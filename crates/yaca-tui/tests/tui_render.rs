@@ -121,3 +121,61 @@ fn scroll_back_saturates() {
     state.scroll_down(10);
     assert_eq!(state.scroll_back, 0);
 }
+
+#[test]
+fn tool_call_renders_as_one_compact_line() {
+    use serde_json::json;
+    use yaca_proto::{ToolCallId, ToolName};
+
+    let mut state = AppState::default();
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    state.apply(&env(
+        1,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        2,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: ToolName::new("read"),
+        },
+    ));
+    state.apply(&env(
+        3,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name: ToolName::new("read"),
+            input: json!({ "path": "Cargo.toml" }),
+        },
+    ));
+    state.apply(&env(
+        4,
+        Event::ToolResult {
+            session,
+            message,
+            part,
+            call,
+            output: json!({ "ok": true }),
+            time_ms: 7,
+        },
+    ));
+
+    let text = render(&mut state, 100, 12);
+    assert!(text.contains("⚙ read"), "tool name renders");
+    assert!(text.contains("Cargo.toml"), "brief input renders");
+    assert!(text.contains("7ms"), "completion time renders");
+    assert_eq!(text.matches('⚙').count(), 1, "exactly one tool line");
+}

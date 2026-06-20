@@ -9,7 +9,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use yaca_proto::{Envelope, PartProjection, Projection, Role};
+use yaca_proto::{Envelope, PartProjection, Projection, Role, ToolName, ToolPartState};
 
 #[derive(Default)]
 pub struct AppState {
@@ -60,34 +60,77 @@ fn role_style(role: Role) -> (&'static str, Color) {
     }
 }
 
-fn message_text(parts: &[PartProjection]) -> String {
-    let mut text = String::new();
-    for p in parts {
-        match p {
-            PartProjection::Text { text: t, .. } => text.push_str(t),
-            PartProjection::Tool { name, .. } => text.push_str(&format!("[tool:{name}]")),
-            PartProjection::Reasoning { .. } => {}
-        }
+fn ellipsize(s: &str, max: usize) -> String {
+    let cleaned = s.replace('\n', " ");
+    if cleaned.chars().count() <= max {
+        cleaned
+    } else {
+        let head: String = cleaned.chars().take(max).collect();
+        format!("{head}…")
     }
-    text
+}
+
+fn tool_input(state: &ToolPartState) -> String {
+    let value = match state {
+        ToolPartState::Pending { input }
+        | ToolPartState::Running { input }
+        | ToolPartState::Completed { input, .. }
+        | ToolPartState::Error { input, .. } => input,
+    };
+    if value.is_null() {
+        String::new()
+    } else {
+        ellipsize(&value.to_string(), 48)
+    }
+}
+
+fn tool_line(name: &ToolName, state: &ToolPartState) -> Line<'static> {
+    let (status, color) = match state {
+        ToolPartState::Completed { time_ms, .. } => (format!("✓ {time_ms}ms"), Color::Green),
+        ToolPartState::Error { message, .. } => {
+            (format!("✗ {}", ellipsize(message, 40)), Color::Red)
+        }
+        ToolPartState::Running { .. } | ToolPartState::Pending { .. } => {
+            ("…".to_string(), Color::Yellow)
+        }
+    };
+    Line::from(vec![
+        Span::styled(format!("  ⚙ {name} "), Style::default().fg(Color::Magenta)),
+        Span::raw(format!("{} ", tool_input(state))),
+        Span::styled(status, Style::default().fg(color)),
+    ])
 }
 
 fn transcript_lines(projection: &Projection) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for m in &projection.session.messages {
         let (label, color) = role_style(m.role);
-        let text = message_text(&m.parts);
-        let mut segments = text.split('\n');
-        let first = segments.next().unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{label} "),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(first.to_string()),
-        ]));
-        for rest in segments {
-            lines.push(Line::from(format!("     {rest}")));
+        let header = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let mut labelled = false;
+        for part in &m.parts {
+            match part {
+                PartProjection::Text { text, .. } => {
+                    for segment in text.split('\n') {
+                        if labelled {
+                            lines.push(Line::from(format!("     {segment}")));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("{label} "), header),
+                                Span::raw(segment.to_string()),
+                            ]));
+                            labelled = true;
+                        }
+                    }
+                }
+                PartProjection::Tool { name, state, .. } => {
+                    if !labelled {
+                        lines.push(Line::from(Span::styled(format!("{label} "), header)));
+                        labelled = true;
+                    }
+                    lines.push(tool_line(name, state));
+                }
+                PartProjection::Reasoning { .. } => {}
+            }
         }
     }
     if lines.is_empty() {

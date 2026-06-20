@@ -25,7 +25,7 @@ use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 #[derive(Parser)]
 #[command(
@@ -86,7 +86,14 @@ fn agent_with_model(model: &str) -> AgentSpec {
 
 fn build_session_engine(store: SessionStore, router: ProviderRouter) -> Arc<SessionEngine> {
     let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    // Auto-allow read-only tools; mutating tools (edit/bash) stay Ask, which errors
+    // safely until an interactive permission prompt is wired.
+    let rules = PermissionRules::new(vec![
+        Rule::new(Action::Read, "*", Mode::Allow),
+        Rule::new(Action::Glob, "*", Mode::Allow),
+        Rule::new(Action::Grep, "*", Mode::Allow),
+    ]);
+    let (permission, _asks) = PermissionPlane::new(rules);
     Arc::new(SessionEngine::new(
         store,
         Arc::new(router),

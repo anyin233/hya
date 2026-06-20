@@ -228,6 +228,8 @@ impl SessionEngine {
         )
         .await?;
 
+        const MAX_TOOL_ROUNDS: u32 = 25;
+        let mut rounds: u32 = 0;
         loop {
             if cancel.is_cancelled() {
                 self.emit(
@@ -318,6 +320,49 @@ impl SessionEngine {
                 };
                 self.emit(session, event).await?;
             }
+
+            rounds += 1;
+            if rounds >= MAX_TOOL_ROUNDS {
+                let part = PartId::new();
+                self.emit(
+                    session,
+                    Event::TextStart {
+                        session,
+                        message,
+                        part,
+                    },
+                )
+                .await?;
+                self.emit(
+                    session,
+                    Event::TextDelta {
+                        session,
+                        message,
+                        part,
+                        delta: format!("[stopped: reached the {MAX_TOOL_ROUNDS}-tool-call limit]"),
+                    },
+                )
+                .await?;
+                self.emit(
+                    session,
+                    Event::TextEnd {
+                        session,
+                        message,
+                        part,
+                    },
+                )
+                .await?;
+                self.emit(
+                    session,
+                    Event::MessageFinished {
+                        session,
+                        message,
+                        finish: FinishReason::Error,
+                    },
+                )
+                .await?;
+                return Ok(FinishReason::Error);
+            }
         }
     }
 }
@@ -339,6 +384,30 @@ fn collect_text(parts: &[PartProjection]) -> String {
     s
 }
 
+fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
+    parts
+        .iter()
+        .filter_map(|p| match p {
+            PartProjection::Text { id, text } => Some(Part::Text {
+                id: *id,
+                text: text.clone(),
+            }),
+            PartProjection::Tool {
+                id,
+                call,
+                name,
+                state,
+            } => Some(Part::Tool {
+                id: *id,
+                call_id: *call,
+                name: name.clone(),
+                state: state.clone(),
+            }),
+            PartProjection::Reasoning { .. } => None,
+        })
+        .collect()
+}
+
 fn build_request(
     agent: &AgentSpec,
     projection: &Projection,
@@ -348,27 +417,23 @@ fn build_request(
         .session
         .messages
         .iter()
-        .map(|m| {
-            let text = collect_text(&m.parts);
-            let parts = vec![Part::Text {
-                id: PartId::new(),
-                text: text.clone(),
-            }];
-            match m.role {
-                Role::User => Message::User { id: m.id, parts },
-                Role::Assistant => Message::Assistant {
-                    id: m.id,
-                    agent: agent.name.clone(),
-                    model: agent.model.clone(),
-                    parts,
-                    finish: m.finish,
-                    tokens: None,
-                },
-                Role::System => Message::System {
-                    id: m.id,
-                    content: text,
-                },
-            }
+        .map(|m| match m.role {
+            Role::User => Message::User {
+                id: m.id,
+                parts: map_parts(&m.parts),
+            },
+            Role::Assistant => Message::Assistant {
+                id: m.id,
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                parts: map_parts(&m.parts),
+                finish: m.finish,
+                tokens: None,
+            },
+            Role::System => Message::System {
+                id: m.id,
+                content: collect_text(&m.parts),
+            },
         })
         .collect();
     CompletionRequest {
