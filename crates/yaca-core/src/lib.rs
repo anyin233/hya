@@ -7,6 +7,7 @@ pub mod engine;
 pub mod error;
 pub mod loop_mode;
 pub mod subagent;
+pub mod team;
 
 pub use bus::EventBus;
 pub use completion::{
@@ -20,4 +21,8 @@ pub use loop_mode::{
 };
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
+};
+pub use team::{
+    MailEndpoint, MailKind, MemberState, TaskStatus, TeamControlPlane, TeamError, TeamState,
+    team_transition,
 };
