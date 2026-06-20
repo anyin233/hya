@@ -1,4 +1,10 @@
-//! `yaca-tool` — Tool trait, JSON schema, registry, and the allow/ask/deny PermissionPlane.
-//!
-//! Phase 0 scaffold (see .trellis/tasks/06-20-agent-spec/implement.md). Types and
-//! logic land in later phases; this stub exists so the workspace builds green.
+//! `yaca-tool` — Tool trait + registry + the allow/ask/deny permission plane.
+
+pub mod permission;
+pub mod tool;
+
+pub use permission::{
+    Action, AskRequest, Decision, Mode, PermissionError, PermissionPlane, PermissionRules,
+    Resource, Rule, glob_match,
+};
+pub use tool::{Tool, ToolCtx, ToolError, ToolRegistry};
