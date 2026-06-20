@@ -38,6 +38,9 @@ impl ProviderRouter {
         let provider = self
             .resolve(&req.model)
             .ok_or_else(|| ProviderError::UnknownModel(req.model.to_string()))?;
+        if let Some(caps) = provider.capabilities(&req.model) {
+            crate::preflight(&caps, &req)?;
+        }
         provider.stream(req, session, message).await
     }
 }
