@@ -9,3 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+yaca-proto = { workspace = true }
+ratatui = { workspace = true }
