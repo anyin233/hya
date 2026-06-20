@@ -20,6 +20,17 @@ pub struct SessionStore {
     pool: sqlx::SqlitePool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerEntry {
+    pub session: SessionId,
+    pub role: String,
+    pub iteration: Option<i64>,
+    pub completion_run_id: Option<String>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub confidence: String,
+}
+
 impl SessionStore {
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
@@ -96,5 +107,51 @@ impl SessionStore {
 
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
         Ok(Projection::from_events(&self.replay(session).await?))
+    }
+
+    pub async fn record_usage(&self, entry: &LedgerEntry) -> Result<(), StoreError> {
+        let id = uuid::Uuid::now_v7().as_bytes().to_vec();
+        let session = entry.session.as_uuid().as_bytes().to_vec();
+        sqlx::query(
+            "INSERT INTO token_ledger \
+             (id, session_id, iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, ts) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(session)
+        .bind(entry.iteration)
+        .bind(entry.completion_run_id.clone())
+        .bind(entry.role.clone())
+        .bind(entry.prompt_tokens)
+        .bind(entry.completion_tokens)
+        .bind(entry.confidence.clone())
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn read_usage(&self, session: SessionId) -> Result<Vec<LedgerEntry>, StoreError> {
+        let key = session.as_uuid().as_bytes().to_vec();
+        let rows = sqlx::query(
+            "SELECT iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence \
+             FROM token_ledger WHERE session_id = ? ORDER BY ts",
+        )
+        .bind(key)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(LedgerEntry {
+                session,
+                iteration: r.try_get("iteration")?,
+                completion_run_id: r.try_get("completion_run_id")?,
+                role: r.try_get("role")?,
+                prompt_tokens: r.try_get("prompt_tokens")?,
+                completion_tokens: r.try_get("completion_tokens")?,
+                confidence: r.try_get("confidence")?,
+            });
+        }
+        Ok(out)
     }
 }
