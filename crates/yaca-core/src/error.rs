@@ -10,4 +10,6 @@ pub enum CoreError {
     Store(#[from] yaca_store::StoreError),
     #[error("cancelled")]
     Cancelled,
+    #[error("invalid: {0}")]
+    Invalid(String),
 }
