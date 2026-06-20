@@ -2520,7 +2520,9 @@ dependencies = [
 name = "yaca-core"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "futures",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
