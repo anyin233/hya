@@ -2,10 +2,11 @@
 //! default entry); subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE
 //! `serve`, and `tail-session`.
 //!
-//! This build ships a dev engine backed by an offline provider so the whole stack
-//! (engine -> provider -> store -> projection / HTTP) runs without API keys. Wire
-//! real OpenAI / Anthropic providers from config to get live responses (see README).
+//! Models come from opencode's config (`~/.config/opencode/opencode.json`):
+//! its providers + keys are reused to build real OpenAI/Anthropic routes. With no
+//! usable config, an offline echo provider keeps the whole stack runnable.
 
+mod config;
 mod tui;
 
 use std::io::Write as _;
@@ -20,9 +21,9 @@ use yaca_core::{
     AgentSpec, CreateSession, EventBus, GoalEvaluator, ModelGoalEvaluator, SafetyCaps,
     SessionEngine, run_goal,
 };
-use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
-use yaca_provider::{DevProvider, FakeProvider, FakeStep, ProviderRouter};
-use yaca_server::{AppState, router};
+use yaca_proto::{AgentName, ModelRef, SessionId};
+use yaca_provider::{DevProvider, ProviderRouter};
+use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
@@ -41,6 +42,9 @@ struct Cli {
     /// Iteration cap for `-p` goal mode.
     #[arg(long, default_value_t = 6)]
     max_iterations: u32,
+    /// Model id to use (overrides opencode default + `YACA_MODEL`).
+    #[arg(long, global = true, value_name = "MODEL")]
+    model: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -71,27 +75,51 @@ enum Command {
     },
 }
 
-fn dev_agent() -> AgentSpec {
+fn agent_with_model(model: &str) -> AgentSpec {
     AgentSpec {
         name: AgentName::new("build"),
-        model: ModelRef::new("fake"),
+        model: ModelRef::new(model),
         system_prompt: "You are yaca, a coding agent.".to_string(),
         workdir: PathBuf::from("."),
     }
 }
 
-fn dev_engine(store: SessionStore) -> Arc<SessionEngine> {
-    // Offline provider: echoes every turn, no network. Matches any model ref.
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
+fn build_session_engine(store: SessionStore, router: ProviderRouter) -> Arc<SessionEngine> {
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     Arc::new(SessionEngine::new(
         store,
-        router,
+        Arc::new(router),
         tools,
         permission,
         EventBus::default(),
     ))
+}
+
+fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
+    let router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
+    (
+        router,
+        model_override.unwrap_or_else(|| "offline".to_string()),
+    )
+}
+
+/// Resolve a provider router + active model from opencode's config, falling back
+/// to the offline echo provider when no usable config is present.
+fn resolve_router(model_override: Option<String>) -> (ProviderRouter, String) {
+    match config::load() {
+        Ok(Some(cfg)) => {
+            let model = model_override
+                .or_else(|| std::env::var("YACA_MODEL").ok())
+                .unwrap_or(cfg.default_model);
+            (cfg.router, model)
+        }
+        Ok(None) => offline_router(model_override),
+        Err(e) => {
+            eprintln!("yaca: opencode config error ({e:#}); using the offline provider");
+            offline_router(model_override)
+        }
+    }
 }
 
 async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
@@ -106,12 +134,13 @@ async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     }
 }
 
-async fn cmd_exec(prompt: String) -> anyhow::Result<()> {
+async fn cmd_exec(prompt: String, model_override: Option<String>) -> anyhow::Result<()> {
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let engine = dev_engine(store);
-    let agent = dev_agent();
+    let (router, model) = resolve_router(model_override);
+    let engine = build_session_engine(store, router);
+    let agent = agent_with_model(&model);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -137,12 +166,17 @@ async fn cmd_exec(prompt: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_goal(goal: String, max_iterations: u32) -> anyhow::Result<()> {
+async fn cmd_goal(
+    goal: String,
+    max_iterations: u32,
+    model_override: Option<String>,
+) -> anyhow::Result<()> {
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let engine = dev_engine(store);
-    let agent = dev_agent();
+    let (router, model) = resolve_router(model_override);
+    let engine = build_session_engine(store, router.clone());
+    let agent = agent_with_model(&model);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -153,16 +187,8 @@ async fn cmd_goal(goal: String, max_iterations: u32) -> anyhow::Result<()> {
         .await
         .context("create session")?;
     let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ModelGoalEvaluator::new(
-        Arc::new(
-            ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(vec![vec![
-                FakeStep::Text(
-                    "{\"met\":false,\"reason\":\"offline dev provider cannot satisfy goals\"}"
-                        .to_string(),
-                ),
-                FakeStep::Finish(FinishReason::Stop),
-            ]]))),
-        ),
-        ModelRef::new("fake"),
+        Arc::new(router),
+        ModelRef::new(&model),
     ));
     let caps = SafetyCaps {
         max_iterations,
@@ -183,7 +209,7 @@ async fn cmd_goal(goal: String, max_iterations: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_tui() -> anyhow::Result<()> {
+async fn cmd_tui(model_override: Option<String>) -> anyhow::Result<()> {
     use std::io::IsTerminal as _;
     if !std::io::stdout().is_terminal() {
         println!(
@@ -199,25 +225,26 @@ async fn cmd_tui() -> anyhow::Result<()> {
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let engine = dev_engine(store);
-    let agent = dev_agent();
-    let model = agent.model.to_string();
+    let (router, model) = resolve_router(model_override);
+    let engine = build_session_engine(store, router);
+    let agent = agent_with_model(&model);
     tui::run(engine, agent, model).await
 }
 
-async fn cmd_serve(bind: String, db: String) -> anyhow::Result<()> {
+async fn cmd_serve(bind: String, db: String, model_override: Option<String>) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
-    let engine = dev_engine(store);
+    let (router, model) = resolve_router(model_override);
+    let engine = build_session_engine(store, router);
     let state = AppState {
         engine,
-        agent: Arc::new(dev_agent()),
+        agent: Arc::new(agent_with_model(&model)),
     };
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
     println!("yaca server listening on http://{addr}");
-    axum::serve(listener, router(state))
+    axum::serve(listener, server_router(state))
         .await
         .context("serve http")?;
     Ok(())
@@ -227,7 +254,8 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let uuid = uuid::Uuid::parse_str(&id).context("parse session id")?;
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
-    let engine = dev_engine(store);
+    let (router, _model) = offline_router(None);
+    let engine = build_session_engine(store, router);
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
@@ -247,13 +275,14 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let model = cli.model.clone();
     if let Some(goal) = cli.prompt {
-        return cmd_goal(goal, cli.max_iterations).await;
+        return cmd_goal(goal, cli.max_iterations, model).await;
     }
     match cli.command {
-        None => cmd_tui().await,
-        Some(Command::Exec { prompt }) => cmd_exec(prompt).await,
-        Some(Command::Serve { bind, db }) => cmd_serve(bind, db).await,
+        None => cmd_tui(model).await,
+        Some(Command::Exec { prompt }) => cmd_exec(prompt, model).await,
+        Some(Command::Serve { bind, db }) => cmd_serve(bind, db, model).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
     }
 }

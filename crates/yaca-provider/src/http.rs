@@ -1,0 +1,220 @@
+//! `HttpProvider` — drives a `Protocol` over reqwest + SSE into the canonical
+//! `Event` stream. One provider per upstream route (OpenAI-compatible or
+//! Anthropic), selected by the model id it serves.
+
+use std::collections::HashSet;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use eventsource_stream::Eventsource as _;
+use futures::StreamExt as _;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use secrecy::{ExposeSecret as _, SecretString};
+use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use yaca_proto::{Event, MessageId, ModelRef, SessionId};
+
+use crate::anthropic::AnthropicMessagesProtocol;
+use crate::openai::OpenAiChatProtocol;
+use crate::{
+    Capabilities, CompletionRequest, Decoder, EventStream, Protocol, Provider, ProviderError,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderKind {
+    OpenAiCompatible,
+    Anthropic,
+}
+
+enum AuthStyle {
+    Bearer(SecretString),
+    Anthropic { key: SecretString, version: String },
+}
+
+pub struct HttpProvider {
+    id: String,
+    protocol: Box<dyn Protocol>,
+    client: reqwest::Client,
+    endpoint: String,
+    auth: AuthStyle,
+    models: HashSet<String>,
+    caps: Capabilities,
+}
+
+fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
+    let mut header = HeaderValue::from_str(value)
+        .map_err(|_| ProviderError::Http("invalid auth header value".to_string()))?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+impl HttpProvider {
+    pub fn new(
+        id: impl Into<String>,
+        kind: ProviderKind,
+        base_url: &str,
+        api_key: String,
+        models: impl IntoIterator<Item = String>,
+    ) -> Result<Self, ProviderError> {
+        // Security: never follow redirects (reqwest keeps `x-api-key` across a
+        // cross-origin 3xx). Connect-timeout only — a read timeout would abort
+        // long streaming completions.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        let base = base_url.trim_end_matches('/');
+        let key = SecretString::new(api_key);
+        let (protocol, endpoint, auth): (Box<dyn Protocol>, String, AuthStyle) = match kind {
+            ProviderKind::OpenAiCompatible => (
+                Box::new(OpenAiChatProtocol),
+                format!("{base}/chat/completions"),
+                AuthStyle::Bearer(key),
+            ),
+            ProviderKind::Anthropic => (
+                Box::new(AnthropicMessagesProtocol),
+                format!("{base}/messages"),
+                AuthStyle::Anthropic {
+                    key,
+                    version: "2023-06-01".to_string(),
+                },
+            ),
+        };
+        Ok(Self {
+            id: id.into(),
+            protocol,
+            client,
+            endpoint,
+            auth,
+            models: models.into_iter().collect(),
+            caps: Capabilities {
+                streaming_tool_calls: true,
+                parallel_tool_calls: true,
+                usage_reporting: false,
+                max_context: 200_000,
+                ..Capabilities::default()
+            },
+        })
+    }
+
+    fn auth_headers(&self) -> Result<HeaderMap, ProviderError> {
+        let mut headers = HeaderMap::new();
+        match &self.auth {
+            AuthStyle::Bearer(key) => {
+                headers.insert(
+                    AUTHORIZATION,
+                    sensitive(&format!("Bearer {}", key.expose_secret()))?,
+                );
+            }
+            AuthStyle::Anthropic { key, version } => {
+                headers.insert(
+                    HeaderName::from_static("x-api-key"),
+                    sensitive(key.expose_secret())?,
+                );
+                headers.insert(
+                    HeaderName::from_static("anthropic-version"),
+                    HeaderValue::from_str(version)
+                        .map_err(|_| ProviderError::Http("invalid version header".to_string()))?,
+                );
+            }
+        }
+        Ok(headers)
+    }
+}
+
+#[async_trait]
+impl Provider for HttpProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        self.models
+            .contains(model.as_str())
+            .then(|| self.caps.clone())
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let body = self.protocol.encode(&req)?;
+        let decoder = self.protocol.decoder(session, message);
+        let resp = self
+            .client
+            .post(&self.endpoint)
+            .headers(self.auth_headers()?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let snippet = text.get(..500).unwrap_or(text.as_str());
+            return Err(ProviderError::Http(format!("{status}: {snippet}")));
+        }
+        let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
+        tokio::spawn(pump(resp, decoder, tx));
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+}
+
+async fn pump(
+    resp: reqwest::Response,
+    mut decoder: Box<dyn Decoder>,
+    tx: mpsc::Sender<Result<Event, ProviderError>>,
+) {
+    let mut sse = resp.bytes_stream().eventsource();
+    while let Some(frame) = sse.next().await {
+        let frame = match frame {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = tx.send(Err(ProviderError::Http(e.to_string()))).await;
+                return;
+            }
+        };
+        // A gateway can answer 200 then emit `{"error": {...}}` mid-stream; the
+        // canonical decoders ignore unknown shapes, so surface it explicitly.
+        if frame.data.contains("\"error\"")
+            && let Ok(value) = serde_json::from_str::<Value>(&frame.data)
+            && let Some(err) = value.get("error")
+        {
+            let msg = err
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("provider returned an error");
+            let _ = tx.send(Err(ProviderError::Http(msg.to_string()))).await;
+            return;
+        }
+        match decoder.push(&frame.data) {
+            Ok(events) => {
+                for event in events {
+                    if tx.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                return;
+            }
+        }
+    }
+    match decoder.finish() {
+        Ok(events) => {
+            for event in events {
+                if tx.send(Ok(event)).await.is_err() {
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            let _ = tx.send(Err(e)).await;
+        }
+    }
+}

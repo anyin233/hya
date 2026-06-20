@@ -4,6 +4,7 @@
 pub mod anthropic;
 pub mod dev;
 pub mod fake;
+pub mod http;
 pub mod openai;
 pub mod router;
 
@@ -15,6 +16,7 @@ use yaca_proto::{Event, Message, MessageId, ModelRef, SessionId, ToolSchema};
 pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
+pub use http::{HttpProvider, ProviderKind};
 pub use openai::{OpenAiChatDecoder, OpenAiChatProtocol};
 pub use router::ProviderRouter;
 

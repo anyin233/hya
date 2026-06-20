@@ -8,10 +8,10 @@ engine — never the worker — owns the stop decision.
 ## Status
 
 The full stack compiles, lints clean (`clippy -D warnings`), and the workspace
-test suite passes. The shipped `yaca` binary runs against an **offline dev
-provider** so the entire pipeline (engine → provider → store → projection / HTTP /
-SSE) is exercisable without API keys. Wiring real OpenAI / Anthropic providers
-from config is the next step (see [Configuration](#configuration)).
+test suite passes. `yaca` talks to **real models** by reusing opencode's provider
+config (OpenAI-compatible + Anthropic routes over streaming SSE; see
+[Configuration](#configuration)), and falls back to an offline echo provider when
+no config is present.
 
 ## Crates
 
@@ -43,6 +43,9 @@ to use yaca:
 yaca
 #   type a message, Enter to send, responses stream in live,
 #   PgUp/PgDn to scroll history, Ctrl-C to quit.
+
+# Pick a specific model (else the opencode default / YACA_MODEL is used).
+yaca --model claude-sonnet-4-6
 ```
 
 Headless subcommands remain for scripting and automation:
@@ -87,10 +90,22 @@ GET  /sessions/:id/stream      -> text/event-stream of Envelopes
 
 ## Configuration
 
-The dev binary uses an offline provider and requires no configuration. Real
-provider, category, permission, and loop configuration (API keys, model tiers,
-permission rules, loop budgets) is the documented next integration step; the
-underlying engines and protocol decoders already exist and are unit-tested.
+yaca reuses **opencode's** config — no separate setup. It reads
+`~/.config/opencode/opencode.json` (honoring `$XDG_CONFIG_HOME`) and, for each
+entry under `provider`, builds a real HTTP route:
+
+- `npm` `@ai-sdk/openai-compatible` → OpenAI Chat Completions (`Authorization: Bearer`)
+- `npm` `@ai-sdk/anthropic` → Anthropic Messages (`x-api-key` + `anthropic-version`)
+- `options.baseURL` + `options.apiKey` (literal or `{env:VAR}` / `{file:path}`) + the
+  `models` keys define the route and which model ids it serves.
+
+Responses stream over SSE. API keys are held in `SecretString`, sent as sensitive
+headers, and never logged. Redirects are disabled so an auth header can't follow a
+3xx to another host.
+
+Select the model with `--model <id>` or `YACA_MODEL`; otherwise yaca prefers a
+`sonnet` model, then the first available. With no usable opencode config, yaca
+falls back to an offline echo provider so the stack still runs.
 
 ## Development
 
