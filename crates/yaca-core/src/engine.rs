@@ -73,6 +73,62 @@ impl SessionEngine {
         Ok(self.store.read_projection(session).await?)
     }
 
+    pub async fn inject_system_message(
+        &self,
+        session: SessionId,
+        content: String,
+    ) -> Result<MessageId, CoreError> {
+        let message = MessageId::new();
+        let part = PartId::new();
+        self.emit(
+            session,
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::System,
+            },
+        )
+        .await?;
+        self.emit(
+            session,
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+        )
+        .await?;
+        self.emit(
+            session,
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: content,
+            },
+        )
+        .await?;
+        self.emit(
+            session,
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+        )
+        .await?;
+        self.emit(
+            session,
+            Event::MessageFinished {
+                session,
+                message,
+                finish: FinishReason::Stop,
+            },
+        )
+        .await?;
+        Ok(message)
+    }
+
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
         let seq = self.store.append_event(session, &event).await?;
         self.bus.publish(Envelope {

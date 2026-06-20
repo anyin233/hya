@@ -6,6 +6,7 @@ pub mod completion;
 pub mod engine;
 pub mod error;
 pub mod loop_mode;
+pub mod subagent;
 
 pub use bus::EventBus;
 pub use completion::{
@@ -16,4 +17,7 @@ pub use error::CoreError;
 pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
     cost_preflight, drive_loop, run_loop,
+};
+pub use subagent::{
+    MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
 };
