@@ -1,4 +1,10 @@
-//! `yaca-core` — domain: SessionEngine, AgentLoop, team orchestration, completion (goal + loop) engines.
-//!
-//! Phase 0 scaffold (see .trellis/tasks/06-20-agent-spec/implement.md). Types and
-//! logic land in later phases; this stub exists so the workspace builds green.
+//! `yaca-core` — SessionEngine, the agent turn loop, and the in-process EventBus.
+//! Team orchestration and the completion (goal + loop) engines land in later phases.
+
+pub mod bus;
+pub mod engine;
+pub mod error;
+
+pub use bus::EventBus;
+pub use engine::{AgentSpec, CreateSession, SessionEngine};
+pub use error::CoreError;
