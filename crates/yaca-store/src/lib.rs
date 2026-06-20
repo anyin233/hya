@@ -1,4 +1,100 @@
-//! `yaca-store` — SQLite event log + synchronous projection + replay.
+//! `yaca-store` — SQLite event log + replay; projection folded on read via the
+//! shared `yaca_proto::Projection` reducer (materialized tables deferred to a
+//! later phase — one reducer, no SQL/reducer divergence).
 //!
-//! Phase 0 scaffold (see .trellis/tasks/06-20-agent-spec/implement.md). Types and
-//! logic land in later phases; this stub exists so the workspace builds green.
+//! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
+//! cannot run inside the transaction sqlx wraps migrations in.
+
+pub mod error;
+
+use std::str::FromStr;
+use std::time::Duration;
+
+use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use yaca_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
+
+pub use error::StoreError;
+
+pub struct SessionStore {
+    pool: sqlx::SqlitePool,
+}
+
+impl SessionStore {
+    pub async fn connect(path: &str) -> Result<Self, StoreError> {
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5))
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(opts)
+            .await?;
+        Self::migrate(&pool).await?;
+        Ok(Self { pool })
+    }
+
+    pub async fn connect_memory() -> Result<Self, StoreError> {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        Self::migrate(&pool).await?;
+        Ok(Self { pool })
+    }
+
+    async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
+        sqlx::migrate!("./migrations").run(pool).await?;
+        Ok(())
+    }
+
+    pub async fn append_event(
+        &self,
+        session: SessionId,
+        event: &Event,
+    ) -> Result<EventSeq, StoreError> {
+        let payload = serde_json::to_string(event)?;
+        let key = session.as_uuid().as_bytes().to_vec();
+        let row = sqlx::query(
+            "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq",
+        )
+        .bind(key)
+        .bind(payload)
+        .bind(now_millis())
+        .fetch_one(&self.pool)
+        .await?;
+        let seq: i64 = row.try_get("seq")?;
+        Ok(EventSeq(seq.max(0) as u64))
+    }
+
+    pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, StoreError> {
+        let key = session.as_uuid().as_bytes().to_vec();
+        let rows =
+            sqlx::query("SELECT seq, ts, payload FROM event_log WHERE session_id = ? ORDER BY seq")
+                .bind(key)
+                .fetch_all(&self.pool)
+                .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let seq: i64 = r.try_get("seq")?;
+            let ts: i64 = r.try_get("ts")?;
+            let payload: String = r.try_get("payload")?;
+            let event: Event = serde_json::from_str(&payload)?;
+            out.push(Envelope {
+                seq: EventSeq(seq.max(0) as u64),
+                ts_millis: ts,
+                event,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
+        Ok(Projection::from_events(&self.replay(session).await?))
+    }
+}
