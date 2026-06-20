@@ -5,6 +5,7 @@ pub mod bus;
 pub mod completion;
 pub mod engine;
 pub mod error;
+pub mod loop_mode;
 
 pub use bus::EventBus;
 pub use completion::{
@@ -12,3 +13,7 @@ pub use completion::{
 };
 pub use engine::{AgentSpec, CreateSession, SessionEngine};
 pub use error::CoreError;
+pub use loop_mode::{
+    EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
+    cost_preflight, drive_loop, run_loop,
+};
