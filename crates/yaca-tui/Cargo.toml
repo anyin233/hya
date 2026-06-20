@@ -11,3 +11,6 @@ workspace = true
 [dependencies]
 yaca-proto = { workspace = true }
 ratatui = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

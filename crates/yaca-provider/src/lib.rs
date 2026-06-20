@@ -7,6 +7,7 @@ pub mod fake;
 pub mod http;
 pub mod openai;
 pub mod router;
+mod wire;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;

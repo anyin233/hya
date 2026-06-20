@@ -3,9 +3,14 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use yaca_proto::{Event, FinishReason, MessageId, ModelRef, SessionId};
+use serde_json::json;
+use yaca_proto::{
+    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
+    ToolCallId, ToolName, ToolPartState,
+};
 use yaca_provider::{
-    CompletionRequest, FakeProvider, FakeStep, OpenAiChatProtocol, Protocol, ProviderRouter,
+    AnthropicMessagesProtocol, CompletionRequest, FakeProvider, FakeStep, OpenAiChatProtocol,
+    Protocol, ProviderRouter,
 };
 
 fn summarize(events: &[Event]) -> Vec<String> {
@@ -131,4 +136,107 @@ async fn fake_and_openai_agree_on_canonical_shape() {
         MessageId::new(),
     );
     assert_eq!(summarize(&openai), summarize(&fake));
+}
+
+fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
+    CompletionRequest {
+        model: ModelRef::new("m"),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read it".to_string(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("m"),
+                parts: vec![
+                    Part::Text {
+                        id: PartId::new(),
+                        text: "ok".to_string(),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id: ToolCallId::new(),
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input,
+                            output: json!("hello"),
+                            time_ms: 3,
+                        },
+                    },
+                ],
+                finish: None,
+                tokens: None,
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+    }
+}
+
+#[test]
+fn openai_encodes_tool_call_and_result() {
+    let body = OpenAiChatProtocol
+        .encode(&assistant_tool_request(json!({ "path": "a" })))
+        .unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, vec!["user", "assistant", "tool"]);
+    let asst = &msgs[1];
+    assert_eq!(asst["content"], "ok");
+    assert_eq!(asst["tool_calls"][0]["function"]["name"], "read");
+    assert_eq!(
+        asst["tool_calls"][0]["function"]["arguments"], "{\"path\":\"a\"}",
+        "arguments must be a JSON string"
+    );
+    assert_eq!(
+        msgs[2]["tool_call_id"], asst["tool_calls"][0]["id"],
+        "result id must match the call id"
+    );
+    assert_eq!(msgs[2]["content"], "hello");
+}
+
+#[test]
+fn openai_null_tool_input_becomes_empty_object_string() {
+    let body = OpenAiChatProtocol
+        .encode(&assistant_tool_request(serde_json::Value::Null))
+        .unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(msgs[1]["tool_calls"][0]["function"]["arguments"], "{}");
+}
+
+#[test]
+fn anthropic_encodes_tool_use_and_result() {
+    let body = AnthropicMessagesProtocol
+        .encode(&assistant_tool_request(json!({ "path": "a" })))
+        .unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "user, assistant(tool_use), user(tool_result)"
+    );
+    let asst = &msgs[1];
+    assert_eq!(asst["role"], "assistant");
+    assert_eq!(asst["content"][0]["type"], "text");
+    assert_eq!(asst["content"][1]["type"], "tool_use");
+    assert_eq!(
+        asst["content"][1]["input"]["path"], "a",
+        "input must be an object"
+    );
+    let result = &msgs[2];
+    assert_eq!(result["role"], "user");
+    assert_eq!(result["content"][0]["type"], "tool_result");
+    assert_eq!(result["content"][0]["is_error"], false);
+    assert_eq!(
+        result["content"][0]["tool_use_id"], asst["content"][1]["id"],
+        "tool_result must reference the tool_use id"
+    );
+    assert_eq!(result["content"][0]["content"], "hello");
 }

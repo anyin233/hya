@@ -5,25 +5,23 @@ use yaca_proto::{
     Event, FinishReason, Message, MessageId, Part, PartId, SessionId, ToolCallId, ToolName,
 };
 
+use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
 pub struct AnthropicMessagesProtocol;
 
 impl Protocol for AnthropicMessagesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        let messages: Vec<Value> = req
-            .messages
-            .iter()
-            .filter_map(|m| match m {
+        let mut messages: Vec<Value> = Vec::new();
+        for m in &req.messages {
+            match m {
                 Message::User { parts, .. } => {
-                    Some(json!({"role": "user", "content": parts_text(parts)}))
+                    messages.push(json!({"role": "user", "content": parts_text(parts)}));
                 }
-                Message::Assistant { parts, .. } => {
-                    Some(json!({"role": "assistant", "content": parts_text(parts)}))
-                }
-                Message::System { .. } => None,
-            })
-            .collect();
+                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts),
+                Message::System { .. } => {}
+            }
+        }
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -63,6 +61,81 @@ fn parts_text(parts: &[Part]) -> String {
         }
     }
     s
+}
+
+// Anthropic puts tool_use blocks in the assistant message and the matching
+// tool_result blocks in the FOLLOWING user message. Segment each `[text?, tool+]`
+// cluster into that pair; trailing text becomes a final assistant text message.
+fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
+    let mut text = String::new();
+    let mut tools: Vec<&Part> = Vec::new();
+    for part in parts {
+        match part {
+            Part::Text { text: t, .. } => {
+                if !tools.is_empty() {
+                    flush_cluster(out, &text, &tools);
+                    text.clear();
+                    tools.clear();
+                }
+                text.push_str(t);
+            }
+            Part::Tool { .. } => tools.push(part),
+            Part::Reasoning { .. } => {}
+        }
+    }
+    if tools.is_empty() {
+        if !text.is_empty() {
+            out.push(json!({"role": "assistant", "content": [{"type": "text", "text": text}]}));
+        }
+    } else {
+        flush_cluster(out, &text, &tools);
+    }
+}
+
+fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
+    let mut content: Vec<Value> = Vec::new();
+    if !text.is_empty() {
+        content.push(json!({"type": "text", "text": text}));
+    }
+    for &p in tools {
+        if let Part::Tool {
+            call_id,
+            name,
+            state,
+            ..
+        } = p
+        {
+            let input = tool_input(state);
+            let input_obj = if input.is_null() {
+                json!({})
+            } else {
+                input.clone()
+            };
+            content.push(json!({
+                "type": "tool_use",
+                "id": call_id.to_string(),
+                "name": name.as_str(),
+                "input": input_obj,
+            }));
+        }
+    }
+    out.push(json!({"role": "assistant", "content": content}));
+    let results: Vec<Value> = tools
+        .iter()
+        .filter_map(|&p| {
+            let Part::Tool { call_id, state, .. } = p else {
+                return None;
+            };
+            let (result, is_error) = tool_result(state);
+            Some(json!({
+                "type": "tool_result",
+                "tool_use_id": call_id.to_string(),
+                "content": result,
+                "is_error": is_error,
+            }))
+        })
+        .collect();
+    out.push(json!({"role": "user", "content": results}));
 }
 
 enum BlockKind {
