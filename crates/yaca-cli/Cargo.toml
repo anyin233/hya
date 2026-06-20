@@ -19,9 +19,13 @@ yaca-tool = { workspace = true }
 yaca-store = { workspace = true }
 yaca-server = { workspace = true }
 yaca-proto = { workspace = true }
+yaca-tui = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+futures = { workspace = true }
 axum = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
