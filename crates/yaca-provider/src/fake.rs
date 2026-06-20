@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use async_trait::async_trait;
 use futures::stream;
 use yaca_proto::{
@@ -19,15 +21,25 @@ pub enum FakeStep {
 
 pub struct FakeProvider {
     id: String,
-    script: Vec<FakeStep>,
+    scripts: Vec<Vec<FakeStep>>,
+    turn: AtomicUsize,
 }
 
 impl FakeProvider {
     #[must_use]
     pub fn scripted(script: Vec<FakeStep>) -> Self {
+        Self::scripted_turns(vec![script])
+    }
+
+    /// One script per assistant turn; each `stream()` call advances to the next.
+    /// Calls past the last script yield a bare `Finish(Stop)` so an agent loop
+    /// terminates instead of replaying a tool call forever.
+    #[must_use]
+    pub fn scripted_turns(scripts: Vec<Vec<FakeStep>>) -> Self {
         Self {
             id: "fake".to_string(),
-            script,
+            scripts,
+            turn: AtomicUsize::new(0),
         }
     }
 
@@ -134,7 +146,10 @@ impl Provider for FakeProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        let events = Self::materialize(&self.script, session, message);
+        let idx = self.turn.fetch_add(1, Ordering::Relaxed);
+        let stop = [FakeStep::Finish(FinishReason::Stop)];
+        let script = self.scripts.get(idx).map_or(&stop[..], Vec::as_slice);
+        let events = Self::materialize(script, session, message);
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 }

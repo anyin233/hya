@@ -9,3 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+yaca-proto = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }

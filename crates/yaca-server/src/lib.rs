@@ -1,4 +1,137 @@
-//! `yaca-server` — axum HTTP/SSE server over yaca-core.
-//!
-//! Phase 0 scaffold (see .trellis/tasks/06-20-agent-spec/implement.md). Types and
-//! logic land in later phases; this stub exists so the workspace builds green.
+//! `yaca-server` — axum HTTP + SSE over `yaca-core` (design.md §11).
+
+use std::convert::Infallible;
+use std::sync::Arc;
+
+use axum::Json;
+use axum::Router;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::sse::{Event as SseEvent, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use futures::Stream;
+use futures::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+use yaca_core::{AgentSpec, CreateSession, SessionEngine};
+use yaca_proto::api::{
+    CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest, PromptResponse,
+};
+use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: Arc<SessionEngine>,
+    pub agent: Arc<AgentSpec>,
+}
+
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/sessions", post(create_session))
+        .route("/sessions/:id/prompt", post(prompt))
+        .route("/sessions/:id/events", get(events))
+        .route("/sessions/:id/stream", get(stream))
+        .with_state(state)
+}
+
+pub struct ApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ApiError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<yaca_core::CoreError> for ApiError {
+    fn from(e: yaca_core::CoreError) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, self.message).into_response()
+    }
+}
+
+fn parse_session(id: &str) -> Result<SessionId, ApiError> {
+    Uuid::parse_str(id)
+        .map(SessionId::from_uuid)
+        .map_err(|_| ApiError::bad_request("invalid session id"))
+}
+
+async fn create_session(
+    State(st): State<AppState>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<Json<CreateSessionResponse>, ApiError> {
+    let session = st
+        .engine
+        .create(CreateSession {
+            parent: req.parent,
+            agent: AgentName::new(req.agent),
+            model: ModelRef::new(req.model),
+            workdir: req.workdir,
+        })
+        .await?;
+    Ok(Json(CreateSessionResponse { session }))
+}
+
+async fn prompt(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<PromptRequest>,
+) -> Result<Json<PromptResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    let message = st.engine.admit_user_prompt(session, req.text).await?;
+    let finish = st
+        .engine
+        .run_turn(session, &st.agent, CancellationToken::new())
+        .await?;
+    Ok(Json(PromptResponse { message, finish }))
+}
+
+async fn events(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<EventsQuery>,
+) -> Result<Json<Vec<Envelope>>, ApiError> {
+    let session = parse_session(&id)?;
+    let since = q.since_seq.unwrap_or(0);
+    let envelopes = st
+        .engine
+        .replay(session)
+        .await?
+        .into_iter()
+        .filter(|e| e.seq.0 > since)
+        .collect();
+    Ok(Json(envelopes))
+}
+
+async fn stream(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
+    let session = parse_session(&id)?;
+    let rx = st.engine.bus().subscribe();
+    let events = BroadcastStream::new(rx).filter_map(move |result| async move {
+        match result {
+            Ok(env) if env.event.session() == Some(session) => {
+                Some(Ok(SseEvent::default().json_data(&env).unwrap_or_default()))
+            }
+            Ok(_) => None,
+            Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+        }
+    });
+    Ok(Sse::new(events))
+}
