@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.pdb
+# local runtime / secrets
+*.db
+*.sqlite
+*.sqlite-*
+.env
+# machine-local agent artifacts (not project code)
+/.codegraph
+/.omo
+/.opencode
