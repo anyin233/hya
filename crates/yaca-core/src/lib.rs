@@ -9,6 +9,7 @@ pub mod error;
 pub mod loop_mode;
 pub mod subagent;
 pub mod team;
+pub mod workspace;
 
 pub use bus::EventBus;
 pub use category::{
@@ -30,3 +31,4 @@ pub use team::{
     MailEndpoint, MailKind, MemberState, TaskStatus, TeamControlPlane, TeamError, TeamState,
     team_transition,
 };
+pub use workspace::{TmuxPaneManager, WorktreeManager};
