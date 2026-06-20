@@ -1,8 +1,12 @@
-//! `yaca` — umbrella binary: headless `exec`, HTTP/SSE `serve`, and `tail-session`.
+//! `yaca` — umbrella binary. Bare `yaca` launches the interactive TUI (the
+//! default entry); subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE
+//! `serve`, and `tail-session`.
 //!
 //! This build ships a dev engine backed by an offline provider so the whole stack
 //! (engine -> provider -> store -> projection / HTTP) runs without API keys. Wire
 //! real OpenAI / Anthropic providers from config to get live responses (see README).
+
+mod tui;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -17,7 +21,7 @@ use yaca_core::{
     SessionEngine, run_goal,
 };
 use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
-use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
+use yaca_provider::{DevProvider, FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -77,16 +81,8 @@ fn dev_agent() -> AgentSpec {
 }
 
 fn dev_engine(store: SessionStore) -> Arc<SessionEngine> {
-    // Offline provider: deterministic, no network. Matches any model ref.
-    let provider = FakeProvider::scripted_turns(vec![vec![
-        FakeStep::Text(
-            "(yaca dev provider) No live model is configured. \
-             Configure a provider to get real responses."
-                .to_string(),
-        ),
-        FakeStep::Finish(FinishReason::Stop),
-    ]]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    // Offline provider: echoes every turn, no network. Matches any model ref.
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     Arc::new(SessionEngine::new(
@@ -187,6 +183,28 @@ async fn cmd_goal(goal: String, max_iterations: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn cmd_tui() -> anyhow::Result<()> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdout().is_terminal() {
+        println!(
+            "yaca {} — a multi-agent coding agent",
+            env!("CARGO_PKG_VERSION")
+        );
+        println!(
+            "The interactive TUI needs a terminal. Try `yaca exec \"<prompt>\"`, \
+             `yaca -p \"<goal>\"`, or `yaca --help`."
+        );
+        return Ok(());
+    }
+    let store = SessionStore::connect_memory()
+        .await
+        .context("open in-memory store")?;
+    let engine = dev_engine(store);
+    let agent = dev_agent();
+    let model = agent.model.to_string();
+    tui::run(engine, agent, model).await
+}
+
 async fn cmd_serve(bind: String, db: String) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let engine = dev_engine(store);
@@ -233,14 +251,7 @@ async fn main() -> anyhow::Result<()> {
         return cmd_goal(goal, cli.max_iterations).await;
     }
     match cli.command {
-        None => {
-            println!(
-                "yaca {} — a multi-agent coding agent",
-                env!("CARGO_PKG_VERSION")
-            );
-            println!("Try `yaca exec \"<prompt>\"`, `yaca serve`, or `yaca --help`.");
-            Ok(())
-        }
+        None => cmd_tui().await,
         Some(Command::Exec { prompt }) => cmd_exec(prompt).await,
         Some(Command::Serve { bind, db }) => cmd_serve(bind, db).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,

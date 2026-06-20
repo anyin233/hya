@@ -1,0 +1,217 @@
+//! Interactive terminal UI — the default `yaca` entry point.
+//!
+//! Owns terminal setup/teardown and the async event loop; rendering lives in the
+//! pure `yaca-tui` crate. A spawned task runs each turn and streams its events
+//! back through the engine `EventBus`, which this loop folds into the view.
+
+use std::io;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context as _;
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use futures::StreamExt as _;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use yaca_core::{AgentSpec, CreateSession, SessionEngine};
+use yaca_proto::SessionId;
+use yaca_tui::AppState;
+
+/// Restores the terminal on unwind or early return; the panic hook below covers
+/// the message-printing path so a panic stays readable in cooked mode.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        prev(info);
+    }));
+}
+
+enum Action {
+    None,
+    Quit,
+    Submit(String),
+}
+
+fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
+    {
+        return Action::Quit;
+    }
+    match key.code {
+        KeyCode::Esc => Action::Quit,
+        KeyCode::Enter => {
+            if app.running || app.input.trim().is_empty() {
+                Action::None
+            } else {
+                app.scroll_back = 0;
+                Action::Submit(std::mem::take(&mut app.input))
+            }
+        }
+        KeyCode::Backspace => {
+            app.input.pop();
+            Action::None
+        }
+        KeyCode::PageUp => {
+            app.scroll_up(5);
+            Action::None
+        }
+        KeyCode::PageDown => {
+            app.scroll_down(5);
+            Action::None
+        }
+        KeyCode::Up => {
+            app.scroll_up(1);
+            Action::None
+        }
+        KeyCode::Down => {
+            app.scroll_down(1);
+            Action::None
+        }
+        KeyCode::Char(c) => {
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                app.input.push(c);
+            }
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
+fn spawn_turn(
+    engine: &Arc<SessionEngine>,
+    agent: &AgentSpec,
+    session: SessionId,
+    prompt: String,
+    done_tx: &mpsc::UnboundedSender<()>,
+    cancel: &CancellationToken,
+) -> JoinHandle<()> {
+    let engine = engine.clone();
+    let agent = agent.clone();
+    let done_tx = done_tx.clone();
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        if let Err(e) = engine.admit_user_prompt(session, prompt).await {
+            let _ = engine
+                .inject_system_message(session, format!("input error: {e}"))
+                .await;
+        } else if let Err(e) = engine.run_turn(session, &agent, cancel).await {
+            let _ = engine
+                .inject_system_message(session, format!("turn error: {e}"))
+                .await;
+        }
+        let _ = done_tx.send(());
+    })
+}
+
+pub async fn run(
+    engine: Arc<SessionEngine>,
+    agent: AgentSpec,
+    model: String,
+) -> anyhow::Result<()> {
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .context("create session")?;
+
+    let mut bus = engine.bus().subscribe();
+    let mut app = AppState {
+        model,
+        session_label: session.to_string().chars().take(12).collect(),
+        projection: engine
+            .read_projection(session)
+            .await
+            .context("prime projection")?,
+        ..AppState::default()
+    };
+
+    install_panic_hook();
+    enable_raw_mode().context("enable raw mode")?;
+    execute!(io::stdout(), EnterAlternateScreen).context("enter alternate screen")?;
+    let _guard = TerminalGuard;
+    let mut terminal =
+        Terminal::new(CrosstermBackend::new(io::stdout())).context("initialize terminal")?;
+
+    let cancel = CancellationToken::new();
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
+    let mut events = EventStream::new();
+    let mut current_turn: Option<JoinHandle<()>> = None;
+
+    terminal
+        .draw(|f| yaca_tui::draw(f, &mut app))
+        .context("draw")?;
+
+    loop {
+        tokio::select! {
+            biased;
+            msg = bus.recv() => match msg {
+                Ok(env) => {
+                    if env.event.session() == Some(session) {
+                        app.apply(&env);
+                    }
+                }
+                Err(RecvError::Lagged(_)) => {
+                    let projection = engine.read_projection(session).await.unwrap_or_default();
+                    app.projection = projection;
+                }
+                Err(RecvError::Closed) => break,
+            },
+            _ = done_rx.recv() => {
+                while let Ok(env) = bus.try_recv() {
+                    if env.event.session() == Some(session) {
+                        app.apply(&env);
+                    }
+                }
+                app.running = false;
+            }
+            maybe = events.next() => match maybe {
+                Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
+                    match handle_key(key, &mut app) {
+                        Action::Quit => break,
+                        Action::Submit(prompt) => {
+                            app.running = true;
+                            current_turn =
+                                Some(spawn_turn(&engine, &agent, session, prompt, &done_tx, &cancel));
+                        }
+                        Action::None => {}
+                    }
+                }
+                Some(Ok(_)) => {}
+                Some(Err(_)) | None => break,
+            },
+        }
+        terminal
+            .draw(|f| yaca_tui::draw(f, &mut app))
+            .context("draw")?;
+    }
+
+    cancel.cancel();
+    if let Some(handle) = current_turn.take() {
+        let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
+    }
+    Ok(())
+}

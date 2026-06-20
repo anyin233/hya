@@ -24,8 +24,8 @@ from config is the next step (see [Configuration](#configuration)).
 | `yaca-core` | `SessionEngine`, turn loop, event bus, goal/loop engines, team plane, categories, worktrees |
 | `yaca-server` | axum HTTP + SSE over the engine |
 | `yaca-client` | reqwest client for the server API |
-| `yaca-tui` | ratatui three-pane render (transcript, goal/loop bars, team + permission) |
-| `yaca-cli` | the `yaca` umbrella binary |
+| `yaca-tui` | ratatui chat render (scrollable transcript, status bar, input box) |
+| `yaca-cli` | the `yaca` umbrella binary — interactive TUI + headless subcommands |
 
 ## Build
 
@@ -34,6 +34,18 @@ cargo build --workspace
 ```
 
 ## Usage
+
+The default entry is an interactive chat TUI (crossterm + ratatui) — the main way
+to use yaca:
+
+```sh
+# Launch the interactive TUI (just run `yaca` with no arguments).
+yaca
+#   type a message, Enter to send, responses stream in live,
+#   PgUp/PgDn to scroll history, Ctrl-C to quit.
+```
+
+Headless subcommands remain for scripting and automation:
 
 ```sh
 # Single headless turn; prints the transcript.
