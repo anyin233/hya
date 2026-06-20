@@ -21,6 +21,7 @@ pub struct CreateSession {
     pub workdir: String,
 }
 
+#[derive(Clone)]
 pub struct AgentSpec {
     pub name: AgentName,
     pub model: ModelRef,
@@ -66,6 +67,10 @@ impl SessionEngine {
 
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, CoreError> {
         Ok(self.store.replay(session).await?)
+    }
+
+    pub async fn read_projection(&self, session: SessionId) -> Result<Projection, CoreError> {
+        Ok(self.store.read_projection(session).await?)
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
