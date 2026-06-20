@@ -1,6 +1,7 @@
 //! `yaca-provider` — Provider/Protocol/Route abstraction normalizing every LLM
 //! into the canonical `yaca_proto::Event` stream (design.md §4, the keystone).
 
+pub mod anthropic;
 pub mod fake;
 pub mod openai;
 pub mod router;
@@ -10,9 +11,21 @@ use futures::stream::BoxStream;
 use thiserror::Error;
 use yaca_proto::{Event, Message, MessageId, ModelRef, SessionId, ToolSchema};
 
+pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
 pub use fake::{FakeProvider, FakeStep};
 pub use openai::{OpenAiChatDecoder, OpenAiChatProtocol};
 pub use router::ProviderRouter;
+
+/// Reject a request a route cannot serve before a turn starts (risk #12):
+/// tool-using turns require `streaming_tool_calls`.
+pub fn preflight(caps: &Capabilities, req: &CompletionRequest) -> Result<(), ProviderError> {
+    if !req.tools.is_empty() && !caps.streaming_tool_calls {
+        return Err(ProviderError::Incompatible(
+            "route does not support streaming tool calls".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 pub type EventStream = BoxStream<'static, Result<Event, ProviderError>>;
 
