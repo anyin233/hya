@@ -50,6 +50,7 @@ uuid_id!(MemberId, "mbr");
 uuid_id!(GoalId, "goal");
 uuid_id!(LoopRunId, "loop");
 uuid_id!(PermissionRequestId, "perm");
+uuid_id!(QuestionRequestId, "q");
 
 /// Monotonic per-session event sequence (the `event_log.seq` rowid).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]

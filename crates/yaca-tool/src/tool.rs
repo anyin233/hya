@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use yaca_proto::{ToolName, ToolSchema};
 
+use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::permission::{Action, PermissionError, PermissionPlane, Resource, glob_match};
 
 #[derive(Error, Debug)]
@@ -29,6 +30,7 @@ pub enum ToolError {
 
 pub struct ToolCtx {
     pub permission: PermissionPlane,
+    pub interaction: InteractionPlane,
     pub workdir: PathBuf,
     pub cancel: CancellationToken,
 }
@@ -70,6 +72,7 @@ impl ToolRegistry {
             Arc::new(FindTool),
             Arc::new(GrepTool),
             Arc::new(ShellTool),
+            Arc::new(AskUserTool),
         ];
         let mut tools = HashMap::new();
         for t in list {
@@ -469,5 +472,70 @@ impl Tool for FindTool {
             .map(|(path, size)| json!({ "path": path, "size": size }))
             .collect();
         Ok(json!({ "results": results }))
+    }
+}
+
+pub struct AskUserTool;
+
+#[derive(Deserialize)]
+struct AskUserInput {
+    question: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(default)]
+    allow_custom: bool,
+    #[serde(default)]
+    default: Option<String>,
+}
+
+#[async_trait]
+impl Tool for AskUserTool {
+    fn name(&self) -> &str {
+        "ask_user"
+    }
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "ask_user",
+            "Ask the human operator a question and wait for their answer. Use kind=\"select\" with options for a choice, or kind=\"text\" for free-form input.",
+            json!({
+                "question": { "type": "string" },
+                "kind": { "type": "string", "enum": ["text", "select"] },
+                "options": { "type": "array", "items": { "type": "string" } },
+                "allow_custom": { "type": "boolean" },
+                "default": { "type": "string" }
+            }),
+            &["question"],
+        )
+    }
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let input: AskUserInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let kind = if input.kind == "select" {
+            if input.options.is_empty() {
+                return Err(ToolError::Input(
+                    "kind=select requires a non-empty options list".to_string(),
+                ));
+            }
+            QuestionKind::Select {
+                options: input.options.clone(),
+                allow_custom: input.allow_custom,
+            }
+        } else {
+            QuestionKind::FreeText {
+                default: input.default.clone(),
+            }
+        };
+        match ctx.interaction.ask(input.question, kind).await {
+            Ok(QuestionAnswer::Selected(i)) => Ok(json!({
+                "answer": input.options.get(i).cloned().unwrap_or_default(),
+                "selected_index": i,
+            })),
+            Ok(QuestionAnswer::FreeText(text)) => Ok(json!({ "answer": text })),
+            Ok(QuestionAnswer::Cancelled) | Err(_) => {
+                Ok(json!({ "answer": "", "cancelled": true }))
+            }
+        }
     }
 }

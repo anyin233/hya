@@ -7,7 +7,9 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, SessionPicker, draw};
+use yaca_tui::{
+    AppState, GoalView, LoopView, PermissionPrompt, QuestionPrompt, SessionPicker, draw,
+};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -104,6 +106,22 @@ fn status_shows_yolo_when_enabled() {
         text.contains("YOLO"),
         "status must show YOLO pill when enabled"
     );
+}
+
+#[test]
+fn question_overlay_renders_options() {
+    let mut state = AppState::default();
+    state.question = Some(QuestionPrompt {
+        prompt: "pick a color".to_string(),
+        options: vec!["red".to_string(), "green".to_string()],
+        selected: 1,
+        input: String::new(),
+        allow_custom: false,
+    });
+    let text = render(&mut state, 100, 20);
+    assert!(text.contains("question"), "panel title renders");
+    assert!(text.contains("pick a color"), "prompt renders");
+    assert!(text.contains("green"), "option renders");
 }
 
 #[test]

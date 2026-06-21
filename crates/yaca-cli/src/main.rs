@@ -2,9 +2,9 @@
 //! default entry); subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE
 //! `serve`, and `tail-session`.
 //!
-//! Models come from opencode's config (`~/.config/opencode/opencode.json`):
-//! its providers + keys are reused to build real OpenAI/Anthropic routes. With no
-//! usable config, an offline echo provider keeps the whole stack runnable.
+//! Models come from yaca's config (`~/.config/yaca/config.yaml`): its providers +
+//! keys build real OpenAI/Anthropic/Google routes. With no usable config, an
+//! offline echo provider keeps the whole stack runnable.
 
 mod auth;
 mod commands;
@@ -31,7 +31,10 @@ use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
-use yaca_tool::{Action, AskRequest, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use yaca_tool::{
+    Action, AskRequest, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionRequest,
+    Rule, ToolRegistry,
+};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
 
@@ -93,9 +96,9 @@ enum Command {
         #[arg(long)]
         db: String,
     },
-    /// Save an auth token for a provider id (used instead of its config apiKey).
+    /// Save an auth token for a provider id (used instead of an inline api_key).
     Login {
-        /// Provider id as it appears in opencode config.
+        /// Provider id as it appears in your yaca config.
         provider: String,
         /// The bearer/API token to store.
         token: String,
@@ -199,6 +202,7 @@ fn build_session_engine(
 ) -> (
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
+    tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
 ) {
     let router = Arc::new(router);
     let tools = Arc::new(ToolRegistry::builtins());
@@ -208,13 +212,15 @@ fn build_session_engine(
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
     let (permission, asks) = PermissionPlane::new(rules);
+    let (interaction, questions) = InteractionPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let engine = Arc::new(
         SessionEngine::new(store, router, tools, permission, EventBus::default())
-            .with_compaction(summarizer, compaction_config()),
+            .with_compaction(summarizer, compaction_config())
+            .with_interaction(interaction),
     );
-    (engine, asks)
+    (engine, asks, questions)
 }
 
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
@@ -235,7 +241,7 @@ fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
     )
 }
 
-/// Resolve a provider router + active model from opencode's config, falling back
+/// Resolve a provider router + active model from yaca's config, falling back
 /// to the offline echo provider when no usable config is present.
 fn resolve_router(model_override: Option<String>) -> (ProviderRouter, String) {
     match config::load() {
@@ -247,7 +253,7 @@ fn resolve_router(model_override: Option<String>) -> (ProviderRouter, String) {
         }
         Ok(None) => offline_router(model_override),
         Err(e) => {
-            eprintln!("yaca: opencode config error ({e:#}); using the offline provider");
+            eprintln!("yaca: config error ({e:#}); using the offline provider");
             offline_router(model_override)
         }
     }
@@ -275,7 +281,7 @@ async fn cmd_exec(
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router, &model);
+    let (engine, asks, _) = build_session_engine(store, router, &model);
     let agent = agent_with_model(&model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -318,7 +324,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router, &model);
+    let (engine, asks, _) = build_session_engine(store, router, &model);
     let agent = agent_with_model(&model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -371,7 +377,7 @@ async fn cmd_goal(
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router.clone(), &model);
+    let (engine, asks, _) = build_session_engine(store, router.clone(), &model);
     let agent = agent_with_model(&model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -426,7 +432,7 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router, &model);
+    let (engine, asks, questions) = build_session_engine(store, router, &model);
     let agent = agent_with_model(&model);
     let session = match resume {
         Some(id) => {
@@ -444,7 +450,7 @@ async fn cmd_tui(
             .await
             .context("create session")?,
     };
-    tui::run(engine, agent, model, asks, session, yolo).await
+    tui::run(engine, agent, model, asks, questions, session, yolo).await
 }
 
 async fn cmd_serve(
@@ -455,7 +461,7 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router, &model);
+    let (engine, asks, _) = build_session_engine(store, router, &model);
     let policy = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
         PermissionPolicy::Yolo
@@ -483,7 +489,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks) = build_session_engine(store, router, &model);
+    let (engine, _asks, _) = build_session_engine(store, router, &model);
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

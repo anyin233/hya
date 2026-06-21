@@ -9,7 +9,7 @@ use yaca_proto::{
 };
 use yaca_provider::{CompletionRequest, ProviderRouter};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, ToolCtx, ToolError, ToolRegistry};
+use yaca_tool::{InteractionPlane, PermissionPlane, ToolCtx, ToolError, ToolRegistry};
 
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, Summarizer, compact_with};
@@ -35,6 +35,7 @@ pub struct SessionEngine {
     providers: Arc<ProviderRouter>,
     tools: Arc<ToolRegistry>,
     permission: PermissionPlane,
+    interaction: InteractionPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
@@ -49,15 +50,23 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Self {
+        let (interaction, _rx) = InteractionPlane::new();
         Self {
             store,
             providers,
             tools,
             permission,
+            interaction,
             bus,
             summarizer: None,
             compaction: CompactionConfig::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_interaction(mut self, interaction: InteractionPlane) -> Self {
+        self.interaction = interaction;
+        self
     }
 
     #[must_use]
@@ -318,6 +327,7 @@ impl SessionEngine {
                     Some(tool) => {
                         let ctx = ToolCtx {
                             permission: self.permission.for_session(session),
+                            interaction: self.interaction.for_session(session),
                             workdir: agent.workdir.clone(),
                             cancel: cancel.clone(),
                         };

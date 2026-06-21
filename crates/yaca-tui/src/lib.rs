@@ -18,6 +18,7 @@ pub struct AppState {
     pub loop_view: Option<LoopView>,
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
+    pub question: Option<QuestionPrompt>,
     pub session_picker: Option<SessionPicker>,
     pub input: String,
     pub running: bool,
@@ -55,6 +56,14 @@ impl PermissionPrompt {
             "Deny".to_string(),
         ]
     }
+}
+
+pub struct QuestionPrompt {
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub input: String,
+    pub allow_custom: bool,
 }
 
 pub struct SessionPicker {
@@ -269,6 +278,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
     if let Some(prompt) = &state.permission {
         draw_permission(frame, prompt);
+    } else if let Some(question) = &state.question {
+        draw_question(frame, question);
     } else if let Some(picker) = &state.session_picker {
         draw_session_picker(frame, picker);
     } else if !state.running {
@@ -329,6 +340,69 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
                     .title("permission required")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Red)),
+            )
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
+}
+
+fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
+    let area = frame.area();
+    let extra = u16::try_from(q.options.len()).unwrap_or(0);
+    let height = (7u16.saturating_add(extra)).min(area.height).max(5);
+    let width = area.width.saturating_sub(4).max(12);
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let inner_width = usize::from(width).saturating_sub(4);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            ellipsize(&q.prompt, inner_width),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    for (i, opt) in q.options.iter().enumerate() {
+        let style = if i == q.selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {} ", ellipsize(opt, inner_width)),
+            style,
+        )));
+    }
+    if q.options.is_empty() || q.allow_custom {
+        lines.push(Line::from(format!("> {}", q.input)));
+    }
+    let hint = if q.options.is_empty() {
+        "type your answer · Enter confirm · Esc cancel"
+    } else if q.allow_custom {
+        "↑/↓ select · type for custom · Enter confirm · Esc cancel"
+    } else {
+        "↑/↓ select · Enter confirm · Esc cancel"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title("question")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
             )
             .wrap(Wrap { trim: false }),
         rect,
