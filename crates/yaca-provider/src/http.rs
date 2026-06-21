@@ -16,6 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use yaca_proto::{Event, MessageId, ModelRef, SessionId};
 
 use crate::anthropic::AnthropicMessagesProtocol;
+use crate::google::GoogleProtocol;
 use crate::openai::OpenAiChatProtocol;
 use crate::{
     Capabilities, CompletionRequest, Decoder, EventStream, Protocol, Provider, ProviderError,
@@ -25,11 +26,13 @@ use crate::{
 pub enum ProviderKind {
     OpenAiCompatible,
     Anthropic,
+    Google,
 }
 
 enum AuthStyle {
     Bearer(SecretString),
     Anthropic { key: SecretString, version: String },
+    Google(SecretString),
 }
 
 pub struct HttpProvider {
@@ -37,6 +40,7 @@ pub struct HttpProvider {
     protocol: Box<dyn Protocol>,
     client: reqwest::Client,
     endpoint: String,
+    google_base: Option<String>,
     auth: AuthStyle,
     models: HashSet<String>,
     caps: Capabilities,
@@ -81,12 +85,23 @@ impl HttpProvider {
                     version: "2023-06-01".to_string(),
                 },
             ),
+            ProviderKind::Google => (
+                Box::new(GoogleProtocol),
+                String::new(),
+                AuthStyle::Google(key),
+            ),
+        };
+        let google_base = if kind == ProviderKind::Google {
+            Some(base.to_string())
+        } else {
+            None
         };
         Ok(Self {
             id: id.into(),
             protocol,
             client,
             endpoint,
+            google_base,
             auth,
             models: models.into_iter().collect(),
             caps: Capabilities {
@@ -119,6 +134,12 @@ impl HttpProvider {
                         .map_err(|_| ProviderError::Http("invalid version header".to_string()))?,
                 );
             }
+            AuthStyle::Google(key) => {
+                headers.insert(
+                    HeaderName::from_static("x-goog-api-key"),
+                    sensitive(key.expose_secret())?,
+                );
+            }
         }
         Ok(headers)
     }
@@ -144,9 +165,16 @@ impl Provider for HttpProvider {
     ) -> Result<EventStream, ProviderError> {
         let body = self.protocol.encode(&req)?;
         let decoder = self.protocol.decoder(session, message);
+        let url = match &self.google_base {
+            Some(base) => format!(
+                "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",
+                req.model.as_str()
+            ),
+            None => self.endpoint.clone(),
+        };
         let resp = self
             .client
-            .post(&self.endpoint)
+            .post(&url)
             .headers(self.auth_headers()?)
             .json(&body)
             .send()

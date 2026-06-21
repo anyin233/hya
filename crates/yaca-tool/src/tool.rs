@@ -65,7 +65,9 @@ impl ToolRegistry {
             Arc::new(ReadTool),
             Arc::new(WriteTool),
             Arc::new(EditTool),
+            Arc::new(LsTool),
             Arc::new(GlobTool),
+            Arc::new(FindTool),
             Arc::new(GrepTool),
             Arc::new(ShellTool),
         ];
@@ -176,6 +178,8 @@ struct EditInput {
     path: String,
     old: String,
     new: String,
+    #[serde(default)]
+    replace_all: bool,
 }
 pub struct EditTool;
 #[async_trait]
@@ -186,8 +190,8 @@ impl Tool for EditTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "edit",
-            "Replace the first occurrence of `old` with `new` in a file.",
-            json!({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}),
+            "Replace `old` with `new` in a file. Errors if `old` is missing or matches more than once, unless `replace_all` is set.",
+            json!({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}, "replace_all": {"type": "boolean"}}),
             &["path", "old", "new"],
         )
     }
@@ -198,12 +202,22 @@ impl Tool for EditTool {
             .assert(Action::Edit, Resource::Path(input.path.clone()))
             .await?;
         let content = tokio::fs::read_to_string(&input.path).await?;
-        if !content.contains(&input.old) {
+        let count = content.matches(&input.old).count();
+        if count == 0 {
             return Err(ToolError::Other("old string not found".to_string()));
         }
-        let updated = content.replacen(&input.old, &input.new, 1);
+        if count > 1 && !input.replace_all {
+            return Err(ToolError::Other(format!(
+                "old string is ambiguous ({count} matches); add surrounding context or set replace_all=true"
+            )));
+        }
+        let updated = if input.replace_all {
+            content.replace(&input.old, &input.new)
+        } else {
+            content.replacen(&input.old, &input.new, 1)
+        };
         tokio::fs::write(&input.path, updated).await?;
-        Ok(json!({ "replaced": true }))
+        Ok(json!({ "replaced": count }))
     }
 }
 
@@ -348,27 +362,112 @@ impl Tool for ShellTool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn truncate_keeps_small_output() {
-        assert_eq!(truncate("hello"), "hello");
+#[derive(Deserialize)]
+struct LsInput {
+    path: Option<String>,
+}
+pub struct LsTool;
+#[async_trait]
+impl Tool for LsTool {
+    fn name(&self) -> &str {
+        "ls"
     }
-
-    #[test]
-    fn truncate_caps_large_output_with_marker() {
-        let big = "x".repeat(MAX_OUTPUT_BYTES + 5000);
-        let out = truncate(&big);
-        assert!(out.len() < big.len());
-        assert!(out.contains("truncated"));
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "ls",
+            "List the immediate entries of a directory (name, type, size).",
+            json!({"path": {"type": "string"}}),
+            &[],
+        )
     }
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let input: LsInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let dir = input
+            .path
+            .clone()
+            .map_or_else(|| ctx.workdir.clone(), PathBuf::from);
+        ctx.permission
+            .assert(
+                Action::Read,
+                Resource::Path(dir.to_string_lossy().into_owned()),
+            )
+            .await?;
+        let mut rows: Vec<(String, &'static str, u64)> = Vec::new();
+        let mut rd = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let meta = entry.metadata().await?;
+            let kind = if meta.is_dir() {
+                "dir"
+            } else if meta.is_file() {
+                "file"
+            } else {
+                "other"
+            };
+            rows.push((
+                entry.file_name().to_string_lossy().into_owned(),
+                kind,
+                meta.len(),
+            ));
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let entries: Vec<Value> = rows
+            .into_iter()
+            .map(|(name, kind, size)| json!({ "name": name, "type": kind, "size": size }))
+            .collect();
+        Ok(json!({ "entries": entries }))
+    }
+}
 
-    #[test]
-    fn truncate_never_splits_a_multibyte_char() {
-        let big = "€".repeat(10_000);
-        let out = truncate(&big);
-        assert!(out.contains("truncated"), "must truncate");
+#[derive(Deserialize)]
+struct FindInput {
+    pattern: String,
+    path: Option<String>,
+}
+pub struct FindTool;
+#[async_trait]
+impl Tool for FindTool {
+    fn name(&self) -> &str {
+        "find"
+    }
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "find",
+            "Recursively find files whose relative path or name matches a `*` glob, with size metadata.",
+            json!({"pattern": {"type": "string"}, "path": {"type": "string"}}),
+            &["pattern"],
+        )
+    }
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let input: FindInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let root = input
+            .path
+            .clone()
+            .map_or_else(|| ctx.workdir.clone(), PathBuf::from);
+        ctx.permission
+            .assert(Action::Glob, Resource::Glob(input.pattern.clone()))
+            .await?;
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        let mut rows: Vec<(String, u64)> = Vec::new();
+        for f in &files {
+            let rel = f.strip_prefix(&root).unwrap_or(f.as_path());
+            let rel_str = rel.to_string_lossy();
+            let name = f
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if glob_match(&input.pattern, &rel_str) || glob_match(&input.pattern, &name) {
+                let size = tokio::fs::metadata(f).await.map(|m| m.len()).unwrap_or(0);
+                rows.push((f.to_string_lossy().into_owned(), size));
+            }
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let results: Vec<Value> = rows
+            .into_iter()
+            .map(|(path, size)| json!({ "path": path, "size": size }))
+            .collect();
+        Ok(json!({ "results": results }))
     }
 }

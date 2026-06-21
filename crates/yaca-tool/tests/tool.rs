@@ -191,3 +191,126 @@ async fn shell_happy_and_cancelled() {
         .await;
     assert!(matches!(err, Err(yaca_tool::ToolError::Cancelled)));
 }
+
+#[tokio::test]
+async fn ls_lists_entries_with_type_and_size() {
+    let dir = tempdir();
+    tokio::fs::write(dir.join("a.txt"), "hello").await.unwrap();
+    tokio::fs::create_dir_all(dir.join("sub")).await.unwrap();
+    let reg = ToolRegistry::builtins();
+    let ls = reg.get("ls").unwrap();
+
+    let ctx = ctx_with(vec![allow(Action::Read, "/**")], dir.clone());
+    let out = ls
+        .execute(&ctx, json!({ "path": dir.to_string_lossy() }))
+        .await
+        .unwrap();
+    let entries = out["entries"].as_array().unwrap();
+    let a = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
+    assert_eq!(a["type"], "file");
+    assert_eq!(a["size"], 5);
+    let sub = entries.iter().find(|e| e["name"] == "sub").unwrap();
+    assert_eq!(sub["type"], "dir");
+
+    let out2 = ls.execute(&ctx, json!({})).await.unwrap();
+    assert!(
+        out2["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "a.txt")
+    );
+
+    let denied = ctx_with(vec![deny(Action::Read, "/**")], dir.clone());
+    assert!(
+        ls.execute(&denied, json!({ "path": dir.to_string_lossy() }))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn find_matches_glob_with_metadata() {
+    let dir = tempdir();
+    tokio::fs::create_dir_all(dir.join("src")).await.unwrap();
+    tokio::fs::write(dir.join("src/a.rs"), "fn a(){}")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.join("b.txt"), "x").await.unwrap();
+    let reg = ToolRegistry::builtins();
+    let find = reg.get("find").unwrap();
+
+    let glob_ctx = ctx_with(vec![allow(Action::Glob, "*")], dir.clone());
+    let out = find
+        .execute(
+            &glob_ctx,
+            json!({ "pattern": "*.rs", "path": dir.to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+    let results = out["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0]["path"].as_str().unwrap().ends_with("a.rs"));
+    assert_eq!(results[0]["size"], 8);
+
+    let denied = ctx_with(vec![deny(Action::Glob, "*")], dir.clone());
+    assert!(
+        find.execute(&denied, json!({ "pattern": "*.rs" }))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn edit_guards_ambiguous_unless_replace_all() {
+    let dir = tempdir();
+    let f = dir.join("x.txt");
+    tokio::fs::write(&f, "a\na\n").await.unwrap();
+    let reg = ToolRegistry::builtins();
+    let edit = reg.get("edit").unwrap();
+    let ctx = ctx_with(vec![allow(Action::Edit, "/**")], dir.clone());
+
+    let amb = edit
+        .execute(
+            &ctx,
+            json!({ "path": f.to_string_lossy(), "old": "a", "new": "b" }),
+        )
+        .await;
+    assert!(amb.is_err());
+    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "a\na\n");
+
+    let ok = edit
+        .execute(
+            &ctx,
+            json!({ "path": f.to_string_lossy(), "old": "a", "new": "b", "replace_all": true }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok["replaced"], 2);
+    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "b\nb\n");
+
+    tokio::fs::write(&f, "one two\n").await.unwrap();
+    let uniq = edit
+        .execute(
+            &ctx,
+            json!({ "path": f.to_string_lossy(), "old": "two", "new": "three" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(uniq["replaced"], 1);
+    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "one three\n");
+}
+
+#[tokio::test]
+async fn dropped_reply_yields_unavailable() {
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    let p = plane.clone();
+    let h =
+        tokio::spawn(async move { p.assert(Action::Bash, Resource::Command("ls".into())).await });
+    let req = rx.recv().await.unwrap();
+    drop(req);
+    assert!(matches!(
+        h.await.unwrap(),
+        Err(yaca_tool::PermissionError::Unavailable)
+    ));
+}

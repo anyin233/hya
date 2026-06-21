@@ -18,6 +18,7 @@ pub struct AppState {
     pub loop_view: Option<LoopView>,
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
+    pub session_picker: Option<SessionPicker>,
     pub input: String,
     pub running: bool,
     pub scroll_back: u16,
@@ -42,7 +43,6 @@ pub struct PermissionPrompt {
     pub title: String,
     pub detail: String,
     pub selected: usize,
-    pub reply: String,
 }
 
 impl PermissionPrompt {
@@ -54,6 +54,11 @@ impl PermissionPrompt {
             "Deny".to_string(),
         ]
     }
+}
+
+pub struct SessionPicker {
+    pub entries: Vec<String>,
+    pub selected: usize,
 }
 
 impl AppState {
@@ -257,6 +262,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
     if let Some(prompt) = &state.permission {
         draw_permission(frame, prompt);
+    } else if let Some(picker) = &state.session_picker {
+        draw_session_picker(frame, picker);
     } else if !state.running {
         let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
         let rightmost = input_row.x + input_row.width.saturating_sub(2);
@@ -267,7 +274,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
 fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
     let area = frame.area();
-    let height = 9u16.min(area.height);
+    let height = 8u16.min(area.height);
     let width = area.width.saturating_sub(4).max(12);
     let rect = Rect {
         x: area.x + 2,
@@ -303,13 +310,8 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
         Line::from(ellipsize(&prompt.detail, inner_width)),
         Line::from(""),
         Line::from(option_spans),
-        Line::from(vec![
-            Span::styled("reply: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(prompt.reply.clone()),
-            Span::raw("█"),
-        ]),
         Line::from(Span::styled(
-            "←/→ select · type a reply · Enter confirm · Esc deny",
+            "←/→ select · Enter confirm · Esc deny",
             Style::default().fg(Color::DarkGray),
         )),
     ];
@@ -320,6 +322,50 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
                     .title("permission required")
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Red)),
+            )
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
+}
+
+fn draw_session_picker(frame: &mut Frame, picker: &SessionPicker) {
+    let area = frame.area();
+    let entry_rows = u16::try_from(picker.entries.len()).unwrap_or(u16::MAX);
+    let height = entry_rows.saturating_add(4).min(area.height).max(4);
+    let width = area.width.saturating_sub(4).max(12);
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let inner_width = usize::from(width).saturating_sub(4);
+    let mut lines = vec![Line::from(Span::styled(
+        "switch session — ↑/↓ select · Enter open · Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for (i, label) in picker.entries.iter().enumerate() {
+        let style = if i == picker.selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {} ", ellipsize(label, inner_width)),
+            style,
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title("sessions")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
             )
             .wrap(Wrap { trim: false }),
         rect,

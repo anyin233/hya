@@ -7,7 +7,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, draw};
+use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, SessionPicker, draw};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -94,24 +94,41 @@ fn renders_chat_with_input_status_and_panels() {
 }
 
 #[test]
-fn permission_panel_renders_options_and_reply() {
+fn permission_overlay_renders_options_and_detail() {
     let mut state = AppState::default();
     state.permission = Some(PermissionPrompt {
         title: "bash".to_string(),
         detail: "rm -rf /tmp/x".to_string(),
         selected: 2,
-        reply: "use ls instead".to_string(),
     });
     let text = render(&mut state, 100, 20);
     assert!(text.contains("permission required"), "panel title renders");
     assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
     assert!(text.contains("Allow once"), "allow-once option renders");
     assert!(
-        text.contains("Allow all bash"),
-        "allow-all option uses the action"
+        text.contains("permission required"),
+        "overlay title renders"
     );
+    assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
+    assert!(text.contains("Allow once"), "allow-once option renders");
+    assert!(text.contains("Allow all bash"), "allow-all uses the action");
     assert!(text.contains("Deny"), "deny option renders");
-    assert!(text.contains("use ls instead"), "reply text renders");
+}
+
+#[test]
+fn session_picker_renders_entries() {
+    let mut state = AppState::default();
+    state.session_picker = Some(SessionPicker {
+        entries: vec![
+            "ses_aaa (3 events)".to_string(),
+            "ses_bbb (1 events)".to_string(),
+        ],
+        selected: 1,
+    });
+    let text = render(&mut state, 100, 20);
+    assert!(text.contains("sessions"), "picker title renders");
+    assert!(text.contains("ses_aaa"), "first entry renders");
+    assert!(text.contains("ses_bbb"), "second entry renders");
 }
 
 #[test]

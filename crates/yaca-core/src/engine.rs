@@ -12,6 +12,7 @@ use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, ToolCtx, ToolError, ToolRegistry};
 
 use crate::bus::EventBus;
+use crate::compaction::{CompactionConfig, Summarizer, compact_with};
 use crate::error::CoreError;
 
 pub struct CreateSession {
@@ -35,6 +36,8 @@ pub struct SessionEngine {
     tools: Arc<ToolRegistry>,
     permission: PermissionPlane,
     bus: EventBus,
+    summarizer: Option<Arc<dyn Summarizer>>,
+    compaction: CompactionConfig,
 }
 
 impl SessionEngine {
@@ -52,7 +55,20 @@ impl SessionEngine {
             tools,
             permission,
             bus,
+            summarizer: None,
+            compaction: CompactionConfig::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_compaction(
+        mut self,
+        summarizer: Arc<dyn Summarizer>,
+        config: CompactionConfig,
+    ) -> Self {
+        self.summarizer = Some(summarizer);
+        self.compaction = config;
+        self
     }
 
     #[must_use]
@@ -245,7 +261,16 @@ impl SessionEngine {
             }
 
             let projection = self.store.read_projection(session).await?;
-            let request = build_request(agent, &projection, &self.tools);
+            let messages = projection_to_messages(agent, &projection);
+            let messages = if let Some(summarizer) = &self.summarizer {
+                match compact_with(messages, &self.compaction, summarizer.as_ref()).await {
+                    Ok(compacted) => compacted,
+                    Err(_) => projection_to_messages(agent, &projection),
+                }
+            } else {
+                messages
+            };
+            let request = request_from_messages(agent, messages, &self.tools);
             let mut stream = self.providers.stream(request, session, message).await?;
 
             let mut tool_calls: Vec<ToolCallReq> = Vec::new();
@@ -408,15 +433,12 @@ fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
         .collect()
 }
 
-fn build_request(
-    agent: &AgentSpec,
-    projection: &Projection,
-    tools: &ToolRegistry,
-) -> CompletionRequest {
-    let messages = projection
+fn projection_to_messages(agent: &AgentSpec, projection: &Projection) -> Vec<Message> {
+    projection
         .session
         .messages
         .iter()
+        .filter(|m| !(m.role == Role::Assistant && m.parts.is_empty()))
         .map(|m| match m.role {
             Role::User => Message::User {
                 id: m.id,
@@ -435,7 +457,14 @@ fn build_request(
                 content: collect_text(&m.parts),
             },
         })
-        .collect();
+        .collect()
+}
+
+fn request_from_messages(
+    agent: &AgentSpec,
+    messages: Vec<Message>,
+    tools: &ToolRegistry,
+) -> CompletionRequest {
     CompletionRequest {
         model: agent.model.clone(),
         system: Some(agent.system_prompt.clone()),
