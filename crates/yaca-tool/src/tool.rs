@@ -126,11 +126,11 @@ impl ToolRegistry {
         ] {
             registry.insert_builtin(tool);
         }
-        registry.insert_aliased_builtin("patch", "apply_patch", Arc::new(ApplyPatchTool));
-        registry.insert_aliased_builtin("fetch", "webfetch", Arc::new(WebFetchTool));
-        registry.insert_aliased_builtin("search", "websearch", Arc::new(WebSearchTool));
-        registry.insert_aliased_builtin("todo", "todowrite", Arc::new(TodoWriteTool));
-        registry.insert_aliased_builtin("plan", "plan_exit", Arc::new(PlanExitTool));
+        registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
+        registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
+        registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
+        registry.insert_aliased_builtin("todowrite", "todo", Arc::new(TodoWriteTool));
+        registry.insert_aliased_builtin("plan_exit", "plan", Arc::new(PlanExitTool));
         registry
     }
 
