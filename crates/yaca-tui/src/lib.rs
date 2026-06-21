@@ -5,10 +5,10 @@
 //! terminal I/O and the event loop live in the binary so this stays testable.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use yaca_proto::{Envelope, PartProjection, Projection, Role, ToolName, ToolPartState};
 
 #[derive(Default)]
@@ -17,7 +17,8 @@ pub struct AppState {
     pub goal: Option<GoalView>,
     pub loop_view: Option<LoopView>,
     pub team: Vec<(String, String)>,
-    pub pending_permission: Option<String>,
+    pub permission: Option<PermissionPrompt>,
+    pub session_picker: Option<SessionPicker>,
     pub input: String,
     pub running: bool,
     pub scroll_back: u16,
@@ -36,6 +37,28 @@ pub struct LoopView {
     pub iteration: u32,
     pub budget: u32,
     pub last_score: u8,
+}
+
+pub struct PermissionPrompt {
+    pub title: String,
+    pub detail: String,
+    pub selected: usize,
+}
+
+impl PermissionPrompt {
+    #[must_use]
+    pub fn options(&self) -> [String; 3] {
+        [
+            "Allow once".to_string(),
+            format!("Allow all {}", self.title),
+            "Deny".to_string(),
+        ]
+    }
+}
+
+pub struct SessionPicker {
+    pub entries: Vec<String>,
+    pub selected: usize,
 }
 
 impl AppState {
@@ -224,14 +247,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     }
 
     let input_row = rows[2];
-    let input_widget = match &state.pending_permission {
-        Some(req) => Paragraph::new(format!("PERMISSION REQUEST: {req}  [a]llow  [d]eny")).block(
-            Block::default()
-                .title("permission")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red)),
-        ),
-        None => Paragraph::new(Line::from(vec![
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::Cyan)),
             Span::raw(state.input.clone()),
         ]))
@@ -240,13 +257,117 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
                 .title("message — Enter: send · Ctrl-C: quit · PgUp/PgDn: scroll")
                 .borders(Borders::ALL),
         ),
-    };
-    frame.render_widget(input_widget, input_row);
+        input_row,
+    );
 
-    if state.pending_permission.is_none() && !state.running {
+    if let Some(prompt) = &state.permission {
+        draw_permission(frame, prompt);
+    } else if let Some(picker) = &state.session_picker {
+        draw_session_picker(frame, picker);
+    } else if !state.running {
         let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
         let rightmost = input_row.x + input_row.width.saturating_sub(2);
         let cursor_x = (input_row.x + 3).saturating_add(typed).min(rightmost);
         frame.set_cursor_position((cursor_x, input_row.y + 1));
     }
+}
+
+fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
+    let area = frame.area();
+    let height = 8u16.min(area.height);
+    let width = area.width.saturating_sub(4).max(12);
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let inner_width = usize::from(width).saturating_sub(4);
+    let option_spans: Vec<Span> = prompt
+        .options()
+        .iter()
+        .enumerate()
+        .flat_map(|(i, label)| {
+            let style = if i == prompt.selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
+        })
+        .collect();
+    let lines = vec![
+        Line::from(Span::styled(
+            format!("{} wants to run:", prompt.title),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(ellipsize(&prompt.detail, inner_width)),
+        Line::from(""),
+        Line::from(option_spans),
+        Line::from(Span::styled(
+            "←/→ select · Enter confirm · Esc deny",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title("permission required")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Red)),
+            )
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
+}
+
+fn draw_session_picker(frame: &mut Frame, picker: &SessionPicker) {
+    let area = frame.area();
+    let entry_rows = u16::try_from(picker.entries.len()).unwrap_or(u16::MAX);
+    let height = entry_rows.saturating_add(4).min(area.height).max(4);
+    let width = area.width.saturating_sub(4).max(12);
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let inner_width = usize::from(width).saturating_sub(4);
+    let mut lines = vec![Line::from(Span::styled(
+        "switch session — ↑/↓ select · Enter open · Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for (i, label) in picker.entries.iter().enumerate() {
+        let style = if i == picker.selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {} ", ellipsize(label, inner_width)),
+            style,
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title("sessions")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
 }
