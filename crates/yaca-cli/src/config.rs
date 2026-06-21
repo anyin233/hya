@@ -62,6 +62,8 @@ fn parse_providers(config_json: &str) -> anyhow::Result<Vec<ParsedProvider>> {
             .unwrap_or_default();
         let kind = if npm.contains("anthropic") {
             ProviderKind::Anthropic
+        } else if npm.contains("google") {
+            ProviderKind::Google
         } else if npm.contains("openai") {
             ProviderKind::OpenAiCompatible
         } else {
@@ -125,7 +127,8 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut models = Vec::new();
     for p in parsed {
         models.extend(p.models.iter().cloned());
-        let provider = HttpProvider::new(p.id, p.kind, &p.base_url, p.api_key, p.models)?;
+        let api_key = crate::auth::load_token(&p.id).unwrap_or(p.api_key);
+        let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
         router = router.with(Arc::new(provider));
     }
     let default_model = choose_default(&models);
@@ -154,6 +157,11 @@ mod tests {
                 "options": { "apiKey": "sk-test-literal", "baseURL": "https://gw.example/v1" },
                 "models": { "claude-sonnet-4-6": {} }
             },
+            "gw-google": {
+                "npm": "@ai-sdk/google",
+                "options": { "apiKey": "sk-test-literal", "baseURL": "https://gl.googleapis.com/v1beta" },
+                "models": { "gemini-2.0-flash": {} }
+            },
             "no-models": {
                 "npm": "@ai-sdk/openai-compatible",
                 "options": { "apiKey": "x", "baseURL": "https://y/v1" }
@@ -164,7 +172,7 @@ mod tests {
     #[test]
     fn parses_providers_kinds_and_models() {
         let parsed = parse_providers(FIXTURE).unwrap();
-        assert_eq!(parsed.len(), 2, "providers without models are skipped");
+        assert_eq!(parsed.len(), 3, "providers without models are skipped");
         let oai = parsed.iter().find(|p| p.id == "gw-oai").unwrap();
         assert_eq!(oai.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(oai.base_url, "https://gw.example/v1");
@@ -172,6 +180,8 @@ mod tests {
         assert!(oai.models.contains(&"gpt-5.5".to_string()));
         let anth = parsed.iter().find(|p| p.id == "gw-anth").unwrap();
         assert_eq!(anth.kind, ProviderKind::Anthropic);
+        let goog = parsed.iter().find(|p| p.id == "gw-google").unwrap();
+        assert_eq!(goog.kind, ProviderKind::Google);
     }
 
     #[test]

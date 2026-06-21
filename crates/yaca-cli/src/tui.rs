@@ -22,9 +22,11 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_proto::SessionId;
+use yaca_proto::{ModelRef, SessionId};
 use yaca_tool::{Action as ToolAction, AskRequest, Decision};
-use yaca_tui::{AppState, PermissionPrompt};
+use yaca_tui::{AppState, PermissionPrompt, SessionPicker};
+
+use crate::commands;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -98,7 +100,7 @@ fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
     }
 }
 
-fn action_label(action: ToolAction) -> String {
+fn action_label(action: ToolAction) -> &'static str {
     match action {
         ToolAction::Read => "read",
         ToolAction::Edit => "edit",
@@ -108,16 +110,13 @@ fn action_label(action: ToolAction) -> String {
         ToolAction::Task => "task",
         ToolAction::ExternalDirectory => "external-dir",
     }
-    .to_string()
 }
 
-fn decision_from(prompt: &PermissionPrompt) -> Decision {
-    match prompt.selected {
+fn decision_for(selected: usize) -> Decision {
+    match selected {
         0 => Decision::AllowOnce,
         1 => Decision::AllowAlways,
-        _ => Decision::Reject {
-            feedback: (!prompt.reply.trim().is_empty()).then(|| prompt.reply.clone()),
-        },
+        _ => Decision::Reject { feedback: None },
     }
 }
 
@@ -125,7 +124,10 @@ fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> 
     let prompt = app.permission.as_mut()?;
     match key.code {
         KeyCode::Esc => Some(Decision::Reject { feedback: None }),
-        KeyCode::Enter => Some(decision_from(prompt)),
+        KeyCode::Enter => Some(decision_for(prompt.selected)),
+        KeyCode::Char('a') => Some(Decision::AllowOnce),
+        KeyCode::Char('s') => Some(Decision::AllowAlways),
+        KeyCode::Char('d') => Some(Decision::Reject { feedback: None }),
         KeyCode::Left => {
             prompt.selected = prompt.selected.saturating_sub(1);
             None
@@ -134,17 +136,32 @@ fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> 
             prompt.selected = (prompt.selected + 1).min(2);
             None
         }
-        KeyCode::Backspace => {
-            prompt.reply.pop();
-            None
-        }
-        KeyCode::Char(c) => {
-            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                prompt.reply.push(c);
-            }
-            None
-        }
         _ => None,
+    }
+}
+
+enum PickerAction {
+    Switch(usize),
+    Close,
+    None,
+}
+
+fn handle_picker_key(key: KeyEvent, app: &mut AppState) -> PickerAction {
+    let Some(picker) = app.session_picker.as_mut() else {
+        return PickerAction::None;
+    };
+    match key.code {
+        KeyCode::Esc => PickerAction::Close,
+        KeyCode::Enter => PickerAction::Switch(picker.selected),
+        KeyCode::Up => {
+            picker.selected = picker.selected.saturating_sub(1);
+            PickerAction::None
+        }
+        KeyCode::Down => {
+            picker.selected = (picker.selected + 1).min(picker.entries.len().saturating_sub(1));
+            PickerAction::None
+        }
+        _ => PickerAction::None,
     }
 }
 
@@ -176,19 +193,12 @@ fn spawn_turn(
 
 pub async fn run(
     engine: Arc<SessionEngine>,
-    agent: AgentSpec,
+    mut agent: AgentSpec,
     model: String,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
+    initial_session: SessionId,
 ) -> anyhow::Result<()> {
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-        })
-        .await
-        .context("create session")?;
+    let mut session = initial_session;
 
     let mut bus = engine.bus().subscribe();
     let mut app = AppState {
@@ -213,6 +223,14 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
+    let mut picker_sessions: Vec<SessionId> = Vec::new();
+    let template_dirs: Vec<std::path::PathBuf> = {
+        let mut v = vec![std::path::PathBuf::from(".yaca/prompts")];
+        if let Some(home) = std::env::var_os("HOME") {
+            v.push(std::path::PathBuf::from(home).join(".config/yaca/prompts"));
+        }
+        v
+    };
 
     terminal
         .draw(|f| yaca_tui::draw(f, &mut app))
@@ -245,10 +263,9 @@ pub async fn run(
                 if let Some(req) = maybe_ask {
                     pending = Some(req.reply);
                     app.permission = Some(PermissionPrompt {
-                        title: action_label(req.action),
+                        title: action_label(req.action).to_string(),
                         detail: req.resource.pattern(),
                         selected: 0,
-                        reply: String::new(),
                     });
                 }
             }
@@ -266,15 +283,111 @@ pub async fn run(
                             }
                             app.permission = None;
                         }
+                    } else if app.session_picker.is_some() {
+                        match handle_picker_key(key, &mut app) {
+                            PickerAction::Switch(i) => {
+                                if let Some(&picked) = picker_sessions.get(i) {
+                                    session = picked;
+                                    app.session_label =
+                                        session.to_string().chars().take(12).collect();
+                                    app.projection =
+                                        engine.read_projection(session).await.unwrap_or_default();
+                                }
+                                app.session_picker = None;
+                            }
+                            PickerAction::Close => app.session_picker = None,
+                            PickerAction::None => {}
+                        }
                     } else {
                         match handle_key(key, &mut app) {
                             Action::Quit => break,
-                            Action::Submit(prompt) => {
-                                app.running = true;
-                                current_turn = Some(spawn_turn(
-                                    &engine, &agent, session, prompt, &done_tx, &cancel,
-                                ));
-                            }
+                            Action::Submit(input) => match commands::parse_slash(&input) {
+                                Some(commands::Slash::Exit) => break,
+                                Some(commands::Slash::Help) => {
+                                    let _ = engine
+                                        .inject_system_message(session, commands::help_text())
+                                        .await;
+                                }
+                                Some(commands::Slash::Model(m)) if !m.is_empty() => {
+                                    agent.model = ModelRef::new(&m);
+                                    app.model = m.clone();
+                                    let _ = engine
+                                        .inject_system_message(session, format!("model set to {m}"))
+                                        .await;
+                                }
+                                Some(commands::Slash::Model(_)) => {
+                                    let _ = engine
+                                        .inject_system_message(
+                                            session,
+                                            format!("current model: {}", app.model),
+                                        )
+                                        .await;
+                                }
+                                Some(commands::Slash::Clear) => {
+                                    if let Ok(new_session) = engine
+                                        .create(CreateSession {
+                                            parent: None,
+                                            agent: agent.name.clone(),
+                                            model: agent.model.clone(),
+                                            workdir: agent.workdir.to_string_lossy().into_owned(),
+                                        })
+                                        .await
+                                    {
+                                        session = new_session;
+                                        app.session_label =
+                                            session.to_string().chars().take(12).collect();
+                                        app.projection = engine
+                                            .read_projection(session)
+                                            .await
+                                            .unwrap_or_default();
+                                    }
+                                }
+                                Some(commands::Slash::Sessions) => {
+                                    let sessions =
+                                        engine.store().list_sessions().await.unwrap_or_default();
+                                    if sessions.is_empty() {
+                                        let _ = engine
+                                            .inject_system_message(
+                                                session,
+                                                "no sessions found".to_string(),
+                                            )
+                                            .await;
+                                    } else {
+                                        picker_sessions =
+                                            sessions.iter().map(|s| s.session).collect();
+                                        let entries = sessions
+                                            .iter()
+                                            .map(|s| format!("{} ({} events)", s.session, s.events))
+                                            .collect();
+                                        app.session_picker =
+                                            Some(SessionPicker { entries, selected: 0 });
+                                    }
+                                }
+                                Some(commands::Slash::Template(name)) => {
+                                    match commands::resolve_template(&name, &template_dirs) {
+                                        Some(tpl) => {
+                                            app.running = true;
+                                            current_turn = Some(spawn_turn(
+                                                &engine, &agent, session, tpl, &done_tx, &cancel,
+                                            ));
+                                        }
+                                        None => {
+                                            let _ = engine
+                                                .inject_system_message(
+                                                    session,
+                                                    format!("unknown command: /{name}"),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    app.running = true;
+                                    current_turn = Some(spawn_turn(
+                                        &engine, &agent, session, input, &done_tx, &cancel,
+                                    ));
+                                }
+                            },
                             Action::None => {}
                         }
                     }
