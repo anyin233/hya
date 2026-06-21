@@ -30,6 +30,7 @@ use yaca_tool::{
 use yaca_tui::{AppState, PermissionPrompt, Picker, QuestionPrompt};
 
 use crate::commands;
+use crate::config::ModelEntry;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -243,7 +244,7 @@ pub async fn run(
     engine: Arc<SessionEngine>,
     mut agent: AgentSpec,
     model: String,
-    models: Vec<String>,
+    models: Vec<ModelEntry>,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
     mut questions: mpsc::UnboundedReceiver<QuestionRequest>,
     initial_session: SessionId,
@@ -461,14 +462,19 @@ pub async fn run(
                                     } else {
                                         let selected = models
                                             .iter()
-                                            .position(|m| *m == app.model)
+                                            .position(|m| m.id == app.model)
                                             .unwrap_or(0);
+                                        let entries = models
+                                            .iter()
+                                            .map(|m| format!("{} ({})", m.id, m.provider))
+                                            .collect();
+                                        let ids = models.iter().map(|m| m.id.clone()).collect();
                                         app.picker = Some(Picker {
                                             title: "model".to_string(),
-                                            entries: models.clone(),
+                                            entries,
                                             selected,
                                         });
-                                        picker_kind = Some(PickerKind::Model(models.clone()));
+                                        picker_kind = Some(PickerKind::Model(ids));
                                     }
                                 }
                                 Some(commands::Slash::Clear) => {
