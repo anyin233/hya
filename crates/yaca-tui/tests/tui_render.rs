@@ -94,6 +94,19 @@ fn renders_chat_with_input_status_and_panels() {
 }
 
 #[test]
+fn status_shows_yolo_when_enabled() {
+    let mut state = AppState::default();
+    state.model = "fake".to_string();
+    state.session_label = "s".to_string();
+    state.yolo = true;
+    let text = render(&mut state, 120, 24);
+    assert!(
+        text.contains("YOLO"),
+        "status must show YOLO pill when enabled"
+    );
+}
+
+#[test]
 fn permission_overlay_renders_options_and_detail() {
     let mut state = AppState::default();
     state.permission = Some(PermissionPrompt {
