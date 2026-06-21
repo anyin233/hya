@@ -3066,6 +3066,7 @@ name = "yaca-tui"
 version = "0.0.0"
 dependencies = [
  "ratatui",
+ "serde_json",
  "yaca-proto",
 ]
 
