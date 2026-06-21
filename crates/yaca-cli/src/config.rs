@@ -13,6 +13,7 @@ use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 pub struct ResolvedConfig {
     pub router: ProviderRouter,
     pub default_model: String,
+    pub models: Vec<String>,
 }
 
 struct ParsedProvider {
@@ -109,6 +110,16 @@ fn choose_default(models: &[String]) -> String {
         .unwrap_or_default()
 }
 
+fn model_inventory(providers: &[ParsedProvider]) -> Vec<String> {
+    let mut models: Vec<String> = providers
+        .iter()
+        .flat_map(|provider| provider.models.iter().cloned())
+        .collect();
+    models.sort();
+    models.dedup();
+    models
+}
+
 /// Load opencode's config into a ready router. `Ok(None)` means no usable config
 /// (no file or no providers) — the caller should use the offline provider.
 pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
@@ -122,9 +133,8 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
-    let mut models = Vec::new();
+    let models = model_inventory(&parsed);
     for p in parsed {
-        models.extend(p.models.iter().cloned());
         let provider = HttpProvider::new(p.id, p.kind, &p.base_url, p.api_key, p.models)?;
         router = router.with(Arc::new(provider));
     }
@@ -132,6 +142,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     Ok(Some(ResolvedConfig {
         router,
         default_model,
+        models,
     }))
 }
 
@@ -172,6 +183,36 @@ mod tests {
         assert!(oai.models.contains(&"gpt-5.5".to_string()));
         let anth = parsed.iter().find(|p| p.id == "gw-anth").unwrap();
         assert_eq!(anth.kind, ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn model_inventory_is_sorted_and_deduplicated_across_providers() {
+        let parsed = parse_providers(
+            r#"{
+                "provider": {
+                    "a": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "options": { "apiKey": "sk-test-literal", "baseURL": "https://gw.example/v1" },
+                        "models": { "zeta": {}, "alpha": {} }
+                    },
+                    "b": {
+                        "npm": "@ai-sdk/anthropic",
+                        "options": { "apiKey": "sk-test-literal", "baseURL": "https://gw.example/v1" },
+                        "models": { "alpha": {}, "sonnet": {} }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            model_inventory(&parsed),
+            vec![
+                "alpha".to_string(),
+                "sonnet".to_string(),
+                "zeta".to_string()
+            ]
+        );
     }
 
     #[test]

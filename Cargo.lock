@@ -2946,11 +2946,13 @@ name = "yaca-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "crossterm",
  "futures",
  "ratatui",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

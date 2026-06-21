@@ -28,5 +28,9 @@ ratatui = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 clap = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

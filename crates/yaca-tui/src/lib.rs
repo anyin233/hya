@@ -19,11 +19,26 @@ pub struct AppState {
     pub loop_view: Option<LoopView>,
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
+    pub dialog: Option<DialogView>,
     pub input: String,
     pub running: bool,
     pub scroll_back: u16,
     pub model: String,
     pub session_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DialogView {
+    pub title: String,
+    pub subtitle: String,
+    pub items: Vec<DialogItem>,
+    pub selected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DialogItem {
+    pub label: String,
+    pub detail: String,
 }
 
 pub struct GoalView {
@@ -84,6 +99,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
     if let Some(prompt) = &state.permission {
         widgets::render_permission(frame, prompt, &theme);
+    } else if let Some(dialog) = &state.dialog {
+        widgets::render_dialog(frame, dialog, &theme);
     } else if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
         frame.set_cursor_position(cursor);
     }

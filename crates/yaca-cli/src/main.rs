@@ -27,6 +27,12 @@ use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{Action, AskRequest, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
+struct RuntimeConfig {
+    router: ProviderRouter,
+    model: String,
+    models: Vec<String>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "yaca",
@@ -110,23 +116,35 @@ fn build_session_engine(
     (engine, asks)
 }
 
-fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
+fn offline_router(model_override: Option<String>) -> RuntimeConfig {
     let router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
-    (
+    let model = model_override.unwrap_or_else(|| "offline".to_string());
+    RuntimeConfig {
         router,
-        model_override.unwrap_or_else(|| "offline".to_string()),
-    )
+        models: vec![model.clone()],
+        model,
+    }
 }
 
 /// Resolve a provider router + active model from opencode's config, falling back
 /// to the offline echo provider when no usable config is present.
-fn resolve_router(model_override: Option<String>) -> (ProviderRouter, String) {
+fn resolve_router(model_override: Option<String>) -> RuntimeConfig {
     match config::load() {
         Ok(Some(cfg)) => {
+            let mut models = cfg.models;
             let model = model_override
                 .or_else(|| std::env::var("YACA_MODEL").ok())
                 .unwrap_or(cfg.default_model);
-            (cfg.router, model)
+            if !models.contains(&model) {
+                models.push(model.clone());
+                models.sort();
+                models.dedup();
+            }
+            RuntimeConfig {
+                router: cfg.router,
+                model,
+                models,
+            }
         }
         Ok(None) => offline_router(model_override),
         Err(e) => {
@@ -152,9 +170,9 @@ async fn cmd_exec(prompt: String, model_override: Option<String>) -> anyhow::Res
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, _asks) = build_session_engine(store, router);
-    let agent = agent_with_model(&model);
+    let runtime = resolve_router(model_override);
+    let (engine, _asks) = build_session_engine(store, runtime.router);
+    let agent = agent_with_model(&runtime.model);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -188,9 +206,9 @@ async fn cmd_goal(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, _asks) = build_session_engine(store, router.clone());
-    let agent = agent_with_model(&model);
+    let runtime = resolve_router(model_override);
+    let (engine, _asks) = build_session_engine(store, runtime.router.clone());
+    let agent = agent_with_model(&runtime.model);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -201,8 +219,8 @@ async fn cmd_goal(
         .await
         .context("create session")?;
     let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ModelGoalEvaluator::new(
-        Arc::new(router),
-        ModelRef::new(&model),
+        Arc::new(runtime.router),
+        ModelRef::new(&runtime.model),
     ));
     let caps = SafetyCaps {
         max_iterations,
@@ -239,19 +257,19 @@ async fn cmd_tui(model_override: Option<String>) -> anyhow::Result<()> {
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks) = build_session_engine(store, router);
-    let agent = agent_with_model(&model);
-    tui::run(engine, agent, model, asks).await
+    let runtime = resolve_router(model_override);
+    let (engine, asks) = build_session_engine(store, runtime.router);
+    let agent = agent_with_model(&runtime.model);
+    tui::run(engine, agent, runtime.model, runtime.models, asks).await
 }
 
 async fn cmd_serve(bind: String, db: String, model_override: Option<String>) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, _asks) = build_session_engine(store, router);
+    let runtime = resolve_router(model_override);
+    let (engine, _asks) = build_session_engine(store, runtime.router);
     let state = AppState {
         engine,
-        agent: Arc::new(agent_with_model(&model)),
+        agent: Arc::new(agent_with_model(&runtime.model)),
     };
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -268,8 +286,8 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let uuid = uuid::Uuid::parse_str(&id).context("parse session id")?;
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
-    let (router, _model) = offline_router(None);
-    let (engine, _asks) = build_session_engine(store, router);
+    let runtime = offline_router(None);
+    let (engine, _asks) = build_session_engine(store, runtime.router);
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

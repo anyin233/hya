@@ -15,9 +15,11 @@ The CLI TUI owns side effects:
 - alternate screen enter/leave
 - panic hook that restores the terminal before printing panic output
 - keyboard input
+- mouse wheel scroll events
 - spawning assistant turns
 - subscribing to the engine event bus
 - receiving permission ask requests
+- mirroring interactive history to per-session JSON/JSONL bundles
 
 On startup it creates a session, primes the projection, enters the alternate
 screen, and draws the initial UI. Each submitted prompt runs in a spawned task:
@@ -46,6 +48,7 @@ modules:
 
 - current `Projection`
 - optional goal, loop, team, and permission views
+- optional generic dialog view for commands such as model selection, help, and resume
 - input buffer
 - running flag
 - scrollback
@@ -68,7 +71,8 @@ When the timeline region is at least 110 columns wide, the renderer reserves a
 right sidebar for context. Otherwise the timeline uses the full width.
 
 If a permission request is active, a modal-like permission panel is drawn near
-the bottom.
+the bottom. Otherwise a generic centered dialog may render command lists,
+model choices, or resumable sessions.
 
 ## Input
 
@@ -79,8 +83,31 @@ General keys:
 | `Enter` | Submit input if no turn is running and input is not blank. |
 | `Backspace` | Delete one character. |
 | `PageUp` / `PageDown` | Scroll five lines. |
-| `Up` / `Down` | Scroll one line. |
-| `Esc`, `Ctrl-C`, `Ctrl-D` | Quit. |
+| `Home` / `End` | Jump to oldest or newest transcript content. |
+| mouse wheel | Scroll transcript. |
+| `Up` / `Down` | Navigate prompt history; scroll one line when no prompt history exists. |
+| `Tab` while input starts with `/` | Complete slash command prefixes; open command choices when ambiguous. |
+| `F2` | Open the model selector. |
+| `Ctrl-P` | Open the command/help dialog. |
+| `Ctrl-N` | Start a new session. |
+| `Ctrl-R` | Open the resume dialog. |
+| `Ctrl-C` | Close dialog, clear input, interrupt a running turn, or exit only when idle. |
+
+Slash commands:
+
+Slash command completion is handled by the controller before prompt
+submission. `/m` + `Tab` completes to `/model `; `/` + `Tab` opens the command
+list, where `Enter` or `Tab` accepts the selected command.
+
+| Command | Behavior |
+| --- | --- |
+| `/model` | Open model selection. |
+| `/resume` | Open resumable session selection. |
+| `/new` | Start a new session. |
+| `/help` | Show commands and shortcuts. |
+
+Generic list dialogs use `Up`/`Down`, `Tab`/`Shift-Tab`, `Home`/`End`,
+`PageUp`/`PageDown`, `Enter`, and `Esc`.
 
 Permission panel keys:
 
@@ -88,8 +115,27 @@ Permission panel keys:
 | --- | --- |
 | `Left` / `Right` / `Tab` | Move selected decision. |
 | `Enter` | Confirm selected decision. |
-| `Esc` | Deny. |
+| `Esc` / `Ctrl-C` | Deny. |
 | text input | Add optional rejection feedback. |
+
+## Interactive History
+
+The TUI does not use one central database as the canonical conversation
+history. It mirrors each interactive session into its own bundle:
+
+```text
+<history-root>/
+  index.json
+  sessions/
+    <session-uuid>/
+      meta.json
+      events.jsonl
+```
+
+`YACA_HISTORY_DIR` overrides the root. Otherwise yaca uses `~/.yaca/history`.
+`index.json` is only a rebuildable listing cache; `meta.json` and
+`events.jsonl` are the source of truth. A malformed session bundle is skipped
+while other sessions remain listable and resumable.
 
 ## Rendering Tool Calls
 
@@ -109,4 +155,8 @@ non-empty text.
 Because `yaca-tui` is pure rendering, tests in
 [`../../crates/yaca-tui/tests`](../../crates/yaca-tui/tests) can render states
 into buffers without opening a real terminal. The CLI event loop remains covered
-separately by the runtime paths it exercises.
+separately by controller, history, and dummy harness tests in `yaca-cli`.
+
+The dummy harness drives the TUI controller with key events and a local provider
+that records requested models while returning a fixed `dummy response`. This
+keeps model switching, slash command, and prompt/response tests off the network.

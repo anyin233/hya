@@ -4,6 +4,7 @@
 //! pure `yaca-tui` crate. A spawned task runs each turn and streams its events
 //! back through the engine `EventBus`, which this loop folds into the view.
 
+use std::collections::HashSet;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,9 +23,18 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_proto::SessionId;
+use yaca_proto::{ModelRef, SessionId};
 use yaca_tool::{Action as ToolAction, AskRequest, Decision};
 use yaca_tui::{AppState, PermissionPrompt};
+
+use self::controller::{Controller, SessionSummary, TuiEffect};
+use self::history::{HistoryStore, SessionMeta};
+
+mod commands;
+mod controller;
+#[cfg(test)]
+mod harness;
+mod history;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -46,58 +56,6 @@ fn install_panic_hook() {
     }));
 }
 
-enum Action {
-    None,
-    Quit,
-    Submit(String),
-}
-
-fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
-    {
-        return Action::Quit;
-    }
-    match key.code {
-        KeyCode::Esc => Action::Quit,
-        KeyCode::Enter => {
-            if app.running || app.input.trim().is_empty() {
-                Action::None
-            } else {
-                app.scroll_back = 0;
-                Action::Submit(std::mem::take(&mut app.input))
-            }
-        }
-        KeyCode::Backspace => {
-            app.input.pop();
-            Action::None
-        }
-        KeyCode::PageUp => {
-            app.scroll_up(5);
-            Action::None
-        }
-        KeyCode::PageDown => {
-            app.scroll_down(5);
-            Action::None
-        }
-        KeyCode::Up => {
-            app.scroll_up(1);
-            Action::None
-        }
-        KeyCode::Down => {
-            app.scroll_down(1);
-            Action::None
-        }
-        KeyCode::Char(c) => {
-            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                app.input.push(c);
-            }
-            Action::None
-        }
-        _ => Action::None,
-    }
-}
-
 fn action_label(action: ToolAction) -> String {
     match action {
         ToolAction::Read => "read",
@@ -109,6 +67,31 @@ fn action_label(action: ToolAction) -> String {
         ToolAction::ExternalDirectory => "external-dir",
     }
     .to_string()
+}
+
+fn session_summaries(history: &HistoryStore) -> Vec<SessionSummary> {
+    history
+        .list_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|meta| SessionSummary {
+            id: meta.id,
+            title: if meta.title == "Untitled session" && !meta.last_user_message.is_empty() {
+                meta.last_user_message
+            } else {
+                meta.title
+            },
+            detail: format!("{} · {}", meta.model, meta.workdir),
+        })
+        .collect()
+}
+
+fn meta_for(history: &HistoryStore, id: &str) -> Option<SessionMeta> {
+    history
+        .list_sessions()
+        .ok()?
+        .into_iter()
+        .find(|meta| meta.id == id)
 }
 
 fn decision_from(prompt: &PermissionPrompt) -> Decision {
@@ -123,6 +106,9 @@ fn decision_from(prompt: &PermissionPrompt) -> Decision {
 
 fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> {
     let prompt = app.permission.as_mut()?;
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        return Some(Decision::Reject { feedback: None });
+    }
     match key.code {
         KeyCode::Esc => Some(Decision::Reject { feedback: None }),
         KeyCode::Enter => Some(decision_from(prompt)),
@@ -176,11 +162,13 @@ fn spawn_turn(
 
 pub async fn run(
     engine: Arc<SessionEngine>,
-    agent: AgentSpec,
+    mut agent: AgentSpec,
     model: String,
+    models: Vec<String>,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
 ) -> anyhow::Result<()> {
-    let session = engine
+    let history = HistoryStore::from_env();
+    let mut session = engine
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
@@ -189,9 +177,20 @@ pub async fn run(
         })
         .await
         .context("create session")?;
+    let _ = history.create_session(
+        session,
+        agent.model.as_str(),
+        agent.name.as_str(),
+        &agent.workdir.to_string_lossy(),
+    );
+    for env in engine.replay(session).await.unwrap_or_default() {
+        let _ = history.append_envelope(session, &env);
+    }
+    let mut hydrated_sessions = HashSet::new();
+    hydrated_sessions.insert(session);
 
     let mut bus = engine.bus().subscribe();
-    let mut app = AppState {
+    let app = AppState {
         model,
         session_label: session.to_string().chars().take(12).collect(),
         projection: engine
@@ -200,6 +199,8 @@ pub async fn run(
             .context("prime projection")?,
         ..AppState::default()
     };
+    let mut controller =
+        Controller::with_models_and_sessions(app, models, session_summaries(&history));
 
     install_panic_hook();
     enable_raw_mode().context("enable raw mode")?;
@@ -208,14 +209,14 @@ pub async fn run(
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).context("initialize terminal")?;
 
-    let cancel = CancellationToken::new();
+    let mut turn_cancel = CancellationToken::new();
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
 
     terminal
-        .draw(|f| yaca_tui::draw(f, &mut app))
+        .draw(|f| yaca_tui::draw(f, &mut controller.app))
         .context("draw")?;
 
     loop {
@@ -224,27 +225,29 @@ pub async fn run(
             msg = bus.recv() => match msg {
                 Ok(env) => {
                     if env.event.session() == Some(session) {
-                        app.apply(&env);
+                        controller.app.apply(&env);
+                        let _ = history.append_envelope(session, &env);
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
                     let projection = engine.read_projection(session).await.unwrap_or_default();
-                    app.projection = projection;
+                    controller.app.projection = projection;
                 }
                 Err(RecvError::Closed) => break,
             },
             _ = done_rx.recv() => {
                 while let Ok(env) = bus.try_recv() {
                     if env.event.session() == Some(session) {
-                        app.apply(&env);
+                        controller.app.apply(&env);
+                        let _ = history.append_envelope(session, &env);
                     }
                 }
-                app.running = false;
+                controller.app.running = false;
             }
-            maybe_ask = asks.recv(), if app.permission.is_none() => {
+            maybe_ask = asks.recv(), if controller.app.permission.is_none() => {
                 if let Some(req) = maybe_ask {
                     pending = Some(req.reply);
-                    app.permission = Some(PermissionPrompt {
+                    controller.app.permission = Some(PermissionPrompt {
                         title: action_label(req.action),
                         detail: req.resource.pattern(),
                         selected: 0,
@@ -254,41 +257,102 @@ pub async fn run(
             }
             maybe = events.next() => match maybe {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
-                    {
-                        break;
-                    }
-                    if app.permission.is_some() {
-                        if let Some(decision) = handle_permission_key(key, &mut app) {
+                    if controller.app.permission.is_some() {
+                        if let Some(decision) = handle_permission_key(key, &mut controller.app) {
                             if let Some(tx) = pending.take() {
                                 let _ = tx.send(decision);
                             }
-                            app.permission = None;
+                            controller.app.permission = None;
                         }
                     } else {
-                        match handle_key(key, &mut app) {
-                            Action::Quit => break,
-                            Action::Submit(prompt) => {
-                                app.running = true;
+                        match controller.handle_key(key) {
+                            TuiEffect::Exit => break,
+                            TuiEffect::Interrupt => {
+                                turn_cancel.cancel();
+                            }
+                            TuiEffect::SelectModel(model) => {
+                                agent.model = ModelRef::new(model);
+                            }
+                            TuiEffect::SystemMessage(message) => {
+                                let _ = engine.inject_system_message(session, message).await;
+                            }
+                            TuiEffect::NewSession => {
+                                turn_cancel.cancel();
+                                let new_session = engine
+                                    .create(CreateSession {
+                                        parent: None,
+                                        agent: agent.name.clone(),
+                                        model: agent.model.clone(),
+                                        workdir: agent.workdir.to_string_lossy().into_owned(),
+                                    })
+                                    .await
+                                    .context("create new session")?;
+                                session = new_session;
+                                hydrated_sessions.insert(session);
+                                let _ = history.create_session(
+                                    session,
+                                    agent.model.as_str(),
+                                    agent.name.as_str(),
+                                    &agent.workdir.to_string_lossy(),
+                                );
+                                controller.app.projection = engine
+                                    .read_projection(session)
+                                    .await
+                                    .context("read new session projection")?;
+                                controller.app.session_label =
+                                    session.to_string().chars().take(12).collect();
+                                controller.app.input.clear();
+                                controller.app.scroll_back = 0;
+                                controller.app.running = false;
+                                controller.set_sessions(session_summaries(&history));
+                            }
+                            TuiEffect::ResumeSession(id) => {
+                                if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
+                                    let resume = SessionId::from_uuid(uuid);
+                                    if !hydrated_sessions.contains(&resume) {
+                                        let _ = history.hydrate_store(engine.store(), resume).await;
+                                        hydrated_sessions.insert(resume);
+                                    }
+                                    session = resume;
+                                    if let Some(meta) = meta_for(&history, &id) {
+                                        controller.app.model = meta.model.clone();
+                                        agent.model = ModelRef::new(meta.model);
+                                    }
+                                    controller.app.projection = engine
+                                        .read_projection(session)
+                                        .await
+                                        .context("read resumed session projection")?;
+                                    controller.app.session_label =
+                                        session.to_string().chars().take(12).collect();
+                                    controller.app.input.clear();
+                                    controller.app.scroll_back = 0;
+                                    controller.app.running = false;
+                                }
+                            }
+                            TuiEffect::Submit(prompt) => {
+                                controller.app.running = true;
+                                turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(
-                                    &engine, &agent, session, prompt, &done_tx, &cancel,
+                                    &engine, &agent, session, prompt, &done_tx, &turn_cancel,
                                 ));
                             }
-                            Action::None => {}
+                            TuiEffect::None => {}
                         }
                     }
+                }
+                Some(Ok(Event::Mouse(mouse))) => {
+                    let _ = controller.handle_mouse(mouse);
                 }
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,
             },
         }
         terminal
-            .draw(|f| yaca_tui::draw(f, &mut app))
+            .draw(|f| yaca_tui::draw(f, &mut controller.app))
             .context("draw")?;
     }
 
-    cancel.cancel();
+    turn_cancel.cancel();
     if let Some(handle) = current_turn.take() {
         let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
     }
