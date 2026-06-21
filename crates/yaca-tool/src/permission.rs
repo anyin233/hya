@@ -44,11 +44,11 @@ pub enum Mode {
     Deny,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
     AllowOnce,
     AllowAlways,
-    Reject,
+    Reject { feedback: Option<String> },
 }
 
 #[derive(Clone, Debug)]
@@ -131,8 +131,12 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 
 #[derive(Error, Debug)]
 pub enum PermissionError {
-    #[error("permission denied: {action:?} on {resource:?}")]
-    Denied { action: Action, resource: Resource },
+    #[error("permission denied: {action:?} on {resource:?}{}", .feedback.as_deref().map_or(String::new(), |f| format!(" — user says: {f}")))]
+    Denied {
+        action: Action,
+        resource: Resource,
+        feedback: Option<String>,
+    },
     #[error("permission channel unavailable")]
     Unavailable,
 }
@@ -164,33 +168,48 @@ impl PermissionPlane {
     }
 
     pub async fn assert(&self, action: Action, resource: Resource) -> Result<(), PermissionError> {
+        // Precedence: a snapshot Allow/Deny is authoritative. Only on Ask do we
+        // consult the accumulated "allow always" rules, then fall through to the user.
         match self.snapshot.evaluate(action, &resource) {
-            Mode::Allow => Ok(()),
-            Mode::Deny => Err(PermissionError::Denied { action, resource }),
-            Mode::Ask => {
-                let (tx, rx) = oneshot::channel();
-                let req = AskRequest {
-                    id: PermissionRequestId::new(),
+            Mode::Allow => return Ok(()),
+            Mode::Deny => {
+                return Err(PermissionError::Denied {
                     action,
-                    resource: resource.clone(),
-                    reply: tx,
-                };
-                self.asks
-                    .send(req)
-                    .map_err(|_| PermissionError::Unavailable)?;
-                match rx.await.map_err(|_| PermissionError::Unavailable)? {
-                    Decision::AllowOnce => Ok(()),
-                    Decision::AllowAlways => {
-                        self.persistent.lock().await.rules.push(Rule::new(
-                            action,
-                            resource.pattern(),
-                            Mode::Allow,
-                        ));
-                        Ok(())
-                    }
-                    Decision::Reject => Err(PermissionError::Denied { action, resource }),
-                }
+                    resource,
+                    feedback: None,
+                });
             }
+            Mode::Ask => {}
+        }
+        if self.persistent.lock().await.evaluate(action, &resource) == Mode::Allow {
+            return Ok(());
+        }
+        let (tx, rx) = oneshot::channel();
+        let req = AskRequest {
+            id: PermissionRequestId::new(),
+            action,
+            resource: resource.clone(),
+            reply: tx,
+        };
+        self.asks
+            .send(req)
+            .map_err(|_| PermissionError::Unavailable)?;
+        match rx.await.map_err(|_| PermissionError::Unavailable)? {
+            Decision::AllowOnce => Ok(()),
+            Decision::AllowAlways => {
+                // Widen to the whole action (e.g. all bash), not the exact resource.
+                self.persistent
+                    .lock()
+                    .await
+                    .rules
+                    .push(Rule::new(action, "*", Mode::Allow));
+                Ok(())
+            }
+            Decision::Reject { feedback } => Err(PermissionError::Denied {
+                action,
+                resource,
+                feedback,
+            }),
         }
     }
 }

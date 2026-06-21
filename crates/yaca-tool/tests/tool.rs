@@ -96,7 +96,9 @@ async fn ask_then_allow_once_then_reject() {
             .await
     });
     let req2 = rx.recv().await.unwrap();
-    req2.reply.send(Decision::Reject).unwrap();
+    req2.reply
+        .send(Decision::Reject { feedback: None })
+        .unwrap();
     assert!(h2.await.unwrap().is_err());
 }
 
