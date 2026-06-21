@@ -71,6 +71,7 @@ pub fn decide(policy: &PermissionPolicy, action: Action, resource: &Resource) ->
         PermissionPolicy::Yolo => Decision::AllowOnce,
         PermissionPolicy::ReadOnly => Decision::Reject { feedback: None },
         PermissionPolicy::Scoped { workdir } => match (action, resource) {
+            (Action::Mcp, _) => Decision::AllowOnce,
             (Action::Bash, _) => Decision::AllowOnce,
             (Action::Edit, Resource::Path(p)) => {
                 if path_in_workdir(workdir, p) {
@@ -167,6 +168,27 @@ mod tests {
         );
         assert_eq!(
             decide(&p, Action::Bash, &Resource::Command("rm -rf /".into())),
+            Decision::AllowOnce
+        );
+    }
+
+    #[test]
+    fn mcp_policy_matches_wave5_contract() {
+        let resource = Resource::Command("mcp__echo__ping".into());
+        assert_eq!(
+            decide(&PermissionPolicy::Yolo, Action::Mcp, &resource),
+            Decision::AllowOnce
+        );
+        assert_eq!(
+            decide(&PermissionPolicy::ReadOnly, Action::Mcp, &resource),
+            Decision::Reject { feedback: None }
+        );
+        assert_eq!(
+            decide(
+                &PermissionPolicy::Scoped { workdir: wd() },
+                Action::Mcp,
+                &resource
+            ),
             Decision::AllowOnce
         );
     }

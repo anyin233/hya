@@ -11,11 +11,14 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use serde::Deserialize;
+use yaca_mcp::McpServerConfig;
 use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 
 pub struct ResolvedConfig {
     pub router: ProviderRouter,
     pub default_model: String,
+    pub has_providers: bool,
+    pub mcp: BTreeMap<String, McpServerConfig>,
 }
 
 /// Top-level shape of `~/.config/yaca/config.yaml`.
@@ -26,6 +29,8 @@ struct FileConfig {
     default_model: Option<String>,
     #[serde(default)]
     providers: BTreeMap<String, ProviderConfig>,
+    #[serde(default)]
+    mcp: BTreeMap<String, McpServerConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +125,36 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
     Ok(out)
 }
 
+fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerConfig>> {
+    let mut out = BTreeMap::new();
+    for (id, server) in &file.mcp {
+        if server.enabled == Some(false) {
+            continue;
+        }
+        let env = server
+            .env
+            .as_ref()
+            .map(|vars| {
+                vars.iter()
+                    .map(|(key, value)| {
+                        resolve_secret(value).map(|resolved| (key.clone(), resolved))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()
+            })
+            .transpose()?;
+        out.insert(
+            id.clone(),
+            McpServerConfig {
+                command: server.command.clone(),
+                env,
+                enabled: server.enabled,
+                timeout_ms: server.timeout_ms,
+            },
+        );
+    }
+    Ok(out)
+}
+
 fn choose_default(file_default: Option<String>, models: &[String]) -> String {
     if let Some(model) = file_default {
         return model;
@@ -147,8 +182,9 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let file = parse_config(&yaml)?;
+    let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
-    if parsed.is_empty() {
+    if parsed.is_empty() && mcp.is_empty() {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
@@ -164,13 +200,15 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
         router = router.with(Arc::new(provider));
     }
-    if models.is_empty() {
+    if models.is_empty() && mcp.is_empty() {
         return Ok(None);
     }
     let default_model = choose_default(file.default_model, &models);
     Ok(Some(ResolvedConfig {
         router,
         default_model,
+        has_providers: !models.is_empty(),
+        mcp,
     }))
 }
 
@@ -266,6 +304,34 @@ providers:
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].api_key, None);
         assert_eq!(parsed[0].base_url, "https://api.example/v1");
+    }
+
+    #[test]
+    fn parses_mcp_and_skips_disabled_servers() {
+        let yaml = "
+mcp:
+  echo:
+    command: [python3, echo.py]
+    env:
+      TOKEN: literal-token
+    timeout_ms: 250
+  off:
+    enabled: false
+    command: [nope]
+";
+        let file = parse_config(yaml).unwrap();
+        let mcp = resolve_mcp(&file).unwrap();
+        assert_eq!(mcp.len(), 1);
+        let echo = mcp.get("echo").unwrap();
+        assert_eq!(
+            echo.command,
+            vec!["python3".to_string(), "echo.py".to_string()]
+        );
+        assert_eq!(
+            echo.env.as_ref().unwrap().get("TOKEN").unwrap(),
+            "literal-token"
+        );
+        assert_eq!(echo.timeout_ms, Some(250));
     }
 
     #[test]

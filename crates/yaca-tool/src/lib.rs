@@ -13,4 +13,4 @@ pub use permission::{
     Resource, Rule, glob_match,
 };
 pub use spawn::{MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
-pub use tool::{Tool, ToolCtx, ToolError, ToolRegistry};
+pub use tool::{DuplicateName, Tool, ToolCtx, ToolError, ToolRegistry};
