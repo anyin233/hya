@@ -19,3 +19,4 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+yaca-proto = { workspace = true }

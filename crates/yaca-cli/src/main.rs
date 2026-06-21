@@ -23,17 +23,17 @@ use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{
-    AgentSpec, CompactionConfig, CreateSession, EventBus, GoalEvaluator, ModelGoalEvaluator,
-    ModelSummarizer, PromptEnv, SafetyCaps, SessionEngine, Summarizer, build_system_prompt,
-    run_goal,
+    AgentSpec, CompactionConfig, CreateSession, EventBus, GoalEvaluator, MemberSpec, MemberStatus,
+    ModelGoalEvaluator, ModelSummarizer, PromptEnv, SafetyCaps, SessionEngine, Summarizer,
+    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_goal, run_team,
 };
-use yaca_proto::{AgentName, ModelRef, SessionId};
+use yaca_proto::{AgentName, MemberId, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    Action, AskRequest, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionRequest,
-    Rule, ToolRegistry,
+    Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
+    QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
 };
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
@@ -196,6 +196,47 @@ fn compaction_config() -> CompactionConfig {
     }
 }
 
+fn spawn_team_supervisor(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<SpawnRequest>,
+    engine: Arc<SessionEngine>,
+    base: AgentSpec,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            let engine = engine.clone();
+            let specs: Vec<MemberSpec> = req
+                .members
+                .into_iter()
+                .map(|m| MemberSpec {
+                    id: MemberId::new(),
+                    agent: base.clone(),
+                    directive: m.prompt,
+                })
+                .collect();
+            tokio::spawn(async move {
+                let evidence = run_team(engine.clone(), req.parent, specs, req.cancel).await;
+                let envelope = TeamEvidenceEnvelope {
+                    members: evidence.clone(),
+                };
+                let _ = project_envelope(&engine, req.parent, &envelope).await;
+                let outcomes: Vec<MemberOutcome> = evidence
+                    .into_iter()
+                    .map(|e| MemberOutcome {
+                        member: e.member,
+                        session: e.session,
+                        status: match e.status {
+                            MemberStatus::Done => "done".to_string(),
+                            MemberStatus::Failed => "failed".to_string(),
+                        },
+                        summary: e.summary,
+                    })
+                    .collect();
+                let _ = req.reply.send(outcomes);
+            });
+        }
+    });
+}
+
 fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
@@ -214,13 +255,16 @@ fn build_session_engine(
     ]);
     let (permission, asks) = PermissionPlane::new(rules);
     let (interaction, questions) = InteractionPlane::new();
+    let (spawner, spawn_rx) = SpawnerPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let engine = Arc::new(
         SessionEngine::new(store, router, tools, permission, EventBus::default())
             .with_compaction(summarizer, compaction_config())
-            .with_interaction(interaction),
+            .with_interaction(interaction)
+            .with_spawner(spawner),
     );
+    spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
     (engine, asks, questions)
 }
 

@@ -2,6 +2,7 @@
 
 pub mod interaction;
 pub mod permission;
+pub mod spawn;
 pub mod tool;
 
 pub use interaction::{
@@ -11,4 +12,5 @@ pub use permission::{
     Action, AskRequest, Decision, Mode, PermissionError, PermissionPlane, PermissionRules,
     Resource, Rule, glob_match,
 };
+pub use spawn::{MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
 pub use tool::{Tool, ToolCtx, ToolError, ToolRegistry};

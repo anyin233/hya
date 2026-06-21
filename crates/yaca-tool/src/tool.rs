@@ -7,10 +7,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use yaca_proto::{ToolName, ToolSchema};
+use yaca_proto::{SessionId, ToolName, ToolSchema};
 
 use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::permission::{Action, PermissionError, PermissionPlane, Resource, glob_match};
+use crate::spawn::{SpawnMember, SpawnerPlane};
 
 #[derive(Error, Debug)]
 pub enum ToolError {
@@ -31,6 +32,8 @@ pub enum ToolError {
 pub struct ToolCtx {
     pub permission: PermissionPlane,
     pub interaction: InteractionPlane,
+    pub spawner: SpawnerPlane,
+    pub parent_session: Option<SessionId>,
     pub workdir: PathBuf,
     pub cancel: CancellationToken,
 }
@@ -73,6 +76,7 @@ impl ToolRegistry {
             Arc::new(GrepTool),
             Arc::new(ShellTool),
             Arc::new(AskUserTool),
+            Arc::new(TaskTool),
         ];
         let mut tools = HashMap::new();
         for t in list {
@@ -537,5 +541,113 @@ impl Tool for AskUserTool {
                 Ok(json!({ "answer": "", "cancelled": true }))
             }
         }
+    }
+}
+
+pub struct TaskTool;
+
+#[derive(Deserialize)]
+struct TaskMemberInput {
+    #[serde(default)]
+    description: String,
+    prompt: String,
+    subagent_type: String,
+}
+
+#[derive(Deserialize)]
+struct TaskInput {
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    subagent_type: String,
+    #[serde(default)]
+    members: Vec<TaskMemberInput>,
+}
+
+#[async_trait]
+impl Tool for TaskTool {
+    fn name(&self) -> &str {
+        "task"
+    }
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "task",
+            "Dispatch subagents to work in parallel and return their evidence. Give a single {description, prompt, subagent_type} or a members[] list. subagent_type is one of quick|deep|ultrabrain|writing.",
+            json!({
+                "description": { "type": "string" },
+                "prompt": { "type": "string" },
+                "subagent_type": { "type": "string", "enum": ["quick", "deep", "ultrabrain", "writing"] },
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string" },
+                            "prompt": { "type": "string" },
+                            "subagent_type": { "type": "string", "enum": ["quick", "deep", "ultrabrain", "writing"] }
+                        },
+                        "required": ["prompt", "subagent_type"]
+                    }
+                }
+            }),
+            &[],
+        )
+    }
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        if ctx.parent_session.is_some() {
+            return Err(ToolError::Other(
+                "the task tool is lead-only; a subagent cannot spawn more subagents".to_string(),
+            ));
+        }
+        let input: TaskInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let mut members: Vec<SpawnMember> = input
+            .members
+            .into_iter()
+            .map(|m| SpawnMember {
+                description: m.description,
+                prompt: m.prompt,
+                subagent_type: m.subagent_type,
+            })
+            .collect();
+        if members.is_empty() {
+            if input.prompt.trim().is_empty() {
+                return Err(ToolError::Input(
+                    "provide a prompt + subagent_type, or a non-empty members list".to_string(),
+                ));
+            }
+            members.push(SpawnMember {
+                description: input.description,
+                prompt: input.prompt,
+                subagent_type: input.subagent_type,
+            });
+        }
+        for member in &members {
+            ctx.permission
+                .assert(
+                    Action::Task,
+                    Resource::Subagent(member.subagent_type.clone()),
+                )
+                .await?;
+        }
+        let outcomes = ctx
+            .spawner
+            .spawn(members, ctx.cancel.clone())
+            .await
+            .map_err(|e| ToolError::Other(e.to_string()))?;
+        let members_json: Vec<Value> = outcomes
+            .into_iter()
+            .map(|o| {
+                json!({
+                    "member": o.member,
+                    "session": o.session,
+                    "status": o.status,
+                    "summary": o.summary,
+                })
+            })
+            .collect();
+        Ok(json!({ "members": members_json }))
     }
 }
