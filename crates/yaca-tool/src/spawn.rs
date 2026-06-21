@@ -8,6 +8,7 @@ pub struct SpawnMember {
     pub description: String,
     pub prompt: String,
     pub subagent_type: String,
+    pub task_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -22,6 +23,7 @@ pub struct SpawnRequest {
     pub parent: SessionId,
     pub members: Vec<SpawnMember>,
     pub cancel: CancellationToken,
+    pub background: bool,
     pub reply: oneshot::Sender<Vec<MemberOutcome>>,
 }
 
@@ -56,12 +58,30 @@ impl SpawnerPlane {
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
+        self.spawn_inner(members, cancel, false).await
+    }
+
+    pub async fn spawn_background(
+        &self,
+        members: Vec<SpawnMember>,
+        cancel: CancellationToken,
+    ) -> Result<Vec<MemberOutcome>, SpawnError> {
+        self.spawn_inner(members, cancel, true).await
+    }
+
+    async fn spawn_inner(
+        &self,
+        members: Vec<SpawnMember>,
+        cancel: CancellationToken,
+        background: bool,
+    ) -> Result<Vec<MemberOutcome>, SpawnError> {
         let parent = self.session.ok_or(SpawnError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
         let req = SpawnRequest {
             parent,
             members,
             cancel,
+            background,
             reply: tx,
         };
         self.tx.send(req).map_err(|_| SpawnError::Unavailable)?;
@@ -85,6 +105,7 @@ mod tests {
                         description: "d".to_string(),
                         prompt: "p".to_string(),
                         subagent_type: "quick".to_string(),
+                        task_id: None,
                     }],
                     CancellationToken::new(),
                 )

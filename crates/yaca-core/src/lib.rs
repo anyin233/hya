@@ -7,6 +7,7 @@ pub mod compaction;
 pub mod completion;
 pub mod engine;
 pub mod error;
+pub mod hooks;
 pub mod loop_mode;
 pub mod prompt;
 pub mod subagent;
@@ -25,6 +26,11 @@ pub use completion::{
 };
 pub use engine::{AgentSpec, CreateSession, SessionEngine};
 pub use error::CoreError;
+pub use hooks::{
+    ChatParamsInput, ChatParamsOutcome, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, NoopHookHost, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+};
 pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
     cost_preflight, drive_loop, run_loop,
