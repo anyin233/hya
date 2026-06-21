@@ -34,6 +34,7 @@ use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt};
 
 use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
+use crate::config::ModelEntry;
 
 mod agents;
 mod commands;
@@ -381,7 +382,7 @@ fn spawn_turn(
 
 pub struct RunOptions {
     pub model: String,
-    pub models: Vec<String>,
+    pub models: Vec<ModelEntry>,
     pub asks: mpsc::UnboundedReceiver<AskRequest>,
     pub questions: mpsc::UnboundedReceiver<QuestionRequest>,
     pub initial_session: SessionId,
