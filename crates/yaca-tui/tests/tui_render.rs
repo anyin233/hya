@@ -6,7 +6,10 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
+use serde_json::json;
+use yaca_proto::{
+    Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId, ToolCallId, ToolName,
+};
 use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, draw};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
@@ -32,20 +35,20 @@ fn env(seq: u64, event: Event) -> Envelope {
     }
 }
 
-fn with_assistant_message(state: &mut AppState, text: &str) {
+fn with_text_message(state: &mut AppState, base_seq: u64, role: Role, text: &str) {
     let session = SessionId::new();
     let message = MessageId::new();
     let part = PartId::new();
     state.apply(&env(
-        1,
+        base_seq,
         Event::MessageStarted {
             session,
             message,
-            role: Role::Assistant,
+            role,
         },
     ));
     state.apply(&env(
-        2,
+        base_seq + 1,
         Event::TextStart {
             session,
             message,
@@ -53,7 +56,7 @@ fn with_assistant_message(state: &mut AppState, text: &str) {
         },
     ));
     state.apply(&env(
-        3,
+        base_seq + 2,
         Event::TextDelta {
             session,
             message,
@@ -63,25 +66,88 @@ fn with_assistant_message(state: &mut AppState, text: &str) {
     ));
 }
 
+fn with_assistant_message(state: &mut AppState, text: &str) {
+    with_text_message(state, 1, Role::Assistant, text);
+}
+
+fn with_user_message(state: &mut AppState, text: &str) {
+    with_text_message(state, 10, Role::User, text);
+}
+
+fn with_tool_message(state: &mut AppState, base_seq: u64, path: &str, time_ms: u64) {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let name = ToolName::new("read");
+    state.apply(&env(
+        base_seq,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        base_seq + 1,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: name.clone(),
+        },
+    ));
+    state.apply(&env(
+        base_seq + 2,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input: json!({ "path": path }),
+        },
+    ));
+    state.apply(&env(
+        base_seq + 3,
+        Event::ToolResult {
+            session,
+            message,
+            part,
+            call,
+            output: json!({ "ok": true }),
+            time_ms,
+        },
+    ));
+}
+
+fn rich_state() -> AppState {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        input: "type here".to_string(),
+        goal: Some(GoalView {
+            condition: "tests pass".to_string(),
+            turns: 2,
+            last_reason: "not yet".to_string(),
+        }),
+        loop_view: Some(LoopView {
+            target: "improve".to_string(),
+            iteration: 1,
+            budget: 5,
+            last_score: 60,
+        }),
+        team: vec![("alice".to_string(), "active".to_string())],
+        ..AppState::default()
+    };
+    with_assistant_message(&mut state, "HELLOTUI");
+    state
+}
+
 #[test]
 fn renders_chat_with_input_status_and_panels() {
-    let mut state = AppState::default();
-    state.model = "fake".to_string();
-    state.session_label = "sess-1".to_string();
-    state.input = "type here".to_string();
-    with_assistant_message(&mut state, "HELLOTUI");
-    state.goal = Some(GoalView {
-        condition: "tests pass".to_string(),
-        turns: 2,
-        last_reason: "not yet".to_string(),
-    });
-    state.loop_view = Some(LoopView {
-        target: "improve".to_string(),
-        iteration: 1,
-        budget: 5,
-        last_score: 60,
-    });
-    state.team = vec![("alice".to_string(), "active".to_string())];
+    let mut state = rich_state();
 
     let text = render(&mut state, 120, 24);
     assert!(text.contains("HELLOTUI"), "assistant text must render");
@@ -91,6 +157,52 @@ fn renders_chat_with_input_status_and_panels() {
     assert!(text.contains("LOOP"), "loop indicator must render");
     assert!(text.contains("alice"), "team panel must render");
     assert!(text.contains("message"), "input box title must render");
+}
+
+#[test]
+fn wide_layout_renders_sidebar_and_surface_labels() {
+    let mut state = rich_state();
+    let text = render(&mut state, 120, 36);
+    assert!(
+        text.contains("context"),
+        "wide layout should show context sidebar"
+    );
+    assert!(text.contains("model fake"), "sidebar should show model");
+    assert!(
+        text.contains("session sess-1"),
+        "sidebar should show session label"
+    );
+    assert!(text.contains("team"), "sidebar should summarize team");
+}
+
+#[test]
+fn narrow_layout_hides_sidebar_without_hiding_prompt() {
+    let mut state = rich_state();
+    let text = render(&mut state, 80, 24);
+    assert!(
+        !text.contains("context"),
+        "narrow layout should hide sidebar"
+    );
+    assert!(text.contains("type here"), "prompt must remain visible");
+    assert!(text.contains("HELLOTUI"), "transcript must remain visible");
+}
+
+#[test]
+fn timeline_renders_message_rails_and_tool_status() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        ..AppState::default()
+    };
+    with_user_message(&mut state, "please inspect files");
+    with_tool_message(&mut state, 20, "README.md", 12);
+    let text = render(&mut state, 120, 30);
+    assert!(text.contains("You"), "user label should render");
+    assert!(text.contains("│"), "timeline should use a left rail");
+    assert!(
+        text.contains("tool read completed"),
+        "completed tool should render as a compact status row"
+    );
 }
 
 #[test]
@@ -134,54 +246,8 @@ fn scroll_back_saturates() {
 
 #[test]
 fn tool_call_renders_as_one_compact_line() {
-    use serde_json::json;
-    use yaca_proto::{ToolCallId, ToolName};
-
     let mut state = AppState::default();
-    let session = SessionId::new();
-    let message = MessageId::new();
-    let part = PartId::new();
-    let call = ToolCallId::new();
-    state.apply(&env(
-        1,
-        Event::MessageStarted {
-            session,
-            message,
-            role: Role::Assistant,
-        },
-    ));
-    state.apply(&env(
-        2,
-        Event::ToolInputStart {
-            session,
-            message,
-            part,
-            call,
-            name: ToolName::new("read"),
-        },
-    ));
-    state.apply(&env(
-        3,
-        Event::ToolCallRequested {
-            session,
-            message,
-            part,
-            call,
-            name: ToolName::new("read"),
-            input: json!({ "path": "Cargo.toml" }),
-        },
-    ));
-    state.apply(&env(
-        4,
-        Event::ToolResult {
-            session,
-            message,
-            part,
-            call,
-            output: json!({ "ok": true }),
-            time_ms: 7,
-        },
-    ));
+    with_tool_message(&mut state, 1, "Cargo.toml", 7);
 
     let text = render(&mut state, 100, 12);
     assert!(text.contains("⚙ read"), "tool name renders");
