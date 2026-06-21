@@ -21,6 +21,13 @@ pub struct SessionStore {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub session: SessionId,
+    pub started_millis: i64,
+    pub events: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LedgerEntry {
     pub session: SessionId,
     pub role: String,
@@ -107,6 +114,29 @@ impl SessionStore {
 
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
         Ok(Projection::from_events(&self.replay(session).await?))
+    }
+
+    pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT session_id, MIN(ts) AS started, COUNT(*) AS n \
+             FROM event_log GROUP BY session_id ORDER BY started DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let key: Vec<u8> = r.try_get("session_id")?;
+            let started: i64 = r.try_get("started")?;
+            let n: i64 = r.try_get("n")?;
+            if let Ok(uuid) = uuid::Uuid::from_slice(&key) {
+                out.push(SessionInfo {
+                    session: SessionId::from_uuid(uuid),
+                    started_millis: started,
+                    events: n.max(0) as u64,
+                });
+            }
+        }
+        Ok(out)
     }
 
     pub async fn record_usage(&self, entry: &LedgerEntry) -> Result<(), StoreError> {
