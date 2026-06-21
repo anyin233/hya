@@ -317,7 +317,7 @@ impl SessionEngine {
                 let result = match self.tools.get(&tc.name) {
                     Some(tool) => {
                         let ctx = ToolCtx {
-                            permission: self.permission.clone(),
+                            permission: self.permission.for_session(session),
                             workdir: agent.workdir.clone(),
                             cancel: cancel.clone(),
                         };
