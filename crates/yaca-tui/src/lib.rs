@@ -5,11 +5,12 @@
 //! terminal I/O and the event loop live in the binary so this stays testable.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use yaca_proto::{Envelope, PartProjection, Projection, Role};
+use yaca_proto::{Envelope, Projection};
+
+mod layout;
+mod theme;
+mod view_model;
+mod widgets;
 
 #[derive(Default)]
 pub struct AppState {
@@ -52,158 +53,18 @@ impl AppState {
     }
 }
 
-fn role_style(role: Role) -> (&'static str, Color) {
-    match role {
-        Role::User => ("You", Color::Cyan),
-        Role::Assistant => ("yaca", Color::Green),
-        Role::System => ("sys", Color::DarkGray),
-    }
-}
-
-fn message_text(parts: &[PartProjection]) -> String {
-    let mut text = String::new();
-    for p in parts {
-        match p {
-            PartProjection::Text { text: t, .. } => text.push_str(t),
-            PartProjection::Tool { name, .. } => text.push_str(&format!("[tool:{name}]")),
-            PartProjection::Reasoning { .. } => {}
-        }
-    }
-    text
-}
-
-fn transcript_lines(projection: &Projection) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for m in &projection.session.messages {
-        let (label, color) = role_style(m.role);
-        let text = message_text(&m.parts);
-        let mut segments = text.split('\n');
-        let first = segments.next().unwrap_or_default();
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{label} "),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(first.to_string()),
-        ]));
-        for rest in segments {
-            lines.push(Line::from(format!("     {rest}")));
-        }
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Ask yaca anything. Type below and press Enter.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-    lines
-}
-
-fn status_line(state: &AppState) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled("yaca", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" · {} · {}", state.model, state.session_label)),
-        Span::styled(
-            if state.running {
-                "  ● streaming".to_string()
-            } else {
-                "  ○ idle".to_string()
-            },
-            Style::default().fg(if state.running {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            }),
-        ),
-    ];
-    if let Some(g) = &state.goal {
-        spans.push(Span::raw(format!(
-            "  GOAL:{} turns {}",
-            g.condition, g.turns
-        )));
-    }
-    if let Some(l) = &state.loop_view {
-        spans.push(Span::raw(format!(
-            "  LOOP:{} iter {}/{} score {}",
-            l.target, l.iteration, l.budget, l.last_score
-        )));
-    }
-    Line::from(spans)
-}
-
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
-
-    frame.render_widget(Paragraph::new(status_line(state)), rows[0]);
-
-    let lines = transcript_lines(&state.projection);
-    let inner_height = rows[1].height.saturating_sub(2);
-    let inner_width = rows[1].width.saturating_sub(2).max(1);
-    let total = lines.iter().fold(0u16, |acc, line| {
-        let wrapped = u16::try_from(line.width())
-            .unwrap_or(u16::MAX)
-            .div_ceil(inner_width)
-            .max(1);
-        acc.saturating_add(wrapped)
-    });
-    let max_back = total.saturating_sub(inner_height);
-    state.scroll_back = state.scroll_back.min(max_back);
-    let top = max_back.saturating_sub(state.scroll_back);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().title("conversation").borders(Borders::ALL))
-            .wrap(Wrap { trim: false })
-            .scroll((top, 0)),
-        rows[1],
-    );
-
-    if !state.team.is_empty() {
-        let team: Vec<Line> = state
-            .team
-            .iter()
-            .map(|(member, status)| Line::from(format!("{member}: {status}")))
-            .collect();
-        let overlay = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(rows[1]);
-        frame.render_widget(
-            Paragraph::new(team).block(Block::default().title("team").borders(Borders::ALL)),
-            overlay[1],
-        );
+    let theme = theme::Theme::yaca_dark();
+    let layout = layout::app_layout(frame.area());
+    widgets::render_status(frame, layout.status, state, &theme);
+    widgets::render_timeline(frame, layout.timeline, state, &theme);
+    if let Some(sidebar) = layout.sidebar {
+        widgets::render_sidebar(frame, sidebar, state, &theme);
     }
+    widgets::render_prompt(frame, layout.prompt, state, &theme);
+    widgets::render_footer(frame, layout.footer, state, &theme);
 
-    let input_row = rows[2];
-    let input_widget = match &state.pending_permission {
-        Some(req) => Paragraph::new(format!("PERMISSION REQUEST: {req}  [a]llow  [d]eny")).block(
-            Block::default()
-                .title("permission")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red)),
-        ),
-        None => Paragraph::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.input.clone()),
-        ]))
-        .block(
-            Block::default()
-                .title("message — Enter: send · Ctrl-C: quit · PgUp/PgDn: scroll")
-                .borders(Borders::ALL),
-        ),
-    };
-    frame.render_widget(input_widget, input_row);
-
-    if state.pending_permission.is_none() && !state.running {
-        let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
-        let rightmost = input_row.x + input_row.width.saturating_sub(2);
-        let cursor_x = (input_row.x + 3).saturating_add(typed).min(rightmost);
-        frame.set_cursor_position((cursor_x, input_row.y + 1));
+    if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
+        frame.set_cursor_position(cursor);
     }
 }
