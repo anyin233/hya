@@ -48,6 +48,7 @@ async fn engine_with(provider: FakeProvider) -> (Arc<SessionEngine>, AgentSpec) 
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
+        reasoning: None,
     };
     (engine, agent)
 }

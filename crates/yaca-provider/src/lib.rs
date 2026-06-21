@@ -57,7 +57,54 @@ pub struct Capabilities {
     pub usage_reporting: bool,
     pub json_output: bool,
     pub reasoning_stream: bool,
+    pub reasoning_request: bool,
     pub max_context: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" | "med" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    #[must_use]
+    pub fn anthropic_budget(self) -> u32 {
+        match self {
+            Self::Low => 1024,
+            Self::Medium => 4096,
+            Self::High => 16384,
+        }
+    }
+
+    #[must_use]
+    pub fn google_budget(self) -> u32 {
+        match self {
+            Self::Low => 1024,
+            Self::Medium => 8192,
+            Self::High => 24576,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +115,7 @@ pub struct CompletionRequest {
     pub tools: Vec<ToolSchema>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
+    pub reasoning: Option<ReasoningEffort>,
 }
 
 #[async_trait]

@@ -129,6 +129,7 @@ impl Summarizer for ModelSummarizer {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(1024),
+            reasoning: None,
         };
         let mut stream = self
             .providers

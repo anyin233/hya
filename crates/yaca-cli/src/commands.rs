@@ -8,6 +8,7 @@ pub enum Slash {
     Exit,
     Sessions,
     Yolo(Option<bool>),
+    Think(String),
     Template(String),
 }
 
@@ -28,6 +29,7 @@ pub fn parse_slash(input: &str) -> Option<Slash> {
             "off" | "false" => Some(false),
             _ => None,
         }),
+        "think" => Slash::Think(arg.to_string()),
         other if !other.is_empty() => Slash::Template(other.to_string()),
         _ => Slash::Help,
     })
@@ -42,6 +44,7 @@ pub fn help_text() -> String {
      /exit, /quit     quit yaca\n\
      /sessions        switch to another session\n\
      /yolo [on|off]   auto-approve tool actions (toggle)\n\
+     /think [level]   set reasoning effort (low|medium|high|off)\n\
      /<name>          run prompt template <name>.md"
         .to_string()
 }
@@ -99,6 +102,19 @@ mod tests {
         assert_eq!(parse_slash("/yolo off"), Some(Slash::Yolo(Some(false))));
         assert_eq!(parse_slash("/yolo true"), Some(Slash::Yolo(Some(true))));
         assert_eq!(parse_slash("/yolo false"), Some(Slash::Yolo(Some(false))));
+    }
+
+    #[test]
+    fn parses_think_variants() {
+        assert_eq!(parse_slash("/think"), Some(Slash::Think(String::new())));
+        assert_eq!(
+            parse_slash("/think high"),
+            Some(Slash::Think("high".to_string()))
+        );
+        assert_eq!(
+            parse_slash("/think off"),
+            Some(Slash::Think("off".to_string()))
+        );
     }
 
     #[test]

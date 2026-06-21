@@ -108,6 +108,7 @@ impl HttpProvider {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
                 usage_reporting: false,
+                reasoning_request: matches!(kind, ProviderKind::Anthropic | ProviderKind::Google),
                 max_context: 200_000,
                 ..Capabilities::default()
             },

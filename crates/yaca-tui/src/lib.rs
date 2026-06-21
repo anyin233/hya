@@ -26,6 +26,7 @@ pub struct AppState {
     pub model: String,
     pub session_label: String,
     pub yolo: bool,
+    pub reasoning_effort: Option<String>,
 }
 
 pub struct GoalView {
@@ -196,6 +197,12 @@ fn status_line(state: &AppState) -> Line<'static> {
         spans.push(Span::styled(
             "  [YOLO]".to_string(),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(effort) = &state.reasoning_effort {
+        spans.push(Span::styled(
+            format!("  think:{effort}"),
+            Style::default().fg(Color::Magenta),
         ));
     }
     if let Some(g) = &state.goal {

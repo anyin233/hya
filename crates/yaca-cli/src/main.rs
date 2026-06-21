@@ -53,7 +53,7 @@ struct Cli {
     /// Iteration cap for `-p` goal mode.
     #[arg(long, default_value_t = 6)]
     max_iterations: u32,
-    /// Model id to use (overrides opencode default + `YACA_MODEL`).
+    /// Model id to use (overrides config `default_model` + `YACA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     model: Option<String>,
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
@@ -176,6 +176,7 @@ fn agent_with_model(model: &str) -> AgentSpec {
         model: ModelRef::new(model),
         system_prompt,
         workdir,
+        reasoning: None,
     }
 }
 
