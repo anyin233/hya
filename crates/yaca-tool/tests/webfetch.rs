@@ -40,17 +40,22 @@ fn ctx_with(rules: Vec<Rule>) -> ToolCtx {
 }
 
 async fn serve_once(body: &'static str, content_type: &'static str) -> String {
+    serve_bytes(body.as_bytes(), content_type).await
+}
+
+async fn serve_bytes(body: &'static [u8], content_type: &'static str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut buf = [0u8; 1024];
         let _ = socket.read(&mut buf).await.unwrap();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        let header = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
             body.len()
         );
-        socket.write_all(response.as_bytes()).await.unwrap();
+        socket.write_all(header.as_bytes()).await.unwrap();
+        socket.write_all(body).await.unwrap();
     });
     format!("http://{addr}/doc")
 }
@@ -90,6 +95,31 @@ async fn webfetch_converts_html_to_readable_text_for_markdown() {
     assert!(output.contains("# Title"));
     assert!(output.contains("Hello world."));
     assert!(!output.contains("bad()"));
+}
+
+#[tokio::test]
+async fn webfetch_returns_open_code_attachment_for_images() {
+    let url = serve_bytes(
+        &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+        "image/png",
+    )
+    .await;
+    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
+
+    let out = tool
+        .execute(&ctx, json!({ "url": url, "format": "markdown" }))
+        .await
+        .unwrap();
+
+    assert_eq!(out["output"], "Image fetched successfully");
+    assert_eq!(out["metadata"], json!({}));
+    assert_eq!(out["attachments"][0]["type"], "file");
+    assert_eq!(out["attachments"][0]["mime"], "image/png");
+    assert_eq!(
+        out["attachments"][0]["url"],
+        "data:image/png;base64,iVBORw0KGgo="
+    );
 }
 
 #[tokio::test]

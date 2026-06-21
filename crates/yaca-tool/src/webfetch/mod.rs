@@ -3,6 +3,7 @@ mod html;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use yaca_proto::{ToolName, ToolSchema};
@@ -123,6 +124,18 @@ impl Tool for WebFetchTool {
                 "response too large (exceeds 5MB limit)".to_string(),
             ));
         }
+        if let Some(mime) = image_attachment_mime(&content_type) {
+            return Ok(json!({
+                "title": format!("{} ({content_type})", url.as_str()),
+                "output": "Image fetched successfully",
+                "metadata": {},
+                "attachments": [{
+                    "type": "file",
+                    "mime": mime,
+                    "url": format!("data:{mime};base64,{}", STANDARD.encode(&bytes)),
+                }],
+            }));
+        }
         let content = String::from_utf8_lossy(&bytes);
         let output = match input.format {
             WebFetchFormat::Html => content.into_owned(),
@@ -174,4 +187,17 @@ fn is_html(content_type: &str) -> bool {
         .split(';')
         .next()
         .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/html"))
+}
+
+fn image_attachment_mime(content_type: &str) -> Option<String> {
+    let mime = content_type
+        .split(';')
+        .next()
+        .map(str::trim)?
+        .to_ascii_lowercase();
+    matches!(
+        mime.as_str(),
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+    )
+    .then_some(mime)
 }
