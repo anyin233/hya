@@ -330,10 +330,15 @@ fn build_session_engine(
             eprintln!("yaca: skipping MCP tool ({error})");
         }
     }
-    let tools = Arc::new(registry);
     let plugin_host = Arc::new(tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(PluginHost::connect_all(plugins, host_info()))
     }));
+    for tool in plugin_host.tools() {
+        if let Err(error) = registry.register(tool) {
+            eprintln!("yaca: skipping plugin tool ({error})");
+        }
+    }
+    let tools = Arc::new(registry);
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
         Rule::new(Action::Glob, "*", Mode::Allow),
