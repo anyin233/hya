@@ -37,13 +37,18 @@ use self::history::{HistoryStore, SessionMeta};
 use crate::config::ModelEntry;
 
 mod agents;
+mod block_action;
 mod commands;
 mod controller;
 #[cfg(test)]
 mod harness;
+#[cfg(test)]
+mod harness_block_actions;
 mod history;
 mod prompt;
 mod reference;
+mod selection;
+mod session_fork;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -588,6 +593,30 @@ pub async fn run(
                                     Err(e) => format!("export error: {e:#}"),
                                 };
                                 let _ = engine.inject_system_message(session, message).await;
+                            }
+                            TuiEffect::SelectedBlock(action) => {
+                                turn_cancel.cancel();
+                                if let Some(forked) = session_fork::fork_selected_block(
+                                    &engine,
+                                    &history,
+                                    session,
+                                    &agent,
+                                    &controller.app.projection,
+                                    action,
+                                )
+                                .await?
+                                {
+                                    session = forked.session;
+                                    hydrated_sessions.insert(session);
+                                    controller.app.projection = forked.projection;
+                                    controller.app.session_label =
+                                        session.to_string().chars().take(12).collect();
+                                    controller.app.input = forked.prompt_input;
+                                    controller.app.scroll_back = 0;
+                                    controller.app.running = false;
+                                    controller.app.selected_message = None;
+                                    controller.set_sessions(session_summaries(&history));
+                                }
                             }
                             TuiEffect::NewSession => {
                                 turn_cancel.cancel();

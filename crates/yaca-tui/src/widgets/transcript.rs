@@ -36,11 +36,13 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
 
 fn timeline_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for item in timeline_items(&state.projection) {
+    let items = timeline_items(&state.projection);
+    for (idx, item) in items.iter().enumerate() {
+        let selected = state.selected_message == Some(idx);
         match item.role {
-            Role::User => user_lines(&item.parts, theme, &mut lines),
-            Role::Assistant => assistant_lines(&item.parts, theme, &mut lines),
-            Role::System => system_lines(&item.parts, theme, &mut lines),
+            Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
+            Role::Assistant => assistant_lines(&item.parts, idx, selected, theme, &mut lines),
+            Role::System => system_lines(&item.parts, idx, selected, theme, &mut lines),
         }
     }
 
@@ -53,47 +55,60 @@ fn timeline_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn user_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'static>>) {
+fn user_lines(
+    parts: &[TimelinePart],
+    idx: usize,
+    selected: bool,
+    theme: &Theme,
+    lines: &mut Vec<Line<'static>>,
+) {
+    lines.push(message_header("You", idx, selected, theme, theme.primary));
     let text = text_from_parts(parts);
-    for (idx, segment) in text.split('\n').enumerate() {
-        let label = if idx == 0 { "You " } else { "    " };
+    for segment in text.split('\n') {
         lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(theme.primary)),
+            Span::styled("│ ", block_style(theme.primary, selected, theme)),
+            Span::styled("  ", block_style(theme.muted, selected, theme)),
             Span::styled(
-                label.to_string(),
-                Style::default()
-                    .fg(theme.primary)
-                    .add_modifier(Modifier::BOLD),
+                segment.to_string(),
+                block_style(theme.text, selected, theme),
             ),
-            Span::styled(segment.to_string(), Style::default().fg(theme.text)),
         ]));
     }
     lines.push(Line::from(""));
 }
 
-fn assistant_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'static>>) {
+fn assistant_lines(
+    parts: &[TimelinePart],
+    idx: usize,
+    selected: bool,
+    theme: &Theme,
+    lines: &mut Vec<Line<'static>>,
+) {
+    lines.push(message_header("yaca", idx, selected, theme, theme.success));
     for part in parts {
         match part {
             TimelinePart::Text(text) => {
                 for (idx, segment) in text.trim().split('\n').enumerate() {
                     let label = if idx == 0 { "yaca " } else { "     " };
                     lines.push(Line::from(vec![
-                        Span::styled("  ", Style::default().fg(theme.muted)),
+                        Span::styled("   ", block_style(theme.muted, selected, theme)),
                         Span::styled(
                             label.to_string(),
-                            Style::default()
-                                .fg(theme.success)
+                            block_style(theme.success, selected, theme)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(segment.to_string(), Style::default().fg(theme.text)),
+                        Span::styled(
+                            segment.to_string(),
+                            block_style(theme.text, selected, theme),
+                        ),
                     ]));
                 }
             }
             TimelinePart::Reasoning(text) => {
                 if !text.trim().is_empty() {
                     lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled("Thinking", Style::default().fg(theme.warning)),
+                        Span::styled("   ", block_style(theme.muted, selected, theme)),
+                        Span::styled("Thinking", block_style(theme.warning, selected, theme)),
                     ]));
                 }
             }
@@ -103,13 +118,11 @@ fn assistant_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'
                 status,
             } => {
                 lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("⚙ ", Style::default().fg(theme.accent)),
+                    Span::styled("   ", block_style(theme.muted, selected, theme)),
+                    Span::styled("⚙ ", block_style(theme.accent, selected, theme)),
                     Span::styled(
                         format!("{name} "),
-                        Style::default()
-                            .fg(theme.accent)
-                            .add_modifier(Modifier::BOLD),
+                        block_style(theme.accent, selected, theme).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         if input.is_empty() {
@@ -117,13 +130,16 @@ fn assistant_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'
                         } else {
                             format!("{input} ")
                         },
-                        Style::default().fg(theme.muted),
+                        block_style(theme.muted, selected, theme),
                     ),
                     Span::styled(
                         format!("tool {name} {}", status.label()),
-                        Style::default().fg(status.color(theme)),
+                        block_style(status.color(theme), selected, theme),
                     ),
-                    Span::styled(status.suffix(), Style::default().fg(status.color(theme))),
+                    Span::styled(
+                        status.suffix(),
+                        block_style(status.color(theme), selected, theme),
+                    ),
                 ]));
             }
         }
@@ -131,28 +147,74 @@ fn assistant_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'
     lines.push(Line::from(""));
 }
 
-fn system_lines(parts: &[TimelinePart], theme: &Theme, lines: &mut Vec<Line<'static>>) {
+fn system_lines(
+    parts: &[TimelinePart],
+    idx: usize,
+    selected: bool,
+    theme: &Theme,
+    lines: &mut Vec<Line<'static>>,
+) {
     let text = text_from_parts(parts);
     let is_error = is_system_error_text(&text);
+    let header = if is_error { "error" } else { "sys" };
+    let header_color = if is_error { theme.error } else { theme.muted };
+    lines.push(message_header(header, idx, selected, theme, header_color));
     for (idx, segment) in text.split('\n').enumerate() {
         if is_error {
             let label = if idx == 0 { "error " } else { "      " };
             lines.push(Line::from(vec![
                 Span::styled(
                     label.to_string(),
-                    Style::default()
-                        .fg(theme.error)
-                        .add_modifier(Modifier::BOLD),
+                    block_style(theme.error, selected, theme).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(segment.to_string(), Style::default().fg(theme.error)),
+                Span::styled(
+                    segment.to_string(),
+                    block_style(theme.error, selected, theme),
+                ),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled("sys ", Style::default().fg(theme.muted)),
-                Span::styled(segment.to_string(), Style::default().fg(theme.muted)),
+                Span::styled("sys ", block_style(theme.muted, selected, theme)),
+                Span::styled(
+                    segment.to_string(),
+                    block_style(theme.muted, selected, theme),
+                ),
             ]));
         }
     }
+}
+
+fn message_header(
+    label: &str,
+    idx: usize,
+    selected: bool,
+    theme: &Theme,
+    color: Color,
+) -> Line<'static> {
+    let marker = if selected { "▌ " } else { "  " };
+    let mut spans = vec![
+        Span::styled(marker.to_string(), block_style(color, selected, theme)),
+        Span::styled(
+            format!("{label} #{}", idx + 1),
+            block_style(color, selected, theme).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if selected {
+        spans.push(Span::styled(
+            "  r revert · b branch",
+            block_style(theme.muted, selected, theme),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn block_style(fg: Color, selected: bool, theme: &Theme) -> Style {
+    let bg = if selected {
+        theme.block
+    } else {
+        theme.background
+    };
+    Style::default().fg(fg).bg(bg)
 }
 
 fn text_from_parts(parts: &[TimelinePart]) -> String {

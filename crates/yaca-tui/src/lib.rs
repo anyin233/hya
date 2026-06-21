@@ -31,6 +31,7 @@ pub struct AppState {
     pub model: String,
     pub session_label: String,
     pub reasoning_effort: Option<String>,
+    pub selected_message: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

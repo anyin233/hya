@@ -17,6 +17,7 @@ use yaca_store::SessionStore;
 use yaca_tui::AppState;
 
 use super::controller::{Controller, TuiEffect};
+use super::history::HistoryStore;
 
 struct RecordingProvider {
     seen: Arc<Mutex<Vec<String>>>,
@@ -63,6 +64,7 @@ pub struct DummyHarness {
     controller: Controller,
     engine: Arc<SessionEngine>,
     agent: AgentSpec,
+    history: HistoryStore,
     session: SessionId,
     seen: Arc<Mutex<Vec<String>>>,
 }
@@ -78,6 +80,9 @@ impl DummyHarness {
             crate::build_session_engine(store, router, model, std::collections::BTreeMap::new())
                 .await;
         let agent = crate::agent_with_model(model);
+        let history = HistoryStore::new(
+            std::env::temp_dir().join(format!("yaca-harness-{}", SessionId::new())),
+        );
         let session = engine
             .create(CreateSession {
                 parent: None,
@@ -87,6 +92,14 @@ impl DummyHarness {
             })
             .await
             .expect("create harness session");
+        history
+            .create_session(
+                session,
+                agent.model.as_str(),
+                agent.name.as_str(),
+                &agent.workdir.to_string_lossy(),
+            )
+            .expect("create harness history");
         let app = AppState {
             model: model.to_string(),
             session_label: session.to_string().chars().take(12).collect(),
@@ -99,6 +112,7 @@ impl DummyHarness {
             controller,
             engine,
             agent,
+            history,
             session,
             seen,
         }
@@ -124,6 +138,10 @@ impl DummyHarness {
 
     pub fn transcript(&self) -> String {
         render_transcript(&self.controller.app.projection)
+    }
+
+    pub fn input(&self) -> &str {
+        &self.controller.app.input
     }
 
     async fn apply_effect(&mut self, effect: TuiEffect) {
@@ -187,6 +205,28 @@ impl DummyHarness {
                     .inject_system_message(self.session, message)
                     .await
                     .expect("system message");
+            }
+            TuiEffect::SelectedBlock(action) => {
+                if let Some(forked) = super::session_fork::fork_selected_block(
+                    &self.engine,
+                    &self.history,
+                    self.session,
+                    &self.agent,
+                    &self.controller.app.projection,
+                    action,
+                )
+                .await
+                .expect("fork selected block")
+                {
+                    self.session = forked.session;
+                    self.controller.app.projection = forked.projection;
+                    self.controller.app.session_label =
+                        self.session.to_string().chars().take(12).collect();
+                    self.controller.app.input = forked.prompt_input;
+                    self.controller.app.scroll_back = 0;
+                    self.controller.app.running = false;
+                    self.controller.app.selected_message = None;
+                }
             }
             TuiEffect::Exit
             | TuiEffect::Interrupt

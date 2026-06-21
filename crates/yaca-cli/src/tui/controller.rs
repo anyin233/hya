@@ -3,8 +3,10 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem, DialogView};
 
+use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
 use super::prompt::{PromptState, mention_trigger_index};
+use super::selection::{MessageSelectionStep, next_selected_message};
 use crate::config::ModelEntry;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub enum TuiEffect {
     CompactTranscript,
     InitProject,
     ExportTranscript,
+    SelectedBlock(SelectedBlockAction),
     SystemMessage(String),
 }
 
@@ -118,8 +121,15 @@ impl Controller {
         if self.app.dialog.is_some() {
             return self.handle_dialog_key(key);
         }
+        if let Some(action) =
+            selected_block_action(self.app.selected_message, &self.app.input, &key)
+        {
+            return TuiEffect::SelectedBlock(action);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
+                KeyCode::Up => return self.select_previous_message(),
+                KeyCode::Down => return self.select_next_message(),
                 KeyCode::Char('p') => {
                     self.open_help_dialog();
                     return TuiEffect::None;
@@ -185,6 +195,24 @@ impl Controller {
             }
             _ => TuiEffect::None,
         }
+    }
+
+    fn select_previous_message(&mut self) -> TuiEffect {
+        self.app.selected_message = next_selected_message(
+            self.app.selected_message,
+            self.app.projection.session.messages.len(),
+            MessageSelectionStep::Previous,
+        );
+        TuiEffect::None
+    }
+
+    fn select_next_message(&mut self) -> TuiEffect {
+        self.app.selected_message = next_selected_message(
+            self.app.selected_message,
+            self.app.projection.session.messages.len(),
+            MessageSelectionStep::Next,
+        );
+        TuiEffect::None
     }
 
     pub fn handle_mouse(&mut self, event: MouseEvent) -> TuiEffect {
