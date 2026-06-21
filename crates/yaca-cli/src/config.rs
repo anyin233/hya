@@ -19,7 +19,7 @@ struct ParsedProvider {
     id: String,
     kind: ProviderKind,
     base_url: String,
-    api_key: String,
+    api_key: Option<String>,
     models: Vec<String>,
 }
 
@@ -70,16 +70,17 @@ fn parse_providers(config_json: &str) -> anyhow::Result<Vec<ParsedProvider>> {
             continue;
         };
         let options = pv.get("options");
-        let (Some(base_url), Some(raw_key)) = (
-            options
-                .and_then(|o| o.get("baseURL"))
-                .and_then(serde_json::Value::as_str),
-            options
-                .and_then(|o| o.get("apiKey"))
-                .and_then(serde_json::Value::as_str),
-        ) else {
+        let Some(base_url) = options
+            .and_then(|o| o.get("baseURL"))
+            .and_then(serde_json::Value::as_str)
+        else {
             continue;
         };
+        let api_key = options
+            .and_then(|o| o.get("apiKey"))
+            .and_then(serde_json::Value::as_str)
+            .map(resolve_secret)
+            .transpose()?;
         let models: Vec<String> = pv
             .get("models")
             .and_then(serde_json::Value::as_object)
@@ -92,7 +93,7 @@ fn parse_providers(config_json: &str) -> anyhow::Result<Vec<ParsedProvider>> {
             id: id.clone(),
             kind,
             base_url: base_url.to_string(),
-            api_key: resolve_secret(raw_key)?,
+            api_key,
             models,
         });
     }
@@ -126,10 +127,18 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut router = ProviderRouter::new();
     let mut models = Vec::new();
     for p in parsed {
+        let Some(api_key) = crate::auth::load_token(&p.id).or(p.api_key) else {
+            continue;
+        };
+        if api_key.trim().is_empty() {
+            continue;
+        }
         models.extend(p.models.iter().cloned());
-        let api_key = crate::auth::load_token(&p.id).unwrap_or(p.api_key);
         let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
         router = router.with(Arc::new(provider));
+    }
+    if models.is_empty() {
+        return Ok(None);
     }
     let default_model = choose_default(&models);
     Ok(Some(ResolvedConfig {
@@ -176,7 +185,7 @@ mod tests {
         let oai = parsed.iter().find(|p| p.id == "gw-oai").unwrap();
         assert_eq!(oai.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(oai.base_url, "https://gw.example/v1");
-        assert_eq!(oai.api_key, "sk-test-literal");
+        assert_eq!(oai.api_key.as_deref(), Some("sk-test-literal"));
         assert!(oai.models.contains(&"gpt-5.5".to_string()));
         let anth = parsed.iter().find(|p| p.id == "gw-anth").unwrap();
         assert_eq!(anth.kind, ProviderKind::Anthropic);
@@ -198,5 +207,22 @@ mod tests {
             "resolved-secret"
         );
         assert_eq!(resolve_secret("literal-key").unwrap(), "literal-key");
+    }
+
+    #[test]
+    fn parses_provider_without_apikey() {
+        let json = r#"{
+            "provider": {
+                "12th": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": { "baseURL": "https://api.example/v1" },
+                    "models": { "claude-sonnet-4-6": {} }
+                }
+            }
+        }"#;
+        let parsed = parse_providers(json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].api_key, None);
+        assert_eq!(parsed[0].base_url, "https://api.example/v1");
     }
 }
