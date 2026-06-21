@@ -10,7 +10,7 @@ use serde_json::json;
 use yaca_proto::{
     Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId, ToolCallId, ToolName,
 };
-use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, draw};
+use yaca_tui::{AppState, DialogItem, DialogView, GoalView, LoopView, PermissionPrompt, draw};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -224,6 +224,41 @@ fn permission_panel_renders_options_and_reply() {
     );
     assert!(text.contains("Deny"), "deny option renders");
     assert!(text.contains("use ls instead"), "reply text renders");
+}
+
+#[test]
+fn list_dialog_renders_selected_item_and_hints() {
+    let mut state = AppState {
+        dialog: Some(DialogView {
+            title: "select model".to_string(),
+            subtitle: "next turn uses the selected model".to_string(),
+            items: vec![
+                DialogItem {
+                    label: "model-a".to_string(),
+                    detail: "available".to_string(),
+                },
+                DialogItem {
+                    label: "model-b".to_string(),
+                    detail: "current".to_string(),
+                },
+            ],
+            selected: 1,
+        }),
+        ..AppState::default()
+    };
+
+    let text = render(&mut state, 100, 24);
+    assert!(text.contains("select model"), "dialog title renders");
+    assert!(
+        text.contains("next turn uses the selected model"),
+        "dialog subtitle renders"
+    );
+    assert!(
+        text.contains("> model-b"),
+        "selected row renders with marker"
+    );
+    assert!(text.contains("Esc"), "dialog hint mentions cancel");
+    assert!(text.contains("Enter"), "dialog hint mentions submit");
 }
 
 #[test]

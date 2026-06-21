@@ -42,11 +42,25 @@ to use yaca:
 # Launch the interactive TUI (just run `yaca` with no arguments).
 yaca
 #   type a message, Enter to send, responses stream in live,
-#   PgUp/PgDn to scroll history, Ctrl-C to quit.
+#   PgUp/PgDn or mouse wheel to scroll, Tab completes /commands.
+#   F2 or /model switches models.
+#   Ctrl-C clears input, interrupts a running turn, then exits only when idle.
 
 # Pick a specific model (else the opencode default / YACA_MODEL is used).
 yaca --model claude-sonnet-4-6
 ```
+
+Interactive slash commands:
+
+Type `/` plus an optional prefix and press `Tab` to complete commands. If more
+than one command matches, use the list dialog and press `Enter` or `Tab`.
+
+| Command | Behavior |
+| --- | --- |
+| `/model` | Open the model selector. The next prompt uses the selected model. |
+| `/resume` | Resume a previous TUI conversation from per-session JSON/JSONL history. |
+| `/new` | Start a fresh conversation. |
+| `/help` | Show available commands and shortcuts. |
 
 Headless subcommands remain for scripting and automation:
 
@@ -79,6 +93,9 @@ GET  /sessions/:id/stream      -> text/event-stream of Envelopes
 - **Event-sourced.** Every turn appends `Event`s to the store; the read model is
   a deterministic projection replayed from the log, so `tail-session` and the
   server's `/events` return identical history.
+- **Split TUI history.** Interactive history is mirrored to independent
+  session bundles under `YACA_HISTORY_DIR` or `~/.yaca/history`, with
+  `meta.json` plus `events.jsonl` per session and a rebuildable `index.json`.
 - **Normalized providers.** Provider-specific protocols decode into one `Event`
   stream; a router resolves a `ModelRef` to a provider and runs capability
   preflight before streaming.

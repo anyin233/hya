@@ -7,7 +7,7 @@ use yaca_proto::Role;
 
 use crate::theme::Theme;
 use crate::view_model::{TimelinePart, ToolStatus, timeline_items};
-use crate::{AppState, PermissionPrompt};
+use crate::{AppState, DialogView, PermissionPrompt};
 
 pub fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     frame.render_widget(
@@ -296,7 +296,7 @@ pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     .style(Style::default().fg(theme.text).bg(theme.panel))
     .block(
         Block::default()
-            .title(" message — Enter: send · Ctrl-C: quit · PgUp/PgDn: scroll ")
+            .title(" message — Enter send · Tab complete / · Ctrl-C clear/interrupt · F2 model ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if state.running {
                 theme.border_active
@@ -380,14 +380,79 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
     );
 }
 
+pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(8).clamp(24, 76);
+    let item_rows = u16::try_from(dialog.items.len())
+        .unwrap_or(u16::MAX)
+        .min(10);
+    let height = item_rows.saturating_add(6).min(area.height).max(8);
+    let rect = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+
+    let inner_width = usize::from(width).saturating_sub(6);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            dialog.subtitle.clone(),
+            Style::default().fg(theme.muted),
+        )),
+        Line::from(""),
+    ];
+    for (idx, item) in dialog.items.iter().enumerate().take(usize::from(item_rows)) {
+        let selected = idx == dialog.selected;
+        let marker = if selected { "> " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(theme.background)
+                .bg(theme.primary)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text)
+        };
+        let detail = if item.detail.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", ellipsize(&item.detail, inner_width / 2))
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker.to_string(), Style::default().fg(theme.primary)),
+            Span::styled(item.label.clone(), style),
+            Span::styled(detail, Style::default().fg(theme.muted)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Up/Down or Tab select · Enter confirm · Esc cancel",
+        Style::default().fg(theme.muted),
+    )));
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(theme.text).bg(theme.element))
+            .block(
+                Block::default()
+                    .title(dialog.title.clone())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.border_active)),
+            )
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
+}
+
 pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let text = if state.scroll_back > 0 {
         format!(
-            "scroll {} · PgDn to return · Ctrl-C quit",
+            "scroll {} · End to return · Ctrl-C clear/interrupt",
             state.scroll_back
         )
     } else {
-        "PgUp/PgDn scroll · Enter send · Ctrl-C quit".to_string()
+        "PgUp/PgDn scroll · Tab completes /commands · F2 model · /help".to_string()
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
