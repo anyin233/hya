@@ -32,6 +32,7 @@ use yaca_tui::{AppState, PermissionPrompt};
 use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
 
+mod agents;
 mod commands;
 mod controller;
 #[cfg(test)]
@@ -141,6 +142,15 @@ fn reference_items(workdir: &Path) -> Vec<yaca_tui::DialogItem> {
     items
 }
 
+fn all_reference_items(
+    workdir: &Path,
+    profiles: &[agents::AgentProfile],
+) -> Vec<yaca_tui::DialogItem> {
+    let mut items = agents::reference_items(profiles);
+    items.extend(reference_items(workdir));
+    items
+}
+
 fn custom_commands(workdir: &Path) -> Vec<commands::CustomCommand> {
     commands::load_markdown_commands(workdir).unwrap_or_default()
 }
@@ -177,6 +187,61 @@ fn export_transcript(
     projection: &yaca_proto::Projection,
 ) -> anyhow::Result<PathBuf> {
     write_transcript_export(&export_root(), session, projection)
+}
+
+pub struct InitResult {
+    pub path: PathBuf,
+    pub created: bool,
+}
+
+fn init_project_instructions(workdir: &Path) -> anyhow::Result<InitResult> {
+    std::fs::create_dir_all(workdir).with_context(|| format!("create {}", workdir.display()))?;
+    let path = workdir.join("AGENTS.md");
+    if path.exists() {
+        return Ok(InitResult {
+            path,
+            created: false,
+        });
+    }
+    std::fs::write(
+        &path,
+        "# yaca project instructions\n\n- Keep changes focused and verified.\n- Run the relevant Rust checks before reporting completion.\n- Prefer existing project patterns over new abstractions.\n",
+    )
+    .with_context(|| format!("write {}", path.display()))?;
+    Ok(InitResult {
+        path,
+        created: true,
+    })
+}
+
+fn compact_summary(projection: &yaca_proto::Projection) -> String {
+    const MAX_SUMMARY_BYTES: usize = 12 * 1024;
+    let transcript = render_transcript(projection);
+    let mut start = transcript.len().saturating_sub(MAX_SUMMARY_BYTES);
+    while start < transcript.len() && !transcript.is_char_boundary(start) {
+        start += 1;
+    }
+    let kept = &transcript[start..];
+    format!(
+        "The previous conversation was compacted. Preserve these facts and continue from the latest user intent.\n\n{kept}"
+    )
+}
+
+fn route_agent_mention(
+    profiles: &[agents::AgentProfile],
+    agent: &mut AgentSpec,
+    base_system_prompt: &str,
+    prompt: String,
+) -> String {
+    let Some(routed) = agents::strip_leading_agent_mention(&prompt) else {
+        return prompt;
+    };
+    if let Some(profile) = agents::profile_by_name(profiles, &routed.agent) {
+        agents::apply_profile(agent, base_system_prompt, profile);
+        routed.prompt
+    } else {
+        prompt
+    }
 }
 
 fn display_path(path: &Path) -> String {
@@ -262,6 +327,8 @@ pub async fn run(
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
 ) -> anyhow::Result<()> {
     let history = HistoryStore::from_env();
+    let profiles = agents::builtin_profiles();
+    let base_system_prompt = agent.system_prompt.clone();
     let mut session = engine
         .create(CreateSession {
             parent: None,
@@ -295,7 +362,8 @@ pub async fn run(
     };
     let mut controller =
         Controller::with_models_and_sessions(app, models, session_summaries(&history));
-    controller.set_references(reference_items(&agent.workdir));
+    controller.set_agents(agents::dialog_items(&profiles));
+    controller.set_references(all_reference_items(&agent.workdir, &profiles));
     controller.set_custom_commands(custom_commands(&agent.workdir));
 
     install_panic_hook();
@@ -373,7 +441,34 @@ pub async fn run(
                             TuiEffect::SelectModel(model) => {
                                 agent.model = ModelRef::new(model);
                             }
+                            TuiEffect::SelectAgent(name) => {
+                                if let Some(profile) = agents::profile_by_name(&profiles, &name) {
+                                    agents::apply_profile(&mut agent, &base_system_prompt, profile);
+                                    let _ = engine
+                                        .inject_system_message(
+                                            session,
+                                            format!("selected agent profile: {name}"),
+                                        )
+                                        .await;
+                                }
+                            }
                             TuiEffect::SystemMessage(message) => {
+                                let _ = engine.inject_system_message(session, message).await;
+                            }
+                            TuiEffect::CompactTranscript => {
+                                let summary = compact_summary(&controller.app.projection);
+                                let _ = engine.compact_context(session, summary).await;
+                            }
+                            TuiEffect::InitProject => {
+                                let message = match init_project_instructions(&agent.workdir) {
+                                    Ok(result) if result.created => {
+                                        format!("created {}", result.path.display())
+                                    }
+                                    Ok(result) => {
+                                        format!("{} already exists", result.path.display())
+                                    }
+                                    Err(e) => format!("init error: {e:#}"),
+                                };
                                 let _ = engine.inject_system_message(session, message).await;
                             }
                             TuiEffect::ExportTranscript => {
@@ -412,7 +507,8 @@ pub async fn run(
                                 controller.app.scroll_back = 0;
                                 controller.app.running = false;
                                 controller.set_sessions(session_summaries(&history));
-                                controller.set_references(reference_items(&agent.workdir));
+                                controller.set_agents(agents::dialog_items(&profiles));
+                                controller.set_references(all_reference_items(&agent.workdir, &profiles));
                                 controller.set_custom_commands(custom_commands(&agent.workdir));
                             }
                             TuiEffect::ResumeSession(id) => {
@@ -427,7 +523,8 @@ pub async fn run(
                                         controller.app.model = meta.model.clone();
                                         agent.model = ModelRef::new(meta.model);
                                         let workdir = PathBuf::from(meta.workdir);
-                                        controller.set_references(reference_items(&workdir));
+                                        controller.set_agents(agents::dialog_items(&profiles));
+                                        controller.set_references(all_reference_items(&workdir, &profiles));
                                         controller.set_custom_commands(custom_commands(&workdir));
                                     }
                                     controller.app.projection = engine
@@ -442,6 +539,42 @@ pub async fn run(
                                 }
                             }
                             TuiEffect::Submit(prompt) => {
+                                let prompt = route_agent_mention(
+                                    &profiles,
+                                    &mut agent,
+                                    &base_system_prompt,
+                                    prompt,
+                                );
+                                controller.app.running = true;
+                                turn_cancel = CancellationToken::new();
+                                current_turn = Some(spawn_turn(
+                                    &engine, &agent, session, prompt, &done_tx, &turn_cancel,
+                                ));
+                            }
+                            TuiEffect::SubmitConfigured {
+                                prompt,
+                                agent: command_agent,
+                                model,
+                            } => {
+                                if let Some(model) = model {
+                                    agent.model = ModelRef::new(model);
+                                }
+                                if let Some(profile) = command_agent
+                                    .as_deref()
+                                    .and_then(|name| agents::profile_by_name(&profiles, name))
+                                {
+                                    agents::apply_profile(
+                                        &mut agent,
+                                        &base_system_prompt,
+                                        profile,
+                                    );
+                                }
+                                let prompt = route_agent_mention(
+                                    &profiles,
+                                    &mut agent,
+                                    &base_system_prompt,
+                                    prompt,
+                                );
                                 controller.app.running = true;
                                 turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(
@@ -495,5 +628,22 @@ mod tests {
         let text = std::fs::read_to_string(path).unwrap();
         assert!(text.starts_with("# yaca session "));
         assert!(text.contains("```text"));
+    }
+
+    #[test]
+    fn init_project_writes_agents_md_without_overwriting_existing_file() {
+        let root = std::env::temp_dir().join(format!(
+            "yaca-init-test-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let created = init_project_instructions(&root).unwrap();
+        assert!(created.created);
+        assert!(root.join("AGENTS.md").exists());
+
+        let second = init_project_instructions(&root).unwrap();
+        assert!(!second.created);
     }
 }

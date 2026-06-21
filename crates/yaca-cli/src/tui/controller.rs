@@ -12,9 +12,17 @@ pub enum TuiEffect {
     Exit,
     Interrupt,
     Submit(String),
+    SubmitConfigured {
+        prompt: String,
+        agent: Option<String>,
+        model: Option<String>,
+    },
     SelectModel(String),
+    SelectAgent(String),
     ResumeSession(String),
     NewSession,
+    CompactTranscript,
+    InitProject,
     ExportTranscript,
     SystemMessage(String),
 }
@@ -29,8 +37,10 @@ pub struct SessionSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DialogMode {
     Model,
+    Agent,
     Resume,
     Help,
+    Tools,
     CommandCompletion,
     ReferenceCompletion,
 }
@@ -40,6 +50,7 @@ pub struct Controller {
     available_models: Vec<String>,
     sessions: Vec<SessionSummary>,
     references: Vec<DialogItem>,
+    agents: Vec<DialogItem>,
     custom_commands: Vec<CustomCommand>,
     dialog_mode: Option<DialogMode>,
     input_history: Vec<String>,
@@ -80,6 +91,7 @@ impl Controller {
             available_models,
             sessions,
             references: Vec::new(),
+            agents: Vec::new(),
             custom_commands: Vec::new(),
             dialog_mode: None,
             input_history: Vec::new(),
@@ -180,6 +192,10 @@ impl Controller {
 
     pub fn set_references(&mut self, references: Vec<DialogItem>) {
         self.references = references;
+    }
+
+    pub fn set_agents(&mut self, agents: Vec<DialogItem>) {
+        self.agents = agents;
     }
 
     pub fn set_custom_commands(&mut self, custom_commands: Vec<CustomCommand>) {
@@ -297,13 +313,19 @@ impl Controller {
                         .get(selected)
                         .map(|session| TuiEffect::ResumeSession(session.id.clone()))
                         .unwrap_or(TuiEffect::None),
+                    Some(DialogMode::Agent) => self
+                        .agents
+                        .get(selected)
+                        .map(|agent| TuiEffect::SelectAgent(agent.label.clone()))
+                        .unwrap_or(TuiEffect::None),
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
                         TuiEffect::None
                     }
-                    Some(DialogMode::Help | DialogMode::ReferenceCompletion) | None => {
-                        TuiEffect::None
-                    }
+                    Some(
+                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
+                    )
+                    | None => TuiEffect::None,
                 }
             }
             _ => TuiEffect::None,
@@ -382,6 +404,16 @@ impl Controller {
                 TuiEffect::None
             }
             Some(CommandKind::NewSession) => TuiEffect::NewSession,
+            Some(CommandKind::Compact) => TuiEffect::CompactTranscript,
+            Some(CommandKind::Init) => TuiEffect::InitProject,
+            Some(CommandKind::Agent) => {
+                self.open_agent_dialog();
+                TuiEffect::None
+            }
+            Some(CommandKind::Tools) => {
+                self.open_tools_dialog();
+                TuiEffect::None
+            }
             Some(CommandKind::Export) => TuiEffect::ExportTranscript,
             Some(CommandKind::Quit) => TuiEffect::Exit,
             Some(CommandKind::Help) => {
@@ -391,7 +423,16 @@ impl Controller {
             None if command.trim().is_empty() => TuiEffect::None,
             None => {
                 if let Some(custom) = commands::find_custom(&self.custom_commands, name) {
-                    TuiEffect::Submit(custom.expand(arguments))
+                    let prompt = custom.expand(arguments);
+                    if custom.agent.is_some() || custom.model.is_some() {
+                        TuiEffect::SubmitConfigured {
+                            prompt,
+                            agent: custom.agent.clone(),
+                            model: custom.model.clone(),
+                        }
+                    } else {
+                        TuiEffect::Submit(prompt)
+                    }
                 } else {
                     TuiEffect::SystemMessage(format!("unknown command /{name}; try /help"))
                 }
@@ -634,6 +675,63 @@ impl Controller {
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::Resume);
+    }
+
+    fn open_agent_dialog(&mut self) {
+        let items = if self.agents.is_empty() {
+            vec![DialogItem {
+                label: "build".to_string(),
+                detail: "default coding agent".to_string(),
+            }]
+        } else {
+            self.agents.clone()
+        };
+        self.app.dialog = Some(DialogView {
+            title: "agents".to_string(),
+            subtitle: "select active agent profile".to_string(),
+            items,
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Agent);
+    }
+
+    fn open_tools_dialog(&mut self) {
+        self.app.dialog = Some(DialogView {
+            title: "tools".to_string(),
+            subtitle: "builtin tools and MCP status".to_string(),
+            items: vec![
+                DialogItem {
+                    label: "read".to_string(),
+                    detail: "builtin · auto-allowed".to_string(),
+                },
+                DialogItem {
+                    label: "write".to_string(),
+                    detail: "builtin · asks permission".to_string(),
+                },
+                DialogItem {
+                    label: "edit".to_string(),
+                    detail: "builtin · asks permission".to_string(),
+                },
+                DialogItem {
+                    label: "glob".to_string(),
+                    detail: "builtin · auto-allowed".to_string(),
+                },
+                DialogItem {
+                    label: "grep".to_string(),
+                    detail: "builtin · auto-allowed".to_string(),
+                },
+                DialogItem {
+                    label: "shell".to_string(),
+                    detail: "builtin · asks permission".to_string(),
+                },
+                DialogItem {
+                    label: "mcp".to_string(),
+                    detail: "not connected in this build yet".to_string(),
+                },
+            ],
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Tools);
     }
 
     fn open_help_dialog(&mut self) {
@@ -966,6 +1064,59 @@ mod tests {
     }
 
     #[test]
+    fn slash_compact_requests_context_compaction() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/compact");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::CompactTranscript
+        );
+    }
+
+    #[test]
+    fn slash_init_requests_project_initialization() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/init");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::InitProject
+        );
+    }
+
+    #[test]
+    fn slash_agent_opens_agent_dialog_and_selects_profile() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_agents(vec![DialogItem {
+            label: "plan".to_string(),
+            detail: "Plan before editing".to_string(),
+        }]);
+
+        type_text(&mut controller, "/agent");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectAgent("plan".to_string())
+        );
+    }
+
+    #[test]
+    fn slash_tools_opens_tool_status_dialog() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/tools");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let dialog = controller.app.dialog.as_ref().expect("tools dialog");
+        assert_eq!(dialog.title, "tools");
+        assert!(dialog.items.iter().any(|item| item.label == "read"));
+        assert!(dialog.items.iter().any(|item| item.label == "mcp"));
+    }
+
+    #[test]
     fn custom_slash_command_submits_expanded_prompt() {
         let mut controller = Controller::new(AppState::default());
         controller.set_custom_commands(vec![CustomCommand {
@@ -981,6 +1132,29 @@ mod tests {
         assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
             TuiEffect::Submit("Create Button in src/ui. Args: Button src/ui".to_string())
+        );
+    }
+
+    #[test]
+    fn custom_slash_command_submits_agent_and_model_metadata() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_custom_commands(vec![CustomCommand {
+            name: "planit".to_string(),
+            description: "Plan work".to_string(),
+            template: "Plan $ARGUMENTS".to_string(),
+            agent: Some("plan".to_string()),
+            model: Some("anthropic/claude-sonnet".to_string()),
+        }]);
+
+        type_text(&mut controller, "/planit checkout flow");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SubmitConfigured {
+                prompt: "Plan checkout flow".to_string(),
+                agent: Some("plan".to_string()),
+                model: Some("anthropic/claude-sonnet".to_string()),
+            }
         );
     }
 

@@ -8,6 +8,10 @@ pub enum CommandKind {
     Model,
     Resume,
     NewSession,
+    Compact,
+    Init,
+    Agent,
+    Tools,
     Export,
     Quit,
     Help,
@@ -65,6 +69,41 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Start a new conversation",
         key_hint: "leader n",
         kind: CommandKind::NewSession,
+    },
+    CommandSpec {
+        name: "compact",
+        aliases: &[],
+        description: "Compact prior conversation context",
+        key_hint: "leader c",
+        kind: CommandKind::Compact,
+    },
+    CommandSpec {
+        name: "init",
+        aliases: &[],
+        description: "Create AGENTS.md project instructions",
+        key_hint: "leader i",
+        kind: CommandKind::Init,
+    },
+    CommandSpec {
+        name: "agent",
+        aliases: &["agents"],
+        description: "Select the active agent profile",
+        key_hint: "tab",
+        kind: CommandKind::Agent,
+    },
+    CommandSpec {
+        name: "tools",
+        aliases: &[],
+        description: "Show builtin tools and MCP status",
+        key_hint: "leader t",
+        kind: CommandKind::Tools,
+    },
+    CommandSpec {
+        name: "mcp",
+        aliases: &[],
+        description: "Show MCP and builtin tool status",
+        key_hint: "leader t",
+        kind: CommandKind::Tools,
     },
     CommandSpec {
         name: "export",
@@ -278,6 +317,11 @@ mod tests {
         assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
+        assert_eq!(resolve_slash("compact"), Some(CommandKind::Compact));
+        assert_eq!(resolve_slash("init"), Some(CommandKind::Init));
+        assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
+        assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
+        assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
         assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
         assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
         assert_eq!(resolve_slash("exit"), Some(CommandKind::Quit));
@@ -302,7 +346,7 @@ mod tests {
 
     #[test]
     fn completion_items_filter_by_prefix() {
-        let items = completion_items("/m");
+        let items = completion_items("/mo");
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "/model");
@@ -361,9 +405,11 @@ All args: $ARGUMENTS
 
         let items = completion_items_with_custom("/t", &custom);
 
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].label, "/test");
-        assert!(items[0].detail.contains("Run tests"));
+        let detail = items
+            .iter()
+            .find(|item| item.label == "/test")
+            .map(|item| item.detail.as_str());
+        assert!(matches!(detail, Some(detail) if detail.contains("Run tests")));
     }
 
     fn temp_root() -> std::path::PathBuf {
