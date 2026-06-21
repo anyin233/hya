@@ -23,8 +23,9 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use yaca_core::completion::render_transcript;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_proto::{ModelRef, SessionId};
+use yaca_proto::{ModelRef, SessionId, now_millis};
 use yaca_tool::{Action as ToolAction, AskRequest, Decision};
 use yaca_tui::{AppState, PermissionPrompt};
 
@@ -37,6 +38,7 @@ mod controller;
 mod harness;
 mod history;
 mod prompt;
+mod reference;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -139,6 +141,44 @@ fn reference_items(workdir: &Path) -> Vec<yaca_tui::DialogItem> {
     items
 }
 
+fn custom_commands(workdir: &Path) -> Vec<commands::CustomCommand> {
+    commands::load_markdown_commands(workdir).unwrap_or_default()
+}
+
+fn export_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("YACA_EXPORT_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".yaca/exports");
+    }
+    std::env::temp_dir().join("yaca/exports")
+}
+
+fn write_transcript_export(
+    dir: &Path,
+    session: SessionId,
+    projection: &yaca_proto::Projection,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let short = session.to_string().chars().take(12).collect::<String>();
+    let path = dir.join(format!("session-{short}-{}.md", now_millis()));
+    let transcript = render_transcript(projection);
+    std::fs::write(
+        &path,
+        format!("# yaca session {session}\n\n```text\n{transcript}\n```\n"),
+    )
+    .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+fn export_transcript(
+    session: SessionId,
+    projection: &yaca_proto::Projection,
+) -> anyhow::Result<PathBuf> {
+    write_transcript_export(&export_root(), session, projection)
+}
+
 fn display_path(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
@@ -199,6 +239,8 @@ fn spawn_turn(
     let done_tx = done_tx.clone();
     let cancel = cancel.clone();
     tokio::spawn(async move {
+        let prompt = reference::expand_mentions(&agent.workdir, &prompt)
+            .unwrap_or_else(|e| format!("{prompt}\n\n[reference expansion error: {e}]"));
         if let Err(e) = engine.admit_user_prompt(session, prompt).await {
             let _ = engine
                 .inject_system_message(session, format!("input error: {e}"))
@@ -254,6 +296,7 @@ pub async fn run(
     let mut controller =
         Controller::with_models_and_sessions(app, models, session_summaries(&history));
     controller.set_references(reference_items(&agent.workdir));
+    controller.set_custom_commands(custom_commands(&agent.workdir));
 
     install_panic_hook();
     enable_raw_mode().context("enable raw mode")?;
@@ -333,6 +376,13 @@ pub async fn run(
                             TuiEffect::SystemMessage(message) => {
                                 let _ = engine.inject_system_message(session, message).await;
                             }
+                            TuiEffect::ExportTranscript => {
+                                let message = match export_transcript(session, &controller.app.projection) {
+                                    Ok(path) => format!("exported transcript to {}", path.display()),
+                                    Err(e) => format!("export error: {e:#}"),
+                                };
+                                let _ = engine.inject_system_message(session, message).await;
+                            }
                             TuiEffect::NewSession => {
                                 turn_cancel.cancel();
                                 let new_session = engine
@@ -363,6 +413,7 @@ pub async fn run(
                                 controller.app.running = false;
                                 controller.set_sessions(session_summaries(&history));
                                 controller.set_references(reference_items(&agent.workdir));
+                                controller.set_custom_commands(custom_commands(&agent.workdir));
                             }
                             TuiEffect::ResumeSession(id) => {
                                 if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
@@ -375,7 +426,9 @@ pub async fn run(
                                     if let Some(meta) = meta_for(&history, &id) {
                                         controller.app.model = meta.model.clone();
                                         agent.model = ModelRef::new(meta.model);
-                                        controller.set_references(reference_items(&PathBuf::from(meta.workdir)));
+                                        let workdir = PathBuf::from(meta.workdir);
+                                        controller.set_references(reference_items(&workdir));
+                                        controller.set_custom_commands(custom_commands(&workdir));
                                     }
                                     controller.app.projection = engine
                                         .read_projection(session)
@@ -419,4 +472,28 @@ pub async fn run(
         let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn export_writes_markdown_transcript_file() {
+        let root = std::env::temp_dir().join(format!(
+            "yaca-export-test-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        let session = SessionId::new();
+        let projection = yaca_proto::Projection::default();
+
+        let path = write_transcript_export(&root, session, &projection).unwrap();
+
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.starts_with("# yaca session "));
+        assert!(text.contains("```text"));
+    }
 }

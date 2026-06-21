@@ -108,6 +108,20 @@ cargo test --workspace
 
 ## Implemented In This Pass
 
+- Added opencode-style custom slash command loading from:
+  - `.opencode/commands/*.md`
+  - `.opencode/command/*.md`
+  - `~/.config/opencode/commands/*.md`
+  - `~/.config/opencode/command/*.md`
+- Added custom command frontmatter parsing for `description`, `agent`, and
+  `model`, plus `$ARGUMENTS` and `$1`...`$9` expansion.
+- Wired custom commands into TUI slash completion, help, and dispatch.
+- Added pre-submit `@` mention expansion for files, line ranges, and directory
+  listings. Mention context is bounded and kept under the active workdir.
+- Added `/sessions` as a `/resume` alias.
+- Added `/quit` and `/exit`.
+- Added `/export`, writing the current transcript as Markdown under
+  `YACA_EXPORT_DIR` or `~/.yaca/exports`.
 - Baseline verified before changes:
   - `cargo test -p yaca-tui`
   - `cargo test -p yaca-cli tui`

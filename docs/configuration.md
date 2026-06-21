@@ -81,3 +81,29 @@ When no usable live config exists, yaca creates a router with `DevProvider`. The
 offline provider responds on every turn with a message that includes the latest
 user prompt and says no live model is configured. This keeps the CLI, TUI, store,
 server, and projection path testable without API keys.
+
+## Custom Commands
+
+yaca also reads opencode-style markdown commands for the TUI:
+
+1. `$HOME/.config/opencode/commands/*.md`
+2. `$HOME/.config/opencode/command/*.md`
+3. `<workdir>/.opencode/commands/*.md`
+4. `<workdir>/.opencode/command/*.md`
+
+Project commands override user commands with the same file stem. The file stem
+becomes the slash command name. Optional frontmatter fields are parsed:
+
+```markdown
+---
+description: Create a component
+agent: build
+model: anthropic/claude-sonnet
+---
+Create $1 in $2.
+
+All args: $ARGUMENTS
+```
+
+The first pass submits expanded command bodies as normal prompts; parsed
+`agent` and `model` metadata are preserved for later agent/model routing.

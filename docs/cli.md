@@ -30,6 +30,25 @@ The TUI uses an in-memory store and the same `SessionEngine` as the rest of the
 binary. Read-only tools are auto-allowed; mutating tools ask through the
 permission panel.
 
+TUI slash commands include:
+
+| Command | Meaning |
+| --- | --- |
+| `/model`, `/models` | Open the model selector. |
+| `/resume`, `/sessions` | Resume a prior JSONL-backed TUI session. |
+| `/new` | Start a fresh session. |
+| `/export` | Write the current transcript as Markdown. |
+| `/quit`, `/exit` | Exit the TUI. |
+| `/help`, `/?` | Show command help. |
+
+Custom markdown commands are loaded from opencode-style command directories in
+the project and user config. Their bodies support `$ARGUMENTS` and positional
+`$1`...`$9` replacement before being submitted as a normal prompt.
+
+`@path` mentions in TUI prompts are expanded into bounded context blocks before
+submission. `@file#Lx-y` includes only the requested line range; `@directory`
+includes a short listing.
+
 ## `yaca exec`
 
 ```sh
