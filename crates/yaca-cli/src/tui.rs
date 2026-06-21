@@ -23,8 +23,10 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::{ModelRef, SessionId};
-use yaca_tool::{Action as ToolAction, AskRequest, Decision};
-use yaca_tui::{AppState, PermissionPrompt, SessionPicker};
+use yaca_tool::{
+    Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
+};
+use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt, SessionPicker};
 
 use crate::commands;
 
@@ -140,6 +142,43 @@ fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> 
     }
 }
 
+fn handle_question_key(key: KeyEvent, app: &mut AppState) -> Option<QuestionAnswer> {
+    let q = app.question.as_mut()?;
+    match key.code {
+        KeyCode::Esc => Some(QuestionAnswer::Cancelled),
+        KeyCode::Enter => {
+            if q.options.is_empty() || (q.allow_custom && !q.input.is_empty()) {
+                Some(QuestionAnswer::FreeText(std::mem::take(&mut q.input)))
+            } else {
+                Some(QuestionAnswer::Selected(q.selected))
+            }
+        }
+        KeyCode::Up => {
+            q.selected = q.selected.saturating_sub(1);
+            None
+        }
+        KeyCode::Down => {
+            if !q.options.is_empty() {
+                q.selected = (q.selected + 1).min(q.options.len().saturating_sub(1));
+            }
+            None
+        }
+        KeyCode::Backspace => {
+            q.input.pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            if (q.options.is_empty() || q.allow_custom)
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            {
+                q.input.push(c);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 enum PickerAction {
     Switch(usize),
     Close,
@@ -196,6 +235,7 @@ pub async fn run(
     mut agent: AgentSpec,
     model: String,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
+    mut questions: mpsc::UnboundedReceiver<QuestionRequest>,
     initial_session: SessionId,
     initial_yolo: bool,
 ) -> anyhow::Result<()> {
@@ -225,6 +265,7 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
+    let mut pending_question: Option<oneshot::Sender<QuestionAnswer>> = None;
     let mut picker_sessions: Vec<SessionId> = Vec::new();
     let template_dirs: Vec<std::path::PathBuf> = {
         let mut v = vec![std::path::PathBuf::from(".yaca/prompts")];
@@ -283,6 +324,26 @@ pub async fn run(
                     }
                 }
             }
+            maybe_q = questions.recv(), if app.permission.is_none() && app.question.is_none() => {
+                if let Some(req) = maybe_q {
+                    let (options, allow_custom, input) = match req.kind {
+                        QuestionKind::Select { options, allow_custom } => {
+                            (options, allow_custom, String::new())
+                        }
+                        QuestionKind::FreeText { default } => {
+                            (Vec::new(), false, default.unwrap_or_default())
+                        }
+                    };
+                    pending_question = Some(req.reply);
+                    app.question = Some(QuestionPrompt {
+                        prompt: req.prompt,
+                        options,
+                        selected: 0,
+                        input,
+                        allow_custom,
+                    });
+                }
+            }
             maybe = events.next() => match maybe {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
                     if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -296,6 +357,13 @@ pub async fn run(
                                 let _ = tx.send(decision);
                             }
                             app.permission = None;
+                        }
+                    } else if app.question.is_some() {
+                        if let Some(answer) = handle_question_key(key, &mut app) {
+                            if let Some(tx) = pending_question.take() {
+                                let _ = tx.send(answer);
+                            }
+                            app.question = None;
                         }
                     } else if app.session_picker.is_some() {
                         match handle_picker_key(key, &mut app) {
@@ -434,6 +502,12 @@ pub async fn run(
         let _ = req.reply.send(Decision::Reject {
             feedback: Some("cancelled".to_string()),
         });
+    }
+    if let Some(tx) = pending_question.take() {
+        let _ = tx.send(QuestionAnswer::Cancelled);
+    }
+    while let Ok(req) = questions.try_recv() {
+        let _ = req.reply.send(QuestionAnswer::Cancelled);
     }
     cancel.cancel();
     if let Some(handle) = current_turn.take() {

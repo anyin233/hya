@@ -13,8 +13,8 @@ pub mod projection;
 
 pub use event::{Envelope, Event};
 pub use ids::{
-    EventSeq, GoalId, LoopRunId, MemberId, MessageId, PartId, PermissionRequestId, SessionId,
-    TeamRunId, ToolCallId,
+    EventSeq, GoalId, LoopRunId, MemberId, MessageId, PartId, PermissionRequestId,
+    QuestionRequestId, SessionId, TeamRunId, ToolCallId,
 };
 pub use message::{CostBreakdown, FinishReason, Message, Part, Role, TokenUsage, ToolPartState};
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};

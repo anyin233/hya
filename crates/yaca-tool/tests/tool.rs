@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use yaca_tool::{
-    Action, Decision, Mode, PermissionPlane, PermissionRules, Resource, Rule, ToolCtx, ToolRegistry,
+    Action, Decision, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionAnswer,
+    Resource, Rule, ToolCtx, ToolRegistry,
 };
 
 fn allow(action: Action, pat: &str) -> Rule {
@@ -28,8 +29,10 @@ fn tempdir() -> PathBuf {
 
 fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
+    let (interaction, _irx) = InteractionPlane::new();
     ToolCtx {
         permission,
+        interaction,
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -179,6 +182,7 @@ async fn shell_happy_and_cancelled() {
 
     let cancelled = ToolCtx {
         permission: ctx.permission.clone(),
+        interaction: ctx.interaction.clone(),
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -190,6 +194,33 @@ async fn shell_happy_and_cancelled() {
         .execute(&cancelled, json!({ "command": "echo hi" }))
         .await;
     assert!(matches!(err, Err(yaca_tool::ToolError::Cancelled)));
+}
+
+#[tokio::test]
+async fn ask_user_select_returns_index_and_answer() {
+    let dir = tempdir();
+    let (permission, _prx) = PermissionPlane::new(PermissionRules::default());
+    let (interaction, mut irx) = InteractionPlane::new();
+    let ctx = ToolCtx {
+        permission,
+        interaction,
+        workdir: dir,
+        cancel: CancellationToken::new(),
+    };
+    let reg = ToolRegistry::builtins();
+    let tool = reg.get("ask_user").unwrap();
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({ "question": "pick", "kind": "select", "options": ["red", "green"] }),
+        )
+        .await
+    });
+    let req = irx.recv().await.unwrap();
+    req.reply.send(QuestionAnswer::Selected(1)).unwrap();
+    let out = handle.await.unwrap().unwrap();
+    assert_eq!(out["answer"], "green");
+    assert_eq!(out["selected_index"], 1);
 }
 
 #[tokio::test]
