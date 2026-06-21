@@ -11,15 +11,17 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
-use yaca_proto::Envelope;
+use yaca_proto::{Envelope, SessionId, ToolCallId};
+use yaca_tool::Tool;
 
 use crate::client::{ChildGuard, DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
-    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, PROTOCOL_VERSION,
-    ToolInfo,
+    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, METHOD_TOOL_CALL,
+    PROTOCOL_VERSION, ToolCallParams, ToolCallReply, ToolInfo,
 };
+use crate::plugin_tool::PluginTool;
 
 const EVENT_CHANNEL_CAP: usize = 256;
 const EVENT_DROP_WARN_EVERY: u64 = 256;
@@ -70,6 +72,34 @@ impl PluginConn {
         let client = self.ensure_client().await?;
         match client.call(&hook.method(), params, self.timeout).await {
             Ok(value) => Ok(value),
+            Err(error) => {
+                if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
+                    *self.live.lock().await = None;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) async fn call_tool(
+        &self,
+        tool: &str,
+        session: SessionId,
+        call: ToolCallId,
+        input: Value,
+    ) -> Result<ToolCallReply, PluginError> {
+        let client = self.ensure_client().await?;
+        let params = serde_json::to_value(ToolCallParams {
+            tool: tool.to_string(),
+            session,
+            call,
+            input,
+        })
+        .map_err(|error| PluginError::Json(error.to_string()))?;
+        match client.call(METHOD_TOOL_CALL, params, self.timeout).await {
+            Ok(value) => {
+                serde_json::from_value(value).map_err(|error| PluginError::Json(error.to_string()))
+            }
             Err(error) => {
                 if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
                     *self.live.lock().await = None;
@@ -193,6 +223,18 @@ impl PluginHost {
         self.plugins
             .iter()
             .map(|conn| (conn.id.as_str(), conn.tools.as_slice()))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.plugins
+            .iter()
+            .flat_map(|conn| {
+                conn.tools
+                    .iter()
+                    .filter_map(|tool| PluginTool::try_new(conn.clone(), tool.clone()))
+            })
             .collect()
     }
 

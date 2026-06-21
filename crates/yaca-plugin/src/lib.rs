@@ -17,6 +17,7 @@ pub mod host;
 pub mod manifest;
 pub mod messages;
 pub mod permission_bridge;
+mod plugin_tool;
 pub mod protocol;
 
 pub use client::{ChildGuard, DEFAULT_CALL_TIMEOUT, INITIALIZE_TIMEOUT, PluginClient};
