@@ -17,7 +17,7 @@ mod tui;
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
@@ -249,19 +249,17 @@ fn build_session_engine(
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
+    McpManager,
 ) {
     let router = Arc::new(router);
     let mut registry = ToolRegistry::builtins();
-    if !mcp.is_empty() {
-        let manager = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(McpManager::connect_all(mcp))
-        });
-        for tool in manager.tools() {
-            if let Err(error) = registry.register(tool) {
-                eprintln!("yaca: skipping MCP tool ({error})");
-            }
+    let mcp_manager = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(McpManager::connect_all(mcp))
+    });
+    for tool in mcp_manager.tools() {
+        if let Err(error) = registry.register(tool) {
+            eprintln!("yaca: skipping MCP tool ({error})");
         }
-        keep_mcp_manager_alive(manager);
     }
     let tools = Arc::new(registry);
     let rules = PermissionRules::new(vec![
@@ -281,15 +279,7 @@ fn build_session_engine(
             .with_spawner(spawner),
     );
     spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
-    (engine, asks, questions)
-}
-
-fn keep_mcp_manager_alive(manager: McpManager) {
-    static MANAGERS: OnceLock<Mutex<Vec<McpManager>>> = OnceLock::new();
-    match MANAGERS.get_or_init(|| Mutex::new(Vec::new())).lock() {
-        Ok(mut managers) => managers.push(manager),
-        Err(poisoned) => poisoned.into_inner().push(manager),
-    }
+    (engine, asks, questions, mcp_manager)
 }
 
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
@@ -382,7 +372,7 @@ async fn cmd_exec(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _) =
+    let (engine, asks, _, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -426,7 +416,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _) =
+    let (engine, asks, _, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -481,7 +471,7 @@ async fn cmd_goal(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
     let evaluator_router = runtime.router.clone();
-    let (engine, asks, _) =
+    let (engine, asks, _, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -537,7 +527,7 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions) =
+    let (engine, asks, questions, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let agent = agent_with_model(&runtime.model);
     let session = match resume {
@@ -567,7 +557,7 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _) =
+    let (engine, asks, _, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let policy = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
@@ -596,7 +586,8 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _) = build_session_engine(store, router, &model, BTreeMap::new());
+    let (engine, _asks, _, _mcp_manager) =
+        build_session_engine(store, router, &model, BTreeMap::new());
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
