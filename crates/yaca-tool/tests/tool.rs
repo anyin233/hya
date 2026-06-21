@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use yaca_tool::{
     Action, Decision, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionAnswer,
-    Resource, Rule, ToolCtx, ToolRegistry,
+    Resource, Rule, SpawnerPlane, ToolCtx, ToolRegistry,
 };
 
 fn allow(action: Action, pat: &str) -> Rule {
@@ -30,9 +30,12 @@ fn tempdir() -> PathBuf {
 fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
     let (interaction, _irx) = InteractionPlane::new();
+    let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
         permission,
         interaction,
+        spawner,
+        parent_session: None,
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -183,6 +186,8 @@ async fn shell_happy_and_cancelled() {
     let cancelled = ToolCtx {
         permission: ctx.permission.clone(),
         interaction: ctx.interaction.clone(),
+        spawner: ctx.spawner.clone(),
+        parent_session: None,
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -197,13 +202,39 @@ async fn shell_happy_and_cancelled() {
 }
 
 #[tokio::test]
+async fn task_tool_is_lead_only() {
+    let dir = tempdir();
+    let (permission, _prx) =
+        PermissionPlane::new(PermissionRules::new(vec![allow(Action::Task, "*")]));
+    let (interaction, _irx) = InteractionPlane::new();
+    let (spawner, _srx) = SpawnerPlane::new();
+    let ctx = ToolCtx {
+        permission,
+        interaction,
+        spawner,
+        parent_session: Some(yaca_proto::SessionId::new()),
+        workdir: dir,
+        cancel: CancellationToken::new(),
+    };
+    let reg = ToolRegistry::builtins();
+    let tool = reg.get("task").unwrap();
+    let err = tool
+        .execute(&ctx, json!({ "prompt": "x", "subagent_type": "quick" }))
+        .await;
+    assert!(matches!(err, Err(yaca_tool::ToolError::Other(_))));
+}
+
+#[tokio::test]
 async fn ask_user_select_returns_index_and_answer() {
     let dir = tempdir();
     let (permission, _prx) = PermissionPlane::new(PermissionRules::default());
     let (interaction, mut irx) = InteractionPlane::new();
+    let (spawner, _srx) = SpawnerPlane::new();
     let ctx = ToolCtx {
         permission,
         interaction,
+        spawner,
+        parent_session: None,
         workdir: dir,
         cancel: CancellationToken::new(),
     };
