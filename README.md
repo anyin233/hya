@@ -8,8 +8,8 @@ engine — never the worker — owns the stop decision.
 ## Status
 
 The full stack compiles, lints clean (`clippy -D warnings`), and the workspace
-test suite passes. `yaca` talks to **real models** by reusing opencode's provider
-config (OpenAI-compatible + Anthropic routes over streaming SSE; see
+test suite passes. `yaca` talks to **real models** from its own provider config
+(OpenAI-compatible + Anthropic + Google routes over streaming SSE; see
 [Configuration](#configuration)), and falls back to an offline echo provider when
 no config is present.
 
@@ -44,7 +44,7 @@ yaca
 #   type a message, Enter to send, responses stream in live,
 #   PgUp/PgDn to scroll history, Ctrl-C to quit.
 
-# Pick a specific model (else the opencode default / YACA_MODEL is used).
+# Pick a specific model (else config.yaml default_model / YACA_MODEL is used).
 yaca --model claude-sonnet-4-6
 ```
 
@@ -90,22 +90,33 @@ GET  /sessions/:id/stream      -> text/event-stream of Envelopes
 
 ## Configuration
 
-yaca reuses **opencode's** config — no separate setup. It reads
-`~/.config/opencode/opencode.json` (honoring `$XDG_CONFIG_HOME`) and, for each
-entry under `provider`, builds a real HTTP route:
+yaca reads its own config at `~/.config/yaca/config.yaml` (honoring
+`$XDG_CONFIG_HOME`). Each entry under `providers` builds a real HTTP route:
 
-- `npm` `@ai-sdk/openai-compatible` → OpenAI Chat Completions (`Authorization: Bearer`)
-- `npm` `@ai-sdk/anthropic` → Anthropic Messages (`x-api-key` + `anthropic-version`)
-- `options.baseURL` + `options.apiKey` (literal or `{env:VAR}` / `{file:path}`) + the
-  `models` keys define the route and which model ids it serves.
+```yaml
+default_model: claude-sonnet-4-6        # optional; else a sonnet model, then the first
+providers:
+  my-gateway:
+    kind: openai                        # openai | anthropic | google
+    base_url: https://gateway.example/v1
+    api_key: "{env:MY_API_KEY}"         # optional: literal | {env:VAR} | {file:path}
+    models: [claude-sonnet-4-6, gpt-5.5]
+```
 
-Responses stream over SSE. API keys are held in `SecretString`, sent as sensitive
-headers, and never logged. Redirects are disabled so an auth header can't follow a
-3xx to another host.
+- `kind: openai` → OpenAI Chat Completions (`Authorization: Bearer`)
+- `kind: anthropic` → Anthropic Messages (`x-api-key` + `anthropic-version`)
+- `kind: google` → Gemini
+- `base_url` + the `models` list define the route and which model ids it serves.
 
-Select the model with `--model <id>` or `YACA_MODEL`; otherwise yaca prefers a
-`sonnet` model, then the first available. With no usable opencode config, yaca
-falls back to an offline echo provider so the stack still runs.
+API keys resolve from `~/.config/yaca/auth/<id>.yaml` (saved via `yaca login <id>
+<token>`) first, then the provider's inline `api_key`. Keys are held in
+`SecretString`, sent as sensitive headers, and never logged. Redirects are
+disabled so an auth header can't follow a 3xx to another host. Responses stream
+over SSE.
+
+Select the model with `--model <id>` or `YACA_MODEL`; otherwise `default_model`,
+then a `sonnet` model, then the first available. With no usable config, yaca falls
+back to an offline echo provider so the stack still runs.
 
 ## Development
 
