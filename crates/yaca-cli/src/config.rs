@@ -17,6 +17,7 @@ use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 pub struct ResolvedConfig {
     pub router: ProviderRouter,
     pub default_model: String,
+    pub models: Vec<String>,
     pub has_providers: bool,
     pub mcp: BTreeMap<String, McpServerConfig>,
 }
@@ -208,6 +209,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         router,
         default_model,
         has_providers: !models.is_empty(),
+        models,
         mcp,
     }))
 }

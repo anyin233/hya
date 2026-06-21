@@ -303,6 +303,7 @@ fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
 struct RuntimeConfig {
     router: ProviderRouter,
     model: String,
+    models: Vec<String>,
     mcp: BTreeMap<String, McpServerConfig>,
 }
 
@@ -327,6 +328,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                     fallback_router
                 },
                 model,
+                models: cfg.models,
                 mcp: cfg.mcp,
             }
         }
@@ -335,6 +337,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             RuntimeConfig {
                 router,
                 model,
+                models: Vec::new(),
                 mcp: BTreeMap::new(),
             }
         }
@@ -344,6 +347,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             RuntimeConfig {
                 router,
                 model,
+                models: Vec::new(),
                 mcp: BTreeMap::new(),
             }
         }
@@ -546,7 +550,17 @@ async fn cmd_tui(
             .await
             .context("create session")?,
     };
-    tui::run(engine, agent, runtime.model, asks, questions, session, yolo).await
+    tui::run(
+        engine,
+        agent,
+        runtime.model,
+        runtime.models,
+        asks,
+        questions,
+        session,
+        yolo,
+    )
+    .await
 }
 
 async fn cmd_serve(

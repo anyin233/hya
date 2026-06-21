@@ -7,9 +7,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{
-    AppState, GoalView, LoopView, PermissionPrompt, QuestionPrompt, SessionPicker, draw,
-};
+use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, Picker, QuestionPrompt, draw};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -149,7 +147,8 @@ fn permission_overlay_renders_options_and_detail() {
 #[test]
 fn session_picker_renders_entries() {
     let mut state = AppState::default();
-    state.session_picker = Some(SessionPicker {
+    state.picker = Some(Picker {
+        title: "sessions".to_string(),
         entries: vec![
             "ses_aaa (3 events)".to_string(),
             "ses_bbb (1 events)".to_string(),

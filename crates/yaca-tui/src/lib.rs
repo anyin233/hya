@@ -19,7 +19,7 @@ pub struct AppState {
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
     pub question: Option<QuestionPrompt>,
-    pub session_picker: Option<SessionPicker>,
+    pub picker: Option<Picker>,
     pub input: String,
     pub running: bool,
     pub scroll_back: u16,
@@ -67,7 +67,8 @@ pub struct QuestionPrompt {
     pub allow_custom: bool,
 }
 
-pub struct SessionPicker {
+pub struct Picker {
+    pub title: String,
     pub entries: Vec<String>,
     pub selected: usize,
 }
@@ -287,8 +288,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
         draw_permission(frame, prompt);
     } else if let Some(question) = &state.question {
         draw_question(frame, question);
-    } else if let Some(picker) = &state.session_picker {
-        draw_session_picker(frame, picker);
+    } else if let Some(picker) = &state.picker {
+        draw_picker(frame, picker);
     } else if !state.running {
         let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
         let rightmost = input_row.x + input_row.width.saturating_sub(2);
@@ -416,7 +417,7 @@ fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
     );
 }
 
-fn draw_session_picker(frame: &mut Frame, picker: &SessionPicker) {
+fn draw_picker(frame: &mut Frame, picker: &Picker) {
     let area = frame.area();
     let entry_rows = u16::try_from(picker.entries.len()).unwrap_or(u16::MAX);
     let height = entry_rows.saturating_add(4).min(area.height).max(4);
@@ -430,7 +431,7 @@ fn draw_session_picker(frame: &mut Frame, picker: &SessionPicker) {
     frame.render_widget(Clear, rect);
     let inner_width = usize::from(width).saturating_sub(4);
     let mut lines = vec![Line::from(Span::styled(
-        "switch session — ↑/↓ select · Enter open · Esc cancel",
+        "↑/↓ select · Enter confirm · Esc cancel",
         Style::default().fg(Color::DarkGray),
     ))];
     for (i, label) in picker.entries.iter().enumerate() {
@@ -451,7 +452,7 @@ fn draw_session_picker(frame: &mut Frame, picker: &SessionPicker) {
         Paragraph::new(lines)
             .block(
                 Block::default()
-                    .title("sessions")
+                    .title(picker.title.clone())
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan)),
             )

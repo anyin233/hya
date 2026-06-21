@@ -27,7 +27,7 @@ use yaca_provider::ReasoningEffort;
 use yaca_tool::{
     Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
 };
-use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt, SessionPicker};
+use yaca_tui::{AppState, PermissionPrompt, Picker, QuestionPrompt};
 
 use crate::commands;
 
@@ -187,8 +187,14 @@ enum PickerAction {
     None,
 }
 
+enum PickerKind {
+    Session(Vec<SessionId>),
+    Model(Vec<String>),
+    Think,
+}
+
 fn handle_picker_key(key: KeyEvent, app: &mut AppState) -> PickerAction {
-    let Some(picker) = app.session_picker.as_mut() else {
+    let Some(picker) = app.picker.as_mut() else {
         return PickerAction::None;
     };
     match key.code {
@@ -232,10 +238,12 @@ fn spawn_turn(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     engine: Arc<SessionEngine>,
     mut agent: AgentSpec,
     model: String,
+    models: Vec<String>,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
     mut questions: mpsc::UnboundedReceiver<QuestionRequest>,
     initial_session: SessionId,
@@ -268,7 +276,7 @@ pub async fn run(
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
     let mut pending_question: Option<oneshot::Sender<QuestionAnswer>> = None;
-    let mut picker_sessions: Vec<SessionId> = Vec::new();
+    let mut picker_kind: Option<PickerKind> = None;
     let template_dirs: Vec<std::path::PathBuf> = {
         let mut v = vec![std::path::PathBuf::from(".yaca/prompts")];
         if let Some(home) = std::env::var_os("HOME") {
@@ -367,19 +375,62 @@ pub async fn run(
                             }
                             app.question = None;
                         }
-                    } else if app.session_picker.is_some() {
+                    } else if app.picker.is_some() {
                         match handle_picker_key(key, &mut app) {
                             PickerAction::Switch(i) => {
-                                if let Some(&picked) = picker_sessions.get(i) {
-                                    session = picked;
-                                    app.session_label =
-                                        session.to_string().chars().take(12).collect();
-                                    app.projection =
-                                        engine.read_projection(session).await.unwrap_or_default();
+                                match picker_kind.take() {
+                                    Some(PickerKind::Session(sessions)) => {
+                                        if let Some(&picked) = sessions.get(i) {
+                                            session = picked;
+                                            app.session_label =
+                                                session.to_string().chars().take(12).collect();
+                                            app.projection = engine
+                                                .read_projection(session)
+                                                .await
+                                                .unwrap_or_default();
+                                        }
+                                    }
+                                    Some(PickerKind::Model(entries)) => {
+                                        if let Some(m) = entries.get(i) {
+                                            agent.model = ModelRef::new(m);
+                                            app.model = m.clone();
+                                            let _ = engine
+                                                .inject_system_message(
+                                                    session,
+                                                    format!("model set to {m}"),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    Some(PickerKind::Think) => {
+                                        let levels = ["off", "low", "medium", "high"];
+                                        if let Some(level) = levels.get(i).copied() {
+                                            if level == "off" {
+                                                agent.reasoning = None;
+                                                app.reasoning_effort = None;
+                                            } else if let Some(effort) =
+                                                ReasoningEffort::parse(level)
+                                            {
+                                                agent.reasoning = Some(effort);
+                                                app.reasoning_effort =
+                                                    Some(effort.as_str().to_string());
+                                            }
+                                            let _ = engine
+                                                .inject_system_message(
+                                                    session,
+                                                    format!("thinking effort: {level}"),
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                    None => {}
                                 }
-                                app.session_picker = None;
+                                app.picker = None;
                             }
-                            PickerAction::Close => app.session_picker = None,
+                            PickerAction::Close => {
+                                app.picker = None;
+                                picker_kind = None;
+                            }
                             PickerAction::None => {}
                         }
                     } else {
@@ -400,12 +451,25 @@ pub async fn run(
                                         .await;
                                 }
                                 Some(commands::Slash::Model(_)) => {
-                                    let _ = engine
-                                        .inject_system_message(
-                                            session,
-                                            format!("current model: {}", app.model),
-                                        )
-                                        .await;
+                                    if models.is_empty() {
+                                        let _ = engine
+                                            .inject_system_message(
+                                                session,
+                                                format!("current model: {}", app.model),
+                                            )
+                                            .await;
+                                    } else {
+                                        let selected = models
+                                            .iter()
+                                            .position(|m| *m == app.model)
+                                            .unwrap_or(0);
+                                        app.picker = Some(Picker {
+                                            title: "model".to_string(),
+                                            entries: models.clone(),
+                                            selected,
+                                        });
+                                        picker_kind = Some(PickerKind::Model(models.clone()));
+                                    }
                                 }
                                 Some(commands::Slash::Clear) => {
                                     if let Ok(new_session) = engine
@@ -437,14 +501,17 @@ pub async fn run(
                                             )
                                             .await;
                                     } else {
-                                        picker_sessions =
-                                            sessions.iter().map(|s| s.session).collect();
+                                        let ids = sessions.iter().map(|s| s.session).collect();
                                         let entries = sessions
                                             .iter()
                                             .map(|s| format!("{} ({} events)", s.session, s.events))
                                             .collect();
-                                        app.session_picker =
-                                            Some(SessionPicker { entries, selected: 0 });
+                                        app.picker = Some(Picker {
+                                            title: "sessions".to_string(),
+                                            entries,
+                                            selected: 0,
+                                        });
+                                        picker_kind = Some(PickerKind::Session(ids));
                                     }
                                 }
                                 Some(commands::Slash::Yolo(arg)) => {
@@ -459,29 +526,42 @@ pub async fn run(
                                 }
                                 Some(commands::Slash::Think(arg)) => {
                                     let trimmed = arg.trim();
-                                    let msg = if trimmed.is_empty() {
-                                        let cur = app
-                                            .reasoning_effort
-                                            .clone()
-                                            .unwrap_or_else(|| "off".to_string());
-                                        format!("thinking effort: {cur}")
-                                    } else if matches!(
-                                        trimmed.to_ascii_lowercase().as_str(),
-                                        "off" | "none"
-                                    ) {
-                                        agent.reasoning = None;
-                                        app.reasoning_effort = None;
-                                        "thinking effort disabled".to_string()
-                                    } else if let Some(effort) = ReasoningEffort::parse(trimmed) {
-                                        agent.reasoning = Some(effort);
-                                        app.reasoning_effort = Some(effort.as_str().to_string());
-                                        format!("thinking effort: {}", effort.as_str())
+                                    if trimmed.is_empty() {
+                                        let levels = ["off", "low", "medium", "high"];
+                                        let current =
+                                            app.reasoning_effort.as_deref().unwrap_or("off");
+                                        let selected = levels
+                                            .iter()
+                                            .position(|l| *l == current)
+                                            .unwrap_or(0);
+                                        app.picker = Some(Picker {
+                                            title: "reasoning effort".to_string(),
+                                            entries: levels
+                                                .iter()
+                                                .map(|l| (*l).to_string())
+                                                .collect(),
+                                            selected,
+                                        });
+                                        picker_kind = Some(PickerKind::Think);
                                     } else {
-                                        format!(
-                                            "unknown thinking effort '{trimmed}' (use low|medium|high|off)"
-                                        )
-                                    };
-                                    let _ = engine.inject_system_message(session, msg).await;
+                                        let msg = if matches!(
+                                            trimmed.to_ascii_lowercase().as_str(),
+                                            "off" | "none"
+                                        ) {
+                                            agent.reasoning = None;
+                                            app.reasoning_effort = None;
+                                            "thinking effort disabled".to_string()
+                                        } else if let Some(effort) = ReasoningEffort::parse(trimmed) {
+                                            agent.reasoning = Some(effort);
+                                            app.reasoning_effort = Some(effort.as_str().to_string());
+                                            format!("thinking effort: {}", effort.as_str())
+                                        } else {
+                                            format!(
+                                                "unknown thinking effort '{trimmed}' (use low|medium|high|off)"
+                                            )
+                                        };
+                                        let _ = engine.inject_system_message(session, msg).await;
+                                    }
                                 }
                                 Some(commands::Slash::Template(name)) => {
                                     match commands::resolve_template(&name, &template_dirs) {
