@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use yaca_proto::{PermissionRequestId, SessionId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Read,
     Edit,
@@ -12,6 +14,7 @@ pub enum Action {
     Grep,
     Bash,
     Task,
+    Mcp,
     ExternalDirectory,
 }
 
@@ -259,5 +262,13 @@ mod tests {
         drop(req.reply);
         let result = task.await.expect("join");
         assert!(matches!(result, Err(PermissionError::Unavailable)));
+    }
+
+    #[test]
+    fn mcp_action_round_trips_as_lowercase_json() {
+        let encoded = serde_json::to_string(&Action::Mcp).expect("serialize action");
+        assert_eq!(encoded, "\"mcp\"");
+        let decoded: Action = serde_json::from_str(&encoded).expect("deserialize action");
+        assert_eq!(decoded, Action::Mcp);
     }
 }

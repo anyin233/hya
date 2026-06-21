@@ -20,6 +20,7 @@ yaca-core = { path = "crates/yaca-core" }
 yaca-server = { path = "crates/yaca-server" }
 yaca-client = { path = "crates/yaca-client" }
 yaca-tui = { path = "crates/yaca-tui" }
+yaca-mcp = { path = "crates/yaca-mcp" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }

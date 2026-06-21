@@ -20,6 +20,7 @@ yaca-store = { workspace = true }
 yaca-server = { workspace = true }
 yaca-proto = { workspace = true }
 yaca-tui = { workspace = true }
+yaca-mcp = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

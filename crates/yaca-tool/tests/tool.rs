@@ -1,13 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::json;
+use async_trait::async_trait;
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+use yaca_proto::{ToolName, ToolSchema};
 use yaca_tool::{
     Action, Decision, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionAnswer,
-    Resource, Rule, SpawnerPlane, ToolCtx, ToolRegistry,
+    Resource, Rule, SpawnerPlane, Tool, ToolCtx, ToolRegistry,
 };
 
 fn allow(action: Action, pat: &str) -> Rule {
@@ -39,6 +42,39 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         workdir,
         cancel: CancellationToken::new(),
     }
+}
+
+struct DuplicateTool;
+
+#[async_trait]
+impl Tool for DuplicateTool {
+    fn name(&self) -> &str {
+        "read"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new("read"),
+            description: "duplicate".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, yaca_tool::ToolError> {
+        Ok(json!({ "ok": true }))
+    }
+}
+
+#[test]
+fn registry_rejects_duplicate_tool_name() {
+    let mut registry = ToolRegistry::builtins();
+    let result = registry.register(Arc::new(DuplicateTool));
+    assert!(result.is_err());
+    assert_eq!(
+        registry.get("read").unwrap().schema().description,
+        "Read a file's contents."
+    );
 }
 
 #[test]

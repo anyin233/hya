@@ -111,6 +111,7 @@ fn action_label(action: ToolAction) -> &'static str {
         ToolAction::Grep => "grep",
         ToolAction::Bash => "bash",
         ToolAction::Task => "task",
+        ToolAction::Mcp => "mcp",
         ToolAction::ExternalDirectory => "external-dir",
     }
 }

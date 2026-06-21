@@ -2981,6 +2981,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "yaca-core",
+ "yaca-mcp",
  "yaca-proto",
  "yaca-provider",
  "yaca-server",
@@ -3012,6 +3013,21 @@ dependencies = [
  "yaca-proto",
  "yaca-provider",
  "yaca-store",
+ "yaca-tool",
+]
+
+[[package]]
+name = "yaca-mcp"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "yaca-proto",
  "yaca-tool",
 ]
 

@@ -29,6 +29,12 @@ pub enum ToolError {
     Other(String),
 }
 
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[error("duplicate tool name: {name}")]
+pub struct DuplicateName {
+    pub name: String,
+}
+
 pub struct ToolCtx {
     pub permission: PermissionPlane,
     pub interaction: InteractionPlane,
@@ -83,6 +89,15 @@ impl ToolRegistry {
             tools.insert(t.name().to_string(), t);
         }
         Self { tools }
+    }
+
+    pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
+        let name = tool.name().to_string();
+        if self.tools.contains_key(&name) {
+            return Err(DuplicateName { name });
+        }
+        self.tools.insert(name, tool);
+        Ok(())
     }
 
     #[must_use]

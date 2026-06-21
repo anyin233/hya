@@ -14,9 +14,10 @@ mod rpc;
 mod skills;
 mod tui;
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
@@ -35,6 +36,8 @@ use yaca_tool::{
     Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
     QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
 };
+
+use yaca_mcp::{McpManager, McpServerConfig};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
 
@@ -241,13 +244,26 @@ fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
     model: &str,
+    mcp: BTreeMap<String, McpServerConfig>,
 ) -> (
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
 ) {
     let router = Arc::new(router);
-    let tools = Arc::new(ToolRegistry::builtins());
+    let mut registry = ToolRegistry::builtins();
+    if !mcp.is_empty() {
+        let manager = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(McpManager::connect_all(mcp))
+        });
+        for tool in manager.tools() {
+            if let Err(error) = registry.register(tool) {
+                eprintln!("yaca: skipping MCP tool ({error})");
+            }
+        }
+        keep_mcp_manager_alive(manager);
+    }
+    let tools = Arc::new(registry);
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
         Rule::new(Action::Glob, "*", Mode::Allow),
@@ -268,6 +284,14 @@ fn build_session_engine(
     (engine, asks, questions)
 }
 
+fn keep_mcp_manager_alive(manager: McpManager) {
+    static MANAGERS: OnceLock<Mutex<Vec<McpManager>>> = OnceLock::new();
+    match MANAGERS.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        Ok(mut managers) => managers.push(manager),
+        Err(poisoned) => poisoned.into_inner().push(manager),
+    }
+}
+
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
     if yolo {
         PermissionPolicy::Yolo
@@ -286,20 +310,52 @@ fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
     )
 }
 
+struct RuntimeConfig {
+    router: ProviderRouter,
+    model: String,
+    mcp: BTreeMap<String, McpServerConfig>,
+}
+
 /// Resolve a provider router + active model from yaca's config, falling back
 /// to the offline echo provider when no usable config is present.
-fn resolve_router(model_override: Option<String>) -> (ProviderRouter, String) {
+fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
     match config::load() {
         Ok(Some(cfg)) => {
+            let (fallback_router, fallback_model) = offline_router(model_override.clone());
+            let default_model = if cfg.default_model.is_empty() {
+                fallback_model
+            } else {
+                cfg.default_model
+            };
             let model = model_override
                 .or_else(|| std::env::var("YACA_MODEL").ok())
-                .unwrap_or(cfg.default_model);
-            (cfg.router, model)
+                .unwrap_or(default_model);
+            RuntimeConfig {
+                router: if cfg.has_providers {
+                    cfg.router
+                } else {
+                    fallback_router
+                },
+                model,
+                mcp: cfg.mcp,
+            }
         }
-        Ok(None) => offline_router(model_override),
+        Ok(None) => {
+            let (router, model) = offline_router(model_override);
+            RuntimeConfig {
+                router,
+                model,
+                mcp: BTreeMap::new(),
+            }
+        }
         Err(e) => {
             eprintln!("yaca: config error ({e:#}); using the offline provider");
-            offline_router(model_override)
+            let (router, model) = offline_router(model_override);
+            RuntimeConfig {
+                router,
+                model,
+                mcp: BTreeMap::new(),
+            }
         }
     }
 }
@@ -325,9 +381,10 @@ async fn cmd_exec(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks, _) = build_session_engine(store, router, &model);
-    let agent = agent_with_model(&model);
+    let runtime = resolve_runtime(model_override);
+    let (engine, asks, _) =
+        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
         .create(CreateSession {
@@ -368,9 +425,10 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks, _) = build_session_engine(store, router, &model);
-    let agent = agent_with_model(&model);
+    let runtime = resolve_runtime(model_override);
+    let (engine, asks, _) =
+        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
         .create(CreateSession {
@@ -421,9 +479,11 @@ async fn cmd_goal(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks, _) = build_session_engine(store, router.clone(), &model);
-    let agent = agent_with_model(&model);
+    let runtime = resolve_runtime(model_override);
+    let evaluator_router = runtime.router.clone();
+    let (engine, asks, _) =
+        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
         .create(CreateSession {
@@ -435,8 +495,8 @@ async fn cmd_goal(
         .await
         .context("create session")?;
     let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ModelGoalEvaluator::new(
-        Arc::new(router),
-        ModelRef::new(&model),
+        Arc::new(evaluator_router),
+        ModelRef::new(&runtime.model),
     ));
     let caps = SafetyCaps {
         max_iterations,
@@ -476,9 +536,10 @@ async fn cmd_tui(
         return Ok(());
     }
     let store = open_store(&db).await?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks, questions) = build_session_engine(store, router, &model);
-    let agent = agent_with_model(&model);
+    let runtime = resolve_runtime(model_override);
+    let (engine, asks, questions) =
+        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let agent = agent_with_model(&runtime.model);
     let session = match resume {
         Some(id) => {
             let raw = id.strip_prefix("ses_").unwrap_or(&id);
@@ -495,7 +556,7 @@ async fn cmd_tui(
             .await
             .context("create session")?,
     };
-    tui::run(engine, agent, model, asks, questions, session, yolo).await
+    tui::run(engine, agent, runtime.model, asks, questions, session, yolo).await
 }
 
 async fn cmd_serve(
@@ -505,8 +566,9 @@ async fn cmd_serve(
     yolo: bool,
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
-    let (router, model) = resolve_router(model_override);
-    let (engine, asks, _) = build_session_engine(store, router, &model);
+    let runtime = resolve_runtime(model_override);
+    let (engine, asks, _) =
+        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
     let policy = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
         PermissionPolicy::Yolo
@@ -516,7 +578,7 @@ async fn cmd_serve(
     let _responder = spawn_auto_responder(asks, policy);
     let state = AppState {
         engine,
-        agent: Arc::new(agent_with_model(&model)),
+        agent: Arc::new(agent_with_model(&runtime.model)),
     };
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
@@ -534,7 +596,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _) = build_session_engine(store, router, &model);
+    let (engine, _asks, _) = build_session_engine(store, router, &model, BTreeMap::new());
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
