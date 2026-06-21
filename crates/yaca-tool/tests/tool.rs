@@ -84,7 +84,7 @@ fn registry_rejects_duplicate_tool_name() {
 }
 
 #[test]
-fn builtins_expose_opencode_short_names_and_keep_legacy_aliases_hidden() {
+fn builtins_expose_opencode_names_and_keep_short_aliases_hidden() {
     let registry = ToolRegistry::builtins();
     let visible: Vec<_> = registry
         .schemas()
@@ -93,11 +93,11 @@ fn builtins_expose_opencode_short_names_and_keep_legacy_aliases_hidden() {
         .collect();
 
     for (canonical, alias) in [
-        ("fetch", "webfetch"),
-        ("search", "websearch"),
-        ("todo", "todowrite"),
-        ("patch", "apply_patch"),
-        ("plan", "plan_exit"),
+        ("webfetch", "fetch"),
+        ("websearch", "search"),
+        ("todowrite", "todo"),
+        ("apply_patch", "patch"),
+        ("plan_exit", "plan"),
     ] {
         assert!(registry.get(canonical).is_some(), "{canonical} missing");
         assert!(registry.get(alias).is_some(), "{alias} alias missing");
