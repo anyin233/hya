@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use serde::Deserialize;
 use yaca_mcp::McpServerConfig;
+use yaca_plugin::config::PluginEntry;
 use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 
 pub struct ResolvedConfig {
@@ -20,6 +21,7 @@ pub struct ResolvedConfig {
     pub models: Vec<ModelEntry>,
     pub has_providers: bool,
     pub mcp: BTreeMap<String, McpServerConfig>,
+    pub plugins: BTreeMap<String, PluginEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,8 @@ struct FileConfig {
     providers: BTreeMap<String, ProviderConfig>,
     #[serde(default)]
     mcp: BTreeMap<String, McpServerConfig>,
+    #[serde(default)]
+    plugins: BTreeMap<String, PluginEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,7 +195,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let file = parse_config(&yaml)?;
     let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
-    if parsed.is_empty() && mcp.is_empty() {
+    if parsed.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
@@ -212,7 +216,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
         router = router.with(Arc::new(provider));
     }
-    if models.is_empty() && mcp.is_empty() {
+    if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
         return Ok(None);
     }
     let default_model = choose_default(file.default_model, &models);
@@ -222,6 +226,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         has_providers: !models.is_empty(),
         models,
         mcp,
+        plugins: file.plugins,
     }))
 }
 
@@ -354,5 +359,31 @@ mcp:
             choose_default(Some("gpt-5.5".to_string()), &models),
             "gpt-5.5"
         );
+    }
+
+    #[test]
+    fn parses_plugins_section() {
+        let yaml = "
+plugins:
+  memory:
+    command: [python3, memory.py]
+    timeout_ms: 500
+    env:
+      TOKEN: literal
+  disabled-one:
+    enabled: false
+    command: [nope]
+";
+        let file = parse_config(yaml).unwrap();
+        assert_eq!(file.plugins.len(), 2);
+        let memory = file.plugins.get("memory").unwrap();
+        assert_eq!(
+            memory.command,
+            vec!["python3".to_string(), "memory.py".to_string()]
+        );
+        assert_eq!(memory.timeout_ms, Some(500));
+        assert!(memory.enabled);
+        assert_eq!(memory.env.get("TOKEN").map(String::as_str), Some("literal"));
+        assert!(!file.plugins.get("disabled-one").unwrap().enabled);
     }
 }

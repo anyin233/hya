@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 yaca-proto = { workspace = true }
 ratatui = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

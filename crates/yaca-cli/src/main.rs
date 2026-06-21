@@ -10,6 +10,7 @@ mod auth;
 mod commands;
 mod config;
 mod permission;
+mod plugins;
 mod rpc;
 mod skills;
 mod tui;
@@ -38,6 +39,8 @@ use yaca_tool::{
 };
 
 use yaca_mcp::{McpManager, McpServerConfig};
+use yaca_plugin::config::PluginSpec;
+use yaca_plugin::{HostInfo, PermissionBridge, PluginHost};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
 
@@ -207,21 +210,83 @@ fn spawn_team_supervisor(
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             let engine = engine.clone();
-            let specs: Vec<MemberSpec> = req
-                .members
-                .into_iter()
-                .map(|m| MemberSpec {
-                    id: MemberId::new(),
-                    agent: base.clone(),
-                    directive: m.prompt,
-                })
-                .collect();
+            let base = base.clone();
             tokio::spawn(async move {
-                let evidence = run_team(engine.clone(), req.parent, specs, req.cancel).await;
+                let parent = req.parent;
+                let members = req.members;
+                let cancel = req.cancel;
+                let background = req.background;
+                let mut reply = Some(req.reply);
+                let specs: Vec<MemberSpec> = if background {
+                    let mut specs = Vec::new();
+                    let mut started = Vec::new();
+                    for member in members {
+                        let id = MemberId::new();
+                        let session = match member
+                            .task_id
+                            .as_deref()
+                            .and_then(|task_id| task_id.parse::<SessionId>().ok())
+                        {
+                            Some(session) => session,
+                            None => {
+                                match engine
+                                    .create(CreateSession {
+                                        parent: Some(parent),
+                                        agent: base.name.clone(),
+                                        model: base.model.clone(),
+                                        workdir: base.workdir.to_string_lossy().into_owned(),
+                                    })
+                                    .await
+                                {
+                                    Ok(session) => session,
+                                    Err(err) => {
+                                        started.push(MemberOutcome {
+                                            member: id.to_string(),
+                                            session: "-".to_string(),
+                                            status: "failed".to_string(),
+                                            summary: err.to_string(),
+                                        });
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        started.push(MemberOutcome {
+                            member: id.to_string(),
+                            session: session.to_string(),
+                            status: "running".to_string(),
+                            summary: "The task is working in the background.".to_string(),
+                        });
+                        specs.push(MemberSpec {
+                            id,
+                            agent: base.clone(),
+                            directive: member.prompt,
+                            session: Some(session),
+                        });
+                    }
+                    if let Some(reply) = reply.take() {
+                        let _ = reply.send(started);
+                    }
+                    specs
+                } else {
+                    members
+                        .into_iter()
+                        .map(|m| MemberSpec {
+                            id: MemberId::new(),
+                            agent: base.clone(),
+                            directive: m.prompt,
+                            session: m
+                                .task_id
+                                .as_deref()
+                                .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                        })
+                        .collect()
+                };
+                let evidence = run_team(engine.clone(), parent, specs, cancel).await;
                 let envelope = TeamEvidenceEnvelope {
                     members: evidence.clone(),
                 };
-                let _ = project_envelope(&engine, req.parent, &envelope).await;
+                let _ = project_envelope(&engine, parent, &envelope).await;
                 let outcomes: Vec<MemberOutcome> = evidence
                     .into_iter()
                     .map(|e| MemberOutcome {
@@ -234,7 +299,9 @@ fn spawn_team_supervisor(
                         summary: e.summary,
                     })
                     .collect();
-                let _ = req.reply.send(outcomes);
+                if !background && let Some(reply) = reply.take() {
+                    let _ = reply.send(outcomes);
+                }
             });
         }
     });
@@ -245,11 +312,13 @@ fn build_session_engine(
     router: ProviderRouter,
     model: &str,
     mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
 ) -> (
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
     McpManager,
+    Arc<PluginHost>,
 ) {
     let router = Arc::new(router);
     let mut registry = ToolRegistry::builtins();
@@ -262,24 +331,42 @@ fn build_session_engine(
         }
     }
     let tools = Arc::new(registry);
+    let plugin_host = Arc::new(tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(PluginHost::connect_all(plugins, host_info()))
+    }));
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
         Rule::new(Action::Glob, "*", Mode::Allow),
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
     let (permission, asks) = PermissionPlane::new(rules);
+    let permission = if plugin_host.is_empty() {
+        permission
+    } else {
+        permission.with_interceptor(Arc::new(PermissionBridge::new(plugin_host.clone())))
+    };
     let (interaction, questions) = InteractionPlane::new();
     let (spawner, spawn_rx) = SpawnerPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
-    let engine = Arc::new(
+    let mut engine_builder =
         SessionEngine::new(store, router, tools, permission, EventBus::default())
             .with_compaction(summarizer, compaction_config())
             .with_interaction(interaction)
-            .with_spawner(spawner),
-    );
+            .with_spawner(spawner);
+    if !plugin_host.is_empty() {
+        engine_builder = engine_builder.with_hooks(plugin_host.clone());
+    }
+    let engine = Arc::new(engine_builder);
     spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
-    (engine, asks, questions, mcp_manager)
+    (engine, asks, questions, mcp_manager, plugin_host)
+}
+
+fn host_info() -> HostInfo {
+    HostInfo {
+        name: "yaca".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
 }
 
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
@@ -305,6 +392,7 @@ struct RuntimeConfig {
     model: String,
     models: Vec<config::ModelEntry>,
     mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
 }
 
 /// Resolve a provider router + active model from yaca's config, falling back
@@ -330,6 +418,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: cfg.models,
                 mcp: cfg.mcp,
+                plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
             }
         }
         Ok(None) => {
@@ -339,6 +428,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
+                plugins: Vec::new(),
             }
         }
         Err(e) => {
@@ -349,6 +439,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
+                plugins: Vec::new(),
             }
         }
     }
@@ -376,8 +467,13 @@ async fn cmd_exec(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    );
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -420,8 +516,13 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    );
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -475,8 +576,13 @@ async fn cmd_goal(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
     let evaluator_router = runtime.router.clone();
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    );
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -531,8 +637,13 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    );
     let agent = agent_with_model(&runtime.model);
     let session = match resume {
         Some(id) => {
@@ -571,8 +682,13 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp);
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    );
     let policy = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
         PermissionPolicy::Yolo
@@ -600,8 +716,8 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _, _mcp_manager) =
-        build_session_engine(store, router, &model, BTreeMap::new());
+    let (engine, _asks, _, _mcp_manager, _plugin_host) =
+        build_session_engine(store, router, &model, BTreeMap::new(), Vec::new());
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
