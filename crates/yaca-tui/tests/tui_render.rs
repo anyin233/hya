@@ -6,17 +6,27 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use serde_json::json;
 use yaca_proto::{
     Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId, ToolCallId, ToolName,
 };
 use yaca_tui::{AppState, DialogItem, DialogView, GoalView, LoopView, PermissionPrompt, draw};
 
-fn render(state: &mut AppState, width: u16, height: u16) -> String {
+fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| draw(f, state)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
+    terminal.backend().buffer().clone()
+}
+
+fn render(state: &mut AppState, width: u16, height: u16) -> String {
+    let buffer = render_buffer(state, width, height);
+    buffer_text(&buffer, width, height)
+}
+
+fn buffer_text(buffer: &Buffer, width: u16, height: u16) -> String {
     let mut out = String::new();
     for y in 0..height {
         for x in 0..width {
@@ -25,6 +35,24 @@ fn render(state: &mut AppState, width: u16, height: u16) -> String {
         out.push('\n');
     }
     out
+}
+
+fn find_rendered_text(
+    buffer: &Buffer,
+    width: u16,
+    height: u16,
+    needle: &str,
+) -> Option<(u16, u16)> {
+    for y in 0..height {
+        let mut row = String::new();
+        for x in 0..width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        if let Some(x) = row.find(needle) {
+            return Some((u16::try_from(x).unwrap(), y));
+        }
+    }
+    None
 }
 
 fn env(seq: u64, event: Event) -> Envelope {
@@ -122,6 +150,53 @@ fn with_tool_message(state: &mut AppState, base_seq: u64, path: &str, time_ms: u
     ));
 }
 
+fn with_tool_error_message(state: &mut AppState, base_seq: u64, path: &str, message_text: &str) {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let name = ToolName::new("read");
+    state.apply(&env(
+        base_seq,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        base_seq + 1,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: name.clone(),
+        },
+    ));
+    state.apply(&env(
+        base_seq + 2,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input: json!({ "path": path }),
+        },
+    ));
+    state.apply(&env(
+        base_seq + 3,
+        Event::ToolError {
+            session,
+            message,
+            part,
+            call,
+            message_text: message_text.to_string(),
+        },
+    ));
+}
+
 fn rich_state() -> AppState {
     let mut state = AppState {
         model: "fake".to_string(),
@@ -206,6 +281,71 @@ fn timeline_renders_message_rails_and_tool_status() {
 }
 
 #[test]
+fn system_turn_errors_render_with_error_rail_and_color() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        ..AppState::default()
+    };
+    with_text_message(
+        &mut state,
+        30,
+        Role::System,
+        "turn error: http: 403 Forbidden\nquota exhausted",
+    );
+
+    let buffer = render_buffer(&mut state, 120, 24);
+    let text = buffer_text(&buffer, 120, 24);
+    assert!(
+        text.contains("error turn error: http: 403 Forbidden"),
+        "system errors should be promoted to an error row"
+    );
+    assert!(
+        !text.contains("sys turn error"),
+        "system errors should not be rendered as muted sys chatter"
+    );
+    let (x, y) = find_rendered_text(&buffer, 120, 24, "error turn error").unwrap();
+    assert_eq!(
+        buffer[(x, y)].fg,
+        Color::Rgb(224, 108, 117),
+        "error row label should use the theme error color"
+    );
+}
+
+#[test]
+fn sidebar_summarizes_transcript_tools_and_errors() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        ..AppState::default()
+    };
+    with_user_message(&mut state, "inspect README");
+    with_text_message(&mut state, 20, Role::Assistant, "checking");
+    with_tool_error_message(&mut state, 40, "README.md", "permission denied");
+    with_text_message(
+        &mut state,
+        50,
+        Role::System,
+        "turn error: http: 403 Forbidden",
+    );
+
+    let text = render(&mut state, 120, 36);
+    assert!(
+        text.contains("transcript"),
+        "sidebar should include a transcript section"
+    );
+    assert!(
+        text.contains("messages 4"),
+        "sidebar should count transcript messages"
+    );
+    assert!(text.contains("tools 1"), "sidebar should count tool calls");
+    assert!(
+        text.contains("errors 2"),
+        "sidebar should count tool and system errors"
+    );
+}
+
+#[test]
 fn permission_panel_renders_options_and_reply() {
     let mut state = AppState::default();
     state.permission = Some(PermissionPrompt {
@@ -266,6 +406,22 @@ fn default_state_renders_banner_and_hint() {
     let text = render(&mut AppState::default(), 80, 20);
     assert!(text.contains("yaca"), "status banner must render");
     assert!(text.contains("Ask yaca"), "empty-state hint must render");
+}
+
+#[test]
+fn yolo_and_exit_armed_states_are_visible() {
+    let mut state = AppState {
+        yolo: true,
+        exit_armed: true,
+        ..AppState::default()
+    };
+
+    let text = render(&mut state, 100, 20);
+    assert!(text.contains("YOLO"), "yolo mode should be visible");
+    assert!(
+        text.contains("Ctrl-C again"),
+        "armed exit hint should be visible"
+    );
 }
 
 #[test]

@@ -1,7 +1,10 @@
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem, DialogView};
 
 use super::commands::{self, CommandKind};
+use super::prompt::{PromptState, mention_trigger_index};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TuiEffect {
@@ -28,15 +31,19 @@ enum DialogMode {
     Resume,
     Help,
     CommandCompletion,
+    ReferenceCompletion,
 }
 
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<String>,
     sessions: Vec<SessionSummary>,
+    references: Vec<DialogItem>,
     dialog_mode: Option<DialogMode>,
     input_history: Vec<String>,
     history_cursor: Option<usize>,
+    prompt: PromptState,
+    last_ctrl_c: Option<Instant>,
 }
 
 impl Controller {
@@ -70,9 +77,12 @@ impl Controller {
             app,
             available_models,
             sessions,
+            references: Vec::new(),
             dialog_mode: None,
             input_history: Vec::new(),
             history_cursor: None,
+            prompt: PromptState::default(),
+            last_ctrl_c: None,
         }
     }
 
@@ -102,13 +112,17 @@ impl Controller {
                 self.open_model_dialog();
                 TuiEffect::None
             }
-            KeyCode::Tab | KeyCode::Down if self.app.input.starts_with('/') => {
-                self.complete_slash_input()
+            KeyCode::Tab => {
+                self.app.yolo = !self.app.yolo;
+                self.disarm_exit();
+                TuiEffect::None
             }
             KeyCode::Enter => self.submit_input(),
             KeyCode::Backspace => {
                 self.app.input.pop();
                 self.history_cursor = None;
+                self.disarm_exit();
+                self.refresh_inline_popup();
                 TuiEffect::None
             }
             KeyCode::PageUp => {
@@ -140,6 +154,8 @@ impl Controller {
             {
                 self.app.input.push(c);
                 self.history_cursor = None;
+                self.disarm_exit();
+                self.refresh_inline_popup();
                 TuiEffect::None
             }
             _ => TuiEffect::None,
@@ -159,23 +175,55 @@ impl Controller {
         self.sessions = sessions;
     }
 
+    pub fn set_references(&mut self, references: Vec<DialogItem>) {
+        self.references = references;
+    }
+
+    pub fn handle_paste(&mut self, text: &str) -> TuiEffect {
+        self.disarm_exit();
+        let outcome = self.prompt.handle_paste(&mut self.app, text);
+        if outcome.refresh_popup {
+            self.refresh_inline_popup();
+        }
+        TuiEffect::None
+    }
+
     fn handle_ctrl_c(&mut self) -> TuiEffect {
         if self.app.dialog.is_some() {
+            if matches!(
+                self.dialog_mode,
+                Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+            ) && !self.app.input.is_empty()
+            {
+                self.clear_prompt();
+                return self.arm_exit();
+            }
             self.app.dialog = None;
             self.dialog_mode = None;
             return TuiEffect::None;
         }
         if !self.app.input.is_empty() {
-            self.app.input.clear();
-            return TuiEffect::None;
+            self.clear_prompt();
+            return self.arm_exit();
         }
         if self.app.running {
-            return TuiEffect::Interrupt;
+            let effect = self.arm_exit();
+            return if effect == TuiEffect::Exit {
+                effect
+            } else {
+                TuiEffect::Interrupt
+            };
         }
-        TuiEffect::Exit
+        self.arm_exit()
     }
 
     fn handle_dialog_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if matches!(
+            self.dialog_mode,
+            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+        ) {
+            return self.handle_completion_popup_key(key);
+        }
         let Some(dialog) = self.app.dialog.as_mut() else {
             return TuiEffect::None;
         };
@@ -246,7 +294,9 @@ impl Controller {
                         self.apply_command_completion(selected);
                         TuiEffect::None
                     }
-                    Some(DialogMode::Help) | None => TuiEffect::None,
+                    Some(DialogMode::Help | DialogMode::ReferenceCompletion) | None => {
+                        TuiEffect::None
+                    }
                 }
             }
             _ => TuiEffect::None,
@@ -254,7 +304,12 @@ impl Controller {
     }
 
     fn submit_input(&mut self) -> TuiEffect {
-        let input = std::mem::take(&mut self.app.input);
+        let input = self
+            .prompt
+            .expanded_input(&self.app.input)
+            .trim_end()
+            .to_string();
+        self.clear_prompt();
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return TuiEffect::None;
@@ -265,6 +320,7 @@ impl Controller {
         self.app.scroll_back = 0;
         self.input_history.push(input.clone());
         self.history_cursor = None;
+        self.disarm_exit();
         TuiEffect::Submit(input)
     }
 
@@ -280,6 +336,7 @@ impl Controller {
         self.history_cursor = Some(idx);
         if let Some(value) = self.input_history.get(idx) {
             self.app.input = value.clone();
+            self.refresh_inline_popup();
         }
     }
 
@@ -295,10 +352,12 @@ impl Controller {
             self.history_cursor = Some(next);
             if let Some(value) = self.input_history.get(next) {
                 self.app.input = value.clone();
+                self.refresh_inline_popup();
             }
         } else {
             self.history_cursor = None;
             self.app.input.clear();
+            self.refresh_inline_popup();
         }
     }
 
@@ -325,23 +384,6 @@ impl Controller {
         }
     }
 
-    fn complete_slash_input(&mut self) -> TuiEffect {
-        let items = commands::completion_items(&self.app.input);
-        match items.len() {
-            0 => TuiEffect::None,
-            1 => {
-                if let Some(item) = items.first() {
-                    self.app.input = format!("{} ", item.label);
-                }
-                TuiEffect::None
-            }
-            _ => {
-                self.open_command_completion_dialog(items);
-                TuiEffect::None
-            }
-        }
-    }
-
     fn apply_command_completion(&mut self, selected: usize) {
         let items = commands::completion_items(&self.app.input);
         if let Some(item) = items.get(selected) {
@@ -357,6 +399,175 @@ impl Controller {
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::CommandCompletion);
+    }
+
+    fn open_reference_completion_dialog(&mut self, items: Vec<DialogItem>) {
+        self.app.dialog = Some(DialogView {
+            title: "references".to_string(),
+            subtitle: "select a file or reference".to_string(),
+            items,
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::ReferenceCompletion);
+    }
+
+    fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
+        match key.code {
+            KeyCode::Esc => {
+                self.app.dialog = None;
+                self.dialog_mode = None;
+                TuiEffect::None
+            }
+            KeyCode::Enter
+                if self.dialog_mode == Some(DialogMode::CommandCompletion)
+                    && is_exact_slash_command(&self.app.input) =>
+            {
+                self.app.dialog = None;
+                self.dialog_mode = None;
+                self.submit_input()
+            }
+            KeyCode::Enter | KeyCode::Tab if key.modifiers != KeyModifiers::SHIFT => {
+                let selected = self
+                    .app
+                    .dialog
+                    .as_ref()
+                    .map(|dialog| dialog.selected)
+                    .unwrap_or(0);
+                self.complete_popup_selection(selected);
+                TuiEffect::None
+            }
+            KeyCode::Up => {
+                if let Some(dialog) = self.app.dialog.as_mut() {
+                    dialog.selected = dialog.selected.saturating_sub(1);
+                }
+                TuiEffect::None
+            }
+            KeyCode::Down => {
+                if let Some(dialog) = self.app.dialog.as_mut() {
+                    dialog.selected =
+                        (dialog.selected + 1).min(dialog.items.len().saturating_sub(1));
+                }
+                TuiEffect::None
+            }
+            KeyCode::Backspace => {
+                self.app.input.pop();
+                self.refresh_inline_popup();
+                TuiEffect::None
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.app.input.push(c);
+                self.refresh_inline_popup();
+                TuiEffect::None
+            }
+            _ => TuiEffect::None,
+        }
+    }
+
+    fn complete_popup_selection(&mut self, selected: usize) {
+        match self.dialog_mode {
+            Some(DialogMode::CommandCompletion) => {
+                self.apply_command_completion(selected);
+                self.app.dialog = None;
+                self.dialog_mode = None;
+            }
+            Some(DialogMode::ReferenceCompletion) => {
+                let label = self
+                    .app
+                    .dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.items.get(selected))
+                    .map(|item| item.label.clone());
+                if let Some(label) = label {
+                    self.complete_reference(&label);
+                }
+                self.app.dialog = None;
+                self.dialog_mode = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn complete_reference(&mut self, label: &str) {
+        let Some(idx) = mention_trigger_index(&self.app.input) else {
+            return;
+        };
+        self.app.input.truncate(idx);
+        self.app.input.push_str(label);
+        self.app.input.push(' ');
+    }
+
+    fn refresh_inline_popup(&mut self) {
+        if self.app.input.starts_with('/') && !self.app.input.contains(char::is_whitespace) {
+            let items = commands::completion_items(&self.app.input);
+            if items.is_empty() {
+                self.app.dialog = None;
+                self.dialog_mode = None;
+            } else {
+                self.open_command_completion_dialog(items);
+            }
+            return;
+        }
+        if let Some(idx) = mention_trigger_index(&self.app.input) {
+            let prefix = &self.app.input[idx + 1..];
+            let items = self
+                .references
+                .iter()
+                .filter(|item| {
+                    let label = item.label.strip_prefix('@').unwrap_or(&item.label);
+                    label.starts_with(prefix)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                self.app.dialog = None;
+                self.dialog_mode = None;
+            } else {
+                self.open_reference_completion_dialog(items);
+            }
+            return;
+        }
+        if matches!(
+            self.dialog_mode,
+            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+        ) {
+            self.app.dialog = None;
+            self.dialog_mode = None;
+        }
+    }
+
+    fn clear_prompt(&mut self) {
+        self.prompt.clear(&mut self.app);
+        self.disarm_exit();
+        if matches!(
+            self.dialog_mode,
+            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+        ) {
+            self.app.dialog = None;
+            self.dialog_mode = None;
+        }
+    }
+
+    fn disarm_exit(&mut self) {
+        self.app.exit_armed = false;
+        self.last_ctrl_c = None;
+    }
+
+    fn arm_exit(&mut self) -> TuiEffect {
+        const EXIT_WINDOW: Duration = Duration::from_millis(900);
+        let now = Instant::now();
+        if self
+            .last_ctrl_c
+            .is_some_and(|last| now.duration_since(last) <= EXIT_WINDOW)
+        {
+            self.app.exit_armed = false;
+            self.last_ctrl_c = None;
+            return TuiEffect::Exit;
+        }
+        self.app.exit_armed = true;
+        self.last_ctrl_c = Some(now);
+        TuiEffect::None
     }
 
     fn open_model_dialog(&mut self) {
@@ -420,6 +631,13 @@ impl Controller {
     }
 }
 
+fn is_exact_slash_command(input: &str) -> bool {
+    input
+        .strip_prefix('/')
+        .and_then(commands::resolve_slash)
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -459,6 +677,18 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_clears_input_even_when_completion_popup_is_open() {
+        let mut controller = Controller::new(AppState::default());
+        type_text(&mut controller, "/");
+
+        assert!(controller.app.dialog.is_some());
+        assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::None);
+        assert_eq!(controller.app.input, "");
+        assert!(controller.app.dialog.is_none());
+        assert!(controller.app.exit_armed);
+    }
+
+    #[test]
     fn ctrl_c_interrupts_running_turn_without_exit() {
         let mut controller = Controller::new(AppState {
             running: true,
@@ -473,7 +703,142 @@ mod tests {
     fn ctrl_c_exits_only_when_idle_empty_and_no_dialog() {
         let mut controller = Controller::new(AppState::default());
 
+        assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::None);
+        assert!(controller.app.exit_armed);
         assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::Exit);
+    }
+
+    #[test]
+    fn typing_after_ctrl_c_exit_arm_prevents_accidental_exit() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::None);
+        assert!(controller.app.exit_armed);
+        type_text(&mut controller, "new input");
+
+        assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::None);
+        assert_eq!(controller.app.input, "");
+        assert!(controller.app.exit_armed);
+    }
+
+    #[test]
+    fn slash_popup_opens_as_soon_as_trigger_is_typed() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/");
+
+        let dialog = controller.app.dialog.as_ref().expect("slash popup");
+        assert_eq!(dialog.title, "commands");
+        assert!(dialog.items.iter().any(|item| item.label == "/model"));
+    }
+
+    #[test]
+    fn at_popup_completes_reference_items() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_references(vec![DialogItem {
+            label: "@README.md".to_string(),
+            detail: "file".to_string(),
+        }]);
+
+        type_text(&mut controller, "read @");
+
+        let dialog = controller.app.dialog.as_ref().expect("reference popup");
+        assert_eq!(dialog.title, "references");
+        assert_eq!(dialog.items[0].label, "@README.md");
+
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(controller.app.input, "read @README.md ");
+    }
+
+    #[test]
+    fn tab_toggles_yolo_when_no_popup_is_active() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert!(!controller.app.yolo);
+        assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
+        assert!(controller.app.yolo);
+        assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
+        assert!(!controller.app.yolo);
+    }
+
+    #[test]
+    fn paste_placeholder_expands_on_submit() {
+        let mut controller = Controller::new(AppState::default());
+        let pasted = "one\ntwo\nthree";
+
+        assert_eq!(controller.handle_paste(pasted), TuiEffect::None);
+        assert_eq!(controller.app.input, "[Pasted Text #1] ");
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::Submit(pasted.to_string())
+        );
+    }
+
+    #[test]
+    fn consecutive_paste_reveals_previous_raw_text() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert_eq!(
+            controller.handle_paste("alpha\nbeta\ngamma"),
+            TuiEffect::None
+        );
+        assert_eq!(controller.handle_paste("second paste"), TuiEffect::None);
+
+        assert!(
+            controller.app.input.contains("alpha\nbeta\ngamma"),
+            "second paste should reveal the previous original content"
+        );
+        assert!(controller.app.input.contains("second paste"));
+    }
+
+    #[test]
+    fn image_path_paste_inserts_image_placeholder() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert_eq!(
+            controller.handle_paste("/tmp/screenshot.png"),
+            TuiEffect::None
+        );
+
+        assert_eq!(controller.app.input, "[Image #1] ");
+        assert_eq!(controller.app.attachments.len(), 1);
+        assert_eq!(controller.app.attachments[0].placeholder, "[Image #1]");
+        assert_eq!(
+            controller.app.attachments[0].source_path.as_deref(),
+            Some("/tmp/screenshot.png")
+        );
+    }
+
+    #[test]
+    fn markdown_image_paste_extracts_local_image_path() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert_eq!(
+            controller.handle_paste("![screenshot](/tmp/screenshot with spaces.png)"),
+            TuiEffect::None
+        );
+
+        assert_eq!(controller.app.input, "[Image #1] ");
+        assert_eq!(
+            controller.app.attachments[0].source_path.as_deref(),
+            Some("/tmp/screenshot with spaces.png")
+        );
+    }
+
+    #[test]
+    fn image_tag_paste_extracts_path_attribute() {
+        let mut controller = Controller::new(AppState::default());
+
+        assert_eq!(
+            controller.handle_paste("<image name=[Image #1] path=\"/tmp/CleanShot.png\">"),
+            TuiEffect::None
+        );
+
+        assert_eq!(controller.app.input, "[Image #1] ");
+        assert_eq!(
+            controller.app.attachments[0].source_path.as_deref(),
+            Some("/tmp/CleanShot.png")
+        );
     }
 
     #[test]
@@ -502,12 +867,11 @@ mod tests {
     }
 
     #[test]
-    fn tab_opens_slash_completion_when_prefix_is_ambiguous() {
+    fn slash_completion_popup_selects_ambiguous_commands() {
         let mut controller = Controller::new(AppState::default());
 
         type_text(&mut controller, "/");
 
-        assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
         let dialog = controller.app.dialog.as_ref().expect("slash dialog");
         assert_eq!(dialog.title, "commands");
         assert!(dialog.items.iter().any(|item| item.label == "/model"));
