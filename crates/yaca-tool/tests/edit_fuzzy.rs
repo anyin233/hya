@@ -113,3 +113,160 @@ async fn edit_matches_whitespace_normalized_substring_like_opencode() {
         "let value = gamma;\n"
     );
 }
+
+#[tokio::test]
+async fn edit_matches_similar_block_anchor_like_opencode() {
+    // Given
+    let workdir = tempdir();
+    let target = workdir.join("config.ts");
+    tokio::fs::write(
+        &target,
+        [
+            "function configure() {",
+            "  const enabled = true",
+            "  auditLog()",
+            "}",
+            "",
+        ]
+        .join("\n"),
+    )
+    .await
+    .unwrap();
+    let ctx = ctx_with(workdir);
+    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let old = [
+        "function configure() {",
+        "  const enabled = false",
+        "  auditLog()",
+        "}",
+    ]
+    .join("\n");
+    let new = [
+        "function configure() {",
+        "  const enabled = reviewed",
+        "  auditLog()",
+        "}",
+    ]
+    .join("\n");
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "config.ts",
+                "oldString": old,
+                "newString": new
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["replaced"], 1);
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "function configure() {\n  const enabled = reviewed\n  auditLog()\n}\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_matches_escape_normalized_string_like_opencode() {
+    // Given
+    let workdir = tempdir();
+    let target = workdir.join("text.txt");
+    tokio::fs::write(&target, "before\nalpha\nbeta\nafter\n")
+        .await
+        .unwrap();
+    let ctx = ctx_with(workdir);
+    let tool = ToolRegistry::builtins().get("edit").unwrap();
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "text.txt",
+                "oldString": "alpha\\nbeta",
+                "newString": "gamma"
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["replaced"], 1);
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "before\ngamma\nafter\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_matches_trimmed_boundary_block_like_opencode() {
+    // Given
+    let workdir = tempdir();
+    let target = workdir.join("trimmed.txt");
+    tokio::fs::write(&target, "alpha\nbeta\ngamma\n")
+        .await
+        .unwrap();
+    let ctx = ctx_with(workdir);
+    let tool = ToolRegistry::builtins().get("edit").unwrap();
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "trimmed.txt",
+                "oldString": "\nalpha\nbeta\n",
+                "newString": "delta"
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["replaced"], 1);
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "delta\ngamma\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_matches_context_aware_block_like_opencode() {
+    // Given
+    let workdir = tempdir();
+    let target = workdir.join("context.ts");
+    tokio::fs::write(
+        &target,
+        ["function configure() {", "  keep()", "  actual()", "}", ""].join("\n"),
+    )
+    .await
+    .unwrap();
+    let ctx = ctx_with(workdir);
+    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let old = ["function configure() {", "  keep()", "  expected()", "}"].join("\n");
+    let new = ["function configure() {", "  keep()", "  replacement()", "}"].join("\n");
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "context.ts",
+                "oldString": old,
+                "newString": new
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["replaced"], 1);
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "function configure() {\n  keep()\n  replacement()\n}\n"
+    );
+}
