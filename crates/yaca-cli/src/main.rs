@@ -303,7 +303,7 @@ fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
 struct RuntimeConfig {
     router: ProviderRouter,
     model: String,
-    models: Vec<String>,
+    models: Vec<config::ModelEntry>,
     mcp: BTreeMap<String, McpServerConfig>,
 }
 
