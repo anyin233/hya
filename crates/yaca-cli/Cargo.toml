@@ -21,6 +21,7 @@ yaca-server = { workspace = true }
 yaca-proto = { workspace = true }
 yaca-tui = { workspace = true }
 yaca-mcp = { workspace = true }
+yaca-plugin = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

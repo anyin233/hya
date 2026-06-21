@@ -57,11 +57,13 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
             id: MemberId::new(),
             agent: agent.clone(),
             directive: "do A".to_string(),
+            session: None,
         },
         MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
             directive: "do B".to_string(),
+            session: None,
         },
     ];
     let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
@@ -88,6 +90,46 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
         .filter(|m| matches!(m.role, Role::Assistant))
         .count();
     assert_eq!(assistant_count, 0);
+}
+
+#[tokio::test]
+async fn run_team_can_resume_existing_member_session() {
+    let (engine, agent) = engine().await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let child = engine
+        .create(CreateSession {
+            parent: Some(lead),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let evidence = run_team(
+        engine.clone(),
+        lead,
+        vec![MemberSpec {
+            id: MemberId::new(),
+            agent,
+            directive: "continue prior work".to_string(),
+            session: Some(child),
+        }],
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].session, child.to_string());
+    assert_eq!(evidence[0].status, MemberStatus::Done);
 }
 
 #[tokio::test]
