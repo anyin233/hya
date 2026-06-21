@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ mod controller;
 #[cfg(test)]
 mod harness;
 mod history;
+mod prompt;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -92,6 +94,56 @@ fn meta_for(history: &HistoryStore, id: &str) -> Option<SessionMeta> {
         .ok()?
         .into_iter()
         .find(|meta| meta.id == id)
+}
+
+fn reference_items(workdir: &Path) -> Vec<yaca_tui::DialogItem> {
+    const MAX_ITEMS: usize = 250;
+    let mut items = Vec::new();
+    let mut stack = vec![(workdir.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 3 || items.len() >= MAX_ITEMS {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut paths = entries.filter_map(Result::ok).collect::<Vec<_>>();
+        paths.sort_by_key(|entry| entry.file_name());
+        for entry in paths {
+            if items.len() >= MAX_ITEMS {
+                break;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(name.as_ref(), ".git" | "target" | ".worktrees") {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(workdir) else {
+                continue;
+            };
+            let label = format!("@{}", display_path(relative));
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let detail = if kind.is_dir() { "dir" } else { "file" };
+            items.push(yaca_tui::DialogItem {
+                label,
+                detail: detail.to_string(),
+            });
+            if kind.is_dir() {
+                stack.push((path, depth + 1));
+            }
+        }
+    }
+    items
+}
+
+fn display_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn decision_from(prompt: &PermissionPrompt) -> Decision {
@@ -201,6 +253,7 @@ pub async fn run(
     };
     let mut controller =
         Controller::with_models_and_sessions(app, models, session_summaries(&history));
+    controller.set_references(reference_items(&agent.workdir));
 
     install_panic_hook();
     enable_raw_mode().context("enable raw mode")?;
@@ -246,6 +299,10 @@ pub async fn run(
             }
             maybe_ask = asks.recv(), if controller.app.permission.is_none() => {
                 if let Some(req) = maybe_ask {
+                    if controller.app.yolo {
+                        let _ = req.reply.send(Decision::AllowOnce);
+                        continue;
+                    }
                     pending = Some(req.reply);
                     controller.app.permission = Some(PermissionPrompt {
                         title: action_label(req.action),
@@ -305,6 +362,7 @@ pub async fn run(
                                 controller.app.scroll_back = 0;
                                 controller.app.running = false;
                                 controller.set_sessions(session_summaries(&history));
+                                controller.set_references(reference_items(&agent.workdir));
                             }
                             TuiEffect::ResumeSession(id) => {
                                 if let Ok(uuid) = uuid::Uuid::parse_str(&id) {
@@ -317,6 +375,7 @@ pub async fn run(
                                     if let Some(meta) = meta_for(&history, &id) {
                                         controller.app.model = meta.model.clone();
                                         agent.model = ModelRef::new(meta.model);
+                                        controller.set_references(reference_items(&PathBuf::from(meta.workdir)));
                                     }
                                     controller.app.projection = engine
                                         .read_projection(session)
@@ -342,6 +401,9 @@ pub async fn run(
                 }
                 Some(Ok(Event::Mouse(mouse))) => {
                     let _ = controller.handle_mouse(mouse);
+                }
+                Some(Ok(Event::Paste(text))) => {
+                    let _ = controller.handle_paste(&text);
                 }
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,

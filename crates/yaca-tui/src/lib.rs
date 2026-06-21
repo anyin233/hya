@@ -20,7 +20,10 @@ pub struct AppState {
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
     pub dialog: Option<DialogView>,
+    pub attachments: Vec<PromptAttachment>,
     pub input: String,
+    pub yolo: bool,
+    pub exit_armed: bool,
     pub running: bool,
     pub scroll_back: u16,
     pub model: String,
@@ -39,6 +42,13 @@ pub struct DialogView {
 pub struct DialogItem {
     pub label: String,
     pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptAttachment {
+    pub placeholder: String,
+    pub source_path: Option<String>,
+    pub mime: String,
 }
 
 pub struct GoalView {
