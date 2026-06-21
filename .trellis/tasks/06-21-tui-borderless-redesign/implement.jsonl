@@ -1,0 +1,11 @@
+{"step":1,"title":"Add unicode-width and unicode-segmentation workspace deps","file":"Cargo.toml","action":"add workspace dependencies"}
+{"step":2,"title":"Add theme struct with opencode dark palette","file":"crates/yaca-tui/src/theme.rs","action":"create Theme::opencode_dark"}
+{"step":3,"title":"Implement grapheme-aware InputState","file":"crates/yaca-tui/src/input.rs","action":"create InputState with motion/deletion methods and unit tests"}
+{"step":4,"title":"Redesign draw() to borderless color-block layout","file":"crates/yaca-tui/src/lib.rs","action":"remove borders, add theme backgrounds, status/transcript/input/footer regions"}
+{"step":5,"title":"Move model name into input area","file":"crates/yaca-tui/src/lib.rs","action":"render model label inside input, remove from status bar"}
+{"step":6,"title":"Wire InputState into yaca-cli event loop","file":"crates/yaca-cli/src/tui.rs","action":"route keys to InputState methods, use text()/clear(), add history"}
+{"step":7,"title":"Style overlays with theme colors","file":"crates/yaca-tui/src/lib.rs","action":"update permission/question/picker blocks to use theme.background_panel/border"}
+{"step":8,"title":"Add --mock CLI flag","file":"crates/yaca-cli/src/main.rs","action":"add mock arg and force offline_router in cmd_tui"}
+{"step":9,"title":"Add render-preview example","file":"crates/yaca-tui/examples/preview.rs","action":"build AppState fixtures and render to TestBackend"}
+{"step":10,"title":"Update tui_render tests for new layout","file":"crates/yaca-tui/tests/tui_render.rs","action":"update assertions, add CJK test"}
+{"step":11,"title":"Run final quality gates","command":"cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace","action":"fix all warnings and test failures"}
