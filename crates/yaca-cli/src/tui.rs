@@ -261,9 +261,17 @@ pub async fn run(
             }
             maybe_ask = asks.recv(), if app.permission.is_none() => {
                 if let Some(req) = maybe_ask {
+                    let title = match req.session {
+                        Some(origin) if origin != session => format!(
+                            "{} · subagent {}",
+                            action_label(req.action),
+                            origin.to_string().chars().take(8).collect::<String>()
+                        ),
+                        _ => action_label(req.action).to_string(),
+                    };
                     pending = Some(req.reply);
                     app.permission = Some(PermissionPrompt {
-                        title: action_label(req.action).to_string(),
+                        title,
                         detail: req.resource.pattern(),
                         selected: 0,
                     });
@@ -401,6 +409,16 @@ pub async fn run(
             .context("draw")?;
     }
 
+    if let Some(tx) = pending.take() {
+        let _ = tx.send(Decision::Reject {
+            feedback: Some("cancelled".to_string()),
+        });
+    }
+    while let Ok(req) = asks.try_recv() {
+        let _ = req.reply.send(Decision::Reject {
+            feedback: Some("cancelled".to_string()),
+        });
+    }
     cancel.cancel();
     if let Some(handle) = current_turn.take() {
         let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;
