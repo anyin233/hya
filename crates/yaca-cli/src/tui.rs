@@ -18,12 +18,13 @@ use futures::StreamExt as _;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::SessionId;
-use yaca_tui::AppState;
+use yaca_tool::{Action as ToolAction, AskRequest, Decision};
+use yaca_tui::{AppState, PermissionPrompt};
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -97,6 +98,56 @@ fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
     }
 }
 
+fn action_label(action: ToolAction) -> String {
+    match action {
+        ToolAction::Read => "read",
+        ToolAction::Edit => "edit",
+        ToolAction::Glob => "glob",
+        ToolAction::Grep => "grep",
+        ToolAction::Bash => "bash",
+        ToolAction::Task => "task",
+        ToolAction::ExternalDirectory => "external-dir",
+    }
+    .to_string()
+}
+
+fn decision_from(prompt: &PermissionPrompt) -> Decision {
+    match prompt.selected {
+        0 => Decision::AllowOnce,
+        1 => Decision::AllowAlways,
+        _ => Decision::Reject {
+            feedback: (!prompt.reply.trim().is_empty()).then(|| prompt.reply.clone()),
+        },
+    }
+}
+
+fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> {
+    let prompt = app.permission.as_mut()?;
+    match key.code {
+        KeyCode::Esc => Some(Decision::Reject { feedback: None }),
+        KeyCode::Enter => Some(decision_from(prompt)),
+        KeyCode::Left => {
+            prompt.selected = prompt.selected.saturating_sub(1);
+            None
+        }
+        KeyCode::Right | KeyCode::Tab => {
+            prompt.selected = (prompt.selected + 1).min(2);
+            None
+        }
+        KeyCode::Backspace => {
+            prompt.reply.pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                prompt.reply.push(c);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 fn spawn_turn(
     engine: &Arc<SessionEngine>,
     agent: &AgentSpec,
@@ -127,6 +178,7 @@ pub async fn run(
     engine: Arc<SessionEngine>,
     agent: AgentSpec,
     model: String,
+    mut asks: mpsc::UnboundedReceiver<AskRequest>,
 ) -> anyhow::Result<()> {
     let session = engine
         .create(CreateSession {
@@ -160,6 +212,7 @@ pub async fn run(
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
+    let mut pending: Option<oneshot::Sender<Decision>> = None;
 
     terminal
         .draw(|f| yaca_tui::draw(f, &mut app))
@@ -188,16 +241,42 @@ pub async fn run(
                 }
                 app.running = false;
             }
+            maybe_ask = asks.recv(), if app.permission.is_none() => {
+                if let Some(req) = maybe_ask {
+                    pending = Some(req.reply);
+                    app.permission = Some(PermissionPrompt {
+                        title: action_label(req.action),
+                        detail: req.resource.pattern(),
+                        selected: 0,
+                        reply: String::new(),
+                    });
+                }
+            }
             maybe = events.next() => match maybe {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
-                    match handle_key(key, &mut app) {
-                        Action::Quit => break,
-                        Action::Submit(prompt) => {
-                            app.running = true;
-                            current_turn =
-                                Some(spawn_turn(&engine, &agent, session, prompt, &done_tx, &cancel));
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
+                    {
+                        break;
+                    }
+                    if app.permission.is_some() {
+                        if let Some(decision) = handle_permission_key(key, &mut app) {
+                            if let Some(tx) = pending.take() {
+                                let _ = tx.send(decision);
+                            }
+                            app.permission = None;
                         }
-                        Action::None => {}
+                    } else {
+                        match handle_key(key, &mut app) {
+                            Action::Quit => break,
+                            Action::Submit(prompt) => {
+                                app.running = true;
+                                current_turn = Some(spawn_turn(
+                                    &engine, &agent, session, prompt, &done_tx, &cancel,
+                                ));
+                            }
+                            Action::None => {}
+                        }
                     }
                 }
                 Some(Ok(_)) => {}

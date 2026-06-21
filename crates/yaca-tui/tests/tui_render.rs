@@ -7,7 +7,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{AppState, GoalView, LoopView, draw};
+use yaca_tui::{AppState, GoalView, LoopView, PermissionPrompt, draw};
 
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -94,14 +94,24 @@ fn renders_chat_with_input_status_and_panels() {
 }
 
 #[test]
-fn permission_takes_over_input_area() {
+fn permission_panel_renders_options_and_reply() {
     let mut state = AppState::default();
-    state.pending_permission = Some("bash: rm file".to_string());
+    state.permission = Some(PermissionPrompt {
+        title: "bash".to_string(),
+        detail: "rm -rf /tmp/x".to_string(),
+        selected: 2,
+        reply: "use ls instead".to_string(),
+    });
     let text = render(&mut state, 100, 20);
+    assert!(text.contains("permission required"), "panel title renders");
+    assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
+    assert!(text.contains("Allow once"), "allow-once option renders");
     assert!(
-        text.contains("PERMISSION REQUEST"),
-        "permission prompt must render"
+        text.contains("Allow all bash"),
+        "allow-all option uses the action"
     );
+    assert!(text.contains("Deny"), "deny option renders");
+    assert!(text.contains("use ls instead"), "reply text renders");
 }
 
 #[test]

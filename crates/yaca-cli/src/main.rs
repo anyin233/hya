@@ -25,7 +25,7 @@ use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
-use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use yaca_tool::{Action, AskRequest, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 #[derive(Parser)]
 #[command(
@@ -84,23 +84,30 @@ fn agent_with_model(model: &str) -> AgentSpec {
     }
 }
 
-fn build_session_engine(store: SessionStore, router: ProviderRouter) -> Arc<SessionEngine> {
+fn build_session_engine(
+    store: SessionStore,
+    router: ProviderRouter,
+) -> (
+    Arc<SessionEngine>,
+    tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
+) {
     let tools = Arc::new(ToolRegistry::builtins());
-    // Auto-allow read-only tools; mutating tools (edit/bash) stay Ask, which errors
-    // safely until an interactive permission prompt is wired.
+    // Auto-allow read-only tools; mutating tools (edit/bash) stay Ask and prompt
+    // the user via the interactive permission panel (TUI) or error (headless).
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
         Rule::new(Action::Glob, "*", Mode::Allow),
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
-    let (permission, _asks) = PermissionPlane::new(rules);
-    Arc::new(SessionEngine::new(
+    let (permission, asks) = PermissionPlane::new(rules);
+    let engine = Arc::new(SessionEngine::new(
         store,
         Arc::new(router),
         tools,
         permission,
         EventBus::default(),
-    ))
+    ));
+    (engine, asks)
 }
 
 fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
@@ -146,7 +153,7 @@ async fn cmd_exec(prompt: String, model_override: Option<String>) -> anyhow::Res
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let engine = build_session_engine(store, router);
+    let (engine, _asks) = build_session_engine(store, router);
     let agent = agent_with_model(&model);
     let session = engine
         .create(CreateSession {
@@ -182,7 +189,7 @@ async fn cmd_goal(
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let engine = build_session_engine(store, router.clone());
+    let (engine, _asks) = build_session_engine(store, router.clone());
     let agent = agent_with_model(&model);
     let session = engine
         .create(CreateSession {
@@ -233,15 +240,15 @@ async fn cmd_tui(model_override: Option<String>) -> anyhow::Result<()> {
         .await
         .context("open in-memory store")?;
     let (router, model) = resolve_router(model_override);
-    let engine = build_session_engine(store, router);
+    let (engine, asks) = build_session_engine(store, router);
     let agent = agent_with_model(&model);
-    tui::run(engine, agent, model).await
+    tui::run(engine, agent, model, asks).await
 }
 
 async fn cmd_serve(bind: String, db: String, model_override: Option<String>) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let (router, model) = resolve_router(model_override);
-    let engine = build_session_engine(store, router);
+    let (engine, _asks) = build_session_engine(store, router);
     let state = AppState {
         engine,
         agent: Arc::new(agent_with_model(&model)),
@@ -262,7 +269,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, _model) = offline_router(None);
-    let engine = build_session_engine(store, router);
+    let (engine, _asks) = build_session_engine(store, router);
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

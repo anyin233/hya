@@ -33,6 +33,20 @@ pub struct ToolCtx {
     pub cancel: CancellationToken,
 }
 
+const MAX_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_LIST_ITEMS: usize = 500;
+
+fn truncate(s: &str) -> String {
+    if s.len() <= MAX_OUTPUT_BYTES {
+        return s.to_string();
+    }
+    let mut end = MAX_OUTPUT_BYTES;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n…[truncated {} bytes]", &s[..end], s.len() - end)
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -120,7 +134,7 @@ impl Tool for ReadTool {
             .assert(Action::Read, Resource::Path(input.path.clone()))
             .await?;
         let content = tokio::fs::read_to_string(&input.path).await?;
-        Ok(json!({ "content": content }))
+        Ok(json!({ "content": truncate(&content) }))
     }
 }
 
@@ -232,7 +246,9 @@ impl Tool for GlobTool {
             }
         }
         matches.sort();
-        Ok(json!({ "paths": matches }))
+        let total = matches.len();
+        matches.truncate(MAX_LIST_ITEMS);
+        Ok(json!({ "paths": matches, "total": total }))
     }
 }
 
@@ -285,7 +301,9 @@ impl Tool for GrepTool {
                 }
             }
         }
-        Ok(json!({ "matches": matches }))
+        let total = matches.len();
+        matches.truncate(MAX_LIST_ITEMS);
+        Ok(json!({ "matches": matches, "total": total }))
     }
 }
 
@@ -323,9 +341,34 @@ impl Tool for ShellTool {
             .output()
             .await?;
         Ok(json!({
-            "stdout": String::from_utf8_lossy(&output.stdout).into_owned(),
-            "stderr": String::from_utf8_lossy(&output.stderr).into_owned(),
+            "stdout": truncate(&String::from_utf8_lossy(&output.stdout)),
+            "stderr": truncate(&String::from_utf8_lossy(&output.stderr)),
             "exit_code": output.status.code(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_keeps_small_output() {
+        assert_eq!(truncate("hello"), "hello");
+    }
+
+    #[test]
+    fn truncate_caps_large_output_with_marker() {
+        let big = "x".repeat(MAX_OUTPUT_BYTES + 5000);
+        let out = truncate(&big);
+        assert!(out.len() < big.len());
+        assert!(out.contains("truncated"));
+    }
+
+    #[test]
+    fn truncate_never_splits_a_multibyte_char() {
+        let big = "€".repeat(10_000);
+        let out = truncate(&big);
+        assert!(out.contains("truncated"), "must truncate");
     }
 }
