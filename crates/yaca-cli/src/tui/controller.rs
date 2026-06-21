@@ -19,6 +19,7 @@ pub enum TuiEffect {
     },
     SelectModel(String),
     SelectAgent(String),
+    SelectReasoning(String),
     ResumeSession(String),
     NewSession,
     CompactTranscript,
@@ -41,6 +42,7 @@ enum DialogMode {
     Resume,
     Help,
     Tools,
+    Think,
     CommandCompletion,
     ReferenceCompletion,
 }
@@ -318,6 +320,10 @@ impl Controller {
                         .get(selected)
                         .map(|agent| TuiEffect::SelectAgent(agent.label.clone()))
                         .unwrap_or(TuiEffect::None),
+                    Some(DialogMode::Think) => ["off", "low", "medium", "high"]
+                        .get(selected)
+                        .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
+                        .unwrap_or(TuiEffect::None),
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
                         TuiEffect::None
@@ -395,6 +401,10 @@ impl Controller {
         let name = pieces.next().unwrap_or_default();
         let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
+            Some(CommandKind::Model) if !arguments.is_empty() => {
+                self.app.model = arguments.to_string();
+                TuiEffect::SelectModel(arguments.to_string())
+            }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
                 TuiEffect::None
@@ -412,6 +422,22 @@ impl Controller {
             }
             Some(CommandKind::Tools) => {
                 self.open_tools_dialog();
+                TuiEffect::None
+            }
+            Some(CommandKind::Yolo) => {
+                self.app.yolo = match arguments {
+                    "on" | "true" => true,
+                    "off" | "false" => false,
+                    _ => !self.app.yolo,
+                };
+                let state = if self.app.yolo { "enabled" } else { "disabled" };
+                TuiEffect::SystemMessage(format!("yolo mode {state}"))
+            }
+            Some(CommandKind::Think) if !arguments.is_empty() => {
+                TuiEffect::SelectReasoning(arguments.to_string())
+            }
+            Some(CommandKind::Think) => {
+                self.open_think_dialog();
                 TuiEffect::None
             }
             Some(CommandKind::Export) => TuiEffect::ExportTranscript,
@@ -726,12 +752,38 @@ impl Controller {
                 },
                 DialogItem {
                     label: "mcp".to_string(),
-                    detail: "not connected in this build yet".to_string(),
+                    detail: "configured MCP tools · permission-gated".to_string(),
                 },
             ],
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::Tools);
+    }
+
+    fn open_think_dialog(&mut self) {
+        let current = self.app.reasoning_effort.as_deref().unwrap_or("off");
+        let items = ["off", "low", "medium", "high"]
+            .iter()
+            .map(|level| DialogItem {
+                label: (*level).to_string(),
+                detail: if *level == current {
+                    "current".to_string()
+                } else {
+                    "reasoning effort".to_string()
+                },
+            })
+            .collect::<Vec<_>>();
+        let selected = items
+            .iter()
+            .position(|item| item.label == current)
+            .unwrap_or(0);
+        self.app.dialog = Some(DialogView {
+            title: "reasoning effort".to_string(),
+            subtitle: "future turns use the selected thinking level".to_string(),
+            items,
+            selected,
+        });
+        self.dialog_mode = Some(DialogMode::Think);
     }
 
     fn open_help_dialog(&mut self) {

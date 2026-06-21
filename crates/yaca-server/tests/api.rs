@@ -32,6 +32,7 @@ async fn state() -> AppState {
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
             workdir: std::env::temp_dir(),
+            reasoning: None,
         }),
     }
 }

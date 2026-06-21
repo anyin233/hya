@@ -63,6 +63,12 @@ fn status_line(state: &AppState, theme: &Theme) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    if let Some(effort) = &state.reasoning_effort {
+        spans.push(Span::styled(
+            format!("  think:{effort}"),
+            Style::default().fg(theme.accent),
+        ));
+    }
     if state.exit_armed {
         spans.push(Span::styled(
             "  Ctrl-C again to exit",

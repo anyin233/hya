@@ -12,6 +12,8 @@ pub enum CommandKind {
     Init,
     Agent,
     Tools,
+    Yolo,
+    Think,
     Export,
     Quit,
     Help,
@@ -65,7 +67,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "new",
-        aliases: &[],
+        aliases: &["clear"],
         description: "Start a new conversation",
         key_hint: "leader n",
         kind: CommandKind::NewSession,
@@ -106,6 +108,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         kind: CommandKind::Tools,
     },
     CommandSpec {
+        name: "yolo",
+        aliases: &[],
+        description: "Toggle or set auto-approve mode",
+        key_hint: "tab",
+        kind: CommandKind::Yolo,
+    },
+    CommandSpec {
+        name: "think",
+        aliases: &[],
+        description: "Set reasoning effort for future turns",
+        key_hint: "leader r",
+        kind: CommandKind::Think,
+    },
+    CommandSpec {
         name: "export",
         aliases: &[],
         description: "Export the current transcript as Markdown",
@@ -114,7 +130,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "quit",
-        aliases: &["exit"],
+        aliases: &["exit", "q"],
         description: "Exit yaca",
         key_hint: "ctrl-c ctrl-c",
         kind: CommandKind::Quit,
@@ -232,12 +248,15 @@ fn custom_command_item(command: &CustomCommand) -> DialogItem {
 fn markdown_command_dirs(workdir: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
-        let config = PathBuf::from(home).join(".config/opencode");
+        let home = PathBuf::from(home);
+        let config = home.join(".config/opencode");
         dirs.push(config.join("commands"));
         dirs.push(config.join("command"));
+        dirs.push(home.join(".config/yaca/prompts"));
     }
     dirs.push(workdir.join(".opencode/commands"));
     dirs.push(workdir.join(".opencode/command"));
+    dirs.push(workdir.join(".yaca/prompts"));
     dirs
 }
 
@@ -317,14 +336,18 @@ mod tests {
         assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
+        assert_eq!(resolve_slash("clear"), Some(CommandKind::NewSession));
         assert_eq!(resolve_slash("compact"), Some(CommandKind::Compact));
         assert_eq!(resolve_slash("init"), Some(CommandKind::Init));
         assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
         assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
         assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
+        assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
+        assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
         assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
         assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
         assert_eq!(resolve_slash("exit"), Some(CommandKind::Quit));
+        assert_eq!(resolve_slash("q"), Some(CommandKind::Quit));
         assert_eq!(resolve_slash("help"), Some(CommandKind::Help));
     }
 

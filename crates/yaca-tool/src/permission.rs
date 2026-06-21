@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use yaca_proto::PermissionRequestId;
+use yaca_proto::{PermissionRequestId, SessionId};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Read,
     Edit,
@@ -12,6 +14,7 @@ pub enum Action {
     Grep,
     Bash,
     Task,
+    Mcp,
     ExternalDirectory,
 }
 
@@ -143,6 +146,7 @@ pub enum PermissionError {
 
 pub struct AskRequest {
     pub id: PermissionRequestId,
+    pub session: Option<SessionId>,
     pub action: Action,
     pub resource: Resource,
     pub reply: oneshot::Sender<Decision>,
@@ -153,6 +157,7 @@ pub struct PermissionPlane {
     snapshot: Arc<PermissionRules>,
     persistent: Arc<Mutex<PermissionRules>>,
     asks: mpsc::UnboundedSender<AskRequest>,
+    session: Option<SessionId>,
 }
 
 impl PermissionPlane {
@@ -163,8 +168,16 @@ impl PermissionPlane {
             snapshot: Arc::new(rules.clone()),
             persistent: Arc::new(Mutex::new(rules)),
             asks: tx,
+            session: None,
         };
         (plane, rx)
+    }
+
+    #[must_use]
+    pub fn for_session(&self, session: SessionId) -> Self {
+        let mut plane = self.clone();
+        plane.session = Some(session);
+        plane
     }
 
     pub async fn assert(&self, action: Action, resource: Resource) -> Result<(), PermissionError> {
@@ -187,6 +200,7 @@ impl PermissionPlane {
         let (tx, rx) = oneshot::channel();
         let req = AskRequest {
             id: PermissionRequestId::new(),
+            session: self.session,
             action,
             resource: resource.clone(),
             reply: tx,
@@ -211,5 +225,50 @@ impl PermissionPlane {
                 feedback,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use yaca_proto::SessionId;
+
+    #[tokio::test]
+    async fn ask_request_carries_session() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let session = SessionId::new();
+        let scoped = plane.for_session(session);
+        let task = tokio::spawn(async move {
+            scoped
+                .assert(Action::Bash, Resource::Command("ls".to_string()))
+                .await
+        });
+        let req = rx.recv().await.expect("ask request");
+        assert_eq!(req.session, Some(session));
+        req.reply.send(Decision::AllowOnce).expect("send reply");
+        task.await.expect("join").expect("assert ok");
+    }
+
+    #[tokio::test]
+    async fn dropped_reply_is_unavailable() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let task = tokio::spawn(async move {
+            plane
+                .assert(Action::Bash, Resource::Command("ls".to_string()))
+                .await
+        });
+        let req = rx.recv().await.expect("ask request");
+        drop(req.reply);
+        let result = task.await.expect("join");
+        assert!(matches!(result, Err(PermissionError::Unavailable)));
+    }
+
+    #[test]
+    fn mcp_action_round_trips_as_lowercase_json() {
+        let encoded = serde_json::to_string(&Action::Mcp).expect("serialize action");
+        assert_eq!(encoded, "\"mcp\"");
+        let decoded: Action = serde_json::from_str(&encoded).expect("deserialize action");
+        assert_eq!(decoded, Action::Mcp);
     }
 }

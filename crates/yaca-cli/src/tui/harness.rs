@@ -73,8 +73,10 @@ impl DummyHarness {
         let provider = RecordingProvider { seen: seen.clone() };
         let router = ProviderRouter::new().with(Arc::new(provider));
         let store = SessionStore::connect_memory().await.expect("memory store");
-        let (engine, _asks) = crate::build_session_engine(store, router);
         let model = models.first().copied().unwrap_or("dummy");
+        let (engine, _asks, _questions, _mcp_manager) =
+            crate::build_session_engine(store, router, model, std::collections::BTreeMap::new())
+                .await;
         let agent = crate::agent_with_model(model);
         let session = engine
             .create(CreateSession {
@@ -132,6 +134,13 @@ impl DummyHarness {
             }
             TuiEffect::SelectAgent(agent) => {
                 self.agent.name = yaca_proto::AgentName::new(agent);
+            }
+            TuiEffect::SelectReasoning(level) => {
+                self.agent.reasoning = if matches!(level.as_str(), "off" | "none") {
+                    None
+                } else {
+                    yaca_provider::ReasoningEffort::parse(&level)
+                };
             }
             TuiEffect::SubmitConfigured {
                 prompt,

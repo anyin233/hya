@@ -89,6 +89,7 @@ async fn compact_context_prunes_prior_messages_from_next_provider_request() {
     let agent = AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("model-a"),
+        reasoning: None,
         system_prompt: "base".to_string(),
         workdir: ".".into(),
     };

@@ -5,7 +5,7 @@ mod sidebar;
 mod status;
 mod transcript;
 
-pub use overlays::{render_dialog, render_permission};
+pub use overlays::{render_dialog, render_permission, render_picker, render_question};
 pub use prompt::{prompt_cursor, render_footer, render_prompt};
 pub use sidebar::render_sidebar;
 pub use status::render_status;

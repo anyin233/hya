@@ -209,15 +209,22 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
+
+    static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_root() -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        std::env::temp_dir().join(format!("yaca-history-test-{nanos}-{}", std::process::id()))
+        let seq = TEMP_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "yaca-history-test-{nanos}-{}-{seq}",
+            std::process::id()
+        ))
     }
 
     fn env(seq: u64, event: Event) -> Envelope {

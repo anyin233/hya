@@ -20,6 +20,7 @@ yaca-store = { workspace = true }
 yaca-server = { workspace = true }
 yaca-proto = { workspace = true }
 yaca-tui = { workspace = true }
+yaca-mcp = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
@@ -30,7 +31,9 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_norway = { workspace = true }
 uuid = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

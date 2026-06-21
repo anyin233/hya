@@ -128,6 +128,7 @@ fn preflight_rejects_tools_on_incapable_route() {
         tools: vec![tool],
         temperature: None,
         max_output_tokens: None,
+        reasoning: None,
     };
     let no_tools = CompletionRequest {
         tools: Vec::new(),
