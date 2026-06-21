@@ -74,15 +74,42 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
 
+struct NamedTool {
+    name: String,
+    inner: Arc<dyn Tool>,
+}
+
+#[async_trait]
+impl Tool for NamedTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut schema = self.inner.schema();
+        schema.name = ToolName::new(self.name.clone());
+        schema
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        self.inner.execute(ctx, input).await
+    }
+}
+
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
+    aliases: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
     #[must_use]
     pub fn builtins() -> Self {
-        let list: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(InvalidTool),
+        let mut registry = Self {
+            tools: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+        for tool in [
+            Arc::new(InvalidTool) as Arc<dyn Tool>,
             Arc::new(ReadTool),
             Arc::new(WriteTool),
             Arc::new(EditTool),
@@ -91,27 +118,25 @@ impl ToolRegistry {
             Arc::new(FindTool),
             Arc::new(GrepTool),
             Arc::new(ShellTool),
-            Arc::new(ApplyPatchTool),
-            Arc::new(WebFetchTool),
-            Arc::new(WebSearchTool),
-            Arc::new(TodoWriteTool),
             Arc::new(QuestionTool),
-            Arc::new(PlanExitTool),
             Arc::new(LspTool),
             Arc::new(SkillTool),
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
-        ];
-        let mut tools = HashMap::new();
-        for t in list {
-            tools.insert(t.name().to_string(), t);
+        ] {
+            registry.insert_builtin(tool);
         }
-        Self { tools }
+        registry.insert_aliased_builtin("patch", "apply_patch", Arc::new(ApplyPatchTool));
+        registry.insert_aliased_builtin("fetch", "webfetch", Arc::new(WebFetchTool));
+        registry.insert_aliased_builtin("search", "websearch", Arc::new(WebSearchTool));
+        registry.insert_aliased_builtin("todo", "todowrite", Arc::new(TodoWriteTool));
+        registry.insert_aliased_builtin("plan", "plan_exit", Arc::new(PlanExitTool));
+        registry
     }
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
-        if self.tools.contains_key(&name) {
+        if self.tools.contains_key(&name) || self.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
         self.tools.insert(name, tool);
@@ -120,12 +145,30 @@ impl ToolRegistry {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        self.tools
+            .get(name)
+            .or_else(|| self.aliases.get(name))
+            .cloned()
     }
 
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.tools.values().map(|t| t.schema()).collect()
+    }
+
+    fn insert_builtin(&mut self, tool: Arc<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    fn insert_aliased_builtin(&mut self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
+        self.tools.insert(
+            canonical.to_string(),
+            Arc::new(NamedTool {
+                name: canonical.to_string(),
+                inner: tool.clone(),
+            }),
+        );
+        self.aliases.insert(legacy.to_string(), tool);
     }
 }
 

@@ -84,6 +84,35 @@ fn registry_rejects_duplicate_tool_name() {
 }
 
 #[test]
+fn builtins_expose_opencode_short_names_and_keep_legacy_aliases_hidden() {
+    let registry = ToolRegistry::builtins();
+    let visible: Vec<_> = registry
+        .schemas()
+        .into_iter()
+        .map(|schema| schema.name.as_str().to_string())
+        .collect();
+
+    for (canonical, alias) in [
+        ("fetch", "webfetch"),
+        ("search", "websearch"),
+        ("todo", "todowrite"),
+        ("patch", "apply_patch"),
+        ("plan", "plan_exit"),
+    ] {
+        assert!(registry.get(canonical).is_some(), "{canonical} missing");
+        assert!(registry.get(alias).is_some(), "{alias} alias missing");
+        assert!(
+            visible.iter().any(|name| name == canonical),
+            "{canonical} schema hidden"
+        );
+        assert!(
+            visible.iter().all(|name| name != alias),
+            "{alias} schema should be hidden"
+        );
+    }
+}
+
+#[test]
 fn last_rule_wins_and_default_is_ask() {
     let rules = PermissionRules::new(vec![
         allow(Action::Read, "/**"),
