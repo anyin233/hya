@@ -10,7 +10,7 @@ use yaca_proto::{
 };
 use yaca_provider::{
     AnthropicMessagesProtocol, CompletionRequest, FakeProvider, FakeStep, GoogleProtocol,
-    OpenAiChatProtocol, Protocol, ProviderRouter,
+    OpenAiChatProtocol, Protocol, ProviderRouter, ReasoningEffort,
 };
 
 fn summarize(events: &[Event]) -> Vec<String> {
@@ -55,6 +55,7 @@ async fn fake_provider_round_trips_canonical_events() {
         tools: Vec::new(),
         temperature: None,
         max_output_tokens: None,
+        reasoning: None,
     };
     let stream = router
         .stream(req, SessionId::new(), MessageId::new())
@@ -177,6 +178,7 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
         tools: Vec::new(),
         temperature: None,
         max_output_tokens: None,
+        reasoning: None,
     }
 }
 
@@ -253,6 +255,46 @@ async fn google_decodes_function_call() {
 }
 
 #[test]
+fn encoders_emit_reasoning_only_when_set() {
+    let mut req = CompletionRequest {
+        model: ModelRef::new("m"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+    };
+    let a = AnthropicMessagesProtocol.encode(&req).unwrap();
+    assert_eq!(a["thinking"]["type"], "enabled");
+    assert_eq!(a["thinking"]["budget_tokens"], 16384);
+    assert!(a["max_tokens"].as_u64().unwrap() > 16384);
+    let o = OpenAiChatProtocol.encode(&req).unwrap();
+    assert_eq!(o["reasoning_effort"], "high");
+    let g = GoogleProtocol.encode(&req).unwrap();
+    assert_eq!(
+        g["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        24576
+    );
+
+    req.reasoning = None;
+    assert!(
+        AnthropicMessagesProtocol
+            .encode(&req)
+            .unwrap()
+            .get("thinking")
+            .is_none()
+    );
+    assert!(
+        OpenAiChatProtocol
+            .encode(&req)
+            .unwrap()
+            .get("reasoning_effort")
+            .is_none()
+    );
+}
+
+#[test]
 fn google_encodes_system_user_and_tools() {
     let req = CompletionRequest {
         model: ModelRef::new("gemini-2.0-flash"),
@@ -272,6 +314,7 @@ fn google_encodes_system_user_and_tools() {
         }],
         temperature: None,
         max_output_tokens: None,
+        reasoning: None,
     };
     let body = GoogleProtocol.encode(&req).unwrap();
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be terse");

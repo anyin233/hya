@@ -77,6 +77,7 @@ async fn text_tool_result_text_round_trip() {
         model: ModelRef::new("fake"),
         system_prompt: "you are build".to_string(),
         workdir: dir.clone(),
+        reasoning: None,
     };
     let finish = engine
         .run_turn(session, &agent, CancellationToken::new())
@@ -136,6 +137,7 @@ async fn cancelled_turn_finishes_cancelled() {
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir,
+        reasoning: None,
     };
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -193,6 +195,7 @@ async fn compaction_auto_triggers_when_over_threshold() {
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir,
+        reasoning: None,
     };
     engine
         .run_turn(session, &agent, CancellationToken::new())

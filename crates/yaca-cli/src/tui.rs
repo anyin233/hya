@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::{ModelRef, SessionId};
+use yaca_provider::ReasoningEffort;
 use yaca_tool::{
     Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
 };
@@ -454,6 +455,32 @@ pub async fn run(
                                             format!("yolo mode {state}"),
                                         )
                                         .await;
+                                }
+                                Some(commands::Slash::Think(arg)) => {
+                                    let trimmed = arg.trim();
+                                    let msg = if trimmed.is_empty() {
+                                        let cur = app
+                                            .reasoning_effort
+                                            .clone()
+                                            .unwrap_or_else(|| "off".to_string());
+                                        format!("thinking effort: {cur}")
+                                    } else if matches!(
+                                        trimmed.to_ascii_lowercase().as_str(),
+                                        "off" | "none"
+                                    ) {
+                                        agent.reasoning = None;
+                                        app.reasoning_effort = None;
+                                        "thinking effort disabled".to_string()
+                                    } else if let Some(effort) = ReasoningEffort::parse(trimmed) {
+                                        agent.reasoning = Some(effort);
+                                        app.reasoning_effort = Some(effort.as_str().to_string());
+                                        format!("thinking effort: {}", effort.as_str())
+                                    } else {
+                                        format!(
+                                            "unknown thinking effort '{trimmed}' (use low|medium|high|off)"
+                                        )
+                                    };
+                                    let _ = engine.inject_system_message(session, msg).await;
                                 }
                                 Some(commands::Slash::Template(name)) => {
                                     match commands::resolve_template(&name, &template_dirs) {

@@ -97,6 +97,12 @@ impl Protocol for GoogleProtocol {
         if let Some(m) = req.max_output_tokens {
             gen_config.insert("maxOutputTokens".to_string(), json!(m));
         }
+        if let Some(effort) = req.reasoning {
+            gen_config.insert(
+                "thinkingConfig".to_string(),
+                json!({ "thinkingBudget": effort.google_budget() }),
+            );
+        }
         if !gen_config.is_empty() {
             body["generationConfig"] = Value::Object(gen_config);
         }

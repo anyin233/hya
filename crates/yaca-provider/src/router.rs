@@ -31,7 +31,7 @@ impl ProviderRouter {
 
     pub async fn stream(
         &self,
-        req: CompletionRequest,
+        mut req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
@@ -40,6 +40,9 @@ impl ProviderRouter {
             .ok_or_else(|| ProviderError::UnknownModel(req.model.to_string()))?;
         if let Some(caps) = provider.capabilities(&req.model) {
             crate::preflight(&caps, &req)?;
+            if !caps.reasoning_request {
+                req.reasoning = None;
+            }
         }
         provider.stream(req, session, message).await
     }

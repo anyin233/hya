@@ -7,7 +7,7 @@ use yaca_proto::{
     AgentName, Envelope, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId,
     PartProjection, Projection, Role, SessionId, now_millis,
 };
-use yaca_provider::{CompletionRequest, ProviderRouter};
+use yaca_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{InteractionPlane, PermissionPlane, ToolCtx, ToolError, ToolRegistry};
 
@@ -28,6 +28,7 @@ pub struct AgentSpec {
     pub model: ModelRef,
     pub system_prompt: String,
     pub workdir: PathBuf,
+    pub reasoning: Option<ReasoningEffort>,
 }
 
 pub struct SessionEngine {
@@ -482,5 +483,6 @@ fn request_from_messages(
         tools: tools.schemas(),
         temperature: None,
         max_output_tokens: None,
+        reasoning: agent.reasoning,
     }
 }

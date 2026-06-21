@@ -33,12 +33,20 @@ impl Protocol for AnthropicMessagesProtocol {
                 })
             })
             .collect();
+        let mut max_tokens = req.max_output_tokens.unwrap_or(4096);
         let mut body = json!({
             "model": req.model.as_str(),
-            "max_tokens": req.max_output_tokens.unwrap_or(4096),
             "messages": messages,
             "stream": true,
         });
+        if let Some(effort) = req.reasoning {
+            let budget = effort.anthropic_budget();
+            if max_tokens <= budget {
+                max_tokens = budget + 4096;
+            }
+            body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+        }
+        body["max_tokens"] = json!(max_tokens);
         if let Some(system) = &req.system {
             body["system"] = json!(system);
         }

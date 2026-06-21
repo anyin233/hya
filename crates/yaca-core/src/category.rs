@@ -109,5 +109,6 @@ pub fn build_member_agent(
         model: resolved.model.clone(),
         system_prompt: inject_skills(&prompt, skills),
         workdir: base.workdir.clone(),
+        reasoning: base.reasoning,
     }
 }

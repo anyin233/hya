@@ -44,6 +44,7 @@ fn skills_are_injected_into_member_prompt() {
         model: ModelRef::new("base"),
         system_prompt: "base prompt".to_string(),
         workdir: PathBuf::from("/tmp"),
+        reasoning: None,
     };
     let resolved = CategoryRegistry::builtins().resolve("deep").unwrap();
     let agent = build_member_agent(&base, &resolved, &["use-the-foo-skill".to_string()]);
@@ -119,6 +120,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
         model: ModelRef::new("base"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
+        reasoning: None,
     };
     let specs: Vec<MemberSpec> = ["quick", "deep", "ultrabrain", "writing"]
         .iter()
