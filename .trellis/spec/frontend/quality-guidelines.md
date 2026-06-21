@@ -6,46 +6,50 @@
 
 ## Overview
 
-<!--
-Document your project's quality standards here.
+TUI changes must be covered by render tests using `ratatui::backend::TestBackend`.
+Tests should assert stable semantics and important layout behavior across terminal
+sizes rather than brittle full-frame snapshots.
 
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
+The normal project gate applies:
 
-(To be filled by the team)
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
 ---
 
 ## Forbidden Patterns
 
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
+- Non-Rust TUI renderers in this crate.
+- Terminal I/O, async streaming, or crossterm event loops inside `yaca-tui`.
+- Raw color literals inside widgets when a semantic theme field can express the role.
+- Layout code that indexes optional sidebar columns eagerly; use explicit `if`
+  branches when a rectangle may not exist.
 
 ---
 
 ## Required Patterns
 
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
+- Write failing render tests before changing TUI behavior.
+- Use saturating geometry math for terminal dimensions.
+- Keep `AppState` application idempotent and projection-driven.
+- Preserve prompt visibility on narrow terminals.
 
 ---
 
 ## Testing Requirements
 
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
+Every TUI layout change should include at least one focused render test. Responsive
+changes should cover narrow and wide widths, currently represented by 80-column
+and 120-column tests.
 
 ---
 
 ## Code Review Checklist
 
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+- Does `crates/yaca-cli/src/tui.rs` still own terminal/event-loop behavior?
+- Does the TUI remain readable at 80 columns?
+- Are status labels understandable without color?
+- Do new tests fail on the old behavior and pass on the new behavior?
