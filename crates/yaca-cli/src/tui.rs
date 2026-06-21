@@ -113,6 +113,11 @@ fn action_label(action: ToolAction) -> &'static str {
         ToolAction::Bash => "bash",
         ToolAction::Task => "task",
         ToolAction::Mcp => "mcp",
+        ToolAction::WebFetch => "webfetch",
+        ToolAction::WebSearch => "websearch",
+        ToolAction::TodoWrite => "todowrite",
+        ToolAction::Skill => "skill",
+        ToolAction::Lsp => "lsp",
         ToolAction::ExternalDirectory => "external-dir",
     }
 }

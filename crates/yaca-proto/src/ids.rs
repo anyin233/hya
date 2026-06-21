@@ -38,6 +38,15 @@ macro_rules! uuid_id {
                 write!(f, "{}_{}", $prefix, self.0.simple())
             }
         }
+
+        impl std::str::FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let raw = s.strip_prefix(concat!($prefix, "_")).unwrap_or(s);
+                Uuid::parse_str(raw).map(Self)
+            }
+        }
     };
 }
 
@@ -51,6 +60,19 @@ uuid_id!(GoalId, "goal");
 uuid_id!(LoopRunId, "loop");
 uuid_id!(PermissionRequestId, "perm");
 uuid_id!(QuestionRequestId, "q");
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_parses_display_format() {
+        let id = SessionId::new();
+        let parsed: SessionId = id.to_string().parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+}
 
 /// Monotonic per-session event sequence (the `event_log.seq` rowid).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]

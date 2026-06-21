@@ -10,12 +10,18 @@ use yaca_proto::{
 use yaca_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    InteractionPlane, PermissionPlane, SpawnerPlane, ToolCtx, ToolError, ToolRegistry,
+    InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx,
+    ToolError, ToolRegistry, WebSearchPlane,
 };
 
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, Summarizer, compact_with};
 use crate::error::CoreError;
+use crate::hooks::{
+    ChatParamsInput, ChatParamsOutcome, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+};
 
 pub struct CreateSession {
     pub parent: Option<SessionId>,
@@ -40,9 +46,14 @@ pub struct SessionEngine {
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: SpawnerPlane,
+    todo: TodoPlane,
+    skills: SkillPlane,
+    websearch: WebSearchPlane,
+    lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
+    hooks: Option<Arc<dyn HookDispatcher>>,
 }
 
 impl SessionEngine {
@@ -56,6 +67,10 @@ impl SessionEngine {
     ) -> Self {
         let (interaction, _rx) = InteractionPlane::new();
         let (spawner, _srx) = SpawnerPlane::new();
+        let todo = TodoPlane::default();
+        let skills = SkillPlane::default();
+        let websearch = WebSearchPlane::default();
+        let lsp = LspPlane::default();
         Self {
             store,
             providers,
@@ -63,10 +78,21 @@ impl SessionEngine {
             permission,
             interaction,
             spawner,
+            todo,
+            skills,
+            websearch,
+            lsp,
             bus,
             summarizer: None,
             compaction: CompactionConfig::default(),
+            hooks: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     #[must_use]
@@ -78,6 +104,12 @@ impl SessionEngine {
     #[must_use]
     pub fn with_spawner(mut self, spawner: SpawnerPlane) -> Self {
         self.spawner = spawner;
+        self
+    }
+
+    #[must_use]
+    pub fn with_lsp(mut self, lsp: LspPlane) -> Self {
+        self.lsp = lsp;
         self
     }
 
@@ -168,11 +200,15 @@ impl SessionEngine {
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
         let seq = self.store.append_event(session, &event).await?;
-        self.bus.publish(Envelope {
+        let envelope = Envelope {
             seq,
             ts_millis: now_millis(),
             event,
-        });
+        };
+        if let Some(hooks) = &self.hooks {
+            hooks.dispatch_event(&envelope);
+        }
+        self.bus.publish(envelope);
         Ok(())
     }
 
@@ -197,6 +233,16 @@ impl SessionEngine {
         session: SessionId,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        let text = if let Some(hooks) = &self.hooks {
+            match hooks
+                .message_user_before(MessageUserBeforeInput { session, text })
+                .await
+            {
+                MessageUserBeforeOutcome::Continue { text } => text,
+            }
+        } else {
+            text
+        };
         let message = MessageId::new();
         let part = PartId::new();
         self.emit(
@@ -292,6 +338,20 @@ impl SessionEngine {
                 messages
             };
             let request = request_from_messages(agent, messages, &self.tools);
+            let request = if let Some(hooks) = &self.hooks {
+                match hooks
+                    .chat_params(ChatParamsInput {
+                        session,
+                        message,
+                        request,
+                    })
+                    .await
+                {
+                    ChatParamsOutcome::Continue { request } => request,
+                }
+            } else {
+                request
+            };
             let mut stream = self.providers.stream(request, session, message).await?;
 
             let mut tool_calls: Vec<ToolCallReq> = Vec::new();
@@ -333,7 +393,37 @@ impl SessionEngine {
                 return Ok(finish);
             }
 
-            for tc in tool_calls {
+            for mut tc in tool_calls {
+                if let Some(hooks) = &self.hooks {
+                    let input = std::mem::take(&mut tc.input);
+                    match hooks
+                        .tool_execute_before(ToolExecuteBeforeInput {
+                            session,
+                            message,
+                            call: tc.call,
+                            tool: tc.name.clone(),
+                            input,
+                        })
+                        .await
+                    {
+                        ToolExecuteBeforeOutcome::Continue { input } => tc.input = input,
+                        ToolExecuteBeforeOutcome::Veto { reason } => {
+                            self.emit(
+                                session,
+                                Event::ToolError {
+                                    session,
+                                    message,
+                                    part: tc.part,
+                                    call: tc.call,
+                                    message_text: format!("blocked by plugin: {reason}"),
+                                },
+                            )
+                            .await?;
+                            continue;
+                        }
+                    }
+                }
+                let input_for_after = self.hooks.as_ref().map(|_| tc.input.clone());
                 let started = std::time::Instant::now();
                 let result = match self.tools.get(&tc.name) {
                     Some(tool) => {
@@ -341,7 +431,12 @@ impl SessionEngine {
                             permission: self.permission.for_session(session),
                             interaction: self.interaction.for_session(session),
                             spawner: self.spawner.for_session(session),
+                            session: Some(session),
                             parent_session: projection.session.parent,
+                            todo: self.todo.clone(),
+                            skills: self.skills.clone(),
+                            websearch: self.websearch.clone(),
+                            lsp: self.lsp.clone(),
                             workdir: agent.workdir.clone(),
                             cancel: cancel.clone(),
                         };
@@ -350,6 +445,38 @@ impl SessionEngine {
                     None => Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
                 };
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let result = if let Some(hooks) = &self.hooks {
+                    let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
+                    let native = match &result {
+                        Ok(output) => ToolOutcomeNative::Ok {
+                            output: output.clone(),
+                            time_ms,
+                        },
+                        Err(e) => ToolOutcomeNative::Err {
+                            message: e.to_string(),
+                        },
+                    };
+                    let ToolExecuteAfterOutcome::Continue { result: rewritten } = hooks
+                        .tool_execute_after(ToolExecuteAfterInput {
+                            session,
+                            message,
+                            call: tc.call,
+                            tool: tc.name.clone(),
+                            input: input_for_after.unwrap_or_default(),
+                            result: native,
+                        })
+                        .await;
+                    if was_permission_err {
+                        result
+                    } else {
+                        match rewritten {
+                            ToolOutcomeNative::Ok { output, .. } => Ok(output),
+                            ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
+                        }
+                    }
+                } else {
+                    result
+                };
                 let event = match result {
                     Ok(output) => Event::ToolResult {
                         session,

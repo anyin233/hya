@@ -84,7 +84,10 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
     use tokio_util::sync::CancellationToken;
-    use yaca_tool::{InteractionPlane, Mode, PermissionPlane, PermissionRules, Rule, SpawnerPlane};
+    use yaca_tool::{
+        InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
+        SpawnerPlane, TodoPlane, WebSearchPlane,
+    };
 
     fn ctx_with(action: Action, mode: Mode) -> ToolCtx {
         let (permission, _rx) =
@@ -95,7 +98,12 @@ mod tests {
             permission,
             interaction,
             spawner,
+            session: None,
             parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            websearch: WebSearchPlane::default(),
+            lsp: LspPlane::default(),
             workdir: std::env::temp_dir(),
             cancel: CancellationToken::new(),
         }

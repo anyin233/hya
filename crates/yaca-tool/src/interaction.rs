@@ -16,6 +16,7 @@ pub enum QuestionKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionAnswer {
     Selected(usize),
+    SelectedMany(Vec<usize>),
     FreeText(String),
     Cancelled,
 }
