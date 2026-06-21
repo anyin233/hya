@@ -67,15 +67,15 @@ fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
     match key.code {
         KeyCode::Esc => Action::Quit,
         KeyCode::Enter => {
-            if app.running || app.input.trim().is_empty() {
+            if app.running || app.input.text().trim().is_empty() {
                 Action::None
             } else {
                 app.scroll_back = 0;
-                Action::Submit(std::mem::take(&mut app.input))
+                Action::Submit(app.input.take_text())
             }
         }
         KeyCode::Backspace => {
-            app.input.pop();
+            app.input.backspace();
             Action::None
         }
         KeyCode::PageUp => {
@@ -96,7 +96,7 @@ fn handle_key(key: KeyEvent, app: &mut AppState) -> Action {
         }
         KeyCode::Char(c) => {
             if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                app.input.push(c);
+                app.input.insert(c);
             }
             Action::None
         }

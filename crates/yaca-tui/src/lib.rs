@@ -9,7 +9,14 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+
 use yaca_proto::{Envelope, PartProjection, Projection, Role, ToolName, ToolPartState};
+
+pub mod input;
+pub mod theme;
+
+pub use input::InputState;
+pub use theme::Theme;
 
 #[derive(Default)]
 pub struct AppState {
@@ -20,13 +27,14 @@ pub struct AppState {
     pub permission: Option<PermissionPrompt>,
     pub question: Option<QuestionPrompt>,
     pub picker: Option<Picker>,
-    pub input: String,
+    pub input: InputState,
     pub running: bool,
     pub scroll_back: u16,
     pub model: String,
     pub session_label: String,
     pub yolo: bool,
     pub reasoning_effort: Option<String>,
+    pub theme: Theme,
 }
 
 pub struct GoalView {
@@ -87,11 +95,11 @@ impl AppState {
     }
 }
 
-fn role_style(role: Role) -> (&'static str, Color) {
+fn role_style(role: Role, theme: &Theme) -> (&'static str, Color) {
     match role {
-        Role::User => ("You", Color::Cyan),
-        Role::Assistant => ("yaca", Color::Green),
-        Role::System => ("sys", Color::DarkGray),
+        Role::User => ("You", theme.secondary),
+        Role::Assistant => ("yaca", theme.success),
+        Role::System => ("sys", theme.text_muted),
     }
 }
 
@@ -119,27 +127,27 @@ fn tool_input(state: &ToolPartState) -> String {
     }
 }
 
-fn tool_line(name: &ToolName, state: &ToolPartState) -> Line<'static> {
+fn tool_line(name: &ToolName, state: &ToolPartState, theme: &Theme) -> Line<'static> {
     let (status, color) = match state {
-        ToolPartState::Completed { time_ms, .. } => (format!("✓ {time_ms}ms"), Color::Green),
+        ToolPartState::Completed { time_ms, .. } => (format!("✓ {time_ms}ms"), theme.success),
         ToolPartState::Error { message, .. } => {
-            (format!("✗ {}", ellipsize(message, 40)), Color::Red)
+            (format!("✗ {}", ellipsize(message, 40)), theme.error)
         }
         ToolPartState::Running { .. } | ToolPartState::Pending { .. } => {
-            ("…".to_string(), Color::Yellow)
+            ("…".to_string(), theme.warning)
         }
     };
     Line::from(vec![
-        Span::styled(format!("  ⚙ {name} "), Style::default().fg(Color::Magenta)),
+        Span::styled(format!("  ⚙ {name} "), Style::default().fg(theme.accent)),
         Span::raw(format!("{} ", tool_input(state))),
         Span::styled(status, Style::default().fg(color)),
     ])
 }
 
-fn transcript_lines(projection: &Projection) -> Vec<Line<'static>> {
+fn transcript_lines(projection: &Projection, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for m in &projection.session.messages {
-        let (label, color) = role_style(m.role);
+        let (label, color) = role_style(m.role, theme);
         let header = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let mut labelled = false;
         for part in &m.parts {
@@ -162,7 +170,7 @@ fn transcript_lines(projection: &Projection) -> Vec<Line<'static>> {
                         lines.push(Line::from(Span::styled(format!("{label} "), header)));
                         labelled = true;
                     }
-                    lines.push(tool_line(name, state));
+                    lines.push(tool_line(name, state, theme));
                 }
                 PartProjection::Reasoning { .. } => {}
             }
@@ -178,9 +186,10 @@ fn transcript_lines(projection: &Projection) -> Vec<Line<'static>> {
 }
 
 fn status_line(state: &AppState) -> Line<'static> {
+    let theme = &state.theme;
     let mut spans = vec![
         Span::styled("yaca", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" · {} · {}", state.model, state.session_label)),
+        Span::raw(format!(" · {}", state.session_label)),
         Span::styled(
             if state.running {
                 "  ● streaming".to_string()
@@ -188,22 +197,24 @@ fn status_line(state: &AppState) -> Line<'static> {
                 "  ○ idle".to_string()
             },
             Style::default().fg(if state.running {
-                Color::Yellow
+                theme.warning
             } else {
-                Color::DarkGray
+                theme.text_muted
             }),
         ),
     ];
     if state.yolo {
         spans.push(Span::styled(
             "  [YOLO]".to_string(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     if let Some(effort) = &state.reasoning_effort {
         spans.push(Span::styled(
             format!("  think:{effort}"),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(theme.accent),
         ));
     }
     if let Some(g) = &state.goal {
@@ -221,25 +232,107 @@ fn status_line(state: &AppState) -> Line<'static> {
     Line::from(spans)
 }
 
+fn footer_line() -> Line<'static> {
+    Line::from("Enter send · Esc quit · ↑↓ history · PgUp/PgDn scroll")
+}
+
+fn model_label(model: &str) -> String {
+    if model.len() > 16 {
+        format!("{}…", &model[..16])
+    } else {
+        model.to_string()
+    }
+}
+
+fn draw_input(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    let theme = state.theme.clone();
+    let model = model_label(&state.model);
+    let prefix = format!("{model} › ");
+    let prefix_width = unicode_width::UnicodeWidthStr::width(prefix.as_str());
+    let usable = area.width.saturating_sub(2).max(1) as usize;
+    let text_width = usable.saturating_sub(prefix_width);
+
+    state.input.scroll_to_cursor(text_width);
+    let (visible, _offset) = state.input.visible_slice(text_width);
+
+    let line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(theme.text_muted)),
+        Span::raw(visible.to_string()),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line)
+            .block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .style(Style::default().bg(theme.background_element)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+
+    if !state.running
+        && state.permission.is_none()
+        && state.question.is_none()
+        && state.picker.is_none()
+    {
+        let cursor_col = state.input.cursor_column();
+        let cursor_x = area.x
+            + 1
+            + u16::try_from(prefix_width + cursor_col.saturating_sub(state.input.scroll_offset()))
+                .unwrap_or(area.width);
+        let cursor_x = cursor_x.min(area.x + area.width - 1);
+        frame.set_cursor_position((cursor_x, area.y + 1));
+    }
+}
+
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
+    let theme = state.theme.clone();
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
-    frame.render_widget(Paragraph::new(status_line(state)), rows[0]);
+    frame.render_widget(
+        Paragraph::new(status_line(state)).block(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(theme.background_panel)),
+        ),
+        rows[0],
+    );
 
-    let lines = transcript_lines(&state.projection);
-    let inner_height = rows[1].height.saturating_sub(2);
-    let inner_width = rows[1].width.saturating_sub(2).max(1);
+    let transcript_area = rows[1];
+    let padded = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(transcript_area);
+    let inner = padded[1];
+    let (conversation_area, team_area) = if state.team.is_empty() {
+        (inner, None)
+    } else {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(inner);
+        (columns[0], Some(columns[1]))
+    };
+
+    let lines = transcript_lines(&state.projection, &theme);
+    let inner_height = conversation_area.height;
+    let inner_width = usize::from(conversation_area.width).max(1);
     let total = lines.iter().fold(0u16, |acc, line| {
         let wrapped = u16::try_from(line.width())
             .unwrap_or(u16::MAX)
-            .div_ceil(inner_width)
+            .div_ceil(inner_width as u16)
             .max(1);
         acc.saturating_add(wrapped)
     });
@@ -248,68 +341,70 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let top = max_back.saturating_sub(state.scroll_back);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().title("conversation").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .borders(Borders::NONE)
+                    .style(Style::default().bg(theme.background)),
+            )
             .wrap(Wrap { trim: false })
             .scroll((top, 0)),
-        rows[1],
+        conversation_area,
     );
 
-    if !state.team.is_empty() {
+    if let Some(team_area) = team_area {
         let team: Vec<Line> = state
             .team
             .iter()
             .map(|(member, status)| Line::from(format!("{member}: {status}")))
             .collect();
-        let overlay = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(rows[1]);
         frame.render_widget(
-            Paragraph::new(team).block(Block::default().title("team").borders(Borders::ALL)),
-            overlay[1],
+            Paragraph::new(team)
+                .block(
+                    Block::default()
+                        .borders(Borders::NONE)
+                        .style(Style::default().bg(theme.background_panel)),
+                )
+                .wrap(Wrap { trim: false }),
+            team_area,
         );
     }
 
-    let input_row = rows[2];
+    draw_input(frame, state, rows[2]);
+
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.input.clone()),
-        ]))
-        .block(
+        Paragraph::new(footer_line()).block(
             Block::default()
-                .title("message — Enter: send · Ctrl-C: quit · PgUp/PgDn: scroll")
-                .borders(Borders::ALL),
+                .borders(Borders::NONE)
+                .style(Style::default().bg(theme.background_panel)),
         ),
-        input_row,
+        rows[3],
     );
 
     if let Some(prompt) = &state.permission {
-        draw_permission(frame, prompt);
+        draw_permission(frame, prompt, &theme);
     } else if let Some(question) = &state.question {
-        draw_question(frame, question);
+        draw_question(frame, question, &theme);
     } else if let Some(picker) = &state.picker {
-        draw_picker(frame, picker);
-    } else if !state.running {
-        let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
-        let rightmost = input_row.x + input_row.width.saturating_sub(2);
-        let cursor_x = (input_row.x + 3).saturating_add(typed).min(rightmost);
-        frame.set_cursor_position((cursor_x, input_row.y + 1));
+        draw_picker(frame, picker, &theme);
     }
 }
 
-fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
+fn overlay_rect(frame: &Frame, height: u16) -> Rect {
     let area = frame.area();
-    let height = 8u16.min(area.height);
+    let height = height.min(area.height);
     let width = area.width.saturating_sub(4).max(12);
-    let rect = Rect {
+    Rect {
         x: area.x + 2,
         y: area.height.saturating_sub(height),
         width,
         height,
-    };
+    }
+}
+
+fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &Theme) {
+    let rect = overlay_rect(frame, 8);
     frame.render_widget(Clear, rect);
-    let inner_width = usize::from(width).saturating_sub(4);
+    let inner_width = usize::from(rect.width).saturating_sub(4);
     let option_spans: Vec<Span> = prompt
         .options()
         .iter()
@@ -317,11 +412,11 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
         .flat_map(|(i, label)| {
             let style = if i == prompt.selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(theme.background)
+                    .bg(theme.primary)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.text_muted)
             };
             vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
         })
@@ -330,7 +425,7 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
         Line::from(Span::styled(
             format!("{} wants to run:", prompt.title),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.warning)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(ellipsize(&prompt.detail, inner_width)),
@@ -338,7 +433,7 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
         Line::from(option_spans),
         Line::from(Span::styled(
             "←/→ select · Enter confirm · Esc deny",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_muted),
         )),
     ];
     frame.render_widget(
@@ -347,31 +442,25 @@ fn draw_permission(frame: &mut Frame, prompt: &PermissionPrompt) {
                 Block::default()
                     .title("permission required")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Red)),
+                    .border_style(Style::default().fg(theme.border))
+                    .style(Style::default().bg(theme.background_panel)),
             )
             .wrap(Wrap { trim: false }),
         rect,
     );
 }
 
-fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
-    let area = frame.area();
+fn draw_question(frame: &mut Frame, q: &QuestionPrompt, theme: &Theme) {
     let extra = u16::try_from(q.options.len()).unwrap_or(0);
-    let height = (7u16.saturating_add(extra)).min(area.height).max(5);
-    let width = area.width.saturating_sub(4).max(12);
-    let rect = Rect {
-        x: area.x + 2,
-        y: area.height.saturating_sub(height),
-        width,
-        height,
-    };
+    let height = (7u16.saturating_add(extra)).min(frame.area().height).max(5);
+    let rect = overlay_rect(frame, height);
     frame.render_widget(Clear, rect);
-    let inner_width = usize::from(width).saturating_sub(4);
+    let inner_width = usize::from(rect.width).saturating_sub(4);
     let mut lines = vec![
         Line::from(Span::styled(
             ellipsize(&q.prompt, inner_width),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.secondary)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -379,11 +468,11 @@ fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
     for (i, opt) in q.options.iter().enumerate() {
         let style = if i == q.selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(theme.background)
+                .bg(theme.primary)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme.text_muted)
         };
         lines.push(Line::from(Span::styled(
             format!(" {} ", ellipsize(opt, inner_width)),
@@ -402,7 +491,7 @@ fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
     };
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_muted),
     )));
     frame.render_widget(
         Paragraph::new(lines)
@@ -410,38 +499,32 @@ fn draw_question(frame: &mut Frame, q: &QuestionPrompt) {
                 Block::default()
                     .title("question")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .border_style(Style::default().fg(theme.border))
+                    .style(Style::default().bg(theme.background_panel)),
             )
             .wrap(Wrap { trim: false }),
         rect,
     );
 }
 
-fn draw_picker(frame: &mut Frame, picker: &Picker) {
-    let area = frame.area();
+fn draw_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
     let entry_rows = u16::try_from(picker.entries.len()).unwrap_or(u16::MAX);
-    let height = entry_rows.saturating_add(4).min(area.height).max(4);
-    let width = area.width.saturating_sub(4).max(12);
-    let rect = Rect {
-        x: area.x + 2,
-        y: area.height.saturating_sub(height),
-        width,
-        height,
-    };
+    let height = entry_rows.saturating_add(4).min(frame.area().height).max(4);
+    let rect = overlay_rect(frame, height);
     frame.render_widget(Clear, rect);
-    let inner_width = usize::from(width).saturating_sub(4);
+    let inner_width = usize::from(rect.width).saturating_sub(4);
     let mut lines = vec![Line::from(Span::styled(
         "↑/↓ select · Enter confirm · Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_muted),
     ))];
     for (i, label) in picker.entries.iter().enumerate() {
         let style = if i == picker.selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(theme.background)
+                .bg(theme.primary)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme.text_muted)
         };
         lines.push(Line::from(Span::styled(
             format!(" {} ", ellipsize(label, inner_width)),
@@ -454,7 +537,8 @@ fn draw_picker(frame: &mut Frame, picker: &Picker) {
                 Block::default()
                     .title(picker.title.clone())
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
+                    .border_style(Style::default().fg(theme.border))
+                    .style(Style::default().bg(theme.background_panel)),
             )
             .wrap(Wrap { trim: false }),
         rect,

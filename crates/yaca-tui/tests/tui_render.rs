@@ -68,7 +68,7 @@ fn renders_chat_with_input_status_and_panels() {
     let mut state = AppState::default();
     state.model = "fake".to_string();
     state.session_label = "sess-1".to_string();
-    state.input = "type here".to_string();
+    state.input.set_text("type here");
     with_assistant_message(&mut state, "HELLOTUI");
     state.goal = Some(GoalView {
         condition: "tests pass".to_string(),
@@ -90,7 +90,7 @@ fn renders_chat_with_input_status_and_panels() {
     assert!(text.contains("GOAL"), "goal indicator must render");
     assert!(text.contains("LOOP"), "loop indicator must render");
     assert!(text.contains("alice"), "team panel must render");
-    assert!(text.contains("message"), "input box title must render");
+    assert!(text.contains("›"), "input prompt marker must render");
 }
 
 #[test]
