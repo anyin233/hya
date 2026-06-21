@@ -5,6 +5,7 @@ use yaca_tui::{AppState, DialogItem, DialogView};
 
 use super::commands::{self, CommandKind, CustomCommand};
 use super::prompt::{PromptState, mention_trigger_index};
+use crate::config::ModelEntry;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TuiEffect {
@@ -49,7 +50,7 @@ enum DialogMode {
 
 pub struct Controller {
     pub app: AppState,
-    available_models: Vec<String>,
+    available_models: Vec<ModelEntry>,
     sessions: Vec<SessionSummary>,
     references: Vec<DialogItem>,
     agents: Vec<DialogItem>,
@@ -70,8 +71,15 @@ impl Controller {
 
     #[cfg(test)]
     #[must_use]
-    pub fn with_models(app: AppState, mut available_models: Vec<String>) -> Self {
-        Self::with_models_and_sessions(app, std::mem::take(&mut available_models), Vec::new())
+    pub fn with_models(app: AppState, available_models: Vec<String>) -> Self {
+        let entries = available_models
+            .into_iter()
+            .map(|id| ModelEntry {
+                id,
+                provider: "test".to_string(),
+            })
+            .collect();
+        Self::with_models_and_sessions(app, entries, Vec::new())
     }
 
     #[cfg(test)]
@@ -83,10 +91,10 @@ impl Controller {
     #[must_use]
     pub fn with_models_and_sessions(
         app: AppState,
-        mut available_models: Vec<String>,
+        mut available_models: Vec<ModelEntry>,
         sessions: Vec<SessionSummary>,
     ) -> Self {
-        available_models.sort();
+        available_models.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.provider.cmp(&b.provider)));
         available_models.dedup();
         Self {
             app,
@@ -304,10 +312,9 @@ impl Controller {
                     Some(DialogMode::Model) => self
                         .available_models
                         .get(selected)
-                        .cloned()
-                        .map(|model| {
-                            self.app.model = model.clone();
-                            TuiEffect::SelectModel(model)
+                        .map(|entry| {
+                            self.app.model = entry.id.clone();
+                            TuiEffect::SelectModel(entry.id.clone())
                         })
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::Resume) => self
@@ -657,12 +664,12 @@ impl Controller {
         let items = self
             .available_models
             .iter()
-            .map(|model| DialogItem {
-                label: model.clone(),
-                detail: if *model == self.app.model {
-                    "current".to_string()
+            .map(|entry| DialogItem {
+                label: entry.id.clone(),
+                detail: if entry.id == self.app.model {
+                    format!("{} · current", entry.provider)
                 } else {
-                    "available".to_string()
+                    entry.provider.clone()
                 },
             })
             .collect::<Vec<_>>();
@@ -1019,6 +1026,23 @@ mod tests {
         assert_eq!(dialog.title, "select model");
         assert_eq!(dialog.items[0].label, "alpha");
         assert_eq!(dialog.items[1].label, "beta");
+    }
+
+    #[test]
+    fn model_dialog_shows_provider_in_detail() {
+        let mut controller = Controller::with_models(
+            AppState {
+                model: "alpha".to_string(),
+                ..AppState::default()
+            },
+            vec!["alpha".into(), "beta".into()],
+        );
+
+        type_text(&mut controller, "/model");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        let dialog = controller.app.dialog.as_ref().expect("model dialog");
+        assert_eq!(dialog.items[0].detail, "test · current");
+        assert_eq!(dialog.items[1].detail, "test");
     }
 
     #[test]

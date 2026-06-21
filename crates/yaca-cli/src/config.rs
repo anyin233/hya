@@ -17,9 +17,15 @@ use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 pub struct ResolvedConfig {
     pub router: ProviderRouter,
     pub default_model: String,
-    pub models: Vec<String>,
+    pub models: Vec<ModelEntry>,
     pub has_providers: bool,
     pub mcp: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEntry {
+    pub id: String,
+    pub provider: String,
 }
 
 /// Top-level shape of `~/.config/yaca/config.yaml`.
@@ -156,7 +162,7 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
     Ok(out)
 }
 
-fn choose_default(file_default: Option<String>, models: &[String]) -> String {
+fn choose_default(file_default: Option<String>, models: &[ModelEntry]) -> String {
     if let Some(model) = file_default {
         return model;
     }
@@ -165,9 +171,9 @@ fn choose_default(file_default: Option<String>, models: &[String]) -> String {
     }
     models
         .iter()
-        .find(|m| m.contains("sonnet"))
+        .find(|m| m.id.contains("sonnet"))
         .or_else(|| models.first())
-        .cloned()
+        .map(|m| m.id.clone())
         .unwrap_or_default()
 }
 
@@ -197,7 +203,12 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         if api_key.trim().is_empty() {
             continue;
         }
-        models.extend(p.models.iter().cloned());
+        for m in &p.models {
+            models.push(ModelEntry {
+                id: m.clone(),
+                provider: p.id.clone(),
+            });
+        }
         let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
         router = router.with(Arc::new(provider));
     }
@@ -338,7 +349,7 @@ mcp:
 
     #[test]
     fn explicit_default_model_wins() {
-        let models = vec!["gpt-5.5".to_string(), "claude-sonnet-4-6".to_string()];
+        let models: Vec<ModelEntry> = Vec::new();
         assert_eq!(
             choose_default(Some("gpt-5.5".to_string()), &models),
             "gpt-5.5"
