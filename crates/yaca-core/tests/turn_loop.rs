@@ -2,12 +2,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use yaca_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use yaca_proto::{AgentName, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
+use yaca_core::{
+    AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, SessionEngine, Summarizer,
+};
+use yaca_proto::{AgentName, FinishReason, Message, ModelRef, PartProjection, Role, ToolPartState};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_store::SessionStore;
 use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
@@ -74,6 +77,7 @@ async fn text_tool_result_text_round_trip() {
         model: ModelRef::new("fake"),
         system_prompt: "you are build".to_string(),
         workdir: dir.clone(),
+        reasoning: None,
     };
     let finish = engine
         .run_turn(session, &agent, CancellationToken::new())
@@ -133,9 +137,72 @@ async fn cancelled_turn_finishes_cancelled() {
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir,
+        reasoning: None,
     };
     let cancel = CancellationToken::new();
     cancel.cancel();
     let finish = engine.run_turn(session, &agent, cancel).await.unwrap();
     assert_eq!(finish, FinishReason::Cancelled);
+}
+
+struct Recording(Arc<AtomicBool>);
+
+#[async_trait::async_trait]
+impl Summarizer for Recording {
+    async fn summarize(&self, _messages: &[Message]) -> Result<String, CoreError> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok("SUMMARY".to_string())
+    }
+}
+
+#[tokio::test]
+async fn compaction_auto_triggers_when_over_threshold() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("ok".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default())
+        .with_compaction(
+            Arc::new(Recording(called.clone())),
+            CompactionConfig {
+                token_threshold: 1,
+                keep_recent: 1,
+            },
+        );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        engine
+            .admit_user_prompt(session, "some earlier message text".to_string())
+            .await
+            .unwrap();
+    }
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        called.load(Ordering::SeqCst),
+        "summarizer must be invoked when over threshold"
+    );
 }

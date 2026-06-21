@@ -117,3 +117,38 @@ async fn replay_is_session_scoped() {
     assert_eq!(store.replay(a).await.unwrap().len(), 1);
     assert_eq!(store.replay(b).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn list_sessions_returns_each_session_with_count() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let a = SessionId::new();
+    let b = SessionId::new();
+    for s in [a, b] {
+        store
+            .append_event(
+                s,
+                &Event::SessionTitled {
+                    session: s,
+                    title: "one".into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                s,
+                &Event::SessionTitled {
+                    session: s,
+                    title: "two".into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let sessions = store.list_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 2);
+    let ids: Vec<SessionId> = sessions.iter().map(|s| s.session).collect();
+    assert!(ids.contains(&a) && ids.contains(&b));
+    let info_a = sessions.iter().find(|s| s.session == a).unwrap();
+    assert_eq!(info_a.events, 2);
+}

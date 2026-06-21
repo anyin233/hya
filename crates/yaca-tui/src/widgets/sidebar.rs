@@ -141,6 +141,13 @@ fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
             Span::styled("YOLO", Style::default().fg(theme.warning)),
         ]));
     }
+    if let Some(effort) = &state.reasoning_effort {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("think ", Style::default().fg(theme.muted)),
+            Span::styled(effort.clone(), Style::default().fg(theme.accent)),
+        ]));
+    }
     lines
 }
 

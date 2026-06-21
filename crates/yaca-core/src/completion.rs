@@ -252,6 +252,7 @@ impl GoalEvaluator for ModelGoalEvaluator {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(256),
+            reasoning: None,
         };
         let mut stream = self
             .providers

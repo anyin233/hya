@@ -26,8 +26,11 @@ use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::{ModelRef, SessionId, now_millis};
-use yaca_tool::{Action as ToolAction, AskRequest, Decision};
-use yaca_tui::{AppState, PermissionPrompt};
+use yaca_provider::ReasoningEffort;
+use yaca_tool::{
+    Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
+};
+use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt};
 
 use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
@@ -69,6 +72,7 @@ fn action_label(action: ToolAction) -> String {
         ToolAction::Grep => "grep",
         ToolAction::Bash => "bash",
         ToolAction::Task => "task",
+        ToolAction::Mcp => "mcp",
         ToolAction::ExternalDirectory => "external-dir",
     }
     .to_string()
@@ -291,6 +295,62 @@ fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> 
     }
 }
 
+fn handle_question_key(key: KeyEvent, app: &mut AppState) -> Option<QuestionAnswer> {
+    let question = app.question.as_mut()?;
+    match key.code {
+        KeyCode::Esc => Some(QuestionAnswer::Cancelled),
+        KeyCode::Enter => {
+            if question.options.is_empty() || (question.allow_custom && !question.input.is_empty())
+            {
+                Some(QuestionAnswer::FreeText(std::mem::take(
+                    &mut question.input,
+                )))
+            } else {
+                Some(QuestionAnswer::Selected(question.selected))
+            }
+        }
+        KeyCode::Up => {
+            question.selected = question.selected.saturating_sub(1);
+            None
+        }
+        KeyCode::Down => {
+            if !question.options.is_empty() {
+                question.selected =
+                    (question.selected + 1).min(question.options.len().saturating_sub(1));
+            }
+            None
+        }
+        KeyCode::Backspace => {
+            question.input.pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            if (question.options.is_empty() || question.allow_custom)
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+            {
+                question.input.push(c);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn apply_reasoning(agent: &mut AgentSpec, app: &mut AppState, level: &str) -> String {
+    let trimmed = level.trim().to_ascii_lowercase();
+    if matches!(trimmed.as_str(), "off" | "none") {
+        agent.reasoning = None;
+        app.reasoning_effort = None;
+        return "thinking effort disabled".to_string();
+    }
+    if let Some(effort) = ReasoningEffort::parse(&trimmed) {
+        agent.reasoning = Some(effort);
+        app.reasoning_effort = Some(effort.as_str().to_string());
+        return format!("thinking effort: {}", effort.as_str());
+    }
+    format!("unknown thinking effort '{level}' (use low|medium|high|off)")
+}
+
 fn spawn_turn(
     engine: &Arc<SessionEngine>,
     agent: &AgentSpec,
@@ -319,25 +379,32 @@ fn spawn_turn(
     })
 }
 
+pub struct RunOptions {
+    pub model: String,
+    pub models: Vec<String>,
+    pub asks: mpsc::UnboundedReceiver<AskRequest>,
+    pub questions: mpsc::UnboundedReceiver<QuestionRequest>,
+    pub initial_session: SessionId,
+    pub initial_yolo: bool,
+}
+
 pub async fn run(
     engine: Arc<SessionEngine>,
     mut agent: AgentSpec,
-    model: String,
-    models: Vec<String>,
-    mut asks: mpsc::UnboundedReceiver<AskRequest>,
+    options: RunOptions,
 ) -> anyhow::Result<()> {
+    let RunOptions {
+        model,
+        models,
+        mut asks,
+        mut questions,
+        initial_session,
+        initial_yolo,
+    } = options;
     let history = HistoryStore::from_env();
     let profiles = agents::builtin_profiles();
     let base_system_prompt = agent.system_prompt.clone();
-    let mut session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: agent.workdir.to_string_lossy().into_owned(),
-        })
-        .await
-        .context("create session")?;
+    let mut session = initial_session;
     let _ = history.create_session(
         session,
         agent.model.as_str(),
@@ -358,6 +425,8 @@ pub async fn run(
             .read_projection(session)
             .await
             .context("prime projection")?,
+        yolo: initial_yolo,
+        reasoning_effort: agent.reasoning.map(|effort| effort.as_str().to_string()),
         ..AppState::default()
     };
     let mut controller =
@@ -378,6 +447,7 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
+    let mut pending_question: Option<oneshot::Sender<QuestionAnswer>> = None;
 
     terminal
         .draw(|f| yaca_tui::draw(f, &mut controller.app))
@@ -414,12 +484,40 @@ pub async fn run(
                         let _ = req.reply.send(Decision::AllowOnce);
                         continue;
                     }
+                    let title = match req.session {
+                        Some(origin) if origin != session => format!(
+                            "{} · subagent {}",
+                            action_label(req.action),
+                            origin.to_string().chars().take(8).collect::<String>()
+                        ),
+                        _ => action_label(req.action),
+                    };
                     pending = Some(req.reply);
                     controller.app.permission = Some(PermissionPrompt {
-                        title: action_label(req.action),
+                        title,
                         detail: req.resource.pattern(),
                         selected: 0,
                         reply: String::new(),
+                    });
+                }
+            }
+            maybe_question = questions.recv(), if controller.app.permission.is_none() && controller.app.question.is_none() => {
+                if let Some(req) = maybe_question {
+                    let (options, allow_custom, input) = match req.kind {
+                        QuestionKind::Select { options, allow_custom } => {
+                            (options, allow_custom, String::new())
+                        }
+                        QuestionKind::FreeText { default } => {
+                            (Vec::new(), false, default.unwrap_or_default())
+                        }
+                    };
+                    pending_question = Some(req.reply);
+                    controller.app.question = Some(QuestionPrompt {
+                        prompt: req.prompt,
+                        options,
+                        selected: 0,
+                        input,
+                        allow_custom,
                     });
                 }
             }
@@ -432,6 +530,13 @@ pub async fn run(
                             }
                             controller.app.permission = None;
                         }
+                    } else if controller.app.question.is_some() {
+                        if let Some(answer) = handle_question_key(key, &mut controller.app) {
+                            if let Some(tx) = pending_question.take() {
+                                let _ = tx.send(answer);
+                            }
+                            controller.app.question = None;
+                        }
                     } else {
                         match controller.handle_key(key) {
                             TuiEffect::Exit => break,
@@ -440,6 +545,11 @@ pub async fn run(
                             }
                             TuiEffect::SelectModel(model) => {
                                 agent.model = ModelRef::new(model);
+                            }
+                            TuiEffect::SelectReasoning(level) => {
+                                let message =
+                                    apply_reasoning(&mut agent, &mut controller.app, &level);
+                                let _ = engine.inject_system_message(session, message).await;
                             }
                             TuiEffect::SelectAgent(name) => {
                                 if let Some(profile) = agents::profile_by_name(&profiles, &name) {
@@ -600,6 +710,22 @@ pub async fn run(
             .context("draw")?;
     }
 
+    if let Some(tx) = pending.take() {
+        let _ = tx.send(Decision::Reject {
+            feedback: Some("cancelled".to_string()),
+        });
+    }
+    while let Ok(req) = asks.try_recv() {
+        let _ = req.reply.send(Decision::Reject {
+            feedback: Some("cancelled".to_string()),
+        });
+    }
+    if let Some(tx) = pending_question.take() {
+        let _ = tx.send(QuestionAnswer::Cancelled);
+    }
+    while let Ok(req) = questions.try_recv() {
+        let _ = req.reply.send(QuestionAnswer::Cancelled);
+    }
     turn_cancel.cancel();
     if let Some(handle) = current_turn.take() {
         let _ = tokio::time::timeout(Duration::from_millis(500), handle).await;

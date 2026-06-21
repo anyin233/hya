@@ -19,6 +19,8 @@ pub struct AppState {
     pub loop_view: Option<LoopView>,
     pub team: Vec<(String, String)>,
     pub permission: Option<PermissionPrompt>,
+    pub question: Option<QuestionPrompt>,
+    pub picker: Option<Picker>,
     pub dialog: Option<DialogView>,
     pub attachments: Vec<PromptAttachment>,
     pub input: String,
@@ -28,6 +30,7 @@ pub struct AppState {
     pub scroll_back: u16,
     pub model: String,
     pub session_label: String,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +85,20 @@ impl PermissionPrompt {
     }
 }
 
+pub struct QuestionPrompt {
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    pub input: String,
+    pub allow_custom: bool,
+}
+
+pub struct Picker {
+    pub title: String,
+    pub entries: Vec<String>,
+    pub selected: usize,
+}
+
 impl AppState {
     pub fn apply(&mut self, envelope: &Envelope) {
         self.projection.apply(envelope);
@@ -109,6 +126,10 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
     if let Some(prompt) = &state.permission {
         widgets::render_permission(frame, prompt, &theme);
+    } else if let Some(question) = &state.question {
+        widgets::render_question(frame, question, &theme);
+    } else if let Some(picker) = &state.picker {
+        widgets::render_picker(frame, picker, &theme);
     } else if let Some(dialog) = &state.dialog {
         widgets::render_dialog(frame, dialog, &theme);
     } else if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
