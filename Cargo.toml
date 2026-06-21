@@ -45,8 +45,9 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 time = { version = "0.3", features = ["serde", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-ratatui = "0.28"
+ratatui = "0.30.2"
 crossterm = "0.28"
+unicode-width = "0.2.2"
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
 camino = { version = "1", features = ["serde1"] }
