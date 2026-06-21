@@ -1,18 +1,62 @@
-//! Build a provider router from opencode's config, reusing its providers + keys.
+//! Build a provider router from yaca's own config (`~/.config/yaca/config.yaml`).
 //!
-//! Reads `~/.config/opencode/opencode.json`: each `provider.<id>` maps to one
-//! `HttpProvider` (route chosen by `npm`), and the union of `models` keys becomes
-//! the set yaca can address. Absent config or key → caller falls back to offline.
+//! Reads YAML: each entry under `providers.<id>` maps to one `HttpProvider`
+//! (route chosen by `kind`), and the union of `models` becomes the set yaca can
+//! address. API keys come from `~/.config/yaca/auth/<id>.yaml` (via `yaca login`)
+//! or an inline `api_key`. Absent config or key → caller falls back to offline.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use serde::Deserialize;
 use yaca_provider::{HttpProvider, ProviderKind, ProviderRouter};
 
 pub struct ResolvedConfig {
     pub router: ProviderRouter,
     pub default_model: String,
+}
+
+/// Top-level shape of `~/.config/yaca/config.yaml`.
+#[derive(Debug, Deserialize)]
+struct FileConfig {
+    /// Model used when neither `--model` nor `YACA_MODEL` is set.
+    #[serde(default)]
+    default_model: Option<String>,
+    #[serde(default)]
+    providers: BTreeMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderConfig {
+    kind: ProviderKindConfig,
+    base_url: String,
+    /// Literal, `{env:VAR}`, or `{file:path}`. Optional — a token saved via
+    /// `yaca login` (`~/.config/yaca/auth/<id>.yaml`) takes precedence.
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ProviderKindConfig {
+    #[serde(alias = "openai-compatible")]
+    Openai,
+    Anthropic,
+    Google,
+}
+
+impl From<ProviderKindConfig> for ProviderKind {
+    fn from(kind: ProviderKindConfig) -> Self {
+        match kind {
+            ProviderKindConfig::Openai => Self::OpenAiCompatible,
+            ProviderKindConfig::Anthropic => Self::Anthropic,
+            ProviderKindConfig::Google => Self::Google,
+        }
+    }
 }
 
 struct ParsedProvider {
@@ -23,15 +67,15 @@ struct ParsedProvider {
     models: Vec<String>,
 }
 
-fn opencode_config_path() -> Option<PathBuf> {
+fn config_path() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        let path = PathBuf::from(dir).join("opencode/opencode.json");
+        let path = PathBuf::from(dir).join("yaca/config.yaml");
         if path.exists() {
             return Some(path);
         }
     }
     let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".config/opencode/opencode.json");
+    let path = PathBuf::from(home).join(".config/yaca/config.yaml");
     path.exists().then_some(path)
 }
 
@@ -48,59 +92,38 @@ fn resolve_secret(raw: &str) -> anyhow::Result<String> {
     }
 }
 
-fn parse_providers(config_json: &str) -> anyhow::Result<Vec<ParsedProvider>> {
-    let root: serde_json::Value =
-        serde_json::from_str(config_json).context("parse opencode.json")?;
+fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
+    serde_norway::from_str(yaml).context("parse yaca config.yaml")
+}
+
+/// Flatten the file's providers into addressable routes, skipping any provider
+/// that declares no models and resolving each `api_key` template.
+fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
     let mut out = Vec::new();
-    let Some(providers) = root.get("provider").and_then(serde_json::Value::as_object) else {
-        return Ok(out);
-    };
-    for (id, pv) in providers {
-        let npm = pv
-            .get("npm")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let kind = if npm.contains("anthropic") {
-            ProviderKind::Anthropic
-        } else if npm.contains("google") {
-            ProviderKind::Google
-        } else if npm.contains("openai") {
-            ProviderKind::OpenAiCompatible
-        } else {
-            continue;
-        };
-        let options = pv.get("options");
-        let Some(base_url) = options
-            .and_then(|o| o.get("baseURL"))
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let api_key = options
-            .and_then(|o| o.get("apiKey"))
-            .and_then(serde_json::Value::as_str)
-            .map(resolve_secret)
-            .transpose()?;
-        let models: Vec<String> = pv
-            .get("models")
-            .and_then(serde_json::Value::as_object)
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        if models.is_empty() {
+    for (id, provider) in &file.providers {
+        if provider.models.is_empty() {
             continue;
         }
+        let api_key = provider
+            .api_key
+            .as_deref()
+            .map(resolve_secret)
+            .transpose()?;
         out.push(ParsedProvider {
             id: id.clone(),
-            kind,
-            base_url: base_url.to_string(),
+            kind: provider.kind.into(),
+            base_url: provider.base_url.clone(),
             api_key,
-            models,
+            models: provider.models.clone(),
         });
     }
     Ok(out)
 }
 
-fn choose_default(models: &[String]) -> String {
+fn choose_default(file_default: Option<String>, models: &[String]) -> String {
+    if let Some(model) = file_default {
+        return model;
+    }
     if let Ok(model) = std::env::var("YACA_MODEL") {
         return model;
     }
@@ -112,15 +135,19 @@ fn choose_default(models: &[String]) -> String {
         .unwrap_or_default()
 }
 
-/// Load opencode's config into a ready router. `Ok(None)` means no usable config
-/// (no file or no providers) — the caller should use the offline provider.
+/// Load yaca's config into a ready router. `Ok(None)` means no usable config
+/// (no file, empty, or no providers) — the caller should use the offline provider.
 pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
-    let Some(path) = opencode_config_path() else {
+    let Some(path) = config_path() else {
         return Ok(None);
     };
-    let json =
+    let yaml =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let parsed = parse_providers(&json)?;
+    if yaml.trim().is_empty() {
+        return Ok(None);
+    }
+    let file = parse_config(&yaml)?;
+    let parsed = resolve_providers(&file)?;
     if parsed.is_empty() {
         return Ok(None);
     }
@@ -140,7 +167,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     if models.is_empty() {
         return Ok(None);
     }
-    let default_model = choose_default(&models);
+    let default_model = choose_default(file.default_model, &models);
     Ok(Some(ResolvedConfig {
         router,
         default_model,
@@ -153,30 +180,33 @@ mod tests {
 
     use super::*;
 
-    const FIXTURE: &str = r#"{
-        "$schema": "x",
-        "provider": {
-            "gw-oai": {
-                "npm": "@ai-sdk/openai-compatible",
-                "options": { "apiKey": "sk-test-literal", "baseURL": "https://gw.example/v1" },
-                "models": { "gpt-5.5": {}, "gpt-5.4": {} }
-            },
-            "gw-anth": {
-                "npm": "@ai-sdk/anthropic",
-                "options": { "apiKey": "sk-test-literal", "baseURL": "https://gw.example/v1" },
-                "models": { "claude-sonnet-4-6": {} }
-            },
-            "gw-google": {
-                "npm": "@ai-sdk/google",
-                "options": { "apiKey": "sk-test-literal", "baseURL": "https://gl.googleapis.com/v1beta" },
-                "models": { "gemini-2.0-flash": {} }
-            },
-            "no-models": {
-                "npm": "@ai-sdk/openai-compatible",
-                "options": { "apiKey": "x", "baseURL": "https://y/v1" }
-            }
-        }
-    }"#;
+    const FIXTURE: &str = "
+default_model: gpt-5.5
+providers:
+  gw-oai:
+    kind: openai
+    base_url: https://gw.example/v1
+    api_key: sk-test-literal
+    models: [gpt-5.5, gpt-5.4]
+  gw-anth:
+    kind: anthropic
+    base_url: https://gw.example/v1
+    api_key: sk-test-literal
+    models: [claude-sonnet-4-6]
+  gw-google:
+    kind: google
+    base_url: https://gl.googleapis.com/v1beta
+    api_key: sk-test-literal
+    models: [gemini-2.0-flash]
+  no-models:
+    kind: openai
+    base_url: https://y/v1
+    api_key: x
+";
+
+    fn parse_providers(yaml: &str) -> anyhow::Result<Vec<ParsedProvider>> {
+        resolve_providers(&parse_config(yaml)?)
+    }
 
     #[test]
     fn parses_providers_kinds_and_models() {
@@ -199,6 +229,20 @@ mod tests {
     }
 
     #[test]
+    fn openai_compatible_alias_is_accepted() {
+        let yaml = "
+providers:
+  gw:
+    kind: openai-compatible
+    base_url: https://gw.example/v1
+    models: [m1]
+";
+        let parsed = parse_providers(yaml).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].kind, ProviderKind::OpenAiCompatible);
+    }
+
+    #[test]
     fn resolves_env_template_key() {
         // SAFETY: single-threaded test; sets then reads a unique env var.
         unsafe { std::env::set_var("YACA_TEST_KEY_XYZ", "resolved-secret") };
@@ -211,18 +255,25 @@ mod tests {
 
     #[test]
     fn parses_provider_without_apikey() {
-        let json = r#"{
-            "provider": {
-                "12th": {
-                    "npm": "@ai-sdk/openai-compatible",
-                    "options": { "baseURL": "https://api.example/v1" },
-                    "models": { "claude-sonnet-4-6": {} }
-                }
-            }
-        }"#;
-        let parsed = parse_providers(json).unwrap();
+        let yaml = "
+providers:
+  12th:
+    kind: openai
+    base_url: https://api.example/v1
+    models: [claude-sonnet-4-6]
+";
+        let parsed = parse_providers(yaml).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].api_key, None);
         assert_eq!(parsed[0].base_url, "https://api.example/v1");
+    }
+
+    #[test]
+    fn explicit_default_model_wins() {
+        let models = vec!["gpt-5.5".to_string(), "claude-sonnet-4-6".to_string()];
+        assert_eq!(
+            choose_default(Some("gpt-5.5".to_string()), &models),
+            "gpt-5.5"
+        );
     }
 }
