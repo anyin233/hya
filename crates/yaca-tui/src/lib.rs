@@ -24,6 +24,7 @@ pub struct AppState {
     pub scroll_back: u16,
     pub model: String,
     pub session_label: String,
+    pub yolo: bool,
 }
 
 pub struct GoalView {
@@ -182,6 +183,12 @@ fn status_line(state: &AppState) -> Line<'static> {
             }),
         ),
     ];
+    if state.yolo {
+        spans.push(Span::styled(
+            "  [YOLO]".to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(g) = &state.goal {
         spans.push(Span::raw(format!(
             "  GOAL:{} turns {}",

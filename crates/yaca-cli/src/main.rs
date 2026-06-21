@@ -410,6 +410,7 @@ async fn cmd_tui(
     model_override: Option<String>,
     db: String,
     resume: Option<String>,
+    yolo: bool,
 ) -> anyhow::Result<()> {
     use std::io::IsTerminal as _;
     if !std::io::stdout().is_terminal() {
@@ -443,7 +444,7 @@ async fn cmd_tui(
             .await
             .context("create session")?,
     };
-    tui::run(engine, agent, model, asks, session).await
+    tui::run(engine, agent, model, asks, session, yolo).await
 }
 
 async fn cmd_serve(
@@ -532,7 +533,7 @@ async fn main() -> anyhow::Result<()> {
         return cmd_goal(goal, cli.max_iterations, model, yolo).await;
     }
     match cli.command {
-        None => cmd_tui(model, db, resume).await,
+        None => cmd_tui(model, db, resume, yolo).await,
         Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, yolo, json).await,
         Some(Command::Serve { bind, db }) => cmd_serve(bind, db, model, yolo).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,

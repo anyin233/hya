@@ -7,6 +7,7 @@ pub enum Slash {
     Clear,
     Exit,
     Sessions,
+    Yolo(Option<bool>),
     Template(String),
 }
 
@@ -22,6 +23,11 @@ pub fn parse_slash(input: &str) -> Option<Slash> {
         "clear" | "new" => Slash::Clear,
         "exit" | "quit" | "q" => Slash::Exit,
         "sessions" => Slash::Sessions,
+        "yolo" => Slash::Yolo(match arg {
+            "on" | "true" => Some(true),
+            "off" | "false" => Some(false),
+            _ => None,
+        }),
         other if !other.is_empty() => Slash::Template(other.to_string()),
         _ => Slash::Help,
     })
@@ -35,6 +41,7 @@ pub fn help_text() -> String {
      /clear, /new     start a fresh session\n\
      /exit, /quit     quit yaca\n\
      /sessions        switch to another session\n\
+     /yolo [on|off]   auto-approve tool actions (toggle)\n\
      /<name>          run prompt template <name>.md"
         .to_string()
 }
@@ -83,6 +90,15 @@ mod tests {
             Some(Slash::Template("review".to_string()))
         );
         assert_eq!(parse_slash("hello world"), None);
+    }
+
+    #[test]
+    fn parses_yolo_variants() {
+        assert_eq!(parse_slash("/yolo"), Some(Slash::Yolo(None)));
+        assert_eq!(parse_slash("/yolo on"), Some(Slash::Yolo(Some(true))));
+        assert_eq!(parse_slash("/yolo off"), Some(Slash::Yolo(Some(false))));
+        assert_eq!(parse_slash("/yolo true"), Some(Slash::Yolo(Some(true))));
+        assert_eq!(parse_slash("/yolo false"), Some(Slash::Yolo(Some(false))));
     }
 
     #[test]

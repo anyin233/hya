@@ -197,6 +197,7 @@ pub async fn run(
     model: String,
     mut asks: mpsc::UnboundedReceiver<AskRequest>,
     initial_session: SessionId,
+    initial_yolo: bool,
 ) -> anyhow::Result<()> {
     let mut session = initial_session;
 
@@ -208,6 +209,7 @@ pub async fn run(
             .read_projection(session)
             .await
             .context("prime projection")?,
+        yolo: initial_yolo,
         ..AppState::default()
     };
 
@@ -261,20 +263,24 @@ pub async fn run(
             }
             maybe_ask = asks.recv(), if app.permission.is_none() => {
                 if let Some(req) = maybe_ask {
-                    let title = match req.session {
-                        Some(origin) if origin != session => format!(
-                            "{} · subagent {}",
-                            action_label(req.action),
-                            origin.to_string().chars().take(8).collect::<String>()
-                        ),
-                        _ => action_label(req.action).to_string(),
-                    };
-                    pending = Some(req.reply);
-                    app.permission = Some(PermissionPrompt {
-                        title,
-                        detail: req.resource.pattern(),
-                        selected: 0,
-                    });
+                    if app.yolo {
+                        let _ = req.reply.send(Decision::AllowOnce);
+                    } else {
+                        let title = match req.session {
+                            Some(origin) if origin != session => format!(
+                                "{} · subagent {}",
+                                action_label(req.action),
+                                origin.to_string().chars().take(8).collect::<String>()
+                            ),
+                            _ => action_label(req.action).to_string(),
+                        };
+                        pending = Some(req.reply);
+                        app.permission = Some(PermissionPrompt {
+                            title,
+                            detail: req.resource.pattern(),
+                            selected: 0,
+                        });
+                    }
                 }
             }
             maybe = events.next() => match maybe {
@@ -370,6 +376,16 @@ pub async fn run(
                                         app.session_picker =
                                             Some(SessionPicker { entries, selected: 0 });
                                     }
+                                }
+                                Some(commands::Slash::Yolo(arg)) => {
+                                    app.yolo = arg.unwrap_or(!app.yolo);
+                                    let state = if app.yolo { "enabled" } else { "disabled" };
+                                    let _ = engine
+                                        .inject_system_message(
+                                            session,
+                                            format!("yolo mode {state}"),
+                                        )
+                                        .await;
                                 }
                                 Some(commands::Slash::Template(name)) => {
                                     match commands::resolve_template(&name, &template_dirs) {
