@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
 use yaca_tui::DialogItem;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5,6 +8,8 @@ pub enum CommandKind {
     Model,
     Resume,
     NewSession,
+    Export,
+    Quit,
     Help,
 }
 
@@ -14,6 +19,29 @@ pub struct CommandSpec {
     pub description: &'static str,
     pub key_hint: &'static str,
     pub kind: CommandKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomCommand {
+    pub name: String,
+    pub description: String,
+    pub template: String,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+}
+
+impl CustomCommand {
+    #[must_use]
+    pub fn expand(&self, arguments: &str) -> String {
+        let mut out = self.template.replace("$ARGUMENTS", arguments);
+        let positional = split_arguments(arguments);
+        for idx in 1..=9 {
+            let needle = format!("${idx}");
+            let replacement = positional.get(idx - 1).cloned().unwrap_or_default();
+            out = out.replace(&needle, &replacement);
+        }
+        out
+    }
 }
 
 pub const COMMANDS: &[CommandSpec] = &[
@@ -26,7 +54,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resume",
-        aliases: &[],
+        aliases: &["sessions"],
         description: "Resume a previous conversation",
         key_hint: "leader l",
         kind: CommandKind::Resume,
@@ -37,6 +65,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Start a new conversation",
         key_hint: "leader n",
         kind: CommandKind::NewSession,
+    },
+    CommandSpec {
+        name: "export",
+        aliases: &[],
+        description: "Export the current transcript as Markdown",
+        key_hint: "leader e",
+        kind: CommandKind::Export,
+    },
+    CommandSpec {
+        name: "quit",
+        aliases: &["exit"],
+        description: "Exit yaca",
+        key_hint: "ctrl-c ctrl-c",
+        kind: CommandKind::Quit,
     },
     CommandSpec {
         name: "help",
@@ -77,6 +119,63 @@ pub fn completion_items(input: &str) -> Vec<DialogItem> {
         .collect()
 }
 
+#[must_use]
+pub fn help_items_with_custom(custom: &[CustomCommand]) -> Vec<DialogItem> {
+    let mut items = help_items();
+    items.extend(custom.iter().map(custom_command_item));
+    items
+}
+
+#[must_use]
+pub fn completion_items_with_custom(input: &str, custom: &[CustomCommand]) -> Vec<DialogItem> {
+    let mut items = completion_items(input);
+    let Some(rest) = input.strip_prefix('/') else {
+        return items;
+    };
+    if rest.contains(char::is_whitespace) {
+        return items;
+    }
+    items.extend(
+        custom
+            .iter()
+            .filter(|command| command.name.starts_with(rest))
+            .map(custom_command_item),
+    );
+    items
+}
+
+#[must_use]
+pub fn find_custom<'a>(custom: &'a [CustomCommand], name: &str) -> Option<&'a CustomCommand> {
+    custom.iter().find(|command| command.name == name)
+}
+
+pub fn load_markdown_commands(workdir: &Path) -> std::io::Result<Vec<CustomCommand>> {
+    load_markdown_commands_from_dirs(&markdown_command_dirs(workdir))
+}
+
+pub fn load_markdown_commands_from_dirs(dirs: &[PathBuf]) -> std::io::Result<Vec<CustomCommand>> {
+    let mut commands = BTreeMap::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let text = std::fs::read_to_string(&path)?;
+            let command = parse_markdown_command(name, &text);
+            commands.insert(command.name.clone(), command);
+        }
+    }
+    Ok(commands.into_values().collect())
+}
+
 fn command_item(spec: &CommandSpec) -> DialogItem {
     DialogItem {
         label: format!("/{}", spec.name),
@@ -84,8 +183,92 @@ fn command_item(spec: &CommandSpec) -> DialogItem {
     }
 }
 
+fn custom_command_item(command: &CustomCommand) -> DialogItem {
+    DialogItem {
+        label: format!("/{}", command.name),
+        detail: format!("{} · custom", command.description),
+    }
+}
+
+fn markdown_command_dirs(workdir: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let config = PathBuf::from(home).join(".config/opencode");
+        dirs.push(config.join("commands"));
+        dirs.push(config.join("command"));
+    }
+    dirs.push(workdir.join(".opencode/commands"));
+    dirs.push(workdir.join(".opencode/command"));
+    dirs
+}
+
+fn parse_markdown_command(name: &str, text: &str) -> CustomCommand {
+    let (frontmatter, body) = split_frontmatter(text);
+    let description = frontmatter
+        .get("description")
+        .cloned()
+        .unwrap_or_else(|| format!("Run custom command /{name}"));
+    CustomCommand {
+        name: name.to_string(),
+        description,
+        template: body.to_string(),
+        agent: frontmatter.get("agent").cloned(),
+        model: frontmatter.get("model").cloned(),
+    }
+}
+
+fn split_frontmatter(text: &str) -> (BTreeMap<String, String>, &str) {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return (BTreeMap::new(), text);
+    };
+    let Some(end) = rest.find("\n---\n") else {
+        return (BTreeMap::new(), text);
+    };
+    let frontmatter_text = &rest[..end];
+    let body = &rest[end + "\n---\n".len()..];
+    let mut frontmatter = BTreeMap::new();
+    for line in frontmatter_text.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        frontmatter.insert(
+            key.trim().to_string(),
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string(),
+        );
+    }
+    (frontmatter, body)
+}
+
+fn split_arguments(arguments: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in arguments.chars() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
 
     #[test]
@@ -93,7 +276,11 @@ mod tests {
         assert_eq!(resolve_slash("model"), Some(CommandKind::Model));
         assert_eq!(resolve_slash("models"), Some(CommandKind::Model));
         assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
+        assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
+        assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
+        assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
+        assert_eq!(resolve_slash("exit"), Some(CommandKind::Quit));
         assert_eq!(resolve_slash("help"), Some(CommandKind::Help));
     }
 
@@ -108,6 +295,8 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "/model"));
         assert!(items.iter().any(|item| item.label == "/resume"));
         assert!(items.iter().any(|item| item.label == "/new"));
+        assert!(items.iter().any(|item| item.label == "/export"));
+        assert!(items.iter().any(|item| item.label == "/quit"));
         assert!(items.iter().any(|item| item.label == "/help"));
     }
 
@@ -123,5 +312,65 @@ mod tests {
                 .any(|item| item.label == "/resume")
         );
         assert!(completion_items("/model with args").is_empty());
+    }
+
+    #[test]
+    fn markdown_commands_load_frontmatter_and_expand_arguments() {
+        let root = temp_root();
+        let commands_dir = root.join(".opencode").join("commands");
+        std::fs::create_dir_all(&commands_dir).unwrap();
+        std::fs::write(
+            commands_dir.join("component.md"),
+            r#"---
+description: Create a component
+agent: build
+model: anthropic/claude-sonnet
+---
+Create $1 in $2.
+
+All args: $ARGUMENTS
+"#,
+        )
+        .unwrap();
+
+        let commands = load_markdown_commands_from_dirs(&[commands_dir]).unwrap();
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "component");
+        assert_eq!(commands[0].description, "Create a component");
+        assert_eq!(commands[0].agent.as_deref(), Some("build"));
+        assert_eq!(
+            commands[0].model.as_deref(),
+            Some("anthropic/claude-sonnet")
+        );
+        assert_eq!(
+            commands[0].expand("Button src/components"),
+            "Create Button in src/components.\n\nAll args: Button src/components\n"
+        );
+    }
+
+    #[test]
+    fn custom_commands_appear_in_completion_items() {
+        let custom = vec![CustomCommand {
+            name: "test".to_string(),
+            description: "Run tests".to_string(),
+            template: "Run $ARGUMENTS".to_string(),
+            agent: None,
+            model: None,
+        }];
+
+        let items = completion_items_with_custom("/t", &custom);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "/test");
+        assert!(items[0].detail.contains("Run tests"));
+    }
+
+    fn temp_root() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("yaca-command-test-{nanos}-{}", std::process::id()))
     }
 }

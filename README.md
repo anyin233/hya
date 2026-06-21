@@ -58,9 +58,21 @@ than one command matches, use the list dialog and press `Enter` or `Tab`.
 | Command | Behavior |
 | --- | --- |
 | `/model` | Open the model selector. The next prompt uses the selected model. |
-| `/resume` | Resume a previous TUI conversation from per-session JSON/JSONL history. |
+| `/resume`, `/sessions` | Resume a previous TUI conversation from per-session JSON/JSONL history. |
 | `/new` | Start a fresh conversation. |
+| `/export` | Export the current transcript as Markdown under `YACA_EXPORT_DIR` or `~/.yaca/exports`. |
+| `/quit`, `/exit` | Exit the TUI. |
 | `/help` | Show available commands and shortcuts. |
+
+Project and user custom commands are loaded from `.opencode/commands/*.md`,
+`.opencode/command/*.md`, `~/.config/opencode/commands/*.md`, and
+`~/.config/opencode/command/*.md`. Frontmatter fields `description`, `agent`,
+and `model` are parsed; command bodies can use `$ARGUMENTS` and `$1`...`$9`.
+
+`@` file and directory mentions are expanded before a TUI prompt is sent. For
+example, `review @src/lib.rs#L10-20` keeps the visible prompt and appends a
+bounded context block containing the requested file lines. Directory mentions
+append a short listing.
 
 Headless subcommands remain for scripting and automation:
 

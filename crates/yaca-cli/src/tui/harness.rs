@@ -154,6 +154,7 @@ impl DummyHarness {
             TuiEffect::Exit
             | TuiEffect::Interrupt
             | TuiEffect::ResumeSession(_)
+            | TuiEffect::ExportTranscript
             | TuiEffect::NewSession => {}
         }
     }

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem, DialogView};
 
-use super::commands::{self, CommandKind};
+use super::commands::{self, CommandKind, CustomCommand};
 use super::prompt::{PromptState, mention_trigger_index};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub enum TuiEffect {
     SelectModel(String),
     ResumeSession(String),
     NewSession,
+    ExportTranscript,
     SystemMessage(String),
 }
 
@@ -39,6 +40,7 @@ pub struct Controller {
     available_models: Vec<String>,
     sessions: Vec<SessionSummary>,
     references: Vec<DialogItem>,
+    custom_commands: Vec<CustomCommand>,
     dialog_mode: Option<DialogMode>,
     input_history: Vec<String>,
     history_cursor: Option<usize>,
@@ -78,6 +80,7 @@ impl Controller {
             available_models,
             sessions,
             references: Vec::new(),
+            custom_commands: Vec::new(),
             dialog_mode: None,
             input_history: Vec::new(),
             history_cursor: None,
@@ -177,6 +180,10 @@ impl Controller {
 
     pub fn set_references(&mut self, references: Vec<DialogItem>) {
         self.references = references;
+    }
+
+    pub fn set_custom_commands(&mut self, custom_commands: Vec<CustomCommand>) {
+        self.custom_commands = custom_commands;
     }
 
     pub fn handle_paste(&mut self, text: &str) -> TuiEffect {
@@ -362,6 +369,9 @@ impl Controller {
     }
 
     fn dispatch_slash(&mut self, command: &str) -> TuiEffect {
+        let mut pieces = command.splitn(2, char::is_whitespace);
+        let name = pieces.next().unwrap_or_default();
+        let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
@@ -372,20 +382,25 @@ impl Controller {
                 TuiEffect::None
             }
             Some(CommandKind::NewSession) => TuiEffect::NewSession,
+            Some(CommandKind::Export) => TuiEffect::ExportTranscript,
+            Some(CommandKind::Quit) => TuiEffect::Exit,
             Some(CommandKind::Help) => {
                 self.open_help_dialog();
                 TuiEffect::None
             }
             None if command.trim().is_empty() => TuiEffect::None,
             None => {
-                let unknown = command.split_whitespace().next().unwrap_or_default();
-                TuiEffect::SystemMessage(format!("unknown command /{unknown}; try /help"))
+                if let Some(custom) = commands::find_custom(&self.custom_commands, name) {
+                    TuiEffect::Submit(custom.expand(arguments))
+                } else {
+                    TuiEffect::SystemMessage(format!("unknown command /{name}; try /help"))
+                }
             }
         }
     }
 
     fn apply_command_completion(&mut self, selected: usize) {
-        let items = commands::completion_items(&self.app.input);
+        let items = commands::completion_items_with_custom(&self.app.input, &self.custom_commands);
         if let Some(item) = items.get(selected) {
             self.app.input = format!("{} ", item.label);
         }
@@ -420,7 +435,7 @@ impl Controller {
             }
             KeyCode::Enter
                 if self.dialog_mode == Some(DialogMode::CommandCompletion)
-                    && is_exact_slash_command(&self.app.input) =>
+                    && is_exact_slash_command(&self.app.input, &self.custom_commands) =>
             {
                 self.app.dialog = None;
                 self.dialog_mode = None;
@@ -500,7 +515,8 @@ impl Controller {
 
     fn refresh_inline_popup(&mut self) {
         if self.app.input.starts_with('/') && !self.app.input.contains(char::is_whitespace) {
-            let items = commands::completion_items(&self.app.input);
+            let items =
+                commands::completion_items_with_custom(&self.app.input, &self.custom_commands);
             if items.is_empty() {
                 self.app.dialog = None;
                 self.dialog_mode = None;
@@ -624,18 +640,18 @@ impl Controller {
         self.app.dialog = Some(DialogView {
             title: "commands".to_string(),
             subtitle: "slash commands and shortcuts".to_string(),
-            items: commands::help_items(),
+            items: commands::help_items_with_custom(&self.custom_commands),
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::Help);
     }
 }
 
-fn is_exact_slash_command(input: &str) -> bool {
-    input
-        .strip_prefix('/')
-        .and_then(commands::resolve_slash)
-        .is_some()
+fn is_exact_slash_command(input: &str, custom_commands: &[CustomCommand]) -> bool {
+    input.strip_prefix('/').is_some_and(|command| {
+        commands::resolve_slash(command).is_some()
+            || commands::find_custom(custom_commands, command).is_some()
+    })
 }
 
 #[cfg(test)]
@@ -925,6 +941,46 @@ mod tests {
         assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
             TuiEffect::NewSession
+        );
+    }
+
+    #[test]
+    fn slash_quit_requests_exit() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/quit");
+
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::Exit);
+    }
+
+    #[test]
+    fn slash_export_requests_transcript_export() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/export");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::ExportTranscript
+        );
+    }
+
+    #[test]
+    fn custom_slash_command_submits_expanded_prompt() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_custom_commands(vec![CustomCommand {
+            name: "component".to_string(),
+            description: "Create a component".to_string(),
+            template: "Create $1 in $2. Args: $ARGUMENTS".to_string(),
+            agent: None,
+            model: None,
+        }]);
+
+        type_text(&mut controller, "/component Button src/ui");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::Submit("Create Button in src/ui. Args: Button src/ui".to_string())
         );
     }
 
