@@ -154,6 +154,18 @@ cargo test --workspace
   - `widgets/prompt.rs`
   - `widgets/overlays.rs`
   - `widgets/error.rs`
+- Added `/compact`, backed by `SessionEngine::compact_context`, which injects a
+  compacted summary marker and trims earlier messages from later provider
+  requests.
+- Added `/init`, creating a starter `AGENTS.md` in the active workdir without
+  overwriting existing project instructions.
+- Added built-in agent profiles (`build`, `plan`, `general`, `explore`,
+  `scout`), an `/agent` selector, and leading `@agent` mention routing before
+  file-reference expansion.
+- Added `/tools` and `/mcp` status dialogs for builtin tools and the current
+  MCP gap.
+- Applied opencode custom command `agent` and `model` frontmatter when a custom
+  slash command is submitted.
 
 ## Deferred Follow-Ups
 

@@ -37,17 +37,24 @@ TUI slash commands include:
 | `/model`, `/models` | Open the model selector. |
 | `/resume`, `/sessions` | Resume a prior JSONL-backed TUI session. |
 | `/new` | Start a fresh session. |
+| `/compact` | Compact older transcript context for future provider requests. |
+| `/init` | Create a starter `AGENTS.md` if one does not already exist. |
+| `/agent`, `/agents` | Select a built-in agent profile. |
+| `/tools`, `/mcp` | Show builtin tools and MCP status. |
 | `/export` | Write the current transcript as Markdown. |
 | `/quit`, `/exit` | Exit the TUI. |
 | `/help`, `/?` | Show command help. |
 
 Custom markdown commands are loaded from opencode-style command directories in
 the project and user config. Their bodies support `$ARGUMENTS` and positional
-`$1`...`$9` replacement before being submitted as a normal prompt.
+`$1`...`$9` replacement; optional `agent` and `model` frontmatter is applied
+when the command is submitted.
 
 `@path` mentions in TUI prompts are expanded into bounded context blocks before
 submission. `@file#Lx-y` includes only the requested line range; `@directory`
-includes a short listing.
+includes a short listing. A leading built-in agent mention, for example
+`@explore trace this path`, switches that submitted turn to the matching
+profile.
 
 ## `yaca exec`
 

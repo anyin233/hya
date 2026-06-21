@@ -60,6 +60,10 @@ than one command matches, use the list dialog and press `Enter` or `Tab`.
 | `/model` | Open the model selector. The next prompt uses the selected model. |
 | `/resume`, `/sessions` | Resume a previous TUI conversation from per-session JSON/JSONL history. |
 | `/new` | Start a fresh conversation. |
+| `/compact` | Summarize the current transcript and prune older provider context from future turns. |
+| `/init` | Create a starter `AGENTS.md` in the active workdir without overwriting an existing file. |
+| `/agent`, `/agents` | Open the built-in agent profile selector. |
+| `/tools`, `/mcp` | Show builtin tool availability and current MCP status. |
 | `/export` | Export the current transcript as Markdown under `YACA_EXPORT_DIR` or `~/.yaca/exports`. |
 | `/quit`, `/exit` | Exit the TUI. |
 | `/help` | Show available commands and shortcuts. |
@@ -67,12 +71,14 @@ than one command matches, use the list dialog and press `Enter` or `Tab`.
 Project and user custom commands are loaded from `.opencode/commands/*.md`,
 `.opencode/command/*.md`, `~/.config/opencode/commands/*.md`, and
 `~/.config/opencode/command/*.md`. Frontmatter fields `description`, `agent`,
-and `model` are parsed; command bodies can use `$ARGUMENTS` and `$1`...`$9`.
+and `model` are applied when the command is submitted; command bodies can use
+`$ARGUMENTS` and `$1`...`$9`.
 
 `@` file and directory mentions are expanded before a TUI prompt is sent. For
 example, `review @src/lib.rs#L10-20` keeps the visible prompt and appends a
 bounded context block containing the requested file lines. Directory mentions
-append a short listing.
+append a short listing. A leading agent mention such as `@plan sketch this`
+switches to that built-in profile for the submitted turn.
 
 Headless subcommands remain for scripting and automation:
 

@@ -14,6 +14,8 @@ use yaca_tool::{PermissionPlane, ToolCtx, ToolError, ToolRegistry};
 use crate::bus::EventBus;
 use crate::error::CoreError;
 
+const COMPACT_CONTEXT_MARKER: &str = "YACA_COMPACTED_CONTEXT";
+
 pub struct CreateSession {
     pub parent: Option<SessionId>,
     pub agent: AgentName,
@@ -127,6 +129,15 @@ impl SessionEngine {
         )
         .await?;
         Ok(message)
+    }
+
+    pub async fn compact_context(
+        &self,
+        session: SessionId,
+        summary: String,
+    ) -> Result<MessageId, CoreError> {
+        self.inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
+            .await
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
@@ -413,10 +424,7 @@ fn build_request(
     projection: &Projection,
     tools: &ToolRegistry,
 ) -> CompletionRequest {
-    let messages = projection
-        .session
-        .messages
-        .iter()
+    let messages = compacted_messages(projection)
         .map(|m| match m.role {
             Role::User => Message::User {
                 id: m.id,
@@ -444,4 +452,19 @@ fn build_request(
         temperature: None,
         max_output_tokens: None,
     }
+}
+
+fn compacted_messages(
+    projection: &Projection,
+) -> impl Iterator<Item = &yaca_proto::MessageProjection> {
+    let start = projection
+        .session
+        .messages
+        .iter()
+        .rposition(|message| {
+            message.role == Role::System
+                && collect_text(&message.parts).starts_with(COMPACT_CONTEXT_MARKER)
+        })
+        .unwrap_or(0);
+    projection.session.messages[start..].iter()
 }

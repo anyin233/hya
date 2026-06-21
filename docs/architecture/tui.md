@@ -96,15 +96,25 @@ General keys:
 Slash commands:
 
 Slash command completion is handled by the controller before prompt
-submission. `/m` + `Tab` completes to `/model `; `/` + `Tab` opens the command
-list, where `Enter` or `Tab` accepts the selected command.
+submission. `/mo` + `Tab` completes to `/model `; `/` + `Tab` opens the
+command list, where `Enter` or `Tab` accepts the selected command.
 
 | Command | Behavior |
 | --- | --- |
-| `/model` | Open model selection. |
-| `/resume` | Open resumable session selection. |
+| `/model`, `/models` | Open model selection. |
+| `/resume`, `/sessions` | Open resumable session selection. |
 | `/new` | Start a new session. |
-| `/help` | Show commands and shortcuts. |
+| `/compact` | Inject a compacted transcript summary and prune earlier provider context. |
+| `/init` | Create a starter `AGENTS.md` without overwriting an existing one. |
+| `/agent`, `/agents` | Open the built-in agent profile selector. |
+| `/tools`, `/mcp` | Open builtin tool and MCP status. |
+| `/export` | Export the transcript as Markdown. |
+| `/quit`, `/exit` | Exit the TUI. |
+| `/help`, `/?` | Show commands and shortcuts. |
+
+Leading built-in agent mentions, such as `@plan` or `@explore`, are routed
+before file-reference expansion. Other `@path` mentions are expanded into
+bounded file or directory context blocks.
 
 Generic list dialogs use `Up`/`Down`, `Tab`/`Shift-Tab`, `Home`/`End`,
 `PageUp`/`PageDown`, `Enter`, and `Esc`.

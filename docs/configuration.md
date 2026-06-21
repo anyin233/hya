@@ -105,5 +105,6 @@ Create $1 in $2.
 All args: $ARGUMENTS
 ```
 
-The first pass submits expanded command bodies as normal prompts; parsed
-`agent` and `model` metadata are preserved for later agent/model routing.
+Expanded command bodies are submitted as normal prompts. If `agent` names a
+built-in TUI profile, yaca applies that profile before the turn starts. If
+`model` is present, yaca switches the submitted turn to that model.

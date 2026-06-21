@@ -130,6 +130,34 @@ impl DummyHarness {
             TuiEffect::SelectModel(model) => {
                 self.agent.model = yaca_proto::ModelRef::new(model);
             }
+            TuiEffect::SelectAgent(agent) => {
+                self.agent.name = yaca_proto::AgentName::new(agent);
+            }
+            TuiEffect::SubmitConfigured {
+                prompt,
+                agent,
+                model,
+            } => {
+                if let Some(agent) = agent {
+                    self.agent.name = yaca_proto::AgentName::new(agent);
+                }
+                if let Some(model) = model {
+                    self.agent.model = yaca_proto::ModelRef::new(model);
+                }
+                self.engine
+                    .admit_user_prompt(self.session, prompt)
+                    .await
+                    .expect("admit prompt");
+                self.engine
+                    .run_turn(self.session, &self.agent, CancellationToken::new())
+                    .await
+                    .expect("run turn");
+                self.controller.app.projection = self
+                    .engine
+                    .read_projection(self.session)
+                    .await
+                    .expect("read projection");
+            }
             TuiEffect::Submit(prompt) => {
                 self.engine
                     .admit_user_prompt(self.session, prompt)
@@ -154,6 +182,8 @@ impl DummyHarness {
             TuiEffect::Exit
             | TuiEffect::Interrupt
             | TuiEffect::ResumeSession(_)
+            | TuiEffect::CompactTranscript
+            | TuiEffect::InitProject
             | TuiEffect::ExportTranscript
             | TuiEffect::NewSession => {}
         }
