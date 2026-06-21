@@ -36,8 +36,7 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
 
 fn timeline_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let items = timeline_items(&state.projection);
-    for (idx, item) in items.iter().enumerate() {
+    for (idx, item) in timeline_items(&state.projection).iter().enumerate() {
         let selected = state.selected_message == Some(idx);
         match item.role {
             Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
@@ -66,7 +65,7 @@ fn user_lines(
     let text = text_from_parts(parts);
     for segment in text.split('\n') {
         lines.push(Line::from(vec![
-            Span::styled("│ ", block_style(theme.primary, selected, theme)),
+            Span::styled("▏ ", block_style(theme.primary, selected, theme)),
             Span::styled("  ", block_style(theme.muted, selected, theme)),
             Span::styled(
                 segment.to_string(),
@@ -192,12 +191,10 @@ fn message_header(
     color: Color,
 ) -> Line<'static> {
     let marker = if selected { "▌ " } else { "  " };
+    let label_style = block_style(color, selected, theme).add_modifier(Modifier::BOLD);
     let mut spans = vec![
         Span::styled(marker.to_string(), block_style(color, selected, theme)),
-        Span::styled(
-            format!("{label} #{}", idx + 1),
-            block_style(color, selected, theme).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(format!("{label} #{}", idx + 1), label_style),
     ];
     if selected {
         spans.push(Span::styled(
