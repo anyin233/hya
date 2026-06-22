@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 yaca-core = { workspace = true }
+yaca-mcp = { workspace = true }
 yaca-proto = { workspace = true }
 yaca-store = { workspace = true }
 yaca-tool = { workspace = true }

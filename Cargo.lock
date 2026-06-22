@@ -3204,6 +3204,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "yaca-core",
+ "yaca-mcp",
  "yaca-proto",
  "yaca-provider",
  "yaca-store",

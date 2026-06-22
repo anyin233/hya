@@ -687,7 +687,7 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
+    let (engine, asks, questions, mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
         &runtime.model,
@@ -695,7 +695,8 @@ async fn cmd_serve(
         runtime.plugins,
     );
     let mut state = AppState::new(engine, Arc::new(agent_with_model(&runtime.model)))
-        .with_question_requests(questions);
+        .with_question_requests(questions)
+        .with_mcp_manager(mcp_manager);
     let _responder = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
         Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))

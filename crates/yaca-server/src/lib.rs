@@ -15,6 +15,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::BroadcastStream;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
+use yaca_mcp::McpManager;
 use yaca_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
     PromptResponse, ShellRequest,
@@ -32,6 +33,7 @@ pub struct AppState {
     pub agent: Arc<AgentSpec>,
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
+    mcp_manager: Arc<McpManager>,
 }
 
 impl AppState {
@@ -42,6 +44,7 @@ impl AppState {
             agent,
             permission_requests: pending::PermissionRequests::default(),
             question_requests: pending::QuestionRequests::default(),
+            mcp_manager: Arc::new(McpManager::default()),
         }
     }
 
@@ -56,6 +59,12 @@ impl AppState {
         self.question_requests = pending::QuestionRequests::spawn(rx);
         self
     }
+
+    #[must_use]
+    pub fn with_mcp_manager(mut self, manager: McpManager) -> Self {
+        self.mcp_manager = Arc::new(manager);
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -65,6 +74,7 @@ struct ServerState {
     runs: runs::RunRegistry,
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
+    mcp_manager: Arc<McpManager>,
 }
 
 impl ServerState {
@@ -75,6 +85,7 @@ impl ServerState {
             runs: runs::RunRegistry::default(),
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
+            mcp_manager: app.mcp_manager,
         }
     }
 }
