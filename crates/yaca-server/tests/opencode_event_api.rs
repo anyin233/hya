@@ -40,6 +40,11 @@ async fn opencode_v2_event_route_streams_connected_event() {
 }
 
 #[tokio::test]
+async fn opencode_legacy_event_route_streams_connected_event() {
+    assert_event_stream("/event").await;
+}
+
+#[tokio::test]
 async fn opencode_global_event_route_streams_connected_event() {
     assert_event_stream("/global/event").await;
 }
