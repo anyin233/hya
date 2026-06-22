@@ -1,13 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use crate::{ApiError, ServerState};
-
-pub(super) fn workdir(st: &ServerState) -> PathBuf {
-    match std::fs::canonicalize(&st.agent.workdir) {
-        Ok(path) => path,
-        Err(_) => st.agent.workdir.clone(),
-    }
-}
+use crate::ApiError;
 
 pub(super) fn resolve_existing(root: &Path, query_path: &str) -> Result<PathBuf, ApiError> {
     let path = join_under(root, query_path)?;
