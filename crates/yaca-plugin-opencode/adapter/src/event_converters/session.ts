@@ -60,6 +60,22 @@ export function messageStartedEvent(envelope: EventEnvelope): OpenCodeEvent | un
   return undefined
 }
 
+export function messageFinishedEvent(envelope: EventEnvelope): OpenCodeEvent | undefined {
+  const session = stringField(envelope.event, "session")
+  const message = stringField(envelope.event, "message")
+  const role = stringField(envelope.event, "role")
+  if (session === undefined || message === undefined) {
+    return undefined
+  }
+  if (role === "user") {
+    return userMessageEvent(envelope, session, message)
+  }
+  if (role === "assistant") {
+    return assistantMessageEvent(envelope, session, message, finishReason(envelope))
+  }
+  return undefined
+}
+
 export function errorEvent(envelope: EventEnvelope): OpenCodeEvent | undefined {
   const message = stringField(envelope.event, "message")
   if (message === undefined) {
@@ -128,6 +144,7 @@ function assistantMessageEvent(
   envelope: EventEnvelope,
   session: string,
   message: string,
+  finish?: string,
 ): OpenCodeEvent {
   return {
     id: String(envelope.seq),
@@ -145,7 +162,23 @@ function assistantMessageEvent(
         path: { cwd: "", root: "" },
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        ...optionalString("finish", finish),
       },
     },
+  }
+}
+
+function finishReason(envelope: EventEnvelope): string | undefined {
+  const finish = stringField(envelope.event, "finish")
+  switch (finish) {
+    case "tool_calls":
+      return "tool-calls"
+    case "stop":
+    case "length":
+    case "cancelled":
+    case "error":
+      return finish
+    default:
+      return undefined
   }
 }

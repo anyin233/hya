@@ -4,7 +4,9 @@
 
 use async_trait::async_trait;
 use futures::stream;
-use yaca_proto::{Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId};
+use yaca_proto::{
+    Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId,
+};
 
 use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
 
@@ -88,6 +90,7 @@ impl Provider for DevProvider {
             Event::MessageFinished {
                 session,
                 message,
+                role: Role::Assistant,
                 finish: FinishReason::Stop,
             },
         ];

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use yaca_proto::{Event, FinishReason, MessageId, PartId, SessionId, ToolCallId, ToolName};
+use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId, ToolName};
 
 use crate::{Decoder, ProviderError};
 
@@ -66,6 +66,7 @@ impl AnthropicDecoder {
         out.push(Event::MessageFinished {
             session,
             message,
+            role: Role::Assistant,
             finish,
         });
         out

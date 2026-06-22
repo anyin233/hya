@@ -1,5 +1,6 @@
 import {
   commandExecutedEvent,
+  messageFinishedEvent,
   messageStartedEvent,
   sessionCreatedEvent,
   sessionTitledEvent,
@@ -31,6 +32,8 @@ export function openCodeEventFromEnvelope(
       return commandExecutedEvent(envelope)
     case "message_started":
       return messageStartedEvent(envelope)
+    case "message_finished":
+      return messageFinishedEvent(envelope)
     case "text_start":
       return textPartEvent(envelope, "")
     case "text_delta":
