@@ -103,6 +103,18 @@ async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
     .unwrap()
 }
 
+async fn post_empty(app: axum::Router, uri: &str) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn opencode_mcp_add_connects_enabled_local_server() {
     let app = router(state().await);
@@ -133,5 +145,53 @@ async fn opencode_mcp_add_connects_enabled_local_server() {
     assert_eq!(
         body_json(response).await["dynamic"],
         json!({"status": "connected"})
+    );
+}
+
+#[tokio::test]
+async fn opencode_mcp_connect_and_disconnect_update_dynamic_status() {
+    let app = router(state().await);
+
+    let response = request(
+        app.clone(),
+        Method::POST,
+        "/mcp",
+        json!({
+            "name": "dynamic",
+            "config": {
+                "type": "local",
+                "command": server_command(),
+                "timeout": 1000,
+                "enabled": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["dynamic"],
+        json!({"status": "disabled"})
+    );
+
+    let response = post_empty(app.clone(), "/mcp/dynamic/connect").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!(true));
+
+    let response = get(app.clone(), "/mcp").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["dynamic"],
+        json!({"status": "connected"})
+    );
+
+    let response = post_empty(app.clone(), "/mcp/dynamic/disconnect").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!(true));
+
+    let response = get(app, "/mcp").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["dynamic"],
+        json!({"status": "disabled"})
     );
 }

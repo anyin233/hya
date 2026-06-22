@@ -14,6 +14,7 @@ mod instance;
 mod integration;
 mod location;
 mod mcp;
+mod mcp_state;
 mod metadata;
 mod model_ref;
 mod permission;
@@ -42,7 +43,7 @@ mod tui;
 mod worktree_git;
 
 pub(crate) use global::GlobalState;
-pub(crate) use mcp::McpHttpState;
+pub(crate) use mcp_state::McpHttpState;
 pub(crate) use project::ProjectState;
 pub(crate) use pty_state::PtyState;
 pub(in crate::opencode) use session_legacy::load_session;
