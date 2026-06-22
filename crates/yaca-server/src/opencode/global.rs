@@ -70,7 +70,7 @@ async fn upgrade(body: Bytes) -> Response {
     match parse_upgrade_payload(&body) {
         Ok(()) => (
             StatusCode::BAD_REQUEST,
-            Json(json!({"success": false, "error": "Upgrade is unavailable"})),
+            Json(json!({"success": false, "error": "Unknown installation method"})),
         )
             .into_response(),
         Err(()) => invalid_upgrade_body().into_response(),

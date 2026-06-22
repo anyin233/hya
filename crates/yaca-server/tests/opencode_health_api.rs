@@ -182,3 +182,16 @@ async fn opencode_global_upgrade_rejects_invalid_target() {
         json!({"success": false, "error": "Invalid request body"})
     );
 }
+
+#[tokio::test]
+async fn opencode_global_upgrade_reports_unknown_installation() {
+    let app = router(state().await);
+
+    let (status, body) = request_json(app, Method::POST, "/global/upgrade", None).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"success": false, "error": "Unknown installation method"})
+    );
+}
