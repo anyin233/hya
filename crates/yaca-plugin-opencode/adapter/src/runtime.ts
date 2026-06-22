@@ -14,11 +14,17 @@ import {
   type JsonRpcRequest,
 } from "./protocol"
 import { hookRegistrationsFrom } from "./registration"
+import {
+  buildToolRegistry,
+  callRegisteredTool,
+  type OpenCodeToolDefinition,
+} from "./tool"
 
 export const PROTOCOL_VERSION = 1
 
 const METHOD_INITIALIZE = "initialize"
 const METHOD_SHUTDOWN = "shutdown"
+const METHOD_TOOL_CALL = "tool/call"
 
 const InitializeParamsSchema = z
   .object({
@@ -27,6 +33,15 @@ const InitializeParamsSchema = z
       name: z.string(),
       version: z.string(),
     }),
+  })
+  .strict()
+
+const ToolCallParamsSchema = z
+  .object({
+    tool: z.string(),
+    session: z.string(),
+    call: z.string(),
+    input: z.unknown(),
   })
   .strict()
 
@@ -53,6 +68,7 @@ type RequestContext = {
   readonly version: string
   readonly env: RuntimeEnv
   readonly stderr: TextSink
+  readonly tools: Map<string, OpenCodeToolDefinition>
 }
 
 type LoadedHooksResult =
@@ -88,6 +104,8 @@ export function handleRequest(
       return handleInitialize(request, context)
     case METHOD_SHUTDOWN:
       return { response: okResponse(request.id, {}), shouldExit: true }
+    case METHOD_TOOL_CALL:
+      return handleToolCall(request, context)
     default:
       return {
         response: errorResponse(
@@ -105,6 +123,7 @@ export async function runAdapter(options: RuntimeOptions): Promise<void> {
     version: options.version,
     env: options.env ?? process.env,
     stderr: options.stderr,
+    tools: new Map<string, OpenCodeToolDefinition>(),
   }
   for await (const line of readLines(options.input)) {
     if (line.length === 0) {
@@ -142,6 +161,11 @@ async function handleInitialize(
   if (loaded.response !== undefined) {
     return loaded.response
   }
+  const registry = buildToolRegistry(loaded.hooks)
+  context.tools.clear()
+  for (const [name, tool] of registry.tools) {
+    context.tools.set(name, tool)
+  }
   return {
     response: okResponse(request.id, {
       protocol_version: PROTOCOL_VERSION,
@@ -151,8 +175,35 @@ async function handleInitialize(
         kind: "opencode",
       },
       hooks: hookRegistrationsFrom(loaded.hooks),
-      tools: [],
+      tools: registry.infos,
     }),
+    shouldExit: false,
+  }
+}
+
+async function handleToolCall(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = ToolCallParamsSchema.safeParse(request.params)
+  if (!params.success) {
+    return {
+      response: errorResponse(
+        request.id,
+        ERROR_CODES.INVALID_PARAMS,
+        params.error.message,
+      ),
+      shouldExit: false,
+    }
+  }
+  const directory = context.env.YACA_DIRECTORY ?? process.cwd()
+  const worktree = context.env.YACA_WORKTREE ?? directory
+  const reply = await callRegisteredTool(context.tools, params.data, {
+    directory,
+    worktree,
+  })
+  return {
+    response: okResponse(request.id, reply),
     shouldExit: false,
   }
 }

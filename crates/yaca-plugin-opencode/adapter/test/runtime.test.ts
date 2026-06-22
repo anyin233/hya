@@ -25,7 +25,13 @@ const InitializeResultSchema = z.object({
     kind: z.literal("opencode"),
   }),
   hooks: z.array(z.object({ name: z.string() })),
-  tools: z.array(z.unknown()),
+  tools: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string(),
+      inputSchema: z.unknown(),
+    }),
+  ),
 })
 
 const tempDirs: string[] = []
@@ -133,6 +139,82 @@ test("initialize declares hooks from configured local plugins", async () => {
     { name: "chat.params" },
     { name: "tool.execute.before" },
   ])
+})
+
+test("initialize declares OpenCode tools and tool calls execute them", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "tool-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "tools",',
+      "  server: async () => ({",
+      "    tool: {",
+      "      greet: {",
+      '        description: "Greet a user",',
+      '        args: { name: { type: "string" } },',
+      "        execute: async (args, ctx) => {",
+      '          ctx.metadata({ title: "Greeting", metadata: { via: "ctx" } })',
+      '          return { output: `hi ${args.name}`, metadata: { direct: true } }',
+      "        },",
+      "      },",
+      "    },",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 41,
+        method: "initialize",
+        params: { protocol_version: 1, host: { name: "yaca", version: "0.0.0" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 42,
+        method: "tool/call",
+        params: {
+          tool: "greet",
+          session: "session-1",
+          call: "call-1",
+          input: { name: "Ada" },
+        },
+      },
+      { jsonrpc: "2.0", id: 43, method: "shutdown", params: {} },
+    ],
+    {
+      YACA_OPENCODE_OPTIONS_JSON: JSON.stringify({
+        plugin: [pathToFileURL(pluginFile).href],
+      }),
+      YACA_DIRECTORY: root,
+      YACA_WORKTREE: root,
+    },
+  )
+
+  const initialized = InitializeResultSchema.parse(responses[0]?.result)
+  expect(initialized.tools).toEqual([
+    {
+      name: "greet",
+      description: "Greet a user",
+      inputSchema: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      },
+    },
+  ])
+  expect(responses[1]?.result).toMatchObject({
+    ok: true,
+    output: {
+      title: "Greeting",
+      output: "hi Ada",
+      metadata: { via: "ctx", direct: true },
+    },
+  })
 })
 
 test("unknown methods return JSON-RPC method-not-found errors", async () => {
