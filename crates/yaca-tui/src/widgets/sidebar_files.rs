@@ -2,12 +2,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::sidebar_context::{meta, push_section};
+use super::sidebar_context::push_section;
 use crate::AppState;
 use crate::theme::Theme;
 
 const FILE_ROW_WIDTH: usize = 34;
-const MAX_VISIBLE_FILES: usize = 6;
 const EXPANDABLE_FILE_COUNT: usize = 2;
 
 pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
@@ -21,12 +20,8 @@ pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme
         "Modified Files"
     };
     push_section(lines, title, theme.info, theme);
-    for file in state.changed_files.iter().take(MAX_VISIBLE_FILES) {
+    for file in &state.changed_files {
         lines.push(file_line(file, theme));
-    }
-    let hidden = state.changed_files.len().saturating_sub(MAX_VISIBLE_FILES);
-    if hidden > 0 {
-        lines.push(meta(format!("+{hidden} more"), theme.muted));
     }
 }
 

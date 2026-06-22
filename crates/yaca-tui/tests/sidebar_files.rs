@@ -160,3 +160,33 @@ fn context_rail_marks_long_modified_file_lists_expandable_like_opencode() {
     // Then: the section title uses the same disclosure marker as OpenCode.
     assert!(text.contains("▼ Modified Files"));
 }
+
+#[test]
+fn context_rail_renders_all_modified_files_when_expanded_like_opencode() {
+    // Given: OpenCode's expanded Modified Files section has more than six entries.
+    let mut state = AppState {
+        changed_files: ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs", "g.rs"]
+            .into_iter()
+            .map(|path| ChangedFileView {
+                path: path.to_string(),
+                additions: None,
+                deletions: None,
+            })
+            .collect(),
+        ..AppState::default()
+    };
+
+    // When: the context rail renders with enough height for every entry.
+    let buffer = render_buffer(&mut state, 124, 36);
+    let text = buffer_text(&buffer, 124, 36);
+
+    // Then: yaca mirrors OpenCode's open state by showing every file, not a synthetic counter.
+    assert!(
+        text.contains("g.rs"),
+        "expanded file list should include the seventh file"
+    );
+    assert!(
+        !text.contains("+1 more"),
+        "expanded file list should not collapse visible entries"
+    );
+}

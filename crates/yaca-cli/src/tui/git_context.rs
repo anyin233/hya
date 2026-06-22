@@ -87,6 +87,8 @@ fn git_stdout<const N: usize>(workdir: &Path, args: [&str; N]) -> Option<String>
     let output = Command::new("git")
         .arg("-C")
         .arg(workdir)
+        .arg("-c")
+        .arg("core.quotePath=false")
         .args(args)
         .output()
         .ok()?;
@@ -197,6 +199,37 @@ mod tests {
         assert_eq!(app.changed_files[0].path, "tracked.txt");
         assert_eq!(app.changed_files[0].additions, Some(1));
         assert_eq!(app.changed_files[0].deletions, Some(0));
+
+        let _ = fs::remove_dir_all(repo);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_app_branch_keeps_cjk_changed_file_paths_readable() -> anyhow::Result<()> {
+        let Some(git) = git_command() else {
+            return Ok(());
+        };
+        let repo = unique_temp_dir("yaca-cjk-changed-files-repo");
+        fs::create_dir_all(&repo)?;
+        run_git(&git, &repo, &["init"])?;
+        fs::write(repo.join("临时视觉验证文件.rs"), "fn main() {}\n")?;
+        let mut app = AppState::default();
+        app.projection.session.workdir = Some(repo.to_string_lossy().into_owned());
+
+        // Given: a git worktree has an untracked CJK filename.
+        refresh_app_branch(&mut app);
+
+        // Then: the context rail state keeps the readable Unicode path for ratatui width handling.
+        assert!(
+            app.changed_files
+                .iter()
+                .any(|file| file.path == "临时视觉验证文件.rs"),
+            "changed files should include the readable CJK path, got {:?}",
+            app.changed_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>()
+        );
 
         let _ = fs::remove_dir_all(repo);
         Ok(())
