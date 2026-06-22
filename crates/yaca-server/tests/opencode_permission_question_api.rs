@@ -178,7 +178,23 @@ async fn opencode_legacy_session_permission_responds_by_session() {
         Some(json!({"response": "always"})),
     )
     .await;
-    assert_eq!(wrong_session.status(), StatusCode::NOT_FOUND);
+    let wrong_status = wrong_session.status();
+    let wrong_bytes = wrong_session
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let wrong_body = serde_json::from_slice::<Value>(&wrong_bytes).unwrap_or(Value::Null);
+    assert_eq!(wrong_status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        wrong_body,
+        json!({
+            "_tag": "PermissionNotFoundError",
+            "requestID": request_id,
+            "message": format!("Permission request not found: {request_id}"),
+        })
+    );
 
     let reply = request(
         app,
