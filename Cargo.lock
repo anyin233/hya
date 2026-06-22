@@ -3193,8 +3193,10 @@ name = "yaca-server"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "base64",
  "futures",
  "http-body-util",
+ "regex",
  "serde",
  "serde_json",
  "tokio",
