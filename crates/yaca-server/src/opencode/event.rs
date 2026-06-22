@@ -10,7 +10,7 @@ use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
+use yaca_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId};
 
 use crate::ServerState;
 
@@ -114,6 +114,109 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             part,
             text,
         } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", text),
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name,
+        } => tool_part_updated_payload(
+            &envelope,
+            *session,
+            *message,
+            *part,
+            *call,
+            name.as_str(),
+            json!({ "status": "pending", "input": {}, "raw": "" }),
+        ),
+        Event::ToolInputDelta {
+            session,
+            message,
+            part,
+            call,
+            name,
+            delta,
+        } => tool_part_updated_payload(
+            &envelope,
+            *session,
+            *message,
+            *part,
+            *call,
+            name.as_str(),
+            json!({ "status": "pending", "input": {}, "raw": delta }),
+        ),
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input,
+        } => tool_part_updated_payload(
+            &envelope,
+            *session,
+            *message,
+            *part,
+            *call,
+            name.as_str(),
+            json!({
+                "status": "running",
+                "input": object_or_empty(input),
+                "time": { "start": envelope.ts_millis },
+            }),
+        ),
+        Event::ToolResult {
+            session,
+            message,
+            part,
+            call,
+            output,
+            time_ms,
+        } => {
+            let elapsed = i64::try_from(*time_ms).unwrap_or(i64::MAX);
+            tool_part_updated_payload(
+                &envelope,
+                *session,
+                *message,
+                *part,
+                *call,
+                "unknown",
+                json!({
+                    "status": "completed",
+                    "input": {},
+                    "output": tool_output_text(output),
+                    "title": "",
+                    "metadata": {},
+                    "time": {
+                        "start": envelope.ts_millis.saturating_sub(elapsed),
+                        "end": envelope.ts_millis,
+                    },
+                }),
+            )
+        }
+        Event::ToolError {
+            session,
+            message,
+            part,
+            call,
+            message_text,
+        } => tool_part_updated_payload(
+            &envelope,
+            *session,
+            *message,
+            *part,
+            *call,
+            "unknown",
+            json!({
+                "status": "error",
+                "input": {},
+                "error": message_text,
+                "time": {
+                    "start": envelope.ts_millis,
+                    "end": envelope.ts_millis,
+                },
+            }),
+        ),
         Event::PartDeleted {
             session,
             message,
@@ -255,6 +358,55 @@ fn textual_part_delta_payload(
             "delta": delta,
         },
     })
+}
+
+fn tool_part_updated_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    call: ToolCallId,
+    tool: &str,
+    state: Value,
+) -> Value {
+    let session_id = session.to_string();
+    let message_id = message.to_string();
+    let part_id = part.to_string();
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.updated",
+        "properties": {
+            "sessionID": session_id,
+            "part": {
+                "id": part_id,
+                "sessionID": session_id,
+                "messageID": message_id,
+                "type": "tool",
+                "callID": call.to_string(),
+                "tool": tool,
+                "state": state,
+            },
+            "time": envelope.ts_millis,
+        },
+    })
+}
+
+fn object_or_empty(value: &Value) -> Value {
+    if value.is_object() {
+        value.clone()
+    } else {
+        json!({})
+    }
+}
+
+fn tool_output_text(output: &Value) -> String {
+    if let Some(text) = output.as_str() {
+        return text.to_string();
+    }
+    if let Some(text) = output.get("output").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    output.to_string()
 }
 
 fn part_removed_payload(
