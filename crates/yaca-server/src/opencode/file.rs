@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::{ApiError, ServerState};
 
+mod ignore;
 mod path;
 
 use path::{
@@ -104,6 +105,7 @@ async fn list(
 ) -> Result<Json<Vec<LegacyEntry>>, ApiError> {
     let root = workdir(&st);
     let dir = resolve_existing(&root, &query.path)?;
+    let ignore = ignore::IgnoreSet::load(&root);
     let mut entries = Vec::new();
     let mut read_dir = tokio::fs::read_dir(&dir)
         .await
@@ -126,7 +128,7 @@ async fn list(
             path: relative_path(&root, &path),
             absolute: path.to_string_lossy().into_owned(),
             kind,
-            ignored: false,
+            ignored: ignore.matches(&root, &path, kind == "directory"),
         });
     }
     entries.sort_by(|a, b| a.path.cmp(&b.path));
