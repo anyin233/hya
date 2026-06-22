@@ -270,11 +270,7 @@ async fn opencode_v2_session_update_sets_title_metadata_permission_archive_and_s
 
     let (status, listed) = get_json(app, "/api/session?search=OpenCode&limit=10".to_string()).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(listed["data"][0]["id"], requested);
-    assert_eq!(listed["data"][0]["title"], "OpenCode parity");
-    assert_eq!(listed["data"][0]["metadata"]["lane"], "v2");
-    assert_eq!(listed["data"][0]["permission"][1]["permission"], "edit");
-    assert_eq!(listed["data"][0]["time"]["archived"], 99);
+    assert_eq!(listed["data"], json!([]));
 }
 
 #[tokio::test]

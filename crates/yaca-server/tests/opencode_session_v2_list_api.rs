@@ -84,6 +84,22 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, body_json(resp).await)
 }
 
+async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_session_list_filters_directory() {
     let app = router(state().await);
@@ -100,6 +116,32 @@ async fn opencode_v2_session_list_filters_directory() {
         .collect::<Vec<_>>();
     assert!(ids.contains(&included.as_str()));
     assert!(!ids.contains(&excluded.as_str()));
+}
+
+#[tokio::test]
+async fn opencode_v2_session_list_filters_archived_by_default() {
+    let app = router(state().await);
+    let active = create_session(app.clone(), None).await;
+    let archived = create_session(app.clone(), None).await;
+
+    let (status, _) = patch_json(
+        app.clone(),
+        format!("/api/session/{archived}"),
+        json!({"time": {"archived": 99}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = get_json(app, "/api/session?limit=10").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&active.as_str()));
+    assert!(!ids.contains(&archived.as_str()));
 }
 
 #[tokio::test]
