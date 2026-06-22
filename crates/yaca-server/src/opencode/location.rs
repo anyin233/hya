@@ -35,12 +35,14 @@ pub(super) struct LocationRef {
 impl LocationRef {
     pub(super) fn from_request(query: &BTreeMap<String, String>, headers: &HeaderMap) -> Self {
         let directory = query
-            .get("location[directory]")
+            .get("directory")
+            .or_else(|| query.get("location[directory]"))
             .cloned()
             .or_else(|| header_text(headers, "x-opencode-directory").map(|value| decode(&value)))
             .map(PathBuf::from);
         let workspace_id = query
-            .get("location[workspace]")
+            .get("workspace")
+            .or_else(|| query.get("location[workspace]"))
             .cloned()
             .or_else(|| header_text(headers, "x-opencode-workspace"));
         Self {
