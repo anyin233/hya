@@ -192,6 +192,8 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
             | Event::MessageFinished { .. }
+            | Event::MessageDeleted { .. }
+            | Event::PartDeleted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::TextStart { .. }

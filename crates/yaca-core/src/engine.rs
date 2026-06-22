@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, now_millis};
+use yaca_proto::{
+    AgentName, Envelope, Event, MessageId, ModelRef, PartId, Projection, SessionId, now_millis,
+};
 use yaca_provider::{ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
@@ -238,5 +240,31 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         self.emit(session, Event::SessionArchived { session, archived })
             .await
+    }
+
+    pub async fn delete_message(
+        &self,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<(), CoreError> {
+        self.emit(session, Event::MessageDeleted { session, message })
+            .await
+    }
+
+    pub async fn delete_part(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            session,
+            Event::PartDeleted {
+                session,
+                message,
+                part,
+            },
+        )
+        .await
     }
 }

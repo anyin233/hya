@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -29,7 +29,14 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/session/:id/children", get(children))
         .route("/session/:id/todo", get(todo))
         .route("/session/:id/message", get(messages))
-        .route("/session/:id/message/:message", get(message))
+        .route(
+            "/session/:id/message/:message",
+            get(message).delete(super::session_delete::delete_message),
+        )
+        .route(
+            "/session/:id/message/:message/part/:part",
+            delete(super::session_delete::delete_part),
+        )
         .route("/session/:id/prompt_async", post(prompt_async))
         .route("/session/:id/init", post(init_session))
         .route("/session/:id/command", post(command))
