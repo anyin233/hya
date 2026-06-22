@@ -1,3 +1,4 @@
+import { $ } from "bun"
 import { z } from "zod"
 
 import {
@@ -114,9 +115,12 @@ function pluginInput(
     project: {
       id: env.YACA_PROJECT_ID ?? worktree,
       worktree,
-      time: Date.now(),
+      time: {
+        created: Date.now(),
+      },
     },
     serverUrl: new URL(env.YACA_SERVER_URL ?? "http://127.0.0.1:0"),
+    $,
     experimental_workspace: {
       register: () => undefined,
     },
