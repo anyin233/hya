@@ -43,6 +43,13 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
             Span::styled(state_label, Style::default().fg(state_color)),
         ]);
     }
+    if state.running {
+        spans.extend([
+            Span::styled("   ", Style::default().fg(theme.muted)),
+            Span::styled("ctrl+x down ", Style::default().fg(theme.text)),
+            Span::styled("view subagents", Style::default().fg(theme.muted)),
+        ]);
+    }
     Line::from(spans)
 }
 

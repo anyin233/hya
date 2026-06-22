@@ -39,6 +39,7 @@ impl LeaderKey {
                     KeyCode::Char('n') if key.modifiers.is_empty() => LeaderAction::SessionNew,
                     KeyCode::Char('c') if key.modifiers.is_empty() => LeaderAction::SessionCompact,
                     KeyCode::Char('s') if key.modifiers.is_empty() => LeaderAction::StatusView,
+                    KeyCode::Down if key.modifiers.is_empty() => LeaderAction::StatusView,
                     KeyCode::Char('x') if key.modifiers.is_empty() => LeaderAction::SessionExport,
                     KeyCode::Char('q') if key.modifiers.is_empty() => LeaderAction::Exit,
                     KeyCode::Esc => LeaderAction::Cancel,
@@ -83,6 +84,24 @@ mod tests {
         // Then
         assert_eq!(arm, Some(LeaderAction::Arm));
         assert_eq!(action, Some(LeaderAction::ModelList));
+    }
+
+    #[test]
+    fn leader_down_opens_opencode_status_view() {
+        // Given
+        let start = Instant::now();
+        let mut leader = LeaderKey::default();
+
+        // When
+        let arm = leader.handle_at(&ctrl('x'), start);
+        let action = leader.handle_at(
+            &KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+            start + Duration::from_millis(100),
+        );
+
+        // Then
+        assert_eq!(arm, Some(LeaderAction::Arm));
+        assert_eq!(action, Some(LeaderAction::StatusView));
     }
 
     #[test]

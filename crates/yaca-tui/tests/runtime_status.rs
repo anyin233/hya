@@ -72,6 +72,27 @@ fn runtime_status_omits_idle_placeholder_when_no_duration_exists() {
     );
 }
 
+#[test]
+fn runtime_status_shows_subagent_view_hint_while_running() {
+    // Given: a running shell is streaming a turn.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        running: true,
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "view subagents");
+
+    // Then: it exposes OpenCode's subagent viewer affordance.
+    assert!(
+        status_row.contains("ctrl+x down view subagents"),
+        "runtime strip should expose the subagent viewer shortcut, got {status_row:?}"
+    );
+}
+
 fn with_timed_assistant_message(
     state: &mut AppState,
     started_ms: i64,
