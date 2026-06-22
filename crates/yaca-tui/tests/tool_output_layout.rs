@@ -38,6 +38,34 @@ fn completed_tool_stdout_renders_as_a_readable_output_block() {
 }
 
 #[test]
+fn long_completed_tool_stdout_collapses_to_opencode_preview() {
+    // Given: a completed shell tool with more stdout lines than OpenCode shows by default.
+    let mut state = AppState::default();
+    let output = (1..=12)
+        .map(|idx| format!("line {idx}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    with_completed_shell_output(&mut state, &output);
+
+    // When: the transcript is rendered.
+    let rendered = render(&mut state, 100, 32);
+
+    // Then: only the first ten lines render, followed by the overflow marker.
+    assert!(
+        rendered.contains("▏ line 10"),
+        "preview should include the tenth output line:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("▏ line 11"),
+        "preview should collapse lines beyond OpenCode's default limit:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("▏ …"),
+        "collapsed output should advertise overflow with an ellipsis row:\n{rendered}"
+    );
+}
+
+#[test]
 fn compact_tool_status_omits_generic_success_suffix_at_eighty_columns() {
     // Given: a completed shell tool whose input is long enough to pressure an 80-column layout.
     let mut state = AppState::default();

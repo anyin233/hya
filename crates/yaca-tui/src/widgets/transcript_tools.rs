@@ -8,6 +8,7 @@ use crate::tool_labels::status_symbol;
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 48;
+const TOOL_OUTPUT_PREVIEW_LINES: usize = 10;
 
 pub fn push_tool_lines(
     name: &str,
@@ -75,7 +76,8 @@ pub fn push_tool_lines(
             return;
         }
 
-        for segment in output.lines() {
+        let mut output_lines = output.lines();
+        for segment in output_lines.by_ref().take(TOOL_OUTPUT_PREVIEW_LINES) {
             push_output_line(
                 segment,
                 output_line_color(segment, theme),
@@ -83,6 +85,9 @@ pub fn push_tool_lines(
                 theme,
                 lines,
             );
+        }
+        if output_lines.next().is_some() {
+            push_output_line("…", theme.muted, selected, theme, lines);
         }
     }
 }
