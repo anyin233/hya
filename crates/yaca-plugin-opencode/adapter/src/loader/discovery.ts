@@ -31,7 +31,8 @@ const AdapterOptionsSchema = z
     plugin: z.array(PluginSpecSchema).optional().default([]),
   })
   .passthrough()
-const CONFIG_FILES = ["config.json", "opencode.json", "opencode.jsonc"] as const
+const GLOBAL_CONFIG_FILES = ["config.json", "opencode.json", "opencode.jsonc"] as const
+const OPENCODE_DIR_CONFIG_FILES = ["opencode.json", "opencode.jsonc"] as const
 
 type ParsedPluginSpec = z.infer<typeof PluginSpecSchema>
 
@@ -88,7 +89,7 @@ export async function discoverPluginSpecs(
   const [first, ...rest] = dirs
   const configDirs = first !== undefined && first === global ? rest : dirs
   if (first !== undefined && first === global) {
-    specs.push(...(await readConfigDirPluginSpecs(first)))
+    specs.push(...(await readConfigDirPluginSpecs(first, GLOBAL_CONFIG_FILES)))
   }
   if (context.customConfigFile !== undefined && context.customConfigFile.length > 0) {
     specs.push(...(await readConfigFilePluginSpecs(context.customConfigFile)))
@@ -97,7 +98,7 @@ export async function discoverPluginSpecs(
     specs.push(...(await readConfigFilePluginSpecs(file)))
   }
   for (const dir of configDirs) {
-    specs.push(...(await readConfigDirPluginSpecs(dir)))
+    specs.push(...(await readConfigDirPluginSpecs(dir, OPENCODE_DIR_CONFIG_FILES)))
   }
   if (context.inlineConfig !== undefined && context.inlineConfig.length > 0) {
     specs.push(...parseConfigOptions(context.inlineConfig).plugin)
@@ -131,9 +132,12 @@ async function scanPluginDir(dir: string): Promise<readonly string[]> {
     .map((name) => pathToFileURL(path.join(dir, name)).href)
 }
 
-async function readConfigDirPluginSpecs(dir: string): Promise<readonly PluginSpec[]> {
+async function readConfigDirPluginSpecs(
+  dir: string,
+  names: readonly string[],
+): Promise<readonly PluginSpec[]> {
   const specs: PluginSpec[] = []
-  for (const name of CONFIG_FILES) {
+  for (const name of names) {
     specs.push(...(await readConfigFilePluginSpecs(path.join(dir, name))))
   }
   for (const child of ["plugin", "plugins"] as const) {
