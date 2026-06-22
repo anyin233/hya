@@ -6,7 +6,7 @@ use crate::theme::Theme;
 use crate::tool_labels::{action_label, status_symbol};
 use crate::view_model::ToolStatus;
 
-const TOOL_INPUT_INLINE_MAX: usize = 32;
+const TOOL_INPUT_INLINE_MAX: usize = 48;
 
 pub fn push_tool_lines(
     name: &str,

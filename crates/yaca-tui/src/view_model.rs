@@ -100,8 +100,10 @@ fn tool_input(name: &str, state: &ToolPartState) -> String {
     let value = match state {
         ToolPartState::Pending { input }
         | ToolPartState::Running { input }
-        | ToolPartState::Completed { input, .. }
         | ToolPartState::Error { input, .. } => input,
+        ToolPartState::Completed { input, output, .. } => {
+            return completed_tool_input(name, input, output);
+        }
     };
     if let Some(summary) = tool_inputs::summary(name, value) {
         return summary;
@@ -111,6 +113,47 @@ fn tool_input(name: &str, state: &ToolPartState) -> String {
     } else {
         ellipsize(&value.to_string(), 48)
     }
+}
+
+fn completed_tool_input(
+    name: &str,
+    input: &serde_json::Value,
+    output: &serde_json::Value,
+) -> String {
+    let summary = tool_inputs::summary(name, input).unwrap_or_else(|| {
+        if input.is_null() {
+            String::new()
+        } else {
+            ellipsize(&input.to_string(), 48)
+        }
+    });
+    match completed_count_suffix(name, output) {
+        Some(suffix) if summary.is_empty() => suffix,
+        Some(suffix) => format!("{summary} {suffix}"),
+        None => summary,
+    }
+}
+
+fn completed_count_suffix(name: &str, output: &serde_json::Value) -> Option<String> {
+    match name {
+        "glob" => match_count_suffix(output, "count"),
+        "grep" => match_count_suffix(output, "matches"),
+        "websearch" => output
+            .get("numResults")
+            .and_then(serde_json::Value::as_u64)
+            .map(|count| format!("({count} results)")),
+        _ => None,
+    }
+}
+
+fn match_count_suffix(output: &serde_json::Value, key: &str) -> Option<String> {
+    output
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .map(|count| {
+            let noun = if count == 1 { "match" } else { "matches" };
+            format!("({count} {noun})")
+        })
 }
 
 fn ellipsize(s: &str, max: usize) -> String {

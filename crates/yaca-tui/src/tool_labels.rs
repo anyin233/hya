@@ -31,7 +31,7 @@ pub(crate) fn action_label(name: &str) -> String {
         "task" => "Task".to_string(),
         "todowrite" => "Todos".to_string(),
         "webfetch" => "WebFetch".to_string(),
-        "websearch" => "WebSearch".to_string(),
+        "websearch" => "Web Search".to_string(),
         other => title_case_ascii(other),
     }
 }

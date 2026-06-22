@@ -20,24 +20,32 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
         "find",
         json!({ "pattern": "*.rs", "path": "crates/yaca-tui" }),
     );
-    with_completed_tool(
+    with_completed_tool_output(
         &mut state,
         20,
         "grep",
         json!({ "pattern": "render_tool", "path": "crates/yaca-tui" }),
+        json!({ "matches": 3 }),
     );
-    with_completed_tool(&mut state, 30, "glob", json!({ "pattern": "*.rs" }));
+    with_completed_tool_output(
+        &mut state,
+        30,
+        "glob",
+        json!({ "pattern": "*.rs" }),
+        json!({ "count": 2 }),
+    );
     with_completed_tool(
         &mut state,
         40,
         "webfetch",
         json!({ "url": "https://opencode.ai" }),
     );
-    with_completed_tool(
+    with_completed_tool_output(
         &mut state,
         50,
         "websearch",
         json!({ "query": "opencode tui layout" }),
+        json!({ "numResults": 2 }),
     );
 
     // When: the transcript is rendered on a normal terminal width.
@@ -53,20 +61,20 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
         "find should quote the searched pattern like OpenCode search rows:\n{output}"
     );
     assert!(
-        output.contains("✱ Grep \"render_tool\" in crates/yaca-tui"),
-        "grep should quote the searched pattern like OpenCode search rows:\n{output}"
+        output.contains("✱ Grep \"render_tool\" in crates/yaca-tui (3 matches)"),
+        "grep should include the completed match count like OpenCode search rows:\n{output}"
     );
     assert!(
-        output.contains("✱ Glob \"*.rs\""),
-        "glob should quote the pattern like OpenCode search rows:\n{output}"
+        output.contains("✱ Glob \"*.rs\" (2 matches)"),
+        "glob should include the completed match count like OpenCode search rows:\n{output}"
     );
     assert!(
         output.contains("% WebFetch https://opencode.ai"),
         "webfetch should render with the OpenCode percent glyph and camel-case title:\n{output}"
     );
     assert!(
-        output.contains("◈ WebSearch \"opencode tui layout\""),
-        "websearch should quote the query like OpenCode websearch rows:\n{output}"
+        output.contains("◈ Web Search \"opencode tui layout\" (2 results)"),
+        "websearch should use OpenCode's label and result count:\n{output}"
     );
     assert!(
         !output.contains("completed ✓"),
@@ -79,6 +87,16 @@ fn with_completed_tool(
     base_seq: u64,
     tool_name: &str,
     input: serde_json::Value,
+) {
+    with_completed_tool_output(state, base_seq, tool_name, input, json!({ "ok": true }));
+}
+
+fn with_completed_tool_output(
+    state: &mut AppState,
+    base_seq: u64,
+    tool_name: &str,
+    input: serde_json::Value,
+    output: serde_json::Value,
 ) {
     let session = SessionId::new();
     let message = MessageId::new();
@@ -121,7 +139,7 @@ fn with_completed_tool(
             message,
             part,
             call,
-            output: json!({ "ok": true }),
+            output,
             time_ms: base_seq,
         },
     ));
