@@ -1,5 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::Value;
 use yaca_proto::{MessageId, PartId, ToolPartState};
@@ -80,12 +82,18 @@ pub(super) async fn update_part(
     State(st): State<ServerState>,
     Path((id, message, part)): Path<(String, String, String)>,
     Json(payload): Json<PartUpdatePayload>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     payload.ensure_path_ids(&id, &message, &part)?;
     let session = parse_session(&id)?;
     let message_id = parse_message(&message)?;
     let part_id = parse_part(&part)?;
-    let snapshot = super::load_session(&st, session, None).await?;
+    let snapshot = match super::load_session(&st, session, None).await {
+        Ok(snapshot) => snapshot,
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            return Ok(super::errors::legacy_session_not_found(session));
+        }
+        Err(error) => return Err(error),
+    };
     let Some(found) = snapshot
         .messages
         .iter()
@@ -121,7 +129,7 @@ pub(super) async fn update_part(
     let part = updated
         .part(&part_id.to_string())
         .ok_or_else(|| ApiError::not_found("part not found"))?;
-    Ok(Json(part))
+    Ok(Json(part).into_response())
 }
 
 fn parse_message(id: &str) -> Result<MessageId, ApiError> {
