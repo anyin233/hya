@@ -44,16 +44,18 @@ async fn body_json(resp: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn create_session(app: axum::Router) -> String {
+async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
+    let mut body = json!({"agent": "build", "model": "fake", "workdir": WORKDIR});
+    if let Some(parent) = parent {
+        body["parent"] = json!(parent.trim_start_matches("ses_"));
+    }
     let resp = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/sessions")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"agent": "build", "model": "fake", "workdir": WORKDIR}).to_string(),
-                ))
+                .body(Body::from(body.to_string()))
                 .unwrap(),
         )
         .await
@@ -83,7 +85,7 @@ async fn post_prompt(app: axum::Router, session: &str) {
 #[tokio::test]
 async fn opencode_session_routes_list_get_and_messages() {
     let app = router(state().await);
-    let session = create_session(app.clone()).await;
+    let session = create_session(app.clone(), None).await;
     post_prompt(app.clone(), &session).await;
 
     let list = app
@@ -147,4 +149,120 @@ async fn opencode_session_routes_list_get_and_messages() {
     );
     assert_eq!(message_body[1]["info"]["role"], "assistant");
     assert_eq!(message_body[1]["parts"][0]["text"], "assistant answer");
+}
+
+#[tokio::test]
+async fn opencode_session_routes_page_message_and_children() {
+    let app = router(state().await);
+    let parent = create_session(app.clone(), None).await;
+    let child = create_session(app.clone(), Some(&parent)).await;
+    post_prompt(app.clone(), &parent).await;
+
+    let children = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/children"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(children.status(), StatusCode::OK);
+    let children_body = body_json(children).await;
+    assert_eq!(children_body[0]["id"], child);
+    assert_eq!(children_body[0]["parentID"], parent);
+
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.status(), StatusCode::OK);
+    let all_body = body_json(all).await;
+    let user_message = all_body[0]["info"]["id"]
+        .as_str()
+        .expect("message id")
+        .to_string();
+
+    let one = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/message/{user_message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(one.status(), StatusCode::OK);
+    let one_body = body_json(one).await;
+    assert_eq!(one_body["info"]["id"], user_message);
+    assert_eq!(one_body["parts"][0]["text"], "hello");
+
+    let first_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/message?limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let cursor = first_page
+        .headers()
+        .get("x-next-cursor")
+        .expect("cursor")
+        .to_str()
+        .expect("cursor text")
+        .to_string();
+    let link = first_page
+        .headers()
+        .get("link")
+        .expect("pagination link")
+        .to_str()
+        .expect("link text")
+        .to_string();
+    assert!(link.contains(&cursor));
+    assert!(link.contains("rel=\"next\""));
+    let first_page_body = body_json(first_page).await;
+    assert_eq!(first_page_body.as_array().expect("page").len(), 1);
+
+    let second_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/message?limit=1&before={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_page_body = body_json(second_page).await;
+    assert_eq!(second_page_body.as_array().expect("page").len(), 1);
+
+    let bad_before = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/message?before={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_before.status(), StatusCode::BAD_REQUEST);
 }
