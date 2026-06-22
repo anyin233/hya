@@ -55,6 +55,8 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         "Ctrl-C again to exit · type to cancel".to_string()
     } else if state.yolo {
         "YOLO mode · Tab disables auto-allow · / commands · @ references".to_string()
+    } else if state.goal.is_some() || state.loop_view.is_some() {
+        runtime_footer_text(state)
     } else {
         "PgUp/PgDn scroll · Tab yolo · / commands · @ references · F2 model".to_string()
     };
@@ -81,7 +83,7 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
     };
     let effort = state.reasoning_effort.as_deref().unwrap_or("off");
     let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
-    let mode = if state.yolo { "yolo" } else { "manual" };
+    let mode = if state.yolo { "YOLO" } else { "manual" };
     Line::from(vec![
         Span::styled("  ", Style::default().bg(theme.element)),
         Span::styled(
@@ -116,6 +118,21 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
             Style::default().fg(theme.muted).bg(theme.element),
         ),
     ])
+}
+
+fn runtime_footer_text(state: &AppState) -> String {
+    let mut segments = Vec::new();
+    if let Some(goal) = &state.goal {
+        segments.push(format!("GOAL:{} turns {}", goal.condition, goal.turns));
+    }
+    if let Some(loop_view) = &state.loop_view {
+        segments.push(format!(
+            "LOOP:{} iter {}/{} score {}",
+            loop_view.target, loop_view.iteration, loop_view.budget, loop_view.last_score
+        ));
+    }
+    segments.push("ctrl+p commands".to_string());
+    segments.join(" · ")
 }
 
 #[cfg(test)]

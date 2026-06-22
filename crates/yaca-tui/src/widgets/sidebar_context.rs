@@ -173,14 +173,14 @@ fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme)
     push_section(lines, "Runtime", theme.accent, theme);
     if let Some(goal) = &state.goal {
         lines.push(meta(
-            format!("goal {} · turns {}", goal.condition, goal.turns),
+            format!("GOAL:{} turns {}", goal.condition, goal.turns),
             theme.text,
         ));
     }
     if let Some(loop_view) = &state.loop_view {
         lines.push(meta(
             format!(
-                "loop {} · {}/{} · score {}",
+                "LOOP:{} iter {}/{} score {}",
                 loop_view.target, loop_view.iteration, loop_view.budget, loop_view.last_score
             ),
             theme.text,

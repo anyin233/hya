@@ -157,7 +157,6 @@ impl AppState {
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let theme = theme::Theme::yaca_dark();
     let layout = layout::app_layout(frame.area());
-    widgets::render_status(frame, layout.status, state, &theme);
     widgets::render_timeline(frame, layout.timeline, state, &theme);
     if let Some(sidebar) = layout.sidebar {
         widgets::render_sidebar(frame, sidebar, state, &theme);
