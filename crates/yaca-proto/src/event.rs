@@ -107,6 +107,7 @@ pub enum Event {
         message: MessageId,
         part: PartId,
         call: ToolCallId,
+        name: ToolName,
         delta: String,
     },
     ToolCallRequested {

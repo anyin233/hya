@@ -91,6 +91,28 @@ export function toolInputStartEvent(envelope: EventEnvelope): OpenCodeEvent | un
   })
 }
 
+export function toolInputDeltaEvent(envelope: EventEnvelope): OpenCodeEvent | undefined {
+  const ids = toolIds(envelope.event)
+  const tool = stringField(envelope.event, "name")
+  const delta = stringField(envelope.event, "delta")
+  if (ids === undefined || tool === undefined || delta === undefined) {
+    return undefined
+  }
+  return partEvent(envelope, {
+    id: ids.part,
+    sessionID: ids.session,
+    messageID: ids.message,
+    type: "tool",
+    callID: ids.call,
+    tool,
+    state: {
+      status: "pending",
+      input: {},
+      raw: delta,
+    },
+  }, delta)
+}
+
 export function toolResultEvent(envelope: EventEnvelope): OpenCodeEvent | undefined {
   const ids = toolIds(envelope.event)
   if (ids === undefined) {
