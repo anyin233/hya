@@ -97,6 +97,14 @@ async fn prompt(
         .engine
         .admit_user_prompt_with_id(session, message, prompt.text.clone())
         .await?;
+    st.engine
+        .record_user_prompt_context(
+            session,
+            admitted,
+            prompt.files.clone(),
+            prompt.agents.clone(),
+        )
+        .await?;
     let envelopes = st.engine.replay(session).await?;
     let (admitted_seq, time_created) = admission_info(&envelopes, admitted)?;
     if let Some(run) = run {
@@ -198,6 +206,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ModelSwitched { .. }
             | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
+            | Event::UserPromptContextRecorded { .. }
             | Event::MessageStarted { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }

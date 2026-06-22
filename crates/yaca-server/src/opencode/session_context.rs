@@ -65,8 +65,8 @@ fn message_json(
             "id": message.id.to_string(),
             "time": { "created": time.created.unwrap_or(0) },
             "text": text_content(&message.parts),
-            "files": [],
-            "agents": [],
+            "files": message.files,
+            "agents": message.agents,
             "type": "user",
         }),
         Role::Assistant => assistant_message(message, projection, time),
@@ -198,6 +198,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
             | Event::SessionStatus { .. }
+            | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }

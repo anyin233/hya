@@ -73,6 +73,12 @@ pub enum Event {
         message: MessageId,
         role: Role,
     },
+    UserPromptContextRecorded {
+        session: SessionId,
+        message: MessageId,
+        files: Vec<serde_json::Value>,
+        agents: Vec<serde_json::Value>,
+    },
     MessageFinished {
         session: SessionId,
         message: MessageId,
@@ -219,6 +225,7 @@ impl Event {
             | Event::SessionStatus { session, .. }
             | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
+            | Event::UserPromptContextRecorded { session, .. }
             | Event::MessageFinished { session, .. }
             | Event::MessageDeleted { session, .. }
             | Event::PartDeleted { session, .. }
