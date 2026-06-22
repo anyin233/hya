@@ -6,6 +6,7 @@ mod catalog;
 mod control;
 mod event;
 mod experimental;
+mod experimental_worktree;
 mod file;
 mod global;
 mod health;
@@ -35,6 +36,7 @@ mod session_switch;
 mod session_update;
 mod session_v2;
 mod tui;
+mod worktree_git;
 
 pub(crate) use global::GlobalState;
 pub(crate) use mcp::McpHttpState;
@@ -48,6 +50,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(control::router())
         .merge(event::router())
         .merge(experimental::router())
+        .merge(experimental_worktree::router())
         .merge(file::router())
         .merge(global::router())
         .merge(health::router())
