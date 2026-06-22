@@ -59,6 +59,7 @@ fn context_rail_footer_stays_anchored_to_bottom() {
     // Given: a wide OpenCode-style context rail with worktree and branch state.
     let mut state = AppState {
         branch_label: Some("feat/footer".to_string()),
+        workspace_workdir: Some("/tmp/yaca-footer".to_string()),
         ..AppState::default()
     };
     with_session(&mut state, "/tmp/yaca-footer");
@@ -84,6 +85,7 @@ fn context_rail_footer_emphasizes_workdir_name_like_opencode() {
     // Given: a wide context rail with a worktree path and branch.
     let mut state = AppState {
         branch_label: Some("feat/footer".to_string()),
+        workspace_workdir: Some("/tmp/yaca-footer".to_string()),
         ..AppState::default()
     };
     with_session(&mut state, "/tmp/yaca-footer");
@@ -139,6 +141,28 @@ fn context_rail_footer_marks_workdir_as_context_prefix() {
     assert!(
         !rendered.contains("/tmp/yaca-footer:"),
         "branchless worktree footer should not append a colon, got {rendered:?}"
+    );
+}
+
+#[test]
+fn context_rail_footer_omits_branch_for_external_session_workdir() {
+    // Given: OpenCode has a branch for the active workspace but renders another session directory.
+    let mut state = AppState {
+        branch_label: Some("feat/footer".to_string()),
+        workspace_workdir: Some("/tmp/yaca-workspace".to_string()),
+        ..AppState::default()
+    };
+    with_session(&mut state, "/tmp/yaca-external-session");
+
+    // When: the wide context rail renders the sidebar footer.
+    let buffer = render_buffer(&mut state, 124, 36);
+
+    // Then: the external session path is shown without the active workspace branch suffix.
+    let workdir_row = row_containing(&buffer, 124, 36, "/tmp/yaca-external-session").unwrap();
+    let rendered = row_text(&buffer, 124, workdir_row);
+    assert!(
+        !rendered.contains("feat/footer"),
+        "external session footer should not append the active workspace branch, got {rendered:?}"
     );
 }
 

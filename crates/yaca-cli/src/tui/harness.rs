@@ -105,6 +105,7 @@ impl DummyHarness {
             model: model.to_string(),
             session_label: session.to_string().chars().take(12).collect(),
             projection: engine.read_projection(session).await.expect("projection"),
+            workspace_workdir: Some(agent.workdir.to_string_lossy().into_owned()),
             ..AppState::default()
         };
         let controller =

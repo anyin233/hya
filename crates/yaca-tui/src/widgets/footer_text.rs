@@ -51,11 +51,7 @@ fn default_footer_text(state: &AppState, width: u16) -> String {
 
 fn project_label(state: &AppState) -> String {
     let workdir = workdir_label(state.projection.session.workdir.as_deref());
-    match state
-        .branch_label
-        .as_deref()
-        .filter(|branch| !branch.is_empty())
-    {
+    match state.visible_branch_label() {
         Some(branch) => format!("{workdir}:{branch}"),
         None => workdir,
     }

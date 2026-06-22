@@ -467,6 +467,7 @@ pub async fn run(
         yolo: initial_yolo,
         mcp,
         reasoning_effort: agent.reasoning.map(|effort| effort.as_str().to_string()),
+        workspace_workdir: Some(agent.workdir.to_string_lossy().into_owned()),
         ..AppState::default()
     };
     let mut controller =

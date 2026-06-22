@@ -39,11 +39,7 @@ fn workdir_footer_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
 
 fn workdir_footer_label(state: &AppState, width: u16) -> String {
     let workdir = workdir_label(state.projection.session.workdir.as_deref());
-    let label = match state
-        .branch_label
-        .as_deref()
-        .filter(|branch| !branch.is_empty())
-    {
+    let label = match state.visible_branch_label() {
         Some(branch) => format!("{workdir}:{branch}"),
         None => workdir,
     };

@@ -44,6 +44,7 @@ pub struct AppState {
     pub mcp: Vec<ConnectorView>,
     pub lsp_status: Option<String>,
     pub branch_label: Option<String>,
+    pub workspace_workdir: Option<String>,
     pub changed_files: Vec<ChangedFileView>,
     pub selected_message: Option<usize>,
     pub selected_message_scroll_anchor: Option<usize>,
@@ -181,6 +182,18 @@ impl AppState {
     pub fn set_model_identity(&mut self, model: String, provider_label: Option<String>) {
         self.model = model;
         self.model_provider_label = provider_label.filter(|label| !label.trim().is_empty());
+    }
+
+    pub fn visible_branch_label(&self) -> Option<&str> {
+        let branch = self
+            .branch_label
+            .as_deref()
+            .filter(|branch| !branch.is_empty())?;
+        match (&self.workspace_workdir, &self.projection.session.workdir) {
+            (Some(workspace), Some(session)) => (workspace == session).then_some(branch),
+            (Some(_), None) => None,
+            (None, _) => Some(branch),
+        }
     }
 }
 
