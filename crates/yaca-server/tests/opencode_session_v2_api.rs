@@ -12,7 +12,7 @@ use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 const WORKDIR: &str = "/tmp/yaca-opencode-session-v2-api";
 
@@ -24,6 +24,30 @@ async fn state() -> AppState {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn shell_state() -> AppState {
+    std::fs::create_dir_all(WORKDIR).unwrap();
+    let provider = FakeProvider::scripted(vec![]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Bash,
+        "**",
+        Mode::Allow,
+    )]));
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
     AppState::new(
@@ -200,6 +224,60 @@ async fn opencode_v2_session_update_sets_title_and_searches_it() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["data"][0]["id"], requested);
     assert_eq!(listed["data"][0]["title"], "OpenCode parity");
+}
+
+#[tokio::test]
+async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, command) = post_json(
+        app,
+        &format!("/api/session/{session}/command"),
+        json!({
+            "command": "init",
+            "arguments": "audit parity"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["data"]["info"]["role"], "user");
+    assert_eq!(command["data"]["parts"][0]["text"], "/init audit parity");
+
+    let shell_app = router(shell_state().await);
+    let (status, created) = post_json(
+        shell_app.clone(),
+        "/api/session",
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let shell_session = created["data"]["id"].as_str().expect("session id");
+    let (status, shell) = post_json(
+        shell_app,
+        &format!("/api/session/{shell_session}/shell"),
+        json!({
+            "agent": "build",
+            "command": "printf opencode-v2-shell-ok"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(shell["data"]["info"]["role"], "assistant");
+    assert_eq!(shell["data"]["parts"][0]["type"], "tool");
+    assert_eq!(shell["data"]["parts"][0]["tool"], "shell");
+    assert!(
+        shell["data"]["parts"][0]["state"]["output"]["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("opencode-v2-shell-ok"))
+    );
 }
 
 #[tokio::test]

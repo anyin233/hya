@@ -3,6 +3,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use yaca_proto::api::{CommandRequest, ShellRequest};
 use yaca_proto::{Envelope, Event, MessageId, SessionId};
 
 use crate::{ApiError, ServerState, parse_session};
@@ -38,6 +39,11 @@ struct PromptAdmittedResponse {
 }
 
 #[derive(Serialize)]
+struct MessageResponse {
+    data: super::projection::OpenCodeMessage,
+}
+
+#[derive(Serialize)]
 struct PromptAdmitted {
     #[serde(rename = "admittedSeq")]
     admitted_seq: u64,
@@ -53,7 +59,10 @@ struct PromptAdmitted {
 }
 
 pub(super) fn router() -> Router<ServerState> {
-    Router::new().route("/api/session/:id/prompt", post(prompt))
+    Router::new()
+        .route("/api/session/:id/prompt", post(prompt))
+        .route("/api/session/:id/command", post(command))
+        .route("/api/session/:id/shell", post(shell))
 }
 
 async fn prompt(
@@ -107,6 +116,48 @@ async fn prompt(
             promoted_seq: None,
         },
     }))
+}
+
+async fn command(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<CommandRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    super::load_session(&st, session, None).await?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let text = req.text.unwrap_or_else(|| {
+        super::session_legacy::command_prompt_text(&req.command, &req.arguments)
+    });
+    let message = st
+        .engine
+        .admit_command_prompt(session, req.command, req.arguments, text)
+        .await?;
+    let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+    let data = super::session_legacy::load_message(&st, session, message).await?;
+    Ok(Json(MessageResponse { data }))
+}
+
+async fn shell(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<ShellRequest>,
+) -> Result<Json<MessageResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    super::load_session(&st, session, None).await?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let (message, _finish) = st
+        .engine
+        .run_shell(session, &st.agent, req.command, run.token())
+        .await?;
+    let data = super::session_legacy::load_message(&st, session, message).await?;
+    Ok(Json(MessageResponse { data }))
 }
 
 async fn message_exists(

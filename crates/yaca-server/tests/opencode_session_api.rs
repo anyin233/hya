@@ -79,6 +79,30 @@ async fn todo_state() -> AppState {
     )
 }
 
+async fn shell_state() -> AppState {
+    std::fs::create_dir_all(WORKDIR).unwrap();
+    let provider = FakeProvider::scripted(vec![]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Bash,
+        "**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -127,6 +151,24 @@ async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode,
         .oneshot(
             Request::builder()
                 .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
+async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
                 .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
@@ -245,6 +287,47 @@ async fn opencode_session_update_sets_title() {
     )
     .await;
     assert_eq!(unsupported.0, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_session_command_and_shell_routes_return_created_messages() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, command) = post_json(
+        app,
+        format!("/session/{session}/command"),
+        json!({
+            "command": "init",
+            "arguments": "audit parity"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["info"]["role"], "user");
+    assert_eq!(command["parts"][0]["type"], "text");
+    assert_eq!(command["parts"][0]["text"], "/init audit parity");
+
+    let shell_app = router(shell_state().await);
+    let shell_session = create_session(shell_app.clone(), None).await;
+    let (status, shell) = post_json(
+        shell_app,
+        format!("/session/{shell_session}/shell"),
+        json!({
+            "agent": "build",
+            "command": "printf opencode-shell-ok"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(shell["info"]["role"], "assistant");
+    assert_eq!(shell["parts"][0]["type"], "tool");
+    assert_eq!(shell["parts"][0]["tool"], "shell");
+    assert!(
+        shell["parts"][0]["state"]["output"]["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("opencode-shell-ok"))
+    );
 }
 
 #[tokio::test]
