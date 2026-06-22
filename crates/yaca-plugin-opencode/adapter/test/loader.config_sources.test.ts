@@ -123,6 +123,35 @@ test("discovers project opencode config files before config directories", async 
   ])
 })
 
+test("ignores config.json outside the global OpenCode config directory", async () => {
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const xdgConfigHome = path.join(root, "xdg")
+  const globalConfig = path.join(xdgConfigHome, "opencode", "config.json")
+  const projectConfigJson = path.join(directory, ".opencode", "config.json")
+  const projectOpencodeJson = path.join(directory, ".opencode", "opencode.json")
+  await mkdir(path.dirname(globalConfig), { recursive: true })
+  await mkdir(path.dirname(projectConfigJson), { recursive: true })
+  await writeFile(globalConfig, JSON.stringify({ plugin: ["global-config-json"] }))
+  await writeFile(
+    projectConfigJson,
+    JSON.stringify({ plugin: ["ignored-project-config-json"] }),
+  )
+  await writeFile(
+    projectOpencodeJson,
+    JSON.stringify({ plugin: ["project-opencode-json"] }),
+  )
+
+  const specs = await discoverPluginSpecs({
+    directory,
+    worktree: directory,
+    xdgConfigHome,
+    home: path.join(root, "home"),
+  })
+
+  expect(specs).toEqual(["global-config-json", "project-opencode-json"])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)
