@@ -19,8 +19,15 @@ fn timeline_renders_message_rails_and_compact_tool_actions() {
     // When: the transcript renders at a wide OpenCode-style layout.
     let text = render(&mut state, 120, 30);
 
-    // Then: the block keeps role/rail structure while successful tools stay compact.
-    assert!(text.contains("You"), "user label should render");
+    // Then: the block keeps rail structure while successful tools stay compact.
+    assert!(
+        text.contains("please inspect files"),
+        "user content should render"
+    );
+    assert!(
+        !text.contains("You #1") && !text.contains("yaca #"),
+        "OpenCode stream blocks should not render numbered role labels"
+    );
     assert!(text.contains("▏"), "timeline should use a left rail");
     assert!(
         text.contains("→ Read README.md"),

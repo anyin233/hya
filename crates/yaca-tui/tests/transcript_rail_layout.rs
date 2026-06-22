@@ -15,6 +15,10 @@ fn user_transcript_rails_do_not_use_box_drawing_border_glyphs() {
     let text = render(&mut state, 100, 20);
 
     // Then: the rail remains visible without being mistaken for a box border.
+    assert!(
+        !text.contains("You #1"),
+        "OpenCode user transcript blocks should not render numbered role labels:\n{text}"
+    );
     let user_row = text
         .lines()
         .find(|row| row.contains("read the file"))

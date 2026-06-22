@@ -49,17 +49,16 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         let selected = state.selected_message == Some(idx);
         let start = lines.len();
         match item.role {
-            Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
+            Role::User => user_lines(&item.parts, selected, theme, &mut lines),
             Role::Assistant => assistant_lines(
                 &item.parts,
-                idx,
                 selected,
                 assistant_status(streaming_assistant_idx, idx, item.duration_ms),
                 state,
                 theme,
                 &mut lines,
             ),
-            Role::System => system_lines(&item.parts, idx, selected, theme, &mut lines),
+            Role::System => system_lines(&item.parts, selected, theme, &mut lines),
         }
         if selected {
             fill_selected_surface(&mut lines[start..], theme, width);
@@ -99,12 +98,10 @@ fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16)
 
 fn user_lines(
     parts: &[TimelinePart],
-    idx: usize,
     selected: bool,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
-    lines.push(message_header("You", idx, selected, theme, theme.primary));
     let text = text_from_parts(parts);
     for segment in text.split('\n') {
         lines.push(Line::from(vec![
@@ -121,14 +118,12 @@ fn user_lines(
 
 fn assistant_lines(
     parts: &[TimelinePart],
-    idx: usize,
     selected: bool,
     status: AssistantBlockStatus,
     state: &AppState,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
-    lines.push(message_header("yaca", idx, selected, theme, theme.success));
     let mut has_visible_part = false;
     let mut previous_was_tool = false;
     for part in parts {
@@ -182,16 +177,12 @@ fn assistant_lines(
 
 fn system_lines(
     parts: &[TimelinePart],
-    idx: usize,
     selected: bool,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
     let text = text_from_parts(parts);
     let is_error = is_system_error_text(&text);
-    let header = if is_error { "error" } else { "sys" };
-    let header_color = if is_error { theme.error } else { theme.muted };
-    lines.push(message_header(header, idx, selected, theme, header_color));
     for (idx, segment) in text.split('\n').enumerate() {
         if is_error {
             let label = if idx == 0 { "error " } else { "      " };
@@ -217,28 +208,6 @@ fn system_lines(
         }
     }
     lines.push(Line::from(""));
-}
-
-fn message_header(
-    label: &str,
-    idx: usize,
-    selected: bool,
-    theme: &Theme,
-    color: Color,
-) -> Line<'static> {
-    let marker = if selected { "▌ " } else { "  " };
-    let label_style = block_style(color, selected, theme).add_modifier(Modifier::BOLD);
-    let mut spans = vec![
-        Span::styled(marker.to_string(), block_style(color, selected, theme)),
-        Span::styled(format!("{label} #{}", idx + 1), label_style),
-    ];
-    if selected {
-        spans.push(Span::styled(
-            "  r revert · b branch",
-            block_style(theme.muted, selected, theme),
-        ));
-    }
-    Line::from(spans)
 }
 
 fn block_style(fg: Color, selected: bool, theme: &Theme) -> Style {

@@ -86,10 +86,14 @@ fn main_stream_starts_at_top_without_status_banner() {
     let buffer = render_buffer(&mut state, 80, 16);
     let first_row = rendered_row(&buffer, 80, 0);
 
-    // Then: the stream owns the first row instead of an extra status banner.
+    // Then: the stream owns the first row instead of an extra status banner or role label.
     assert!(
-        first_row.contains("yaca #1"),
-        "first row should be the selected transcript stream, got {first_row:?}"
+        first_row.contains("top stream"),
+        "first row should start with transcript content, got {first_row:?}"
+    );
+    assert!(
+        !first_row.contains("yaca #1"),
+        "OpenCode assistant blocks should not render numbered role labels, got {first_row:?}"
     );
     assert!(
         !first_row.contains(" · build · fake · sess-1"),
