@@ -278,16 +278,16 @@ impl Tool for GlobTool {
             || ctx.workdir.clone(),
             |path| resolve_file(&ctx.workdir, path),
         );
-        if tokio::fs::metadata(&search)
+        let is_file = tokio::fs::metadata(&search)
             .await
-            .map(|meta| meta.is_file())
-            .unwrap_or(false)
-        {
-            return Err(ToolError::Other(format!(
-                "glob path must be a directory: {}",
-                display_path(&search)
-            )));
-        }
+            .is_ok_and(|meta| meta.is_file());
+        let search = if is_file {
+            search
+                .parent()
+                .map_or_else(|| search.clone(), Path::to_path_buf)
+        } else {
+            search
+        };
         assert_external_directory(ctx, &search, true).await?;
         let mut files = Vec::new();
         walk(&search, &mut files);
