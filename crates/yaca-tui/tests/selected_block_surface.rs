@@ -8,7 +8,7 @@ use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
 use yaca_tui::{AppState, draw};
 
 #[test]
-fn selected_message_surface_extends_to_the_timeline_edge() {
+fn selected_message_surface_extends_to_the_padded_timeline_edge() {
     // Given: a selected assistant message with short text on a narrow shell.
     let mut state = AppState {
         selected_message: Some(0),
@@ -21,12 +21,17 @@ fn selected_message_surface_extends_to_the_timeline_edge() {
     let height = 18;
     let buffer = render_buffer(&mut state, width, height);
 
-    // Then: the selected block surface fills the content row to the right edge.
+    // Then: the selected block surface fills the padded content row, not the terminal gutter.
     let (_x, y) = find_rendered_text(&buffer, width, height, "selected assistant block").unwrap();
     assert_eq!(
-        buffer[(width - 1, y)].bg,
+        buffer[(width - 3, y)].bg,
         Color::Rgb(24, 48, 58),
-        "selected block rows should paint the whole selectable width"
+        "selected block rows should paint through the padded main content width"
+    );
+    assert_eq!(
+        buffer[(width - 1, y)].bg,
+        Color::Reset,
+        "right terminal gutter should remain outside the selected message block"
     );
 }
 

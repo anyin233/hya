@@ -2,6 +2,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 const SIDEBAR_BREAKPOINT: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 42;
+const MAIN_HORIZONTAL_PADDING: u16 = 2;
 
 pub struct AppLayout {
     pub timeline: Rect,
@@ -25,7 +26,7 @@ pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayo
             .constraints([Constraint::Percentage(100)])
             .split(area)
     };
-    let main = columns[0];
+    let main = main_content_area(columns[0]);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -50,9 +51,30 @@ pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayo
 
 #[must_use]
 pub const fn main_width(area: Rect) -> u16 {
-    if area.width > SIDEBAR_BREAKPOINT {
+    let width = if area.width > SIDEBAR_BREAKPOINT {
         area.width.saturating_sub(SIDEBAR_WIDTH)
     } else {
         area.width
+    };
+    let inset = main_padding(width);
+    width.saturating_sub(inset.saturating_mul(2))
+}
+
+const fn main_content_area(area: Rect) -> Rect {
+    let inset = main_padding(area.width);
+    Rect {
+        x: area.x.saturating_add(inset),
+        y: area.y,
+        width: area.width.saturating_sub(inset.saturating_mul(2)),
+        height: area.height,
+    }
+}
+
+const fn main_padding(width: u16) -> u16 {
+    let max_inset = width.saturating_sub(1) / 2;
+    if MAIN_HORIZONTAL_PADDING < max_inset {
+        MAIN_HORIZONTAL_PADDING
+    } else {
+        max_inset
     }
 }

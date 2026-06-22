@@ -26,7 +26,7 @@ fn assistant_metadata_rows(
     let mut rows = Vec::new();
     for y in 0..height {
         let row = row_text(buffer, width, y);
-        if row.starts_with("   ") && row.contains(needle) {
+        if row.starts_with("     ▣ ") && row.contains(needle) {
             rows.push(row);
         }
     }

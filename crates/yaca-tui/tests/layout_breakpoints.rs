@@ -1,9 +1,16 @@
 #![allow(clippy::unwrap_used)]
 
+#[allow(dead_code)]
+mod render_support;
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
+use yaca_proto::Role;
 use yaca_tui::{AppState, draw};
+
+use render_support::with_text_message;
 
 fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     let backend = TestBackend::new(width, height);
@@ -70,5 +77,55 @@ fn sidebar_uses_opencode_forty_two_column_width_when_wide() {
         x,
         width - 42 + 2,
         "OpenCode reserves a 42-column context rail with a two-column title gutter"
+    );
+}
+
+#[test]
+fn composer_rail_uses_opencode_two_column_main_gutter() {
+    // Given: a narrow shell where OpenCode still applies main-column padding.
+    let mut state = AppState {
+        input: "type here".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the grounded composer renders.
+    let buffer = render_buffer(&mut state, 80, 16);
+    let (x, _y) = find_text(&buffer, 80, 16, "▌").unwrap();
+
+    // Then: the composer rail starts after the OpenCode two-column main gutter.
+    assert_eq!(
+        x, 2,
+        "OpenCode pads the main column by two cells before the composer rail"
+    );
+}
+
+#[test]
+fn selected_block_surface_starts_after_opencode_main_gutter() {
+    // Given: a selected transcript block in the main stream.
+    let mut state = AppState {
+        selected_message: Some(0),
+        ..AppState::default()
+    };
+    with_text_message(&mut state, 1, Role::Assistant, "selected assistant block");
+
+    // When: the transcript renders without the sidebar.
+    let buffer = render_buffer(&mut state, 80, 18);
+    let (_x, y) = find_text(&buffer, 80, 18, "selected assistant block").unwrap();
+
+    // Then: the selectable surface fills the padded main column, not the terminal gutter.
+    assert_eq!(
+        buffer[(0, y)].bg,
+        Color::Reset,
+        "left terminal gutter should remain outside the selected message block"
+    );
+    assert_eq!(
+        buffer[(1, y)].bg,
+        Color::Reset,
+        "second terminal gutter cell should remain outside the selected message block"
+    );
+    assert_eq!(
+        buffer[(2, y)].bg,
+        Color::Rgb(24, 48, 58),
+        "selected block should begin at the OpenCode main content edge"
     );
 }

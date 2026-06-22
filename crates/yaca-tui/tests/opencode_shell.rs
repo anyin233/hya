@@ -171,7 +171,7 @@ fn composer_metadata_anchors_commands_to_main_column_edge() {
     // When: the composer metadata row is rendered in the main output column.
     let buffer = render_buffer(&mut state, 124, 16);
     let metadata_row = find_row(&buffer, 124, 16, "ctrl+p commands");
-    let main_column: String = metadata_row.chars().take(82).collect();
+    let main_column: String = metadata_row.chars().take(80).collect();
 
     // Then: the command affordance is anchored to the main column's right edge.
     assert!(
@@ -210,7 +210,7 @@ fn active_runtime_strip_sits_above_the_composer() {
         "runtime strip should expose the running state, got {status_row:?}"
     );
     assert!(
-        prompt_row.starts_with("▌"),
+        prompt_row.starts_with("  ▌"),
         "composer input rail should remain directly below the runtime strip, got {prompt_row:?}"
     );
 }
