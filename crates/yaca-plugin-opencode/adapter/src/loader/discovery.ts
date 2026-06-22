@@ -1,6 +1,8 @@
 import { readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { parse as parseJsonc } from "jsonc-parser"
+import type { ParseError as JsoncParseError } from "jsonc-parser"
 import { z } from "zod"
 
 import { resolveLocalPluginSpec } from "./shape"
@@ -55,6 +57,10 @@ export function parseAdapterOptions(raw: string | undefined): AdapterOptions {
     }
     throw error
   }
+  return parseAdapterValue(value)
+}
+
+function parseAdapterValue(value: unknown): AdapterOptions {
   const parsed = AdapterOptionsSchema.safeParse(value)
   if (!parsed.success) {
     throw new AdapterOptionsParseError(parsed.error.message)
@@ -140,7 +146,14 @@ async function readConfigFile(file: string): Promise<string | undefined> {
 
 function parseConfigOptions(raw: string): AdapterOptions {
   try {
-    return parseAdapterOptions(raw)
+    const errors: JsoncParseError[] = []
+    const value: unknown = parseJsonc(raw, errors, {
+      allowTrailingComma: true,
+    })
+    if (errors.length > 0) {
+      return { plugin: [] }
+    }
+    return parseAdapterValue(value)
   } catch (error) {
     if (error instanceof AdapterOptionsParseError) {
       return { plugin: [] }

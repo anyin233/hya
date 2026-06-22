@@ -92,6 +92,35 @@ test("discovers OpenCode config plugin entries relative to their config file", a
   ])
 })
 
+test("discovers OpenCode JSONC config plugin entries", async () => {
+  // Given: a JSONC config with comments and trailing commas.
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const configFile = path.join(directory, ".opencode", "opencode.jsonc")
+  const pluginFile = path.join(directory, ".opencode", "jsonc-plugin.ts")
+  await mkdir(path.dirname(configFile), { recursive: true })
+  await writeFile(pluginFile, "export default {}")
+  await writeFile(
+    configFile,
+    `{
+      // OpenCode documents opencode.jsonc as a supported config format.
+      "plugin": [
+        "./jsonc-plugin.ts",
+      ],
+    }`,
+  )
+
+  // When: the adapter discovers OpenCode plugin specs for the project.
+  const specs = await discoverPluginSpecs({
+    directory,
+    xdgConfigHome: path.join(root, "xdg"),
+    home: path.join(root, "home"),
+  })
+
+  // Then: JSONC plugin specs are parsed and path-resolved.
+  expect(specs).toEqual([pathToFileURL(pluginFile).href])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)
