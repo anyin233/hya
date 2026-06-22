@@ -160,6 +160,7 @@ fn action_label(name: &str) -> String {
         "find" => "Find".to_string(),
         "grep" => "Grep".to_string(),
         "glob" => "Glob".to_string(),
+        "ask_user" => "Asked".to_string(),
         "task" => "Task".to_string(),
         "todowrite" => "Todos".to_string(),
         "webfetch" => "WebFetch".to_string(),

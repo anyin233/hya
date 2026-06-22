@@ -1,5 +1,6 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::tool_questions;
 use crate::tool_tasks;
 use crate::tool_todos;
 
@@ -126,6 +127,7 @@ fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
         "glob" => field_text(value, "pattern"),
         "webfetch" => field_text(value, "url"),
         "websearch" => field_text(value, "query"),
+        "ask_user" => tool_questions::summary(value),
         "task" => tool_tasks::summary(value),
         "todowrite" => tool_todos::summary(value),
         _ => None,
@@ -178,6 +180,9 @@ fn completed_tool_output_text(
     input: &serde_json::Value,
     output: &serde_json::Value,
 ) -> Option<String> {
+    if name == "ask_user" {
+        return tool_questions::snapshot_text(input, output);
+    }
     if name == "todowrite" {
         return tool_todos::snapshot_text(input);
     }

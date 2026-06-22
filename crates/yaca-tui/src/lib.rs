@@ -9,6 +9,7 @@ use yaca_proto::{Envelope, Projection};
 
 mod layout;
 mod theme;
+mod tool_questions;
 mod tool_tasks;
 mod tool_todos;
 mod view_model;
