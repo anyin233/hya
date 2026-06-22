@@ -134,7 +134,7 @@ pub fn render_footer(
     } else if state.exit_armed {
         "Ctrl-C again to exit · type to cancel".to_string()
     } else if state.yolo {
-        "YOLO mode · Tab disables auto-allow · / commands · @ references".to_string()
+        "YOLO mode · /yolo disables auto-allow · / commands · @ references".to_string()
     } else if state.goal.is_some() || state.loop_view.is_some() {
         runtime_footer_text(state)
     } else {

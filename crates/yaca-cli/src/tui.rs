@@ -38,6 +38,7 @@ use self::history::{HistoryStore, SessionMeta};
 pub use self::mcp_view::connector_views as mcp_connector_views;
 use crate::config::ModelEntry;
 
+mod agent_cycle;
 mod agents;
 mod block_action;
 mod commands;

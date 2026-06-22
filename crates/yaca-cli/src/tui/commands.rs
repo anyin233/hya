@@ -111,7 +111,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "yolo",
         aliases: &[],
         description: "Toggle or set auto-approve mode",
-        key_hint: "tab",
+        key_hint: "/yolo",
         kind: CommandKind::Yolo,
     },
     CommandSpec {

@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem, DialogView};
 
+use super::agent_cycle::next_agent_label;
 use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
 use super::prompt::{PromptState, mention_trigger_index};
@@ -148,9 +149,11 @@ impl Controller {
                 TuiEffect::None
             }
             KeyCode::Tab => {
-                self.app.yolo = !self.app.yolo;
-                self.disarm_exit();
-                TuiEffect::None
+                next_agent_label(&self.app.agent, &self.agents).map_or(TuiEffect::None, |agent| {
+                    self.app.agent = agent.clone();
+                    self.disarm_exit();
+                    TuiEffect::SelectAgent(agent)
+                })
             }
             KeyCode::Enter => self.submit_input(),
             KeyCode::Backspace => {
@@ -955,14 +958,31 @@ mod tests {
     }
 
     #[test]
-    fn tab_toggles_yolo_when_no_popup_is_active() {
-        let mut controller = Controller::new(AppState::default());
+    fn tab_cycles_agents_when_no_popup_is_active() {
+        let mut controller = Controller::new(AppState {
+            agent: "build".to_string(),
+            ..AppState::default()
+        });
+        controller.set_agents(
+            ["build", "plan"]
+                .into_iter()
+                .map(|label| DialogItem {
+                    label: label.to_string(),
+                    detail: "agent profile".to_string(),
+                })
+                .collect(),
+        );
 
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Tab)),
+            TuiEffect::SelectAgent("plan".to_string())
+        );
+        assert_eq!(controller.app.agent, "plan");
         assert!(!controller.app.yolo);
-        assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
-        assert!(controller.app.yolo);
-        assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
-        assert!(!controller.app.yolo);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Tab)),
+            TuiEffect::SelectAgent("build".to_string())
+        );
     }
 
     #[test]

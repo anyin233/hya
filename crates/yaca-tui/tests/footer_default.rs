@@ -40,3 +40,27 @@ fn idle_composer_metadata_occupies_bottom_row() {
         "bottom row should be composer metadata, got {bottom_row:?} in {text:?}"
     );
 }
+
+#[test]
+fn default_footer_shows_agent_shortcut_until_usage_exists() {
+    // Given: an idle OpenCode-style composer before any usage data exists.
+    let mut state = AppState::default();
+
+    // When: it renders at a width where footer shortcuts are visible.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: the footer shows agent and command affordances, not placeholder cost.
+    assert!(
+        bottom_row.contains("tab agents"),
+        "OpenCode default footer should expose the agent-cycle shortcut, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("ctrl+p commands"),
+        "OpenCode default footer should keep command affordance visible, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("cost n/a"),
+        "OpenCode default footer should not show placeholder billing before usage exists, got {bottom_row:?}"
+    );
+}
