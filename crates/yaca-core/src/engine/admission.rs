@@ -148,6 +148,18 @@ impl SessionEngine {
         arguments: String,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        self.admit_command_prompt_with_id(session, MessageId::new(), command, arguments, text)
+            .await
+    }
+
+    pub async fn admit_command_prompt_with_id(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        command: String,
+        arguments: String,
+        text: String,
+    ) -> Result<MessageId, CoreError> {
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .command_execute_before(CommandExecuteBeforeInput {
@@ -163,7 +175,9 @@ impl SessionEngine {
         } else {
             text
         };
-        let message = self.admit_user_prompt(session, text).await?;
+        let message = self
+            .admit_user_prompt_with_id(session, message, text)
+            .await?;
         self.emit(
             session,
             Event::CommandExecuted {

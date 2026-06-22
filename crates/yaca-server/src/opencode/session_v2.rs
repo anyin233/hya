@@ -87,6 +87,7 @@ pub(super) fn router() -> Router<ServerState> {
             "/api/session/:id",
             get(get_one).patch(update).delete(remove),
         )
+        .route("/api/session/:id/init", post(init))
         .route("/api/session/:id/compact", post(compact))
         .route("/api/session/:id/wait", post(wait))
 }
@@ -184,6 +185,16 @@ async fn remove(
     super::load_session(&st, session, None).await?;
     st.runs.cancel(session);
     let data = st.engine.delete_session(session).await?;
+    Ok(Json(DataResponse { data }))
+}
+
+async fn init(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<super::session_legacy::InitSessionPayload>,
+) -> Result<Json<DataResponse<bool>>, ApiError> {
+    let session = parse_session(&id)?;
+    let data = super::session_legacy::run_session_init(&st, session, req).await?;
     Ok(Json(DataResponse { data }))
 }
 

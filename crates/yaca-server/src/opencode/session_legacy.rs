@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::Value;
 use yaca_proto::api::{CommandRequest, PromptRequest, ShellRequest};
-use yaca_proto::{MessageId, Projection, SessionId};
+use yaca_proto::{Event, MessageId, ModelRef, Projection, SessionId};
 
 use crate::{ApiError, ServerState, parse_session, runs};
 
@@ -32,6 +32,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/session/:id/message", get(messages))
         .route("/session/:id/message/:message", get(message))
         .route("/session/:id/prompt_async", post(prompt_async))
+        .route("/session/:id/init", post(init_session))
         .route("/session/:id/command", post(command))
         .route("/session/:id/shell", post(shell))
         .route("/session/:id/abort", post(abort))
@@ -55,6 +56,16 @@ struct UpdateSessionPayload {
     metadata: Option<Value>,
     permission: Option<Value>,
     time: Option<Value>,
+}
+
+#[derive(Deserialize)]
+pub(in crate::opencode) struct InitSessionPayload {
+    #[serde(rename = "messageID")]
+    message_id: String,
+    #[serde(rename = "providerID")]
+    provider_id: String,
+    #[serde(rename = "modelID")]
+    model_id: String,
 }
 
 impl UpdateSessionPayload {
@@ -210,6 +221,15 @@ async fn prompt_async(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn init_session(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<InitSessionPayload>,
+) -> Result<Json<bool>, ApiError> {
+    let session = parse_session(&id)?;
+    Ok(Json(run_session_init(&st, session, req).await?))
+}
+
 async fn command(
     State(st): State<ServerState>,
     Path(id): Path<String>,
@@ -291,6 +311,38 @@ pub(in crate::opencode) async fn load_message(
         .ok_or_else(|| ApiError::not_found("message not found"))
 }
 
+pub(in crate::opencode) async fn run_session_init(
+    st: &ServerState,
+    session: SessionId,
+    req: InitSessionPayload,
+) -> Result<bool, ApiError> {
+    load_session(st, session, None).await?;
+    let message = req
+        .message_id
+        .parse::<MessageId>()
+        .map_err(|_| ApiError::bad_request("invalid message id"))?;
+    if message_exists(st, session, message).await? {
+        return Err(ApiError::conflict("prompt message id already exists"));
+    }
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let mut agent = (*st.agent).clone();
+    agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
+    st.engine
+        .admit_command_prompt_with_id(
+            session,
+            message,
+            "init".to_string(),
+            String::new(),
+            "/init".to_string(),
+        )
+        .await?;
+    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
+    Ok(true)
+}
+
 pub(in crate::opencode) async fn load_session(
     st: &ServerState,
     session: SessionId,
@@ -361,6 +413,22 @@ fn decode_cursor(cursor: &str) -> Result<MessageCursor, ApiError> {
         .decode(cursor)
         .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("invalid cursor"))
+}
+
+async fn message_exists(
+    st: &ServerState,
+    session: SessionId,
+    message: MessageId,
+) -> Result<bool, ApiError> {
+    Ok(st.engine.replay(session).await?.into_iter().any(|env| {
+        matches!(
+            env.event,
+            Event::MessageStarted {
+                message: existing,
+                ..
+            } if existing == message
+        )
+    }))
 }
 
 pub(in crate::opencode) fn command_prompt_text(command: &str, arguments: &str) -> String {
