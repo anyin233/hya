@@ -17,10 +17,26 @@ const JsonRpcRequestSchema = z
   })
   .strict()
 
+const JsonRpcNotificationSchema = z
+  .object({
+    jsonrpc: z.literal(JSONRPC_VERSION),
+    id: z.undefined().optional(),
+    method: z.string().min(1),
+    params: z.unknown().optional().default({}),
+  })
+  .strict()
+
+const JsonRpcMessageSchema = z.union([
+  JsonRpcRequestSchema,
+  JsonRpcNotificationSchema,
+])
+
 export type JsonRpcRequest = z.infer<typeof JsonRpcRequestSchema>
+export type JsonRpcNotification = z.infer<typeof JsonRpcNotificationSchema>
+export type JsonRpcMessage = z.infer<typeof JsonRpcMessageSchema>
 
 export type ParseRequestResult =
-  | { readonly ok: true; readonly request: JsonRpcRequest }
+  | { readonly ok: true; readonly request: JsonRpcMessage }
   | { readonly ok: false; readonly message: string }
 
 export function parseJsonRpcRequest(line: string): ParseRequestResult {
@@ -36,7 +52,7 @@ export function parseJsonRpcRequest(line: string): ParseRequestResult {
     }
     throw error
   }
-  const parsed = JsonRpcRequestSchema.safeParse(value)
+  const parsed = JsonRpcMessageSchema.safeParse(value)
   if (!parsed.success) {
     return { ok: false, message: parsed.error.message }
   }

@@ -3,12 +3,14 @@ import {
   handleToolExecuteAfter,
   handleToolExecuteBefore,
 } from "./hook_methods"
+import { handleEventNotification } from "./event_method"
 import { handleInitialize, PROTOCOL_VERSION } from "./initialize"
 import {
   ERROR_CODES,
   errorResponse,
   okResponse,
   parseJsonRpcRequest,
+  type JsonRpcMessage,
   type JsonRpcRequest,
 } from "./protocol"
 import {
@@ -24,6 +26,7 @@ export type { RuntimeOptions }
 
 const METHOD_INITIALIZE = "initialize"
 const METHOD_SHUTDOWN = "shutdown"
+const METHOD_EVENT = "event"
 const METHOD_TOOL_CALL = "tool/call"
 const METHOD_MESSAGE_USER_BEFORE = "hook/message.user.before"
 const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
@@ -50,6 +53,19 @@ export async function* readLines(
 }
 
 export function handleRequest(
+  request: JsonRpcMessage,
+  context: RequestContext,
+): Promise<HandledRequest> | HandledRequest {
+  if (request.id === undefined) {
+    if (request.method === METHOD_EVENT) {
+      return handleEventNotification(request, context)
+    }
+    return { response: "", shouldExit: false }
+  }
+  return handleRequestWithResponse(request, context)
+}
+
+function handleRequestWithResponse(
   request: JsonRpcRequest,
   context: RequestContext,
 ): Promise<HandledRequest> | HandledRequest {
@@ -90,7 +106,9 @@ export async function runAdapter(options: RuntimeOptions): Promise<void> {
       continue
     }
     const handled = await handleRequest(parsed.request, context)
-    await options.stdout.write(handled.response)
+    if (handled.response.length > 0) {
+      await options.stdout.write(handled.response)
+    }
     if (handled.shouldExit) {
       break
     }
