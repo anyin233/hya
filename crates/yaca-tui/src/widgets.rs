@@ -18,6 +18,7 @@ mod transcript_diff;
 mod transcript_metadata;
 mod transcript_pending;
 mod transcript_reasoning;
+mod transcript_scroll;
 mod transcript_text;
 mod transcript_tools;
 

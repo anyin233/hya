@@ -46,6 +46,7 @@ pub struct AppState {
     pub branch_label: Option<String>,
     pub changed_files: Vec<ChangedFileView>,
     pub selected_message: Option<usize>,
+    pub selected_message_scroll_anchor: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -8,6 +10,7 @@ use yaca_proto::Role;
 use super::error::{display_system_error_segment, is_system_error_text};
 use super::transcript_metadata::{AssistantBlockStatus, assistant_metadata_label};
 use super::transcript_reasoning::push_reasoning_lines;
+use super::transcript_scroll::{top_with_selection_visible, wrapped_row_range, wrapped_rows};
 use super::transcript_text::text_from_parts;
 use super::transcript_tools::push_tool_lines;
 use crate::AppState;
@@ -17,20 +20,25 @@ use crate::view_model::{TimelinePart, timeline_items};
 pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme) {
     let inner_height = area.height.max(1);
     let inner_width = area.width.max(1);
-    let lines = timeline_lines(state, theme, inner_width);
-    let total = lines.iter().fold(0u16, |acc, line| {
-        let wrapped = u16::try_from(line.width())
-            .unwrap_or(u16::MAX)
-            .div_ceil(inner_width)
-            .max(1);
-        acc.saturating_add(wrapped)
-    });
+    let timeline = timeline_lines(state, theme, inner_width);
+    let total = wrapped_rows(&timeline.lines, inner_width);
     let max_back = total.saturating_sub(inner_height);
     state.scroll_back = state.scroll_back.min(max_back);
     let top = max_back.saturating_sub(state.scroll_back);
+    let selected_message = state.selected_message;
+    let selected_rows = if state.selected_message_scroll_anchor == selected_message {
+        None
+    } else {
+        timeline
+            .selected_message_range
+            .map(|range| wrapped_row_range(&timeline.lines, range, inner_width))
+    };
+    let top = top_with_selection_visible(top, inner_height, max_back, selected_rows);
+    state.scroll_back = max_back.saturating_sub(top);
+    state.selected_message_scroll_anchor = selected_message;
 
     frame.render_widget(
-        Paragraph::new(lines)
+        Paragraph::new(timeline.lines)
             .style(theme.base())
             .wrap(Wrap { trim: false })
             .scroll((top, 0)),
@@ -38,8 +46,14 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
     );
 }
 
-fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+struct TimelineLines {
+    lines: Vec<Line<'static>>,
+    selected_message_range: Option<Range<usize>>,
+}
+
+fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> TimelineLines {
     let mut lines = vec![Line::from("")];
+    let mut selected_message_range = None;
     let items = timeline_items(&state.projection);
     let streaming_assistant_idx = items
         .last()
@@ -63,6 +77,7 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         }
         if selected {
             fill_selected_surface(&mut lines[start..], theme, width);
+            selected_message_range = Some(start..lines.len());
         } else if is_user {
             fill_panel_surface(&mut lines[start..], theme, width);
         }
@@ -71,7 +86,10 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         }
     }
 
-    lines
+    TimelineLines {
+        lines,
+        selected_message_range,
+    }
 }
 
 fn assistant_status(
