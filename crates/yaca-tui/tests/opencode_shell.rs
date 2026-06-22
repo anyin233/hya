@@ -3,6 +3,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
 use yaca_tui::{AppState, ContextView, PromptAttachment, draw};
 
@@ -200,7 +201,8 @@ fn active_runtime_strip_sits_above_the_composer() {
     let buffer = render_buffer(&mut state, 120, 16);
     let status_y = find_row_index(&buffer, 120, 16, "streaming");
     let status_row = rendered_row(&buffer, 120, status_y);
-    let prompt_row = rendered_row(&buffer, 120, status_y + 1);
+    let padding_row = status_y + 1;
+    let prompt_row = rendered_row(&buffer, 120, status_y + 2);
 
     // Then: the active runtime strip is visible directly above the input row.
     assert!(
@@ -216,8 +218,17 @@ fn active_runtime_strip_sits_above_the_composer() {
         "runtime strip should expose the running state, got {status_row:?}"
     );
     assert!(
+        !rendered_row(&buffer, 120, padding_row).contains("▌"),
+        "composer should keep OpenCode's top padding row before the input rail"
+    );
+    assert_eq!(
+        buffer[(2, padding_row)].bg,
+        Color::Rgb(30, 30, 30),
+        "composer top padding should use the input surface"
+    );
+    assert!(
         prompt_row.starts_with("  ▌"),
-        "composer input rail should remain directly below the runtime strip, got {prompt_row:?}"
+        "composer input rail should sit below the input padding row, got {prompt_row:?}"
     );
 }
 

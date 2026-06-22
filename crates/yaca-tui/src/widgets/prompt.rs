@@ -31,15 +31,13 @@ pub fn render_prompt(
         theme.primary
     };
     let input_lines = visible_input_lines(&state.input, state.input_cursor, area.width);
-    let mut lines = input_lines
-        .into_iter()
-        .map(|text| {
-            Line::from(vec![
-                Span::styled("▌ ", Style::default().fg(rail).bg(theme.element)),
-                Span::styled(text, Style::default().fg(theme.text).bg(theme.element)),
-            ])
-        })
-        .collect::<Vec<_>>();
+    let mut lines = vec![Line::from("")];
+    lines.extend(input_lines.into_iter().map(|text| {
+        Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(rail).bg(theme.element)),
+            Span::styled(text, Style::default().fg(theme.text).bg(theme.element)),
+        ])
+    }));
     lines.push(composer_identity_metadata(
         state,
         theme,
@@ -61,7 +59,7 @@ pub fn prompt_height(state: &AppState, width: u16) -> u16 {
         u16::try_from(visible_input_lines(&state.input, state.input_cursor, width).len())
             .unwrap_or(6);
     let attachment_rows = u16::from(!state.attachments.is_empty());
-    input_rows + 1 + attachment_rows
+    input_rows + 2 + attachment_rows
 }
 
 #[must_use]
@@ -77,6 +75,7 @@ pub fn prompt_cursor(state: &AppState, area: Rect) -> Option<(u16, u16)> {
     let typed = u16::try_from(UnicodeWidthStr::width(cursor_line)).unwrap_or(u16::MAX);
     let cursor_y = area
         .y
+        .saturating_add(1)
         .saturating_add(u16::try_from(cursor_row.saturating_sub(input_window.start)).unwrap_or(0));
     let rightmost = area.x + area.width.saturating_sub(1);
     let cursor_x = (area.x + PROMPT_GUTTER_WIDTH)
@@ -196,7 +195,7 @@ mod tests {
         let cursor = prompt_cursor(&state, area);
 
         // Then: the cursor advances by four terminal columns, not two chars.
-        assert_eq!(cursor, Some((16, 20)));
+        assert_eq!(cursor, Some((16, 21)));
     }
 
     #[test]
@@ -212,7 +211,7 @@ mod tests {
         let cursor = prompt_cursor(&state, area);
 
         // Then: the cursor sits after the final row instead of the first row.
-        assert_eq!(cursor, Some((18, 21)));
+        assert_eq!(cursor, Some((18, 22)));
     }
 
     #[test]
@@ -229,7 +228,7 @@ mod tests {
         let cursor = prompt_cursor(&state, area);
 
         // Then: the cursor lands after "ab", not at the end of the input.
-        assert_eq!(cursor, Some((14, 20)));
+        assert_eq!(cursor, Some((14, 21)));
     }
 
     #[test]
@@ -248,6 +247,6 @@ mod tests {
 
         // Then: the row containing the logical cursor is visible at the top.
         assert_eq!(rows.first().map(String::as_str), Some("zero"));
-        assert_eq!(cursor, Some((12, 20)));
+        assert_eq!(cursor, Some((12, 21)));
     }
 }

@@ -94,12 +94,17 @@ fn composer_rail_uses_opencode_two_column_main_gutter() {
 
     // When: the grounded composer renders.
     let buffer = render_buffer(&mut state, 80, 16);
-    let (x, _y) = find_text(&buffer, 80, 16, "▌").unwrap();
+    let (x, y) = find_text(&buffer, 80, 16, "▌").unwrap();
 
     // Then: the composer rail starts after the OpenCode two-column main gutter.
     assert_eq!(
         x, 2,
         "OpenCode pads the main column by two cells before the composer rail"
+    );
+    assert_eq!(
+        buffer[(x, y - 1)].bg,
+        Color::Rgb(30, 30, 30),
+        "OpenCode applies one-row input-surface padding above the composer text"
     );
 }
 
