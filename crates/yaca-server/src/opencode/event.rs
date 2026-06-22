@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::routing::get;
 use futures::stream;
@@ -19,7 +21,7 @@ use crate::ServerState;
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/event", get(subscribe))
-        .route("/api/event", get(subscribe))
+        .route("/api/event", get(subscribe_api))
         .route("/global/event", get(subscribe_global))
 }
 
@@ -53,6 +55,47 @@ async fn subscribe(
     Sse::new(initial.chain(live))
 }
 
+async fn subscribe_api(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let location_info = super::location::info_at(&st, &location);
+    let requested_directory = super::location::workdir_at(&st, &location)
+        .to_string_lossy()
+        .into_owned();
+    let connected = json_event(&json!({
+        "id": event_id(),
+        "type": "server.connected",
+        "location": location_info.clone(),
+        "data": {},
+    }));
+    let initial = stream::once(async move { Ok(connected) });
+    let live_st = st.clone();
+    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+        let st = live_st.clone();
+        let location_info = location_info.clone();
+        let requested_directory = requested_directory.clone();
+        async move {
+            match result {
+                Ok(envelope) => {
+                    if !envelope_matches_location(&st, &requested_directory, &envelope).await {
+                        return None;
+                    }
+                    let payload = envelope_payload(&st, envelope).await;
+                    Some(Ok(json_event(&native_event_payload(
+                        &location_info,
+                        payload,
+                    ))))
+                }
+                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+            }
+        }
+    });
+    Sse::new(initial.chain(live))
+}
+
 async fn subscribe_global(
     State(st): State<ServerState>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
@@ -78,6 +121,29 @@ async fn subscribe_global(
         }
     });
     Sse::new(initial.chain(live))
+}
+
+async fn envelope_matches_location(
+    st: &ServerState,
+    requested_directory: &str,
+    envelope: &Envelope,
+) -> bool {
+    let Some(session) = envelope.event.session() else {
+        return true;
+    };
+    match super::load_session(st, session, None).await {
+        Ok(snapshot) => snapshot.info.directory() == requested_directory,
+        Err(_) => false,
+    }
+}
+
+fn native_event_payload(location: &super::location::LocationInfo, payload: Value) -> Value {
+    json!({
+        "id": payload.get("id").cloned().unwrap_or_else(|| json!(event_id())),
+        "type": payload.get("type").cloned().unwrap_or_else(|| json!("yaca.envelope")),
+        "location": location,
+        "data": payload.get("properties").cloned().unwrap_or_else(|| json!({})),
+    })
 }
 
 async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {

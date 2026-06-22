@@ -70,6 +70,10 @@ impl OpenCodeSessionInfo {
         &self.title
     }
 
+    pub(super) fn directory(&self) -> &str {
+        &self.directory
+    }
+
     pub(super) fn permission(&self) -> Option<&[Value]> {
         self.permission.as_deref()
     }

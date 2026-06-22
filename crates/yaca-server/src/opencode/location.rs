@@ -12,7 +12,7 @@ pub(super) struct LocationResponse<T> {
     data: T,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct LocationInfo {
     directory: String,
     #[serde(rename = "workspaceID", skip_serializing_if = "Option::is_none")]
@@ -20,7 +20,7 @@ pub(super) struct LocationInfo {
     project: ProjectInfo,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ProjectInfo {
     id: &'static str,
     directory: String,

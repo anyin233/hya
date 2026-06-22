@@ -83,7 +83,31 @@ async fn shell_state() -> AppState {
 
 #[tokio::test]
 async fn opencode_v2_event_route_streams_connected_event() {
-    assert_event_stream("/api/event").await;
+    let app = router(state().await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event?location%5Bdirectory%5D=/tmp/yaca-opencode-event-api")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let mut stream = resp.into_body().into_data_stream();
+    let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["type"], "server.connected");
+    assert_eq!(event["location"]["directory"], WORKDIR);
+    assert_eq!(event["data"], json!({}));
+    assert!(event.get("properties").is_none());
 }
 
 #[tokio::test]
@@ -122,12 +146,13 @@ async fn opencode_global_event_route_streams_connected_event() {
 #[tokio::test]
 async fn opencode_v2_event_route_streams_session_created_location() {
     let app = router(state().await);
+    let directory = "/tmp/yaca-opencode-event-api-scoped";
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri(format!("/api/event?location%5Bdirectory%5D={directory}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -137,8 +162,9 @@ async fn opencode_v2_event_route_streams_session_created_location() {
     let mut stream = resp.into_body().into_data_stream();
     let connected = read_sse_json(&mut stream).await;
     assert_eq!(connected["type"], "server.connected");
+    assert_eq!(connected["location"]["directory"], directory);
+    assert_eq!(connected["data"], json!({}));
 
-    let directory = "/tmp/yaca-opencode-event-api-scoped";
     let created = app
         .oneshot(
             Request::builder()
@@ -156,21 +182,88 @@ async fn opencode_v2_event_route_streams_session_created_location() {
 
     let event = read_sse_json(&mut stream).await;
     assert_eq!(event["type"], "session.created");
-    assert!(event.get("location").is_none());
-    let session = event["properties"]["sessionID"].as_str().unwrap();
-    assert_eq!(event["properties"]["info"]["id"], session);
-    assert_eq!(event["properties"]["info"]["directory"], directory);
+    assert_eq!(event["location"]["directory"], directory);
+    assert!(event.get("properties").is_none());
+    let session = event["data"]["sessionID"].as_str().unwrap();
+    assert_eq!(event["data"]["info"]["id"], session);
+    assert_eq!(event["data"]["info"]["directory"], directory);
 }
 
 #[tokio::test]
-async fn opencode_v2_event_route_streams_session_updated_properties() {
+async fn opencode_v2_event_route_filters_session_events_by_location() {
+    let app = router(state().await);
+    let visible = "/tmp/yaca-opencode-event-api-visible";
+    let hidden = "/tmp/yaca-opencode-event-api-hidden";
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/event?location%5Bdirectory%5D={visible}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    assert_eq!(
+        read_sse_json(&mut stream).await["location"]["directory"],
+        visible
+    );
+
+    let hidden_created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"location": {"directory": hidden}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hidden_created.status(), StatusCode::OK);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err(),
+        "unexpected event for hidden location"
+    );
+
+    let visible_created = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"location": {"directory": visible}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(visible_created.status(), StatusCode::OK);
+
+    let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["type"], "session.created");
+    assert_eq!(event["location"]["directory"], visible);
+    assert_eq!(event["data"]["info"]["directory"], visible);
+}
+
+#[tokio::test]
+async fn opencode_legacy_event_route_streams_session_updated_properties() {
     let app = router(state().await);
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -249,14 +342,14 @@ async fn opencode_v2_event_route_streams_session_updated_properties() {
 }
 
 #[tokio::test]
-async fn opencode_v2_event_route_streams_message_updated_properties() {
+async fn opencode_legacy_event_route_streams_message_updated_properties() {
     let app = router(state().await);
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -386,14 +479,14 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
 }
 
 #[tokio::test]
-async fn opencode_v2_event_route_streams_reasoning_part_events() {
+async fn opencode_legacy_event_route_streams_reasoning_part_events() {
     let app = router(reasoning_state().await);
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -451,14 +544,14 @@ async fn opencode_v2_event_route_streams_reasoning_part_events() {
 }
 
 #[tokio::test]
-async fn opencode_v2_event_route_streams_tool_part_events() {
+async fn opencode_legacy_event_route_streams_tool_part_events() {
     let app = router(shell_state().await);
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
