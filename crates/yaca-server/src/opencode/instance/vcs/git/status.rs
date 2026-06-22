@@ -7,9 +7,21 @@ use super::{GitItem, status_name, text};
 pub(super) fn items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
     let out = text(
         workdir,
-        &["status", "--porcelain=v1", "-uall", "--no-renames"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-uall",
+            "--no-renames",
+            "-z",
+            "--",
+            ".",
+        ],
     )?;
-    let mut items: Vec<_> = out.lines().filter_map(item_from_line).collect();
+    let mut items: Vec<_> = out
+        .split('\0')
+        .filter(|line| !line.is_empty())
+        .filter_map(item_from_line)
+        .collect();
     items.sort_by(|a, b| a.file.cmp(&b.file));
     Ok(items)
 }
