@@ -49,24 +49,24 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
         "ls should render like OpenCode's List tool instead of raw JSON:\n{output}"
     );
     assert!(
-        output.contains("✱ Find *.rs in crates/yaca-tui"),
-        "find should render as a search-style tool with a compact summary:\n{output}"
+        output.contains("✱ Find \"*.rs\" in crates/yaca-tui"),
+        "find should quote the searched pattern like OpenCode search rows:\n{output}"
     );
     assert!(
-        output.contains("✱ Grep render_tool in crates/yaca-tui"),
-        "grep should render with the OpenCode search glyph and compact summary:\n{output}"
+        output.contains("✱ Grep \"render_tool\" in crates/yaca-tui"),
+        "grep should quote the searched pattern like OpenCode search rows:\n{output}"
     );
     assert!(
-        output.contains("✱ Glob *.rs"),
-        "glob should render with the OpenCode search glyph:\n{output}"
+        output.contains("✱ Glob \"*.rs\""),
+        "glob should quote the pattern like OpenCode search rows:\n{output}"
     );
     assert!(
         output.contains("% WebFetch https://opencode.ai"),
         "webfetch should render with the OpenCode percent glyph and camel-case title:\n{output}"
     );
     assert!(
-        output.contains("◈ WebSearch opencode tui layout"),
-        "websearch should render with the OpenCode diamond glyph and compact query:\n{output}"
+        output.contains("◈ WebSearch \"opencode tui layout\""),
+        "websearch should quote the query like OpenCode websearch rows:\n{output}"
     );
 }
 
