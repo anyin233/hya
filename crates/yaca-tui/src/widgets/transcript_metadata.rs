@@ -1,6 +1,12 @@
 use crate::AppState;
 
-pub(super) fn assistant_metadata_label(state: &AppState) -> String {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AssistantBlockStatus {
+    Completed,
+    Streaming,
+}
+
+pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockStatus) -> String {
     let agent = if state.agent.is_empty() {
         "build"
     } else {
@@ -11,10 +17,9 @@ pub(super) fn assistant_metadata_label(state: &AppState) -> String {
     } else {
         state.model.as_str()
     };
-    let status = if state.running {
-        "streaming"
-    } else {
-        "completed"
+    let status = match status {
+        AssistantBlockStatus::Completed => "completed",
+        AssistantBlockStatus::Streaming => "streaming",
     };
     format!("{agent} · {model} · {status}")
 }

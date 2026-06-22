@@ -6,8 +6,9 @@ use ratatui::widgets::{Paragraph, Wrap};
 use yaca_proto::Role;
 
 use super::error::{display_system_error_segment, is_system_error_text};
-use super::transcript_metadata::assistant_metadata_label;
-use super::transcript_tools::{push_tool_lines, status_label};
+use super::transcript_metadata::{AssistantBlockStatus, assistant_metadata_label};
+use super::transcript_text::text_from_parts;
+use super::transcript_tools::push_tool_lines;
 use crate::AppState;
 use crate::theme::Theme;
 use crate::view_model::{TimelinePart, timeline_items};
@@ -38,14 +39,25 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
 
 fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for (idx, item) in timeline_items(&state.projection).iter().enumerate() {
+    let items = timeline_items(&state.projection);
+    let streaming_assistant_idx = items
+        .last()
+        .filter(|item| state.running && matches!(item.role, Role::Assistant))
+        .map(|_| items.len().saturating_sub(1));
+    for (idx, item) in items.iter().enumerate() {
         let selected = state.selected_message == Some(idx);
         let start = lines.len();
         match item.role {
             Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
-            Role::Assistant => {
-                assistant_lines(&item.parts, idx, selected, state, theme, &mut lines)
-            }
+            Role::Assistant => assistant_lines(
+                &item.parts,
+                idx,
+                selected,
+                assistant_status(streaming_assistant_idx, idx),
+                state,
+                theme,
+                &mut lines,
+            ),
             Role::System => system_lines(&item.parts, idx, selected, theme, &mut lines),
         }
         if selected {
@@ -60,6 +72,14 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         )));
     }
     lines
+}
+
+fn assistant_status(streaming_assistant_idx: Option<usize>, idx: usize) -> AssistantBlockStatus {
+    if streaming_assistant_idx == Some(idx) {
+        AssistantBlockStatus::Streaming
+    } else {
+        AssistantBlockStatus::Completed
+    }
 }
 
 fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
@@ -104,6 +124,7 @@ fn assistant_lines(
     parts: &[TimelinePart],
     idx: usize,
     selected: bool,
+    status: AssistantBlockStatus,
     state: &AppState,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
@@ -154,7 +175,7 @@ fn assistant_lines(
         lines.push(Line::from(vec![
             Span::styled("   ", block_style(theme.muted, selected, theme)),
             Span::styled(
-                assistant_metadata_label(state),
+                assistant_metadata_label(state, status),
                 block_style(theme.muted, selected, theme),
             ),
         ]));
@@ -230,21 +251,4 @@ fn block_style(fg: Color, selected: bool, theme: &Theme) -> Style {
         theme.background
     };
     Style::default().fg(fg).bg(bg)
-}
-
-fn text_from_parts(parts: &[TimelinePart]) -> String {
-    let mut text = String::new();
-    for part in parts {
-        match part {
-            TimelinePart::Text(value) => text.push_str(value),
-            TimelinePart::Reasoning(_) => {}
-            TimelinePart::Tool { name, status, .. } => {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(&format!("tool {name} {}", status_label(status)));
-            }
-        }
-    }
-    text
 }
