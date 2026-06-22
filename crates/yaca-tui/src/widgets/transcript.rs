@@ -12,9 +12,9 @@ use crate::theme::Theme;
 use crate::view_model::{TimelinePart, timeline_items};
 
 pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme) {
-    let lines = timeline_lines(state, theme);
     let inner_height = area.height.max(1);
     let inner_width = area.width.max(1);
+    let lines = timeline_lines(state, theme, inner_width);
     let total = lines.iter().fold(0u16, |acc, line| {
         let wrapped = u16::try_from(line.width())
             .unwrap_or(u16::MAX)
@@ -35,14 +35,18 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
     );
 }
 
-fn timeline_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
+fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (idx, item) in timeline_items(&state.projection).iter().enumerate() {
         let selected = state.selected_message == Some(idx);
+        let start = lines.len();
         match item.role {
             Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
             Role::Assistant => assistant_lines(&item.parts, idx, selected, theme, &mut lines),
             Role::System => system_lines(&item.parts, idx, selected, theme, &mut lines),
+        }
+        if selected {
+            fill_selected_surface(&mut lines[start..], theme, width);
         }
     }
 
@@ -53,6 +57,22 @@ fn timeline_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
+    let width = usize::from(width.max(1));
+    for line in lines {
+        let line_width = line.width();
+        let rows = line_width.div_ceil(width).max(1);
+        let target_width = rows.saturating_mul(width);
+        let fill_width = target_width.saturating_sub(line_width);
+        if fill_width > 0 {
+            line.spans.push(Span::styled(
+                " ".repeat(fill_width),
+                block_style(theme.text, true, theme),
+            ));
+        }
+    }
 }
 
 fn user_lines(
