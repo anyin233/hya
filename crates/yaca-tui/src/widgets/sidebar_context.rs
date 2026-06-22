@@ -133,7 +133,7 @@ fn push_mcp(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
     }
     lines.push(Line::from(""));
     let title = if state.mcp.len() > 2 {
-        "▾ MCP"
+        "▼ MCP"
     } else {
         "MCP"
     };

@@ -61,7 +61,7 @@ fn context_rail_hides_mcp_expand_arrow_for_short_lists_like_opencode() {
 
     // Then: the title stays plain instead of advertising an unavailable collapse control.
     assert!(text.contains("MCP"));
-    assert!(!text.contains("▾ MCP"));
+    assert!(!text.contains("▼ MCP"));
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn context_rail_shows_mcp_expand_arrow_for_long_lists_like_opencode() {
     let text = render(&mut state, 124, 28);
 
     // Then: the title advertises the expandable section.
-    assert!(text.contains("▾ MCP"));
+    assert!(text.contains("▼ MCP"));
 }
 
 #[test]

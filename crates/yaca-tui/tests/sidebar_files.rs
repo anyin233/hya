@@ -64,3 +64,35 @@ fn context_rail_shows_modified_files() {
         "context rail should include files without numstat data"
     );
 }
+
+#[test]
+fn context_rail_marks_long_modified_file_lists_expandable_like_opencode() {
+    // Given: OpenCode marks modified file lists longer than two entries expandable.
+    let mut state = AppState {
+        changed_files: vec![
+            ChangedFileView {
+                path: "a.rs".to_string(),
+                additions: None,
+                deletions: None,
+            },
+            ChangedFileView {
+                path: "b.rs".to_string(),
+                additions: None,
+                deletions: None,
+            },
+            ChangedFileView {
+                path: "c.rs".to_string(),
+                additions: None,
+                deletions: None,
+            },
+        ],
+        ..AppState::default()
+    };
+
+    // When: the context rail renders the file section.
+    let buffer = render_buffer(&mut state, 124, 28);
+    let text = buffer_text(&buffer, 124, 28);
+
+    // Then: the section title uses the same disclosure marker as OpenCode.
+    assert!(text.contains("▼ Modified Files"));
+}

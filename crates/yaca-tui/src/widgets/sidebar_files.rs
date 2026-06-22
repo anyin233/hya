@@ -7,13 +7,19 @@ use crate::theme::Theme;
 
 const FILE_ROW_WIDTH: usize = 34;
 const MAX_VISIBLE_FILES: usize = 6;
+const EXPANDABLE_FILE_COUNT: usize = 2;
 
 pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
     if state.changed_files.is_empty() {
         return;
     }
     lines.push(Line::from(""));
-    push_section(lines, "Modified Files", theme.info, theme);
+    let title = if state.changed_files.len() > EXPANDABLE_FILE_COUNT {
+        "▼ Modified Files"
+    } else {
+        "Modified Files"
+    };
+    push_section(lines, title, theme.info, theme);
     for file in state.changed_files.iter().take(MAX_VISIBLE_FILES) {
         lines.push(meta(file_label(file), theme.text));
     }
