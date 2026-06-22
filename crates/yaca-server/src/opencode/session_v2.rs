@@ -3,8 +3,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use yaca_core::CreateSession;
 use yaca_proto::AgentName;
@@ -23,6 +21,7 @@ struct ListQuery {
     start: Option<u64>,
     search: Option<String>,
     cursor: Option<String>,
+    workspace: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -45,31 +44,6 @@ struct DataResponse<T> {
     data: T,
 }
 
-#[derive(Serialize)]
-struct SessionsResponse {
-    data: Vec<OpenCodeSessionInfo>,
-    cursor: SessionCursors,
-}
-
-#[derive(Serialize)]
-struct SessionCursors {
-    previous: Option<String>,
-    next: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SessionCursor {
-    id: String,
-    direction: CursorDirection,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum CursorDirection {
-    Previous,
-    Next,
-}
-
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/session", get(list).post(create))
@@ -90,6 +64,13 @@ async fn list(
     if limit == 0 {
         return Err(ApiError::bad_request("limit must be positive"));
     }
+    if query
+        .workspace
+        .as_deref()
+        .is_some_and(|id| !id.starts_with("wrk"))
+    {
+        return Ok(super::errors::invalid_workspace_query());
+    }
     let mut sessions = load_sessions(&st).await?;
     if query.order.as_deref() == Some("asc") {
         sessions.reverse();
@@ -103,22 +84,14 @@ async fn list(
     if let Some(search) = query.search {
         sessions.retain(|session| session.title().contains(&search));
     }
-    let start = match cursor_start(&sessions, query.cursor.as_deref(), limit) {
-        Ok(start) => start,
-        Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
-    };
+    let start =
+        match super::session_v2_cursor::cursor_start(&sessions, query.cursor.as_deref(), limit) {
+            Ok(start) => start,
+            Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
+        };
     let page: Vec<_> = sessions.into_iter().skip(start).take(limit).collect();
-    let cursor = SessionCursors {
-        previous: page
-            .first()
-            .map(|session| encode_cursor(session.id(), CursorDirection::Previous))
-            .transpose()?,
-        next: page
-            .last()
-            .map(|session| encode_cursor(session.id(), CursorDirection::Next))
-            .transpose()?,
-    };
-    Ok(Json(SessionsResponse { data: page, cursor }).into_response())
+    let cursor = super::session_v2_cursor::response_cursor(&page)?;
+    Ok(Json(super::session_v2_cursor::SessionsResponse { data: page, cursor }).into_response())
 }
 
 async fn create(
@@ -239,36 +212,4 @@ async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, Api
         );
     }
     Ok(out)
-}
-
-fn cursor_start(
-    sessions: &[OpenCodeSessionInfo],
-    cursor: Option<&str>,
-    limit: usize,
-) -> Result<usize, ()> {
-    let Some(cursor) = cursor else {
-        return Ok(0);
-    };
-    let cursor = decode_cursor(cursor)?;
-    let Some(position) = sessions
-        .iter()
-        .position(|session| session.id() == cursor.id.as_str())
-    else {
-        return Ok(sessions.len());
-    };
-    Ok(match cursor.direction {
-        CursorDirection::Previous => position.saturating_sub(limit),
-        CursorDirection::Next => position.saturating_add(1),
-    })
-}
-
-fn encode_cursor(id: &str, direction: CursorDirection) -> Result<String, ApiError> {
-    let raw = serde_json::json!({ "id": id, "direction": direction });
-    let bytes = serde_json::to_vec(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn decode_cursor(cursor: &str) -> Result<SessionCursor, ()> {
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
-    serde_json::from_slice(&bytes).map_err(|_| ())
 }

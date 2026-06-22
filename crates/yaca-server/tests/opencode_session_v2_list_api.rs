@@ -108,3 +108,20 @@ async fn opencode_v2_session_list_invalid_cursor_returns_typed_error() {
         })
     );
 }
+
+#[tokio::test]
+async fn opencode_v2_session_list_invalid_workspace_returns_typed_error() {
+    let app = router(state().await);
+
+    let (status, body) = get_json(app, "/api/session?workspace=bad").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "InvalidRequestError",
+            "message": "Invalid workspace query parameter",
+            "kind": "Query",
+            "field": "workspace",
+        })
+    );
+}
