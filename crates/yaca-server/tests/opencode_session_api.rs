@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -127,6 +128,28 @@ async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
     assert_eq!(resp.status(), StatusCode::OK);
     let created: CreateSessionResponse = serde_json::from_value(body_json(resp).await).unwrap();
     format!("ses_{}", created.session.as_uuid().simple())
+}
+
+async fn wait_until_busy(app: axum::Router, session: &str) {
+    for _ in 0..100 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/session/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        if body_json(resp).await[session]["type"] == "busy" {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("session did not become busy");
 }
 
 async fn post_prompt(app: axum::Router, session: &str) {
@@ -384,6 +407,62 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
             .as_str()
             .is_some_and(|output| output.contains("opencode-shell-ok"))
     );
+}
+
+#[tokio::test]
+async fn opencode_session_shell_busy_returns_typed_error() {
+    let app = router(shell_state().await);
+    let session = create_session(app.clone(), None).await;
+    let shell_app = app.clone();
+    let shell_session = session.clone();
+    let mut shell_task = tokio::spawn(async move {
+        post_json(
+            shell_app,
+            format!("/sessions/{shell_session}/shell"),
+            json!({"command": "sleep 20 && printf should-not-finish"}),
+        )
+        .await
+    });
+    wait_until_busy(app.clone(), &session).await;
+
+    let (status, body) = post_json(
+        app.clone(),
+        format!("/session/{session}/shell"),
+        json!({"command": "printf blocked"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "SessionBusyError",
+            "sessionID": session,
+            "message": format!("Session is busy: {session}"),
+        })
+    );
+
+    let abort = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/abort"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(abort.status(), StatusCode::OK);
+    assert_eq!(body_json(abort).await, json!(true));
+    let (shell_status, shell_body) = tokio::select! {
+        joined = &mut shell_task => joined.unwrap(),
+        () = tokio::time::sleep(Duration::from_secs(3)) => {
+            shell_task.abort();
+            panic!("shell request did not finish after abort");
+        }
+    };
+    assert_eq!(shell_status, StatusCode::OK);
+    let response: PromptResponse = serde_json::from_value(shell_body).unwrap();
+    assert_eq!(response.finish, FinishReason::Cancelled);
 }
 
 #[tokio::test]

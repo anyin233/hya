@@ -2,6 +2,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
+use yaca_proto::SessionId;
 
 pub(in crate::opencode) fn session_not_found(session_id: &str) -> Response {
     (
@@ -10,6 +11,18 @@ pub(in crate::opencode) fn session_not_found(session_id: &str) -> Response {
             "_tag": "SessionNotFoundError",
             "sessionID": session_id,
             "message": format!("Session not found: {session_id}"),
+        })),
+    )
+        .into_response()
+}
+
+pub(in crate::opencode) fn session_busy(session: SessionId) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "_tag": "SessionBusyError",
+            "sessionID": session.to_string(),
+            "message": format!("Session is busy: {session}"),
         })),
     )
         .into_response()
