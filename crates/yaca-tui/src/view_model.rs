@@ -1,5 +1,6 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::tool_inputs;
 use crate::tool_questions;
 use crate::tool_tasks;
 use crate::tool_todos;
@@ -100,68 +101,13 @@ fn tool_input(name: &str, state: &ToolPartState) -> String {
         | ToolPartState::Completed { input, .. }
         | ToolPartState::Error { input, .. } => input,
     };
-    if let Some(summary) = known_tool_input(name, value) {
+    if let Some(summary) = tool_inputs::summary(name, value) {
         return summary;
     }
     if value.is_null() {
         String::new()
     } else {
         ellipsize(&value.to_string(), 48)
-    }
-}
-
-fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
-    match name {
-        "read" => field_text(value, "path").map(|path| read_summary(value, path)),
-        "ls" => field_text(value, "path"),
-        "edit" | "write" => field_text(value, "path"),
-        "shell" | "bash" => field_text(value, "cmd").or_else(|| field_text(value, "command")),
-        "find" => field_text(value, "pattern").map(|pattern| match field_text(value, "path") {
-            Some(path) => format!("{pattern} in {path}"),
-            None => pattern,
-        }),
-        "grep" => field_text(value, "pattern").map(|pattern| match field_text(value, "path") {
-            Some(path) => format!("{pattern} in {path}"),
-            None => pattern,
-        }),
-        "glob" => field_text(value, "pattern"),
-        "webfetch" => field_text(value, "url"),
-        "websearch" => field_text(value, "query"),
-        "ask_user" => tool_questions::summary(value),
-        "task" => tool_tasks::summary(value),
-        "todowrite" => tool_todos::summary(value),
-        _ => None,
-    }
-}
-
-fn field_text(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .and_then(clean_inline_text)
-}
-
-fn clean_inline_text(text: &str) -> Option<String> {
-    let cleaned = text.trim().replace('\n', " ");
-    if cleaned.is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
-}
-
-fn read_summary(value: &serde_json::Value, path: String) -> String {
-    let mut args = Vec::new();
-    if let Some(limit) = value.get("limit").and_then(serde_json::Value::as_u64) {
-        args.push(format!("limit={limit}"));
-    }
-    if let Some(offset) = value.get("offset").and_then(serde_json::Value::as_u64) {
-        args.push(format!("offset={offset}"));
-    }
-    if args.is_empty() {
-        path
-    } else {
-        format!("{path} [{}]", args.join(", "))
     }
 }
 

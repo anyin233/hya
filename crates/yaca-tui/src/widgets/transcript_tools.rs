@@ -3,6 +3,7 @@ use ratatui::text::{Line, Span};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
 use crate::theme::Theme;
+use crate::tool_labels::{action_label, status_symbol};
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 32;
@@ -130,50 +131,6 @@ fn ellipsize_input(input: &str) -> String {
     } else {
         let head: String = cleaned.chars().take(TOOL_INPUT_INLINE_MAX).collect();
         format!("{head}…")
-    }
-}
-
-fn status_symbol(name: &str, status: &ToolStatus) -> &'static str {
-    match status {
-        ToolStatus::Error { .. } if name == "task" => "✗",
-        ToolStatus::Error { .. } => "×",
-        ToolStatus::Pending | ToolStatus::Running if name == "task" => "•",
-        ToolStatus::Completed { .. } if name == "task" => "✓",
-        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => match name {
-            "edit" | "write" => "←",
-            "find" | "grep" | "glob" => "✱",
-            "todowrite" => "#",
-            "webfetch" => "%",
-            "websearch" => "◈",
-            _ => "→",
-        },
-    }
-}
-
-fn action_label(name: &str) -> String {
-    match name {
-        "bash" | "shell" => "Shell".to_string(),
-        "read" => "Read".to_string(),
-        "edit" => "Edit".to_string(),
-        "write" => "Write".to_string(),
-        "ls" => "List".to_string(),
-        "find" => "Find".to_string(),
-        "grep" => "Grep".to_string(),
-        "glob" => "Glob".to_string(),
-        "ask_user" => "Asked".to_string(),
-        "task" => "Task".to_string(),
-        "todowrite" => "Todos".to_string(),
-        "webfetch" => "WebFetch".to_string(),
-        "websearch" => "WebSearch".to_string(),
-        other => title_case_ascii(other),
-    }
-}
-
-fn title_case_ascii(input: &str) -> String {
-    let mut chars = input.chars();
-    match chars.next() {
-        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
-        None => String::new(),
     }
 }
 
