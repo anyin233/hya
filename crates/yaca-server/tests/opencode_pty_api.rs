@@ -211,8 +211,10 @@ async fn opencode_v2_pty_routes_wrap_location_and_manage_session_metadata() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(missing["_tag"], "PtyNotFoundError");
 
-    let (status, _) = request(app, "POST", "/api/pty/pty_missing/connect-token", None).await;
+    let (status, forbidden) =
+        request(app, "POST", "/api/pty/pty_missing/connect-token", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(forbidden["_tag"], "PtyForbiddenError");
 }
 
 #[tokio::test]
