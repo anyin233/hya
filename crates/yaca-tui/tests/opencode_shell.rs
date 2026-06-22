@@ -177,3 +177,29 @@ fn active_runtime_strip_sits_above_the_composer() {
         "composer input rail should remain directly below the runtime strip, got {prompt_row:?}"
     );
 }
+
+#[test]
+fn active_runtime_strip_includes_current_team_role() {
+    // Given: the active agent also has an OpenCode-style team role.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        running: true,
+        team: vec![("sisyphus".to_string(), "ultraworker retry".to_string())],
+        ..AppState::default()
+    };
+
+    // When: the wide shell renders the runtime strip above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = rendered_row(&buffer, 120, 11);
+
+    // Then: the strip uses the active agent plus role before the model.
+    assert!(
+        status_row.contains("sisyphus - ultraworker retry"),
+        "runtime strip should show the active agent role, got {status_row:?}"
+    );
+    assert!(
+        status_row.contains("kimi-k2"),
+        "runtime strip should keep the active model visible, got {status_row:?}"
+    );
+}

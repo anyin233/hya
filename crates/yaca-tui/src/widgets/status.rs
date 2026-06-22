@@ -28,6 +28,14 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
     } else {
         state.model.as_str()
     };
+    let agent_label = state
+        .team
+        .iter()
+        .find(|(member, _status)| member == agent)
+        .map_or_else(
+            || agent.to_string(),
+            |(_member, status)| format!("{agent} - {status}"),
+        );
     let state_label = if state.running { "streaming" } else { "idle" };
     let state_color = if state.running {
         theme.warning
@@ -36,7 +44,7 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
     };
     Line::from(vec![
         Span::styled("  ▣ ", Style::default().fg(theme.primary)),
-        Span::styled(agent.to_string(), Style::default().fg(theme.info)),
+        Span::styled(agent_label, Style::default().fg(theme.info)),
         Span::styled(" · ", Style::default().fg(theme.muted)),
         Span::styled(model.to_string(), Style::default().fg(theme.text)),
         Span::styled(" · ", Style::default().fg(theme.muted)),
