@@ -154,6 +154,77 @@ async fn opencode_v2_event_route_streams_session_updated_properties() {
     assert_eq!(updated_event["properties"]["info"]["title"], "Renamed");
 }
 
+#[tokio::test]
+async fn opencode_v2_event_route_streams_message_updated_properties() {
+    let app = router(state().await);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    assert_eq!(read_sse_json(&mut stream).await["type"], "server.connected");
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_event = read_sse_json(&mut stream).await;
+    let session = created_event["properties"]["sessionID"].as_str().unwrap();
+
+    let command = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/{session}/command"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "command": "init",
+                        "arguments": "audit",
+                        "text": "/init audit"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command.status(), StatusCode::OK);
+
+    let started = read_sse_json(&mut stream).await;
+    assert_eq!(started["type"], "message.updated");
+    assert_eq!(started["properties"]["sessionID"], session);
+    let message = started["properties"]["info"]["id"].as_str().unwrap();
+    assert!(!message.is_empty());
+    assert_eq!(started["properties"]["info"]["role"], "user");
+    assert!(started["properties"]["info"].get("finish").is_none());
+
+    let assistant_finished = read_next_message(&mut stream, "assistant", Some("stop")).await;
+    assert_eq!(assistant_finished["properties"]["sessionID"], session);
+    assert_eq!(
+        assistant_finished["properties"]["info"]["role"],
+        "assistant"
+    );
+    assert_eq!(assistant_finished["properties"]["info"]["finish"], "stop");
+}
+
 async fn assert_event_stream(uri: &str) {
     let app = router(state().await);
     let resp = app
@@ -179,6 +250,25 @@ async fn assert_event_stream(uri: &str) {
     assert_eq!(event["type"], "server.connected");
     assert!(event.get("location").is_none());
     assert_eq!(event["properties"], json!({}));
+}
+
+async fn read_next_message(
+    stream: &mut axum::body::BodyDataStream,
+    role: &str,
+    finish: Option<&str>,
+) -> serde_json::Value {
+    for _ in 0..24 {
+        let event = read_sse_json(stream).await;
+        let info = &event["properties"]["info"];
+        let finish_matches = match finish {
+            Some(finish) => info["finish"] == finish,
+            None => info.get("finish").is_none(),
+        };
+        if event["type"] == "message.updated" && info["role"] == role && finish_matches {
+            return event;
+        }
+    }
+    panic!("message.updated role {role} not found");
 }
 
 async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
