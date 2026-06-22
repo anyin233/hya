@@ -33,6 +33,8 @@ export function openCodeEventFromEnvelope(
       return textPartEvent(envelope, "")
     case "text_delta":
       return textPartEvent(envelope, stringEventField(event, "delta"), stringEventField(event, "delta"))
+    case "text_replace":
+      return textPartEvent(envelope, stringEventField(event, "text"))
     case "text_end":
       return textPartEvent(envelope, "", undefined, true)
     case "reasoning_start":
