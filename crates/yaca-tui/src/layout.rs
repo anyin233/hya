@@ -10,6 +10,20 @@ pub struct AppLayout {
 
 #[must_use]
 pub fn app_layout(area: Rect) -> AppLayout {
+    let show_sidebar = area.width >= 110;
+    let columns = if show_sidebar {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(38)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(100)])
+            .split(area)
+    };
+    let main = columns[0];
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -18,26 +32,13 @@ pub fn app_layout(area: Rect) -> AppLayout {
             Constraint::Length(3),
             Constraint::Length(1),
         ])
-        .split(area);
+        .split(main);
 
-    let show_sidebar = rows[1].width >= 110;
-    let body = if show_sidebar {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(38)])
-            .split(rows[1])
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100)])
-            .split(rows[1])
-    };
-
-    let sidebar = if show_sidebar { Some(body[1]) } else { None };
+    let sidebar = if show_sidebar { Some(columns[1]) } else { None };
 
     AppLayout {
         status: rows[0],
-        timeline: body[0],
+        timeline: rows[1],
         sidebar,
         prompt: rows[2],
         footer: rows[3],

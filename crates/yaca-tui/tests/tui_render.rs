@@ -4,12 +4,11 @@
     clippy::field_reassign_with_default
 )]
 
+mod render_support;
+
 use ratatui::style::Color;
 use yaca_proto::Role;
 use yaca_tui::{AppState, DialogItem, DialogView, PermissionPrompt};
-
-#[allow(dead_code)]
-mod render_support;
 
 use render_support::{
     buffer_text, find_rendered_text, render, render_buffer, rich_state, with_event_error,
@@ -38,12 +37,18 @@ fn wide_layout_renders_sidebar_and_surface_labels() {
         text.contains("context"),
         "wide layout should show context sidebar"
     );
-    assert!(text.contains("model fake"), "sidebar should show model");
     assert!(
-        text.contains("session sess-1"),
-        "sidebar should show session label"
+        text.contains("ContextPilot"),
+        "sidebar should show OpenCode-style context pilot"
     );
-    assert!(text.contains("team"), "sidebar should summarize team");
+    assert!(
+        text.contains("Agents"),
+        "sidebar should include agents panel"
+    );
+    assert!(
+        text.contains("alice - active"),
+        "sidebar should summarize team"
+    );
 }
 
 #[test]
@@ -163,16 +168,16 @@ fn sidebar_summarizes_transcript_tools_and_errors() {
 
     let text = render(&mut state, 120, 36);
     assert!(
-        text.contains("transcript"),
-        "sidebar should include a transcript section"
+        text.contains("Context"),
+        "sidebar should include a context section"
     );
     assert!(
-        text.contains("messages 4"),
+        text.contains("4 messages"),
         "sidebar should count transcript messages"
     );
-    assert!(text.contains("tools 1"), "sidebar should count tool calls");
+    assert!(text.contains("1 tools"), "sidebar should count tool calls");
     assert!(
-        text.contains("errors 2"),
+        text.contains("2 errors"),
         "sidebar should count tool and system errors"
     );
 }

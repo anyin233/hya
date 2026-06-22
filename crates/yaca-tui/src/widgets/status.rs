@@ -23,7 +23,12 @@ fn status_line(state: &AppState, theme: &Theme) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" · {} · {}", state.model, state.session_label),
+            format!(
+                " · {} · {} · {}",
+                agent_label(state),
+                state.model,
+                state.session_label
+            ),
             Style::default().fg(theme.muted),
         ),
         Span::styled(
@@ -76,4 +81,12 @@ fn status_line(state: &AppState, theme: &Theme) -> Line<'static> {
         ));
     }
     Line::from(spans)
+}
+
+fn agent_label(state: &AppState) -> &str {
+    if state.agent.is_empty() {
+        "build"
+    } else {
+        state.agent.as_str()
+    }
 }

@@ -2,33 +2,36 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::AppState;
 use crate::theme::Theme;
 
 pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let title = if state.yolo {
-        " message — YOLO · Enter send · Tab yolo off · Ctrl-C clear/interrupt · F2 model "
-    } else {
-        " message — Enter send · Tab yolo · / or @ popup · Ctrl-C clear/interrupt · F2 model "
-    };
-    let widget = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(theme.primary)),
-        Span::styled(state.input.clone(), Style::default().fg(theme.text)),
-    ]))
-    .style(Style::default().fg(theme.text).bg(theme.panel))
-    .block(
-        Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(if state.running {
-                theme.border_active
-            } else {
-                theme.border_subtle
-            })),
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.element)),
+        area,
     );
-    frame.render_widget(widget, area);
+    let rail = if state.running {
+        theme.warning
+    } else {
+        theme.primary
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(rail).bg(theme.element)),
+            Span::styled(
+                state.input.clone(),
+                Style::default().fg(theme.text).bg(theme.element),
+            ),
+        ]),
+        composer_metadata(state, theme),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().fg(theme.text).bg(theme.element)),
+        area,
+    );
 }
 
 #[must_use]
@@ -36,10 +39,10 @@ pub fn prompt_cursor(state: &AppState, area: Rect) -> Option<(u16, u16)> {
     if state.permission.is_some() || state.running {
         return None;
     }
-    let typed = u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX);
-    let rightmost = area.x + area.width.saturating_sub(2);
-    let cursor_x = (area.x + 3).saturating_add(typed).min(rightmost);
-    Some((cursor_x, area.y + 1))
+    let typed = u16::try_from(UnicodeWidthStr::width(state.input.as_str())).unwrap_or(u16::MAX);
+    let rightmost = area.x + area.width.saturating_sub(1);
+    let cursor_x = (area.x + 2).saturating_add(typed).min(rightmost);
+    Some((cursor_x, area.y))
 }
 
 pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
@@ -63,4 +66,78 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         .style(theme.base()),
         area,
     );
+}
+
+fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
+    let agent = if state.agent.is_empty() {
+        "build"
+    } else {
+        state.agent.as_str()
+    };
+    let model = if state.model.is_empty() {
+        "offline"
+    } else {
+        state.model.as_str()
+    };
+    let effort = state.reasoning_effort.as_deref().unwrap_or("off");
+    let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
+    let mode = if state.yolo { "yolo" } else { "manual" };
+    Line::from(vec![
+        Span::styled("  ", Style::default().bg(theme.element)),
+        Span::styled(
+            agent.to_string(),
+            Style::default().fg(theme.info).bg(theme.element),
+        ),
+        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
+        Span::styled(
+            model.to_string(),
+            Style::default().fg(theme.text).bg(theme.element),
+        ),
+        Span::styled(
+            " · think ",
+            Style::default().fg(theme.muted).bg(theme.element),
+        ),
+        Span::styled(
+            effort.to_string(),
+            Style::default().fg(theme.accent).bg(theme.element),
+        ),
+        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
+        Span::styled(
+            mode.to_string(),
+            Style::default().fg(theme.warning).bg(theme.element),
+        ),
+        Span::styled("   ", Style::default().bg(theme.element)),
+        Span::styled(
+            cost.to_string(),
+            Style::default().fg(theme.muted).bg(theme.element),
+        ),
+        Span::styled(
+            "   ctrl+p commands",
+            Style::default().fg(theme.muted).bg(theme.element),
+        ),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+
+    use super::prompt_cursor;
+    use crate::AppState;
+
+    #[test]
+    fn prompt_cursor_uses_display_columns_when_input_contains_cjk() {
+        // Given: a composer input containing two full-width CJK glyphs.
+        let state = AppState {
+            input: "你好".to_string(),
+            ..AppState::default()
+        };
+        let area = Rect::new(10, 20, 40, 2);
+
+        // When: the prompt asks ratatui where to draw the terminal cursor.
+        let cursor = prompt_cursor(&state, area);
+
+        // Then: the cursor advances by four terminal columns, not two chars.
+        assert_eq!(cursor, Some((16, 20)));
+    }
 }

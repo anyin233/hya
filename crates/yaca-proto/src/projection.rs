@@ -20,6 +20,7 @@ pub struct SessionProjection {
     pub parent: Option<SessionId>,
     pub agent: Option<AgentName>,
     pub model: Option<ModelRef>,
+    pub workdir: Option<String>,
     pub title: Option<String>,
     pub messages: Vec<MessageProjection>,
 }
@@ -101,12 +102,14 @@ impl Projection {
                 parent,
                 agent,
                 model,
+                workdir,
                 ..
             } => {
                 self.session.id = Some(*session);
                 self.session.parent = *parent;
                 self.session.agent = Some(agent.clone());
                 self.session.model = Some(model.clone());
+                self.session.workdir = Some(workdir.clone());
             }
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());

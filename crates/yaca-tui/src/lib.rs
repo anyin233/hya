@@ -28,10 +28,50 @@ pub struct AppState {
     pub exit_armed: bool,
     pub running: bool,
     pub scroll_back: u16,
+    pub agent: String,
     pub model: String,
     pub session_label: String,
     pub reasoning_effort: Option<String>,
+    pub cost_label: Option<String>,
+    pub context: ContextView,
+    pub mcp: Vec<ConnectorView>,
+    pub lsp_status: Option<String>,
+    pub branch_label: Option<String>,
     pub selected_message: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContextView {
+    pub session_saved_tokens: Option<u64>,
+    pub all_time_saved_tokens: Option<u64>,
+    pub saved_percent_basis_points: Option<u16>,
+    pub current_tokens: Option<u64>,
+    pub context_window_tokens: Option<u64>,
+    pub spent_label: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectorState {
+    Connected,
+    NeedsAuth,
+    Disabled,
+}
+
+impl ConnectorState {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Connected => "Connected",
+            Self::NeedsAuth => "Needs auth",
+            Self::Disabled => "Disabled",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectorView {
+    pub name: String,
+    pub state: ConnectorState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
