@@ -23,6 +23,7 @@ mod session_delete;
 mod session_diff;
 mod session_fork;
 mod session_legacy;
+mod session_list;
 mod session_part_update;
 mod session_prompt;
 mod session_share;

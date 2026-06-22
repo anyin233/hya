@@ -24,6 +24,7 @@ pub struct SessionStore {
 pub struct SessionInfo {
     pub session: SessionId,
     pub started_millis: i64,
+    pub updated_millis: i64,
     pub events: u64,
 }
 
@@ -133,8 +134,8 @@ impl SessionStore {
 
     pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
         let rows = sqlx::query(
-            "SELECT session_id, MIN(ts) AS started, COUNT(*) AS n \
-             FROM event_log GROUP BY session_id ORDER BY started DESC",
+            "SELECT session_id, MIN(ts) AS started, MAX(ts) AS updated, COUNT(*) AS n \
+             FROM event_log GROUP BY session_id ORDER BY updated DESC, session_id DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -142,11 +143,13 @@ impl SessionStore {
         for r in rows {
             let key: Vec<u8> = r.try_get("session_id")?;
             let started: i64 = r.try_get("started")?;
+            let updated: i64 = r.try_get("updated")?;
             let n: i64 = r.try_get("n")?;
             if let Ok(uuid) = uuid::Uuid::from_slice(&key) {
                 out.push(SessionInfo {
                     session: SessionId::from_uuid(uuid),
                     started_millis: started,
+                    updated_millis: updated,
                     events: n.max(0) as u64,
                 });
             }
