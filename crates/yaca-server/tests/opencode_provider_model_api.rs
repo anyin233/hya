@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -16,7 +17,25 @@ use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
 const WORKDIR: &str = "/tmp/yaca-opencode-provider-model-api";
 
-async fn state() -> AppState {
+fn tempdir() -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "yaca-server-metadata-test-{nanos}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(dir.join(".yaca/skills/demo")).unwrap();
+    std::fs::write(
+        dir.join(".yaca/skills/demo/SKILL.md"),
+        "---\nname: demo\ndescription: Demo skill\n---\nUse this skill.\n",
+    )
+    .unwrap();
+    dir
+}
+
+async fn state(workdir: impl Into<std::path::PathBuf>) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
@@ -28,7 +47,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("openai/gpt-5"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir.into(),
             reasoning: None,
         }),
     )
@@ -70,7 +89,7 @@ async fn get_status(app: axum::Router, uri: &str) -> StatusCode {
 
 #[tokio::test]
 async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
-    let app = router(state().await);
+    let app = router(state(WORKDIR).await);
 
     let (status, providers) = get_json(app.clone(), "/api/provider").await;
     assert_eq!(status, StatusCode::OK);
@@ -102,4 +121,43 @@ async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
     assert_eq!(models["data"][0]["capabilities"]["tools"], false);
     assert_eq!(models["data"][0]["limit"]["context"], 0);
     assert_eq!(models["data"][0]["limit"]["output"], 0);
+}
+
+#[tokio::test]
+async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
+    let workdir = tempdir();
+    let expected = std::fs::canonicalize(&workdir).unwrap();
+    let expected = expected.to_string_lossy();
+    let app = router(state(workdir).await);
+
+    let (status, location) = get_json(app.clone(), "/api/location").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(location["directory"], expected.as_ref());
+    assert_eq!(location["project"]["directory"], expected.as_ref());
+
+    let (status, agents) = get_json(app.clone(), "/api/agent").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(agents["location"]["directory"], expected.as_ref());
+    assert_eq!(agents["data"][0]["id"], "build");
+    assert_eq!(agents["data"][0]["mode"], "primary");
+    assert_eq!(agents["data"][0]["model"]["providerID"], "openai");
+    assert_eq!(agents["data"][0]["model"]["id"], "gpt-5");
+    assert_eq!(agents["data"][0]["request"]["headers"], json!({}));
+    assert_eq!(agents["data"][0]["permissions"], json!([]));
+
+    let (status, commands) = get_json(app.clone(), "/api/command").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        commands["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cmd| cmd["name"] == "help" && cmd["template"] == "/help")
+    );
+
+    let (status, skills) = get_json(app, "/api/skill").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(skills["data"][0]["name"], "demo");
+    assert_eq!(skills["data"][0]["description"], "Demo skill");
+    assert_eq!(skills["data"][0]["content"], "Use this skill.\n");
 }
