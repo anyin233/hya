@@ -12,7 +12,7 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
     let area = frame.area();
     let footer_height = u16::from(area.height > 1);
     let extra = u16::try_from(question.options.len()).unwrap_or(u16::MAX);
-    let height = (7u16.saturating_add(extra)).min(area.height.saturating_sub(footer_height));
+    let height = (6u16.saturating_add(extra)).min(area.height.saturating_sub(footer_height));
     if height == 0 {
         return;
     }
@@ -35,14 +35,8 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
         Line::from(Span::styled(
-            "question",
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
             ellipsize(&question.prompt, inner_width),
-            Style::default()
-                .fg(theme.primary)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text),
         )),
         Line::from(""),
     ];

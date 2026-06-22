@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod render_support;
 
+use ratatui::style::{Color, Modifier};
 use render_support::{render, render_buffer, with_assistant_message};
 use yaca_tui::{AppState, QuestionPrompt};
 
@@ -97,6 +98,10 @@ fn question_panel_uses_opencode_option_labels_and_hint() {
 
     // Then: option rows and hint copy match OpenCode's question footer.
     assert!(
+        !text.lines().any(|row| row.trim() == "question"),
+        "single-question footer should not render a synthetic title:\n{text}"
+    );
+    assert!(
         text.contains("1."),
         "first option should be numbered:\n{text}"
     );
@@ -111,6 +116,41 @@ fn question_panel_uses_opencode_option_labels_and_hint() {
     assert!(
         !text.contains("Up/Down") && !text.contains("Esc cancel"),
         "question footer should omit legacy shortcut copy:\n{text}"
+    );
+}
+
+#[test]
+fn question_panel_renders_prompt_as_body_text() {
+    // Given: a single-choice question prompt.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 0,
+            input: String::new(),
+            allow_custom: false,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the terminal buffer renders the OpenCode-style question footer.
+    let width = 100;
+    let height = 20;
+    let buffer = render_buffer(&mut state, width, height);
+    let (x, y) = render_support::find_rendered_text(&buffer, width, height, "Pick a mode")
+        .unwrap_or_else(|| {
+            panic!(
+                "missing prompt in:\n{}",
+                render_support::buffer_text(&buffer, width, height)
+            )
+        });
+    let cell = &buffer[(x, y)];
+
+    // Then: the prompt is body text, not a synthetic title treatment.
+    assert_eq!(cell.fg, Color::Rgb(238, 238, 238));
+    assert!(
+        !cell.modifier.contains(Modifier::BOLD),
+        "question prompt should render like OpenCode body text"
     );
 }
 
