@@ -466,6 +466,56 @@ async fn opencode_session_shell_busy_returns_typed_error() {
 }
 
 #[tokio::test]
+async fn opencode_session_delete_message_busy_returns_typed_error() {
+    let app = router(shell_state().await);
+    let session = create_session(app.clone(), None).await;
+    let shell_app = app.clone();
+    let shell_session = session.clone();
+    let mut shell_task = tokio::spawn(async move {
+        post_json(
+            shell_app,
+            format!("/sessions/{shell_session}/shell"),
+            json!({"command": "sleep 20 && printf should-not-finish"}),
+        )
+        .await
+    });
+    wait_until_busy(app.clone(), &session).await;
+
+    let message = MessageId::new();
+    let (status, body) =
+        delete_json(app.clone(), format!("/session/{session}/message/{message}")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "SessionBusyError",
+            "sessionID": session,
+            "message": format!("Session is busy: {session}"),
+        })
+    );
+
+    let abort = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/abort"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(abort.status(), StatusCode::OK);
+    let (shell_status, _shell_body) = tokio::select! {
+        joined = &mut shell_task => joined.unwrap(),
+        () = tokio::time::sleep(Duration::from_secs(3)) => {
+            shell_task.abort();
+            panic!("shell request did not finish after abort");
+        }
+    };
+    assert_eq!(shell_status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn opencode_session_delete_removes_session() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
