@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, now_millis};
+use yaca_proto::{
+    AgentName, Envelope, Event, ModelRef, Projection, SessionId, ToolSchema, now_millis,
+};
 use yaca_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
@@ -138,6 +140,11 @@ impl SessionEngine {
     #[must_use]
     pub fn provider_catalog(&self) -> Vec<ProviderModel> {
         self.providers.catalog()
+    }
+
+    #[must_use]
+    pub fn tool_schemas(&self) -> Vec<ToolSchema> {
+        self.tools.schemas()
     }
 
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, CoreError> {
