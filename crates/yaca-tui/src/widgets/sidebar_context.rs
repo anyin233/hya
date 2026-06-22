@@ -2,7 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::sidebar_format::{
-    connector_color, format_basis_points, format_number, saved_tokens, used_percent, workdir_label,
+    connector_color, format_basis_points, format_number, saved_tokens, used_percent,
 };
 use super::sidebar_stats::{TranscriptStats, transcript_stats};
 use crate::AppState;
@@ -20,7 +20,6 @@ pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     push_lsp(&mut lines, state, theme);
     push_agents(&mut lines, state, theme);
     push_runtime(&mut lines, state, theme);
-    push_worktree_footer(&mut lines, state, theme);
     lines
 }
 
@@ -199,22 +198,6 @@ fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme)
     if let Some(effort) = &state.reasoning_effort {
         lines.push(meta(format!("think {effort}"), theme.accent));
     }
-}
-
-fn push_worktree_footer(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    lines.push(Line::from(""));
-    let workdir = workdir_label(state.projection.session.workdir.as_deref());
-    lines.push(meta(workdir, theme.muted));
-    if let Some(branch) = &state.branch_label {
-        lines.push(meta(branch.clone(), theme.text));
-    }
-    lines.push(Line::from(vec![
-        Span::styled("  • ", Style::default().fg(theme.success)),
-        Span::styled(
-            format!("yaca {}", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(theme.muted),
-        ),
-    ]));
 }
 
 fn push_section(lines: &mut Vec<Line<'static>>, title: &str, color: Color, theme: &Theme) {

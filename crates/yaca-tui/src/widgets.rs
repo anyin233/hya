@@ -4,6 +4,7 @@ mod permission;
 mod prompt;
 mod sidebar;
 mod sidebar_context;
+mod sidebar_footer;
 mod sidebar_format;
 mod sidebar_stats;
 mod status;
