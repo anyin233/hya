@@ -128,6 +128,34 @@ fn permission_allow_always_stage_renders_confirm_prompt() {
     );
 }
 
+#[test]
+fn permission_prompt_is_not_duplicated_in_sidebar_runtime() {
+    // Given: an active permission prompt on a wide terminal with the context rail visible.
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash".to_string(),
+            detail: "rm -rf /tmp/x".to_string(),
+            selected: 0,
+            reply: String::new(),
+            stage: PermissionPromptStage::Permission,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the TUI renders the footer permission panel and sidebar together.
+    let text = render(&mut state, 124, 36);
+
+    // Then: permission remains a footer panel instead of being repeated as sidebar runtime text.
+    assert!(
+        text.contains("Permission required"),
+        "footer permission panel should render:\n{text}"
+    );
+    assert!(
+        !text.contains("Runtime") && !text.contains("permission bash"),
+        "permission prompt should not be duplicated in the sidebar runtime section:\n{text}"
+    );
+}
+
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();

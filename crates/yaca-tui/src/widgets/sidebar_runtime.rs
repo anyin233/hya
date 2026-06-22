@@ -7,7 +7,6 @@ use crate::theme::Theme;
 pub(super) fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
     if state.goal.is_none()
         && state.loop_view.is_none()
-        && state.permission.is_none()
         && !state.yolo
         && state.reasoning_effort.is_none()
     {
@@ -28,12 +27,6 @@ pub(super) fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, the
                 loop_view.target, loop_view.iteration, loop_view.budget, loop_view.last_score
             ),
             theme.text,
-        ));
-    }
-    if let Some(permission) = &state.permission {
-        lines.push(meta(
-            format!("permission {}", permission.title),
-            theme.warning,
         ));
     }
     if state.yolo {
