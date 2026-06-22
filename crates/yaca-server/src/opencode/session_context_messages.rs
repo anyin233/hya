@@ -167,6 +167,7 @@ fn tool_state(state: &ToolPartState) -> Value {
             "status": "completed",
             "input": input,
             "content": [],
+            "outputPaths": [],
             "structured": {},
             "result": output,
         }),
