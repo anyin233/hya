@@ -1078,6 +1078,36 @@ async fn opencode_session_updates_text_parts() {
 }
 
 #[tokio::test]
+async fn opencode_session_update_part_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let message = MessageId::new().to_string();
+    let part = PartId::new().to_string();
+
+    let (status, body) = patch_json(
+        app,
+        format!("/session/{missing}/message/{message}/part/{part}"),
+        json!({
+            "id": part,
+            "sessionID": missing,
+            "messageID": message,
+            "type": "text",
+            "text": "never"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
+}
+
+#[tokio::test]
 async fn opencode_session_updates_tool_parts_from_opencode_state() {
     let app = router(shell_state().await);
     let session = create_session(app.clone(), None).await;
