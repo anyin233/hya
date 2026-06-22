@@ -156,7 +156,7 @@ enum OpenCodeToolState {
     },
     Error {
         input: Value,
-        error: String,
+        error: Value,
     },
 }
 
@@ -182,10 +182,23 @@ impl From<OpenCodeToolState> for ToolPartState {
             },
             OpenCodeToolState::Error { input, error } => Self::Error {
                 input,
-                message: error,
+                message: error_message(&error),
+                value: Some(error),
             },
         }
     }
+}
+
+fn error_message(error: &Value) -> String {
+    error
+        .pointer("/error/message")
+        .or_else(|| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| match error {
+            Value::String(message) => message.clone(),
+            other => other.to_string(),
+        })
 }
 
 fn elapsed_ms(time: Option<&OpenCodeToolTime>) -> u64 {

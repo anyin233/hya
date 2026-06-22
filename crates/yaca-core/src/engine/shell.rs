@@ -3,6 +3,7 @@ use tokio_util::sync::CancellationToken;
 use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId, ToolName};
 use yaca_tool::{ToolCtx, ToolError};
 
+use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
 use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
@@ -106,6 +107,7 @@ impl SessionEngine {
             {
                 ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
                 ToolExecuteBeforeOutcome::Veto { reason } => {
+                    let message_text = format!("blocked by plugin: {reason}");
                     self.emit(
                         session,
                         Event::ToolError {
@@ -113,7 +115,8 @@ impl SessionEngine {
                             message: shell_part.message,
                             part: shell_part.part,
                             call: shell_part.call,
-                            message_text: format!("blocked by plugin: {reason}"),
+                            value: Some(tool_error_message_value("blocked", &message_text)),
+                            message_text,
                         },
                     )
                     .await?;
@@ -197,6 +200,7 @@ impl SessionEngine {
                         message: shell_part.message,
                         part: shell_part.part,
                         call: shell_part.call,
+                        value: Some(tool_error_value(&error)),
                         message_text: error.to_string(),
                     },
                 )
