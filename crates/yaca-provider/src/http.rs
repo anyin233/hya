@@ -6,20 +6,19 @@ use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use eventsource_stream::Eventsource as _;
-use futures::StreamExt as _;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret as _, SecretString};
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use yaca_proto::{Event, MessageId, ModelRef, SessionId};
+
+mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
 use crate::google::GoogleProtocol;
 use crate::openai::OpenAiChatProtocol;
 use crate::{
-    Capabilities, CompletionRequest, Decoder, EventStream, Protocol, Provider, ProviderError,
+    Capabilities, CompletionRequest, EventStream, Protocol, Provider, ProviderError, ProviderModel,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +177,16 @@ impl Provider for HttpProvider {
             .then(|| self.caps.clone())
     }
 
+    fn catalog(&self) -> Vec<ProviderModel> {
+        self.models
+            .iter()
+            .map(|model| ProviderModel {
+                provider_id: self.id.clone(),
+                model_id: model.clone(),
+            })
+            .collect()
+    }
+
     async fn stream(
         &self,
         req: CompletionRequest,
@@ -208,62 +217,7 @@ impl Provider for HttpProvider {
             return Err(ProviderError::Http(format!("{status}: {snippet}")));
         }
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
-        tokio::spawn(pump(resp, decoder, tx));
+        tokio::spawn(stream::pump(resp, decoder, tx));
         Ok(Box::pin(ReceiverStream::new(rx)))
-    }
-}
-
-async fn pump(
-    resp: reqwest::Response,
-    mut decoder: Box<dyn Decoder>,
-    tx: mpsc::Sender<Result<Event, ProviderError>>,
-) {
-    let mut sse = resp.bytes_stream().eventsource();
-    while let Some(frame) = sse.next().await {
-        let frame = match frame {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = tx.send(Err(ProviderError::Http(e.to_string()))).await;
-                return;
-            }
-        };
-        // A gateway can answer 200 then emit `{"error": {...}}` mid-stream; the
-        // canonical decoders ignore unknown shapes, so surface it explicitly.
-        if frame.data.contains("\"error\"")
-            && let Ok(value) = serde_json::from_str::<Value>(&frame.data)
-            && let Some(err) = value.get("error")
-        {
-            let msg = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("provider returned an error");
-            let _ = tx.send(Err(ProviderError::Http(msg.to_string()))).await;
-            return;
-        }
-        match decoder.push(&frame.data) {
-            Ok(events) => {
-                for event in events {
-                    if tx.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        }
-    }
-    match decoder.finish() {
-        Ok(events) => {
-            for event in events {
-                if tx.send(Ok(event)).await.is_err() {
-                    return;
-                }
-            }
-        }
-        Err(e) => {
-            let _ = tx.send(Err(e)).await;
-        }
     }
 }

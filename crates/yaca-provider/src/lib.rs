@@ -63,6 +63,12 @@ pub struct Capabilities {
     pub max_context: u32,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProviderModel {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReasoningEffort {
     Low,
@@ -125,6 +131,9 @@ pub struct CompletionRequest {
 pub trait Provider: Send + Sync {
     fn id(&self) -> &str;
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>;
+    fn catalog(&self) -> Vec<ProviderModel> {
+        Vec::new()
+    }
     async fn stream(
         &self,
         req: CompletionRequest,

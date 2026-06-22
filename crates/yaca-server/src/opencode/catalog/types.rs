@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::super::model_ref::OpenCodeModelRefParts;
-
 #[derive(Clone, Serialize)]
 pub(super) struct ProviderInfo {
     id: String,
@@ -117,10 +115,10 @@ struct ModelLimit {
     output: u32,
 }
 
-pub(super) fn provider_info(active: &OpenCodeModelRefParts) -> ProviderInfo {
+pub(super) fn provider_info(provider_id: &str) -> ProviderInfo {
     ProviderInfo {
-        id: active.provider_id.clone(),
-        name: active.provider_id.clone(),
+        id: provider_id.to_string(),
+        name: provider_id.to_string(),
         api: NativeProviderApi {
             kind: "native",
             settings: json!({}),
@@ -132,13 +130,13 @@ pub(super) fn provider_info(active: &OpenCodeModelRefParts) -> ProviderInfo {
     }
 }
 
-pub(super) fn model_info(active: &OpenCodeModelRefParts) -> ModelInfo {
+pub(super) fn model_info(provider_id: &str, model_id: &str) -> ModelInfo {
     ModelInfo {
-        id: active.model_id.clone(),
-        provider_id: active.provider_id.clone(),
-        name: active.model_id.clone(),
+        id: model_id.to_string(),
+        provider_id: provider_id.to_string(),
+        name: model_id.to_string(),
         api: ModelApi {
-            id: active.model_id.clone(),
+            id: model_id.to_string(),
             kind: "native",
             settings: json!({}),
         },
