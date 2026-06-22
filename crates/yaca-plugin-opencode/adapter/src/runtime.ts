@@ -1,12 +1,19 @@
 import { z } from "zod"
 
 import {
+  AdapterOptionsParseError,
+  discoverPluginSpecs,
+  parseAdapterOptions,
+} from "./loader/discovery"
+import { loadLocalPluginHooks, type OpenCodeHooks } from "./loader/init"
+import {
   ERROR_CODES,
   errorResponse,
   okResponse,
   parseJsonRpcRequest,
   type JsonRpcRequest,
 } from "./protocol"
+import { hookRegistrationsFrom } from "./registration"
 
 export const PROTOCOL_VERSION = 1
 
@@ -27,17 +34,30 @@ export type TextSink = {
   readonly write: (data: string) => unknown
 }
 
+export type RuntimeEnv = Readonly<Record<string, string | undefined>>
+
 export type RuntimeOptions = {
   readonly input: ReadableStream<Uint8Array>
   readonly stdout: TextSink
   readonly stderr: TextSink
   readonly version: string
+  readonly env?: RuntimeEnv
 }
 
 type HandledRequest = {
   readonly response: string
   readonly shouldExit: boolean
 }
+
+type RequestContext = {
+  readonly version: string
+  readonly env: RuntimeEnv
+  readonly stderr: TextSink
+}
+
+type LoadedHooksResult =
+  | { readonly hooks: readonly OpenCodeHooks[]; readonly response?: undefined }
+  | { readonly hooks?: undefined; readonly response: HandledRequest }
 
 export async function* readLines(
   input: ReadableStream<Uint8Array>,
@@ -61,11 +81,11 @@ export async function* readLines(
 
 export function handleRequest(
   request: JsonRpcRequest,
-  version: string,
-): HandledRequest {
+  context: RequestContext,
+): Promise<HandledRequest> | HandledRequest {
   switch (request.method) {
     case METHOD_INITIALIZE:
-      return handleInitialize(request, version)
+      return handleInitialize(request, context)
     case METHOD_SHUTDOWN:
       return { response: okResponse(request.id, {}), shouldExit: true }
     default:
@@ -81,6 +101,11 @@ export function handleRequest(
 }
 
 export async function runAdapter(options: RuntimeOptions): Promise<void> {
+  const context = {
+    version: options.version,
+    env: options.env ?? process.env,
+    stderr: options.stderr,
+  }
   for await (const line of readLines(options.input)) {
     if (line.length === 0) {
       continue
@@ -90,7 +115,7 @@ export async function runAdapter(options: RuntimeOptions): Promise<void> {
       await options.stderr.write(`invalid JSON-RPC request: ${parsed.message}\n`)
       continue
     }
-    const handled = handleRequest(parsed.request, options.version)
+    const handled = await handleRequest(parsed.request, context)
     await options.stdout.write(handled.response)
     if (handled.shouldExit) {
       break
@@ -98,10 +123,10 @@ export async function runAdapter(options: RuntimeOptions): Promise<void> {
   }
 }
 
-function handleInitialize(
+async function handleInitialize(
   request: JsonRpcRequest,
-  version: string,
-): HandledRequest {
+  context: RequestContext,
+): Promise<HandledRequest> {
   const params = InitializeParamsSchema.safeParse(request.params)
   if (!params.success) {
     return {
@@ -113,18 +138,78 @@ function handleInitialize(
       shouldExit: false,
     }
   }
+  const loaded = await loadConfiguredHooks(context, request.id)
+  if (loaded.response !== undefined) {
+    return loaded.response
+  }
   return {
     response: okResponse(request.id, {
       protocol_version: PROTOCOL_VERSION,
       plugin: {
         id: "opencode",
-        version,
+        version: context.version,
         kind: "opencode",
       },
-      hooks: [],
+      hooks: hookRegistrationsFrom(loaded.hooks),
       tools: [],
     }),
     shouldExit: false,
+  }
+}
+
+async function loadConfiguredHooks(
+  context: RequestContext,
+  id: number,
+): Promise<LoadedHooksResult> {
+  let options: ReturnType<typeof parseAdapterOptions>
+  try {
+    options = parseAdapterOptions(context.env.YACA_OPENCODE_OPTIONS_JSON)
+  } catch (error) {
+    if (error instanceof AdapterOptionsParseError) {
+      return {
+        response: {
+          response: errorResponse(id, ERROR_CODES.INVALID_PARAMS, error.message),
+          shouldExit: false,
+        },
+      }
+    }
+    throw error
+  }
+  const directory = context.env.YACA_DIRECTORY ?? process.cwd()
+  const worktree = context.env.YACA_WORKTREE ?? directory
+  const discovered = await discoverPluginSpecs({
+    directory,
+    xdgConfigHome: context.env.XDG_CONFIG_HOME,
+    home: context.env.HOME,
+  })
+  const loaded = await loadLocalPluginHooks(
+    [...discovered, ...options.plugin],
+    pluginInput(context.env, directory, worktree),
+  )
+  for (const error of loaded.errors) {
+    await context.stderr.write(`opencode plugin ${error.spec}: ${error.message}\n`)
+  }
+  return { hooks: loaded.hooks }
+}
+
+function pluginInput(
+  env: RuntimeEnv,
+  directory: string,
+  worktree: string,
+): Readonly<Record<string, unknown>> {
+  return {
+    client: {},
+    directory,
+    worktree,
+    project: {
+      id: env.YACA_PROJECT_ID ?? worktree,
+      worktree,
+      time: Date.now(),
+    },
+    serverUrl: new URL(env.YACA_SERVER_URL ?? "http://127.0.0.1:0"),
+    experimental_workspace: {
+      register: () => undefined,
+    },
   }
 }
 

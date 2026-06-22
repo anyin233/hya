@@ -24,4 +24,5 @@ await runAdapter({
   stdout: { write: (data) => process.stdout.write(data) },
   stderr: { write: (data) => process.stderr.write(data) },
   version: VERSION,
+  env: process.env,
 })

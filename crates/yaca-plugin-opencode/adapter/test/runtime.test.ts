@@ -1,4 +1,8 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { z } from "zod"
 
 const AdapterResponseSchema = z.object({
@@ -20,15 +24,25 @@ const InitializeResultSchema = z.object({
     version: z.string(),
     kind: z.literal("opencode"),
   }),
-  hooks: z.array(z.unknown()),
+  hooks: z.array(z.object({ name: z.string() })),
   tools: z.array(z.unknown()),
+})
+
+const tempDirs: string[] = []
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 async function runAdapter(
   requests: readonly unknown[],
+  env?: Readonly<Record<string, string>>,
 ): Promise<readonly z.infer<typeof AdapterResponseSchema>[]> {
   const proc = Bun.spawn([process.execPath, "run", "src/main.ts"], {
     cwd: import.meta.dir.replace(/\/test$/, ""),
+    env: { ...process.env, ...env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -77,6 +91,50 @@ test("initialize returns yaca opencode plugin identity", async () => {
   expect(result.tools).toEqual([])
 })
 
+test("initialize declares hooks from configured local plugins", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "hooks",',
+      "  server: async () => ({",
+      "    event: async () => {},",
+      '    "tool.execute.before": async () => {},',
+      '    "chat.params": async () => {},',
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 31,
+        method: "initialize",
+        params: { protocol_version: 1, host: { name: "yaca", version: "0.0.0" } },
+      },
+      { jsonrpc: "2.0", id: 32, method: "shutdown", params: {} },
+    ],
+    {
+      YACA_OPENCODE_OPTIONS_JSON: JSON.stringify({
+        plugin: [pathToFileURL(pluginFile).href],
+      }),
+      YACA_DIRECTORY: root,
+      YACA_WORKTREE: root,
+    },
+  )
+
+  const result = InitializeResultSchema.parse(responses[0]?.result)
+  expect(result.hooks).toEqual([
+    { name: "event" },
+    { name: "chat.params" },
+    { name: "tool.execute.before" },
+  ])
+})
+
 test("unknown methods return JSON-RPC method-not-found errors", async () => {
   const responses = await runAdapter([
     { jsonrpc: "2.0", id: 21, method: "missing", params: {} },
@@ -89,3 +147,10 @@ test("unknown methods return JSON-RPC method-not-found errors", async () => {
   expect(responses[1]?.id).toBe(22)
   expect(responses[1]?.result).toEqual({})
 })
+
+async function makeTempDir(): Promise<string> {
+  const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
+  await mkdir(created, { recursive: true })
+  tempDirs.push(created)
+  return created
+}
