@@ -103,6 +103,31 @@ async fn glob_supports_path_and_open_code_output_shape() {
 }
 
 #[tokio::test]
+async fn glob_uses_parent_directory_when_path_is_a_file() {
+    let workdir = tempdir();
+    let src = workdir.join("src");
+    tokio::fs::create_dir_all(&src).await.unwrap();
+    tokio::fs::write(src.join("main.rs"), "fn main() {}\n")
+        .await
+        .unwrap();
+    tokio::fs::write(src.join("lib.rs"), "pub fn lib() {}\n")
+        .await
+        .unwrap();
+    let tool = ToolRegistry::builtins().get("glob").unwrap();
+    let ctx = ctx_with(workdir.clone());
+
+    let out = tool
+        .execute(&ctx, json!({ "pattern": "*.rs", "path": "src/main.rs" }))
+        .await
+        .unwrap();
+
+    assert_eq!(out["title"], "src");
+    assert_eq!(out["metadata"]["count"], 2);
+    assert!(out["output"].as_str().unwrap().contains("main.rs"));
+    assert!(out["output"].as_str().unwrap().contains("lib.rs"));
+}
+
+#[tokio::test]
 async fn grep_supports_regex_include_and_open_code_output_shape() {
     let workdir = tempdir();
     let src = workdir.join("src");
