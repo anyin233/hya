@@ -5,6 +5,11 @@ import { parse as parseJsonc } from "jsonc-parser"
 import type { ParseError as JsoncParseError } from "jsonc-parser"
 import { z } from "zod"
 
+import {
+  globalConfigDir,
+  opencodeConfigDirs,
+  projectConfigFiles,
+} from "./config_dirs"
 import { npmPackageNameFromSpec } from "./package"
 import { resolveLocalPluginSpec } from "./shape"
 
@@ -88,6 +93,9 @@ export async function discoverPluginSpecs(
   if (context.customConfigFile !== undefined && context.customConfigFile.length > 0) {
     specs.push(...(await readConfigFilePluginSpecs(context.customConfigFile)))
   }
+  for (const file of projectConfigFiles(context)) {
+    specs.push(...(await readConfigFilePluginSpecs(file)))
+  }
   for (const dir of configDirs) {
     specs.push(...(await readConfigDirPluginSpecs(dir)))
   }
@@ -95,48 +103,6 @@ export async function discoverPluginSpecs(
     specs.push(...parseConfigOptions(context.inlineConfig).plugin)
   }
   return deduplicatePluginSpecs(specs)
-}
-
-export function opencodeConfigDirs(
-  context: DiscoveryContext,
-): readonly string[] {
-  const dirs: string[] = []
-  const global = globalConfigDir(context)
-  if (global !== undefined) {
-    dirs.push(global)
-  }
-  if (context.disableProjectConfig !== true) {
-    dirs.push(...projectConfigDirs(context.directory, context.worktree))
-  }
-  const home = homeConfigDir(context)
-  if (home !== undefined) {
-    dirs.push(home)
-  }
-  if (context.customConfigDir !== undefined && context.customConfigDir.length > 0) {
-    dirs.push(context.customConfigDir)
-  }
-  return [...new Set(dirs)]
-}
-
-function projectConfigDirs(
-  directory: string,
-  worktree: string | undefined,
-): readonly string[] {
-  const dirs: string[] = []
-  const stop = worktree === undefined ? undefined : path.resolve(worktree)
-  let current = path.resolve(directory)
-  while (true) {
-    dirs.push(path.join(current, ".opencode"))
-    if (current === stop) {
-      break
-    }
-    const parent = path.dirname(current)
-    if (parent === current) {
-      break
-    }
-    current = parent
-  }
-  return dirs
 }
 
 async function scanPluginDir(dir: string): Promise<readonly string[]> {
@@ -239,25 +205,6 @@ function pluginIdentity(plugin: PluginSpec): string {
 
 function pluginSpecifier(plugin: PluginSpec): string {
   return typeof plugin === "string" ? plugin : plugin[0]
-}
-
-function globalConfigDir(context: DiscoveryContext): string | undefined {
-  if (context.xdgConfigHome !== undefined && context.xdgConfigHome.length > 0) {
-    return path.join(context.xdgConfigHome, "opencode")
-  }
-  const home = context.home ?? process.env.HOME
-  if (home === undefined || home.length === 0) {
-    return undefined
-  }
-  return path.join(home, ".config", "opencode")
-}
-
-function homeConfigDir(context: DiscoveryContext): string | undefined {
-  const home = context.home ?? process.env.HOME
-  if (home === undefined || home.length === 0) {
-    return undefined
-  }
-  return path.join(home, ".opencode")
 }
 
 function normalizePluginSpec(spec: ParsedPluginSpec): PluginSpec {

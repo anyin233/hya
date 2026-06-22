@@ -80,6 +80,49 @@ test("discovers OPENCODE_CONFIG_CONTENT plugins after config directories", async
   ])
 })
 
+test("discovers project opencode config files before config directories", async () => {
+  const root = await makeTempDir()
+  const worktree = path.join(root, "project")
+  const directory = path.join(worktree, "nested")
+  const parentConfig = path.join(worktree, "opencode.json")
+  const childConfig = path.join(directory, "opencode.jsonc")
+  const childPlugin = path.join(directory, "direct-plugin.ts")
+  const dirConfig = path.join(directory, ".opencode", "opencode.json")
+  await mkdir(directory, { recursive: true })
+  await mkdir(path.dirname(dirConfig), { recursive: true })
+  await writeFile(childPlugin, "export default {}")
+  await writeFile(
+    parentConfig,
+    JSON.stringify({
+      plugin: ["parent-file-plugin", "shared-plugin@1.0.0"],
+    }),
+  )
+  await writeFile(
+    childConfig,
+    JSON.stringify({
+      plugin: [
+        ["./direct-plugin.ts", { source: "direct" }],
+        "shared-plugin@2.0.0",
+      ],
+    }),
+  )
+  await writeFile(dirConfig, JSON.stringify({ plugin: ["dir-plugin"] }))
+
+  const specs = await discoverPluginSpecs({
+    directory,
+    worktree,
+    xdgConfigHome: path.join(root, "xdg"),
+    home: path.join(root, "home"),
+  })
+
+  expect(specs).toEqual([
+    "parent-file-plugin",
+    [pathToFileURL(childPlugin).href, { source: "direct" }],
+    "shared-plugin@2.0.0",
+    "dir-plugin",
+  ])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)
