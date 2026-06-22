@@ -830,6 +830,41 @@ async fn opencode_session_updates_tool_parts_from_opencode_state() {
 }
 
 #[tokio::test]
+async fn opencode_session_diff_returns_empty_message_summary() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.status(), StatusCode::OK);
+    let all_body = body_json(all).await;
+    let message = all_body[0]["info"]["id"].as_str().expect("message id");
+
+    let diff = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/diff?messageID={message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff.status(), StatusCode::OK);
+    assert_eq!(body_json(diff).await, json!([]));
+}
+
+#[tokio::test]
 async fn opencode_session_todo_returns_todowrite_state() {
     let app = router(todo_state().await);
     let session = create_session(app.clone(), None).await;
