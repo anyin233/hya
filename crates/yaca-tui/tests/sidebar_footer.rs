@@ -65,7 +65,7 @@ fn context_rail_footer_stays_anchored_to_bottom() {
     // When: the rail renders with extra vertical space.
     let buffer = render_buffer(&mut state, 124, 36);
 
-    // Then: the worktree footer is anchored near the rail bottom, not after Agents.
+    // Then: the OpenCode-style worktree and branch footer is one attached line.
     let workdir_row = row_containing(&buffer, 124, 36, "/tmp/yaca-footer").unwrap();
     let branch_row = row_containing(&buffer, 124, 36, "feat/footer").unwrap();
     assert!(
@@ -73,9 +73,8 @@ fn context_rail_footer_stays_anchored_to_bottom() {
         "worktree footer should be bottom anchored, found at row {workdir_row}"
     );
     assert_eq!(
-        branch_row,
-        workdir_row + 1,
-        "branch row should remain attached to the worktree footer"
+        workdir_row, branch_row,
+        "OpenCode renders worktree and branch as one path:branch footer line"
     );
 }
 

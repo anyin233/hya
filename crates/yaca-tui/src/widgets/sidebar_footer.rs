@@ -12,9 +12,6 @@ pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<
     let mut lines = Vec::new();
     lines.push(Line::from(""));
     lines.push(meta(workdir_footer_label(state, width), theme.muted));
-    if let Some(branch) = &state.branch_label {
-        lines.push(meta(branch.clone(), theme.text));
-    }
     lines.push(Line::from(vec![
         Span::styled("  • ", Style::default().fg(theme.success)),
         Span::styled(
@@ -26,10 +23,15 @@ pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<
 }
 
 fn workdir_footer_label(state: &AppState, width: u16) -> String {
-    let label = format!(
-        "{}:",
-        workdir_label(state.projection.session.workdir.as_deref())
-    );
+    let workdir = workdir_label(state.projection.session.workdir.as_deref());
+    let label = match state
+        .branch_label
+        .as_deref()
+        .filter(|branch| !branch.is_empty())
+    {
+        Some(branch) => format!("{workdir}:{branch}"),
+        None => format!("{workdir}:"),
+    };
     let content_width = usize::from(width).saturating_sub(FOOTER_PADDING_WIDTH);
     ellipsize_tail(&label, content_width)
 }
