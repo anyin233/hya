@@ -14,13 +14,14 @@ use futures::Stream;
 use futures::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
     PromptResponse, ShellRequest,
 };
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
+
+mod opencode;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -30,6 +31,7 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .merge(opencode::router())
         .route("/sessions", post(create_session))
         .route("/sessions/:id/prompt", post(prompt))
         .route("/sessions/:id/command", post(command))
@@ -51,6 +53,20 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<yaca_core::CoreError> for ApiError {
@@ -69,8 +85,7 @@ impl IntoResponse for ApiError {
 }
 
 fn parse_session(id: &str) -> Result<SessionId, ApiError> {
-    Uuid::parse_str(id)
-        .map(SessionId::from_uuid)
+    id.parse::<SessionId>()
         .map_err(|_| ApiError::bad_request("invalid session id"))
 }
 
