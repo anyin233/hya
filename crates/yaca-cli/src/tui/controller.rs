@@ -131,6 +131,9 @@ impl Controller {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('d')) {
+            return TuiEffect::Exit;
+        }
         if self.app.dialog.is_some() {
             if key.modifiers.contains(KeyModifiers::CONTROL)
                 && matches!(key.code, KeyCode::Char('c'))
@@ -141,9 +144,6 @@ impl Controller {
         }
         if let Some(action) = self.leader_key.handle(&key) {
             return self.handle_leader_action(action);
-        }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            return self.handle_ctrl_c();
         }
         let modified_enter = key.code == KeyCode::Enter
             && (key.modifiers == KeyModifiers::SHIFT
@@ -169,6 +169,7 @@ impl Controller {
             match key.code {
                 KeyCode::Up => return self.select_previous_message(),
                 KeyCode::Down => return self.select_next_message(),
+                KeyCode::Char('c') => return self.handle_ctrl_c(),
                 KeyCode::Char('p') => {
                     self.open_help_dialog();
                     return TuiEffect::None;
@@ -925,6 +926,9 @@ mod scroll_tests;
 
 #[cfg(test)]
 mod leader_key_tests;
+
+#[cfg(test)]
+mod app_exit_tests;
 
 #[cfg(test)]
 mod tests {
