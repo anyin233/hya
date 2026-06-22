@@ -63,6 +63,35 @@ test("discovers project and global OpenCode plugin files", async () => {
   ])
 })
 
+test("discovers OpenCode config plugin entries relative to their config file", async () => {
+  // Given: a project OpenCode config that declares local and npm plugins.
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const configFile = path.join(directory, ".opencode", "opencode.json")
+  const pluginFile = path.join(directory, ".opencode", "configured.ts")
+  await mkdir(path.dirname(configFile), { recursive: true })
+  await writeFile(pluginFile, "export default {}")
+  await writeFile(
+    configFile,
+    JSON.stringify({
+      plugin: [["./configured.ts", { source: "config" }], "npm-plugin@1.0.0"],
+    }),
+  )
+
+  // When: the adapter discovers OpenCode plugin specs for the project.
+  const specs = await discoverPluginSpecs({
+    directory,
+    xdgConfigHome: path.join(root, "xdg"),
+    home: path.join(root, "home"),
+  })
+
+  // Then: path-like specs are resolved using the declaring config file.
+  expect(specs).toEqual([
+    [pathToFileURL(pluginFile).href, { source: "config" }],
+    "npm-plugin@1.0.0",
+  ])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)

@@ -1,7 +1,9 @@
-import { readdir, stat } from "node:fs/promises"
+import { readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
+
+import { resolveLocalPluginSpec } from "./shape"
 
 export class AdapterOptionsParseError extends Error {
   readonly name = "AdapterOptionsParseError"
@@ -21,6 +23,7 @@ const AdapterOptionsSchema = z
     plugin: z.array(PluginSpecSchema).optional().default([]),
   })
   .passthrough()
+const CONFIG_FILES = ["config.json", "opencode.json", "opencode.jsonc"] as const
 
 type ParsedPluginSpec = z.infer<typeof PluginSpecSchema>
 
@@ -64,6 +67,7 @@ export async function discoverPluginSpecs(
 ): Promise<readonly PluginSpec[]> {
   const specs: PluginSpec[] = []
   for (const dir of opencodeConfigDirs(context)) {
+    specs.push(...(await readConfigPluginSpecs(dir)))
     for (const child of ["plugin", "plugins"] as const) {
       specs.push(...(await scanPluginDir(path.join(dir, child))))
     }
@@ -107,6 +111,42 @@ async function scanPluginDir(dir: string): Promise<readonly string[]> {
     .filter(isPluginFilename)
     .sort()
     .map((name) => pathToFileURL(path.join(dir, name)).href)
+}
+
+async function readConfigPluginSpecs(dir: string): Promise<readonly PluginSpec[]> {
+  const specs: PluginSpec[] = []
+  for (const name of CONFIG_FILES) {
+    const file = path.join(dir, name)
+    const raw = await readConfigFile(file)
+    if (raw === undefined) {
+      continue
+    }
+    const options = parseConfigOptions(raw)
+    for (const plugin of options.plugin) {
+      specs.push(await resolveLocalPluginSpec(plugin, file))
+    }
+  }
+  return specs
+}
+
+async function readConfigFile(file: string): Promise<string | undefined> {
+  return readFile(file, "utf8").catch((error: unknown) => {
+    if (error instanceof Error) {
+      return undefined
+    }
+    throw error
+  })
+}
+
+function parseConfigOptions(raw: string): AdapterOptions {
+  try {
+    return parseAdapterOptions(raw)
+  } catch (error) {
+    if (error instanceof AdapterOptionsParseError) {
+      return { plugin: [] }
+    }
+    throw error
+  }
 }
 
 function globalConfigDir(context: DiscoveryContext): string | undefined {
