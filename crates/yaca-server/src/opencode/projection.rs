@@ -22,7 +22,7 @@ pub(super) struct OpenCodeSessionInfo {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenCodeModel {
+pub(super) struct OpenCodeModel {
     id: String,
     #[serde(rename = "providerID")]
     provider_id: String,
@@ -161,7 +161,7 @@ fn session_info(
     }
 }
 
-fn model_info(model: &ModelRef) -> OpenCodeModel {
+pub(super) fn model_info(model: &ModelRef) -> OpenCodeModel {
     if let Some((provider, model_id)) = model.as_str().split_once('/') {
         return OpenCodeModel {
             id: model_id.to_string(),
