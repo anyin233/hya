@@ -45,7 +45,10 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
         "permission panel should not render legacy yaca option labels:\n{text}"
     );
     assert!(
-        text.contains("Esc reject") && !text.contains("Esc deny"),
+        text.contains("enter confirm")
+            && text.contains("esc reject")
+            && !text.contains("Enter")
+            && !text.contains("Esc"),
         "permission hint should use OpenCode's reject wording:\n{text}"
     );
     assert!(
@@ -165,7 +168,7 @@ fn permission_allow_always_stage_renders_confirm_prompt() {
     assert!(text.contains("Confirm"), "confirm option renders:\n{text}");
     assert!(text.contains("Cancel"), "cancel option renders:\n{text}");
     assert!(
-        text.contains("Esc cancel"),
+        text.contains("esc cancel") && !text.contains("Enter"),
         "always stage should cancel back to the permission prompt:\n{text}"
     );
     assert!(
