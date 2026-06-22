@@ -13,7 +13,7 @@ use yaca_proto::{AgentName, FinishReason, ModelRef};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 const WORKDIR: &str = "/tmp/yaca-opencode-session-api";
 
@@ -25,6 +25,46 @@ async fn state() -> AppState {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn todo_state() -> AppState {
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "todowrite".to_string(),
+                input: json!({
+                    "todos": [
+                        { "content": "Audit OpenCode todos", "status": "in_progress", "priority": "high" },
+                        { "content": "Document remaining gaps", "status": "pending", "priority": "medium" }
+                    ]
+                }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("todos updated".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::TodoWrite,
+        "*",
+        Mode::Allow,
+    )]));
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
     AppState::new(
@@ -265,4 +305,30 @@ async fn opencode_session_routes_page_message_and_children() {
         .await
         .unwrap();
     assert_eq!(bad_before.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_session_todo_returns_todowrite_state() {
+    let app = router(todo_state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/todo"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(resp).await,
+        json!([
+            { "content": "Audit OpenCode todos", "status": "in_progress", "priority": "high" },
+            { "content": "Document remaining gaps", "status": "pending", "priority": "medium" }
+        ])
+    );
 }

@@ -5,8 +5,8 @@ use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, no
 use yaca_provider::{ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane, TodoPlane, ToolRegistry,
-    WebSearchPlane,
+    InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane, TodoItem, TodoPlane,
+    ToolRegistry, WebSearchPlane,
 };
 
 use crate::bus::EventBus;
@@ -137,6 +137,10 @@ impl SessionEngine {
 
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, CoreError> {
         Ok(self.store.read_projection(session).await?)
+    }
+
+    pub async fn todos(&self, session: SessionId) -> Vec<TodoItem> {
+        self.todo.get(session).await
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
