@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::{AgentName, ModelRef};
@@ -56,4 +57,93 @@ async fn assert_health(uri: &str) {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["healthy"], true);
+}
+
+async fn request_json(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    let request_body = if let Some(body) = body {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+        Body::from(serde_json::to_vec(&body).unwrap())
+    } else {
+        Body::empty()
+    };
+    let resp = app
+        .oneshot(builder.body(request_body).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    (status, body)
+}
+
+#[tokio::test]
+async fn opencode_global_config_routes_store_runtime_config() {
+    let app = router(state().await);
+
+    let (status, body) = request_json(app.clone(), Method::GET, "/global/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({}));
+
+    let (status, body) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        Some(json!({"username": "httpapi-global"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["username"], "httpapi-global");
+
+    let (status, body) = request_json(app.clone(), Method::GET, "/global/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["username"], "httpapi-global");
+
+    let (status, _body) = request_json(
+        app,
+        Method::PATCH,
+        "/global/config",
+        Some(json!({"username": 7})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_global_dispose_route_returns_true() {
+    let app = router(state().await);
+
+    let (status, body) = request_json(app, Method::POST, "/global/dispose", None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!(true));
+}
+
+#[tokio::test]
+async fn opencode_global_upgrade_rejects_invalid_target() {
+    let app = router(state().await);
+
+    let (status, body) = request_json(
+        app,
+        Method::POST,
+        "/global/upgrade",
+        Some(json!({"target": 1})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"success": false, "error": "Invalid request body"})
+    );
 }

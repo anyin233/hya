@@ -6,6 +6,7 @@ mod catalog;
 mod control;
 mod event;
 mod file;
+mod global;
 mod health;
 mod instance;
 mod integration;
@@ -34,6 +35,7 @@ mod session_update;
 mod session_v2;
 mod tui;
 
+pub(crate) use global::GlobalState;
 pub(crate) use mcp::McpHttpState;
 pub(crate) use project::ProjectState;
 pub(in crate::opencode) use session_legacy::load_session;
@@ -45,6 +47,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(control::router())
         .merge(event::router())
         .merge(file::router())
+        .merge(global::router())
         .merge(health::router())
         .merge(instance::router())
         .merge(integration::router())
