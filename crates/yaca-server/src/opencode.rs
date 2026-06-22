@@ -21,6 +21,8 @@ mod project;
 mod project_copy;
 mod projection;
 mod pty;
+mod pty_payload;
+mod pty_state;
 mod question;
 mod session_context;
 mod session_delete;
@@ -42,6 +44,7 @@ mod worktree_git;
 pub(crate) use global::GlobalState;
 pub(crate) use mcp::McpHttpState;
 pub(crate) use project::ProjectState;
+pub(crate) use pty_state::PtyState;
 pub(in crate::opencode) use session_legacy::load_session;
 pub(crate) use tui::TuiState;
 
