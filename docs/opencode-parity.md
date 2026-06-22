@@ -14,10 +14,10 @@ session context, session title/metadata/permission/archive update/delete/init,
 legacy/v2 command and shell routes, v2 prompt admission, active provider/model compatibility,
 permission/question queue, project copy, project metadata/init/update, MCP
 status, v2 filesystem compatibility, PTY shells/list discovery, OpenCode
-`/log` and `/auth/:providerID`, global health/event routes, legacy provider
-catalog/auth-method routes, legacy session todo compatibility, and queued TUI
-HTTP route increments, basic provider auth list/logout CLI support, plus empty-backend v2
-credential/integration mutation route compatibility.
+`/log` and `/auth/:providerID`, global health/event routes, legacy config and
+provider catalog/auth-method routes, legacy session todo compatibility, and
+queued TUI HTTP route increments, basic provider auth list/logout CLI support,
+plus empty-backend v2 credential/integration mutation route compatibility.
 
 ## Status Summary
 
@@ -39,7 +39,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Project context | Implemented | CLI discovers `AGENTS.md`, builds an environment/context system prompt, and includes available skills. |
 | Skills | Implemented substrate | `.yaca/skills` and `~/.config/yaca/skills` discovery plus `skill` tool loading are present; v2 `/api/skill` returns OpenCode-shaped location-wrapped skill metadata for local skills. |
 | Compaction | Native partial | Engine compaction and `ModelSummarizer` exist, with env-tunable thresholds. Legacy `POST /session/:id/summarize` now writes a persisted yaca-native system summary, but does not yet create OpenCode compaction parts or summary-backed diffs. |
-| Providers | Partial | Native OpenAI-compatible, Anthropic, and Google API-key providers exist; legacy `/provider`, `/provider/auth`, provider OAuth bad-request responses, v2 `/api/provider`, `/api/provider/:providerID`, and `/api/model` expose the active server model in OpenCode response shapes. |
+| Providers | Partial | Native OpenAI-compatible, Anthropic, and Google API-key providers exist; legacy `/config`, `/config/providers`, `/provider`, `/provider/auth`, provider OAuth bad-request responses, v2 `/api/provider`, `/api/provider/:providerID`, and `/api/model` expose the active server model in OpenCode response shapes. |
 | Plugin host | Partial | Native plugin protocol and bundled OpenCode adapter cover server hooks, plugin tools, chat params/messages transforms, command/message/text hooks, events, shell env, and permissions. |
 | MCP tools | Partial | yaca has MCP manager/bridge and can expose MCP tools through the tool registry; `GET /mcp` reports OpenCode-shaped connected/disabled/failed status for configured MCP servers. |
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, event-log-backed session deletion, and OpenCode-shaped session info, children, message list, single-message, and basic paginated message reads are present. |
@@ -62,7 +62,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, compaction-part summarize, and message diff APIs. yaca exposes `GET /session/:id/diff` with the current no-summary empty response and `POST /session/:id/summarize` with a yaca-native persisted system summary, but has no equivalent snapshot/revert service, OpenCode compaction part, or persisted message summary diffs yet. |
 | File HTTP routes | Basic OpenCode legacy file HTTP routes and v2 filesystem read/list/find routes are present, including root `.gitignore`/`.ignore` ignored flags for legacy listing, common image/PDF MIME sniffing for binary content, location-wrapped v2 entries, and raw v2 file reads. Remaining gaps are exact filesystem service ranking/glob semantics, full mime-types coverage, location query/workspace routing, nested ignore file parity, and real LSP-backed symbol search when available. |
 | Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, apply, and v2 location/agent/command/skill endpoints are present. Remaining gaps are exact branch-mode diff parity, OpenCode patch byte caps/empty patch behavior, real LSP/formatter status integration, and full command/agent/skill config/plugin merging. |
-| Config/catalog routes | Active provider/model v2 routes exist, but yaca has not moved the full resolved config/model catalog into server state. Missing full OpenCode config/catalog metadata and update semantics; yaca reads its own `~/.config/yaca/config.yaml`. |
+| Config/catalog routes | Legacy `/config`/`/config/providers` and active provider/model v2 routes exist, but yaca has not moved the full resolved config/model catalog into server state. Missing full OpenCode config/catalog metadata, durable update semantics, and models.dev-backed provider metadata; yaca reads its own `~/.config/yaca/config.yaml`. |
 | Global control routes | `/global/health` and `/global/event` are present. Missing OpenCode global config get/update, global dispose lifecycle, and upgrade/uninstall behavior. |
 | Provider/auth breadth | OpenCode `/auth/:providerID` accepts `api`, `oauth`, and `wellknown` payloads and persists the effective token to yaca's local token file; legacy `/provider` and v2 provider/model routes expose the active yaca model; legacy `/provider/auth` returns an empty method map; unsupported provider OAuth authorize/callback payloads return 400; CLI supports `login`, `auth list`, and `auth logout`; v2 credential update/remove and integration connect/attempt routes now match OpenCode's empty-backend observable statuses. The already constructed provider router is not hot-reloaded after token mutation. Missing AI SDK provider breadth, full models.dev metadata/autoload, provider status/cost/limit metadata, real OAuth authorize/callback flows, real provider auth methods, real credential storage, real integration providers/auth flows, and Console/org switching. |
 | PTY | `/api/pty/shells` discovers local shells and `/api/pty` reports no active yaca-managed PTY sessions. Missing real PTY creation/update/removal, retained PTY state, websocket connect tokens, and websocket attach flow. |

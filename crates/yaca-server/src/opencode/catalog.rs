@@ -13,6 +13,11 @@ use super::model_ref::{OpenCodeModelRefParts, model_ref_parts};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route(
+            "/config",
+            get(legacy_config_get).patch(legacy_config_update),
+        )
+        .route("/config/providers", get(legacy_config_providers))
         .route("/provider", get(legacy_provider_list))
         .route("/provider/auth", get(legacy_provider_auth))
         .route(
@@ -54,6 +59,12 @@ struct LegacyProviderList {
     all: Vec<ProviderInfo>,
     default: BTreeMap<String, String>,
     connected: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct LegacyConfigProviders {
+    providers: Vec<ProviderInfo>,
+    default: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -125,6 +136,30 @@ struct ModelCacheCost {
 struct ModelLimit {
     context: u32,
     output: u32,
+}
+
+async fn legacy_config_get() -> Json<Value> {
+    Json(json!({}))
+}
+
+async fn legacy_config_update(Json(payload): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let Some(map) = payload.as_object() else {
+        return Err(ApiError::bad_request("config payload must be an object"));
+    };
+    if let Some(username) = map.get("username")
+        && !username.is_string()
+    {
+        return Err(ApiError::bad_request("username must be a string"));
+    }
+    Ok(Json(payload))
+}
+
+async fn legacy_config_providers(State(st): State<ServerState>) -> Json<LegacyConfigProviders> {
+    let active = model_ref_parts(&st.agent.model);
+    Json(LegacyConfigProviders {
+        providers: vec![provider_info(&active)],
+        default: BTreeMap::from([(active.provider_id, active.model_id)]),
+    })
 }
 
 async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProviderList> {
