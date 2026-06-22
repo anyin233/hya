@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::{CreateSessionResponse, PromptResponse};
-use yaca_proto::{AgentName, FinishReason, ModelRef};
+use yaca_proto::{AgentName, FinishReason, MessageId, ModelRef};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -388,6 +388,42 @@ async fn opencode_session_delete_removes_session() {
             .iter()
             .all(|item| item["id"] != session)
     );
+}
+
+#[tokio::test]
+async fn opencode_session_init_records_requested_command_message() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    let message = MessageId::new().to_string();
+
+    let (status, initialized) = post_json(
+        app.clone(),
+        format!("/session/{session}/init"),
+        json!({
+            "messageID": message,
+            "providerID": "yaca",
+            "modelID": "fake"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(initialized, json!(true));
+
+    let one = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message/{message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(one.status(), StatusCode::OK);
+    let body = body_json(one).await;
+    assert_eq!(body["info"]["id"], message);
+    assert_eq!(body["info"]["role"], "user");
+    assert_eq!(body["parts"][0]["text"], "/init");
 }
 
 #[tokio::test]
