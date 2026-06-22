@@ -48,6 +48,30 @@ fn runtime_status_uses_latest_finished_assistant_duration_when_idle() {
     );
 }
 
+#[test]
+fn runtime_status_omits_idle_placeholder_when_no_duration_exists() {
+    // Given: an idle shell before any assistant duration exists.
+    let mut state = AppState {
+        agent: "build".to_string(),
+        model: "kimi-k2".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 100, 16);
+    let status_row = find_row(&buffer, 100, 16, "build · kimi-k2");
+
+    // Then: it mirrors OpenCode by omitting idle filler metadata.
+    assert!(
+        !status_row.contains("idle"),
+        "runtime strip should not show idle filler, got {status_row:?}"
+    );
+    assert!(
+        !status_row.contains("kimi-k2 ·"),
+        "runtime strip should not leave a dangling separator, got {status_row:?}"
+    );
+}
+
 fn with_timed_assistant_message(
     state: &mut AppState,
     started_ms: i64,

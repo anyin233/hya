@@ -26,28 +26,30 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
     } else {
         state.model.as_str()
     };
-    let state_label = runtime_state_label(state);
-    let state_color = if state.running {
-        theme.warning
-    } else {
-        theme.muted
-    };
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled("  ▣ ", Style::default().fg(theme.primary)),
         Span::styled(active_agent_label(state), Style::default().fg(theme.info)),
         Span::styled(" · ", Style::default().fg(theme.muted)),
         Span::styled(model.to_string(), Style::default().fg(theme.text)),
-        Span::styled(" · ", Style::default().fg(theme.muted)),
-        Span::styled(state_label, Style::default().fg(state_color)),
-    ])
+    ];
+    if let Some(state_label) = runtime_state_label(state) {
+        let state_color = if state.running {
+            theme.warning
+        } else {
+            theme.muted
+        };
+        spans.extend([
+            Span::styled(" · ", Style::default().fg(theme.muted)),
+            Span::styled(state_label, Style::default().fg(state_color)),
+        ]);
+    }
+    Line::from(spans)
 }
 
-fn runtime_state_label(state: &AppState) -> String {
+fn runtime_state_label(state: &AppState) -> Option<String> {
     if state.running {
-        "streaming".to_string()
+        Some("streaming".to_string())
     } else {
-        latest_assistant_duration_ms(&state.projection)
-            .map(format_duration)
-            .unwrap_or_else(|| "idle".to_string())
+        latest_assistant_duration_ms(&state.projection).map(format_duration)
     }
 }
