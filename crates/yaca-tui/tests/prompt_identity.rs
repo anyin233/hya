@@ -48,3 +48,28 @@ fn composer_identity_shows_provider_between_model_and_effort() {
         "composer identity should show provider between model and effort, got {metadata_row:?}"
     );
 }
+
+#[test]
+fn composer_identity_omits_empty_team_status_suffix() {
+    // Given: the active agent has a team entry without a role/status label.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        team: vec![("sisyphus".to_string(), String::new())],
+        ..AppState::default()
+    };
+
+    // When: the prompt identity row renders.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = find_row(&buffer, 120, 16, "sisyphus");
+
+    // Then: it keeps the bare agent name instead of a dangling separator.
+    assert!(
+        metadata_row.contains("sisyphus · kimi-k2"),
+        "composer identity should omit empty team status, got {metadata_row:?}"
+    );
+    assert!(
+        !metadata_row.contains("sisyphus - "),
+        "composer identity should not render a dangling team separator, got {metadata_row:?}"
+    );
+}

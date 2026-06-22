@@ -16,6 +16,12 @@ pub(super) fn active_agent_label(state: &AppState) -> String {
         .find(|(member, _status)| member == agent)
         .map_or_else(
             || agent.to_string(),
-            |(_member, status)| format!("{agent} - {status}"),
+            |(_member, status)| {
+                if status.trim().is_empty() {
+                    agent.to_string()
+                } else {
+                    format!("{agent} - {status}")
+                }
+            },
         )
 }
