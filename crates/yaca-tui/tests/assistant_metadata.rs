@@ -47,11 +47,11 @@ fn assistant_block_renders_message_metadata_footer() {
     let metadata_row = row_text(&buffer, 80, text_y + 1);
 
     assert!(
-        metadata_row.contains("sisyphus · kimi-k2 · completed"),
+        metadata_row.contains("Sisyphus · kimi-k2 · completed"),
         "assistant metadata footer should sit under the message text, got {metadata_row:?}"
     );
     assert!(
-        metadata_row.contains("▣ sisyphus"),
+        metadata_row.contains("▣ Sisyphus"),
         "assistant metadata footer should use the OpenCode turn marker, got {metadata_row:?}"
     );
 }
@@ -71,7 +71,7 @@ fn assistant_metadata_footer_includes_active_agent_role() {
     let metadata_row = row_text(&buffer, 100, text_y + 1);
 
     assert!(
-        metadata_row.contains("sisyphus - ultraworker retry · kimi-k2 · completed"),
+        metadata_row.contains("Sisyphus - Ultraworker Retry · kimi-k2 · completed"),
         "assistant metadata should include the active agent role, got {metadata_row:?}"
     );
 }
@@ -90,7 +90,7 @@ fn assistant_metadata_footer_uses_finished_turn_duration() {
     let metadata_row = row_text(&buffer, 100, text_y + 1);
 
     assert!(
-        metadata_row.contains("▣ sisyphus · kimi-k2 · 1m 21s"),
+        metadata_row.contains("▣ Sisyphus · kimi-k2 · 1m 21s"),
         "assistant metadata should use the finished turn duration, got {metadata_row:?}"
     );
     assert!(
@@ -111,7 +111,7 @@ fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
     with_text_message(&mut state, 10, Role::Assistant, "second response");
 
     let buffer = render_buffer(&mut state, 100, 20);
-    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "sisyphus · kimi-k2 ·");
+    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "Sisyphus · kimi-k2 ·");
 
     assert_eq!(
         metadata_rows.len(),
@@ -119,12 +119,12 @@ fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
         "expected one metadata footer per assistant block, got {metadata_rows:?}"
     );
     assert!(
-        metadata_rows[0].contains("sisyphus · kimi-k2 · completed"),
+        metadata_rows[0].contains("Sisyphus · kimi-k2 · completed"),
         "older assistant block should remain completed, got {:?}",
         metadata_rows[0]
     );
     assert!(
-        metadata_rows[1].contains("sisyphus · kimi-k2 · streaming"),
+        metadata_rows[1].contains("Sisyphus · kimi-k2 · streaming"),
         "latest assistant block should report streaming, got {:?}",
         metadata_rows[1]
     );
@@ -198,7 +198,7 @@ fn prior_assistant_block_stays_completed_while_new_user_turn_waits() {
     with_text_message(&mut state, 10, Role::User, "new prompt");
 
     let buffer = render_buffer(&mut state, 100, 20);
-    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "sisyphus · kimi-k2 ·");
+    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "Sisyphus · kimi-k2 ·");
 
     assert_eq!(
         metadata_rows.len(),
@@ -206,7 +206,7 @@ fn prior_assistant_block_stays_completed_while_new_user_turn_waits() {
         "expected only the existing assistant footer, got {metadata_rows:?}"
     );
     assert!(
-        metadata_rows[0].contains("sisyphus · kimi-k2 · completed"),
+        metadata_rows[0].contains("Sisyphus · kimi-k2 · completed"),
         "previous assistant block should remain completed while waiting, got {:?}",
         metadata_rows[0]
     );

@@ -44,7 +44,7 @@ fn composer_identity_shows_provider_between_model_and_effort() {
 
     // Then: the provider label appears after the model and before effort.
     assert!(
-        metadata_row.contains("sisyphus · kimi-k2 anthropic · max"),
+        metadata_row.contains("Sisyphus · kimi-k2 anthropic · max"),
         "composer identity should show provider between model and effort, got {metadata_row:?}"
     );
 }
@@ -61,15 +61,15 @@ fn composer_identity_omits_empty_team_status_suffix() {
 
     // When: the prompt identity row renders.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = find_row(&buffer, 120, 16, "sisyphus");
+    let metadata_row = find_row(&buffer, 120, 16, "Sisyphus");
 
     // Then: it keeps the bare agent name instead of a dangling separator.
     assert!(
-        metadata_row.contains("sisyphus · kimi-k2"),
+        metadata_row.contains("Sisyphus · kimi-k2"),
         "composer identity should omit empty team status, got {metadata_row:?}"
     );
     assert!(
-        !metadata_row.contains("sisyphus - "),
+        !metadata_row.contains("Sisyphus - "),
         "composer identity should not render a dangling team separator, got {metadata_row:?}"
     );
 }

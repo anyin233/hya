@@ -45,7 +45,7 @@ fn commands_and_usage_render_below_the_prompt_panel() {
 
     // Then: agent/model identity stays inside the prompt panel and usage/commands
     // sit on the separate footer row below it, matching OpenCode's prompt split.
-    let identity_y = row_index(&buffer, width, height, "sisyphus · kimi-k2 · max");
+    let identity_y = row_index(&buffer, width, height, "Sisyphus · kimi-k2 · max");
     let footer_y = row_index(&buffer, width, height, "ctrl+p commands");
     let footer = row_text(&buffer, width, footer_y);
     assert_eq!(footer_y, identity_y + 1);
@@ -54,7 +54,7 @@ fn commands_and_usage_render_below_the_prompt_panel() {
         "footer should keep usage before billing, got {footer:?}"
     );
     assert!(
-        !footer.contains("sisyphus"),
+        !footer.contains("Sisyphus"),
         "footer should not duplicate prompt identity, got {footer:?}"
     );
     assert_eq!(

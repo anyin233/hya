@@ -45,7 +45,7 @@ fn composer_body_expands_upward_for_multiline_input() {
     assert_eq!(second, first + 1);
     assert_eq!(third, second + 1);
     assert!(
-        row_text(&buffer, width, identity).contains("sisyphus"),
+        row_text(&buffer, width, identity).contains("Sisyphus"),
         "prompt identity row should sit below multiline input"
     );
     assert_eq!(footer, identity + 1);

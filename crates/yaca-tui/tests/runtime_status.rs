@@ -39,7 +39,7 @@ fn runtime_status_uses_latest_finished_assistant_duration_when_idle() {
 
     // Then: it mirrors OpenCode's elapsed-turn metadata instead of plain idle.
     assert!(
-        status_row.contains("sisyphus · kimi-k2 · 1m 21s"),
+        status_row.contains("Sisyphus · kimi-k2 · 1m 21s"),
         "runtime strip should show the latest assistant duration, got {status_row:?}"
     );
     assert!(
@@ -59,7 +59,7 @@ fn runtime_status_omits_idle_placeholder_when_no_duration_exists() {
 
     // When: the grounded runtime strip renders above the composer.
     let buffer = render_buffer(&mut state, 100, 16);
-    let status_row = find_row(&buffer, 100, 16, "build · kimi-k2");
+    let status_row = find_row(&buffer, 100, 16, "Build · kimi-k2");
 
     // Then: it mirrors OpenCode by omitting idle filler metadata.
     assert!(

@@ -48,13 +48,13 @@ fn composer_metadata_hides_context_and_cost_below_compact_width() {
 
     // When: the footer renders just below OpenCode's compact metadata breakpoint.
     let buffer = render_buffer(&mut state, 79, 16);
-    let identity_row = last_row_containing(&buffer, 79, 16, "sisyphus");
+    let identity_row = last_row_containing(&buffer, 79, 16, "Sisyphus");
     let footer_row = row_containing(&buffer, 79, 16, "ctrl+p commands");
 
     // Then: high-priority agent identity and command affordance remain, while
     // lower-priority model/context/cost hints follow OpenCode's width policy.
     assert!(
-        identity_row.contains("sisyphus"),
+        identity_row.contains("Sisyphus"),
         "agent identity should remain visible, got {identity_row:?}"
     );
     assert!(
@@ -87,11 +87,11 @@ fn composer_metadata_uses_bare_effort_without_manual_mode() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = last_row_containing(&buffer, 120, 16, "sisyphus");
+    let metadata_row = last_row_containing(&buffer, 120, 16, "Sisyphus");
 
     // Then: the effort reads like OpenCode's model variant label, not a prose mode.
     assert!(
-        metadata_row.contains("sisyphus · kimi-k2 · max"),
+        metadata_row.contains("Sisyphus · kimi-k2 · max"),
         "composer metadata should show bare effort after model, got {metadata_row:?}"
     );
     assert!(
@@ -115,11 +115,11 @@ fn composer_metadata_hides_absent_effort_instead_of_showing_off() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = last_row_containing(&buffer, 120, 16, "sisyphus");
+    let metadata_row = last_row_containing(&buffer, 120, 16, "Sisyphus");
 
     // Then: the statusline matches OpenCode's absent-variant behavior.
     assert!(
-        metadata_row.contains("sisyphus · kimi-k2"),
+        metadata_row.contains("Sisyphus · kimi-k2"),
         "composer metadata should still show identity, got {metadata_row:?}"
     );
     assert!(

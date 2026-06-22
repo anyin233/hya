@@ -155,11 +155,11 @@ fn composer_metadata_includes_active_agent_role() {
 
     // When: the prompt identity row renders.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = find_row(&buffer, 120, 16, "sisyphus - ultraworker retry");
+    let metadata_row = find_row(&buffer, 120, 16, "Sisyphus - Ultraworker Retry");
 
     // Then: the same agent-role identity used by OpenCode appears before the model.
     assert!(
-        metadata_row.contains("sisyphus - ultraworker retry · kimi-k2"),
+        metadata_row.contains("Sisyphus - Ultraworker Retry · kimi-k2"),
         "composer metadata should show the active agent role, got {metadata_row:?}"
     );
 }
@@ -206,7 +206,7 @@ fn active_runtime_strip_sits_above_the_composer() {
 
     // Then: the active runtime strip is visible directly above the input row.
     assert!(
-        status_row.contains("sisyphus"),
+        status_row.contains("Sisyphus"),
         "runtime strip should show the active agent, got {status_row:?}"
     );
     assert!(
@@ -249,7 +249,7 @@ fn active_runtime_strip_includes_current_team_role() {
 
     // Then: the strip uses the active agent plus role before the model.
     assert!(
-        status_row.contains("sisyphus - ultraworker retry"),
+        status_row.contains("Sisyphus - Ultraworker Retry"),
         "runtime strip should show the active agent role, got {status_row:?}"
     );
     assert!(
