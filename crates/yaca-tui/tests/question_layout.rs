@@ -141,7 +141,11 @@ fn question_panel_renders_custom_answer_like_opencode() {
         "custom answer text should render under the custom option:\n{text}"
     );
     assert!(
-        text.contains("enter save   esc cancel"),
-        "custom answer editing should use OpenCode's save/cancel hint:\n{text}"
+        text.contains("↑↓ select   enter submit   esc dismiss"),
+        "custom answer editing should use OpenCode's submit/dismiss hint:\n{text}"
+    );
+    assert!(
+        !text.contains("enter save") && !text.contains("esc cancel"),
+        "custom answer editing should not expose legacy save/cancel wording:\n{text}"
     );
 }

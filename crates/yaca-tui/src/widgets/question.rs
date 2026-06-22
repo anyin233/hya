@@ -130,8 +130,8 @@ fn option_line(
 }
 
 const fn question_hint(question: &QuestionPrompt) -> &'static str {
-    if question.options.is_empty() || (question.allow_custom && !question.input.is_empty()) {
-        "enter save   esc cancel"
+    if question.options.is_empty() {
+        "enter submit   esc dismiss"
     } else {
         "↑↓ select   enter submit   esc dismiss"
     }
