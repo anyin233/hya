@@ -46,6 +46,35 @@ test("initialize passes OpenCode shell and project time to local plugins", async
   expect(result.hooks).toEqual([{ name: "event" }])
 })
 
+test("initialize passes an OpenCode app log client to local plugins", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "client-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "client",',
+      "  server: async (input) => {",
+      "    const logged = await input.client.app.log({",
+      '      service: "test-plugin",',
+      '      level: "info",',
+      '      message: "loaded",',
+      "      extra: { plugin: true },",
+      "    })",
+      '    if (logged.data !== true) throw new Error("log data mismatch")',
+      '    if (logged.response.status !== 200) throw new Error("log status mismatch")',
+      "    return { event: async () => {} }",
+      "  },",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(root, pluginFile)
+
+  const result = InitializeResultSchema.parse(responses[0]?.result)
+  expect(result.hooks).toEqual([{ name: "event" }])
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,

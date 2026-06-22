@@ -1,6 +1,7 @@
 import { $ } from "bun"
 import { z } from "zod"
 
+import { createOpenCodeClientAdapter } from "./client_adapter"
 import {
   AdapterOptionsParseError,
   discoverPluginSpecs,
@@ -95,7 +96,7 @@ async function loadConfiguredHooks(
   })
   const loaded = await loadLocalPluginHooks(
     [...discovered, ...options.plugin],
-    pluginInput(context.env, directory, worktree),
+    pluginInput(context.env, context.stderr, directory, worktree),
   )
   for (const error of loaded.errors) {
     await context.stderr.write(`opencode plugin ${error.spec}: ${error.message}\n`)
@@ -105,11 +106,12 @@ async function loadConfiguredHooks(
 
 function pluginInput(
   env: RuntimeEnv,
+  stderr: RequestContext["stderr"],
   directory: string,
   worktree: string,
 ): Readonly<Record<string, unknown>> {
   return {
-    client: {},
+    client: createOpenCodeClientAdapter(stderr),
     directory,
     worktree,
     project: {
