@@ -104,6 +104,27 @@ fn context_rail_footer_emphasizes_workdir_name_like_opencode() {
 }
 
 #[test]
+fn context_rail_footer_emphasizes_app_name_like_opencode() {
+    // Given: a wide context rail with the sidebar footer visible.
+    let mut state = AppState::default();
+    with_session(&mut state, "/tmp/yaca-footer");
+
+    // When: the OpenCode-style version footer renders.
+    let buffer = render_buffer(&mut state, 124, 36);
+
+    // Then: the app label is primary text while the version stays muted.
+    let version_row = row_containing(&buffer, 124, 36, "yaca 0.0.0").unwrap();
+    let rendered = row_text(&buffer, 124, version_row);
+    let label_x = u16::try_from(rendered.find("yaca").unwrap()).unwrap();
+    let version_x = u16::try_from(rendered.find("0.0.0").unwrap()).unwrap();
+    assert_eq!(buffer[(label_x, version_row)].fg, Color::Rgb(238, 238, 238));
+    assert_eq!(
+        buffer[(version_x, version_row)].fg,
+        Color::Rgb(128, 128, 128)
+    );
+}
+
+#[test]
 fn context_rail_footer_marks_workdir_as_context_prefix() {
     // Given: a wide context rail with a known worktree path.
     let mut state = AppState::default();

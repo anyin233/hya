@@ -1,4 +1,4 @@
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -15,7 +15,11 @@ pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<
     lines.push(Line::from(vec![
         Span::styled("  • ", Style::default().fg(theme.success)),
         Span::styled(
-            format!("yaca {}", env!("CARGO_PKG_VERSION")),
+            "yaca",
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(theme.muted),
         ),
     ]));
