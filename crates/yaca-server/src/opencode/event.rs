@@ -14,8 +14,6 @@ use yaca_proto::{Envelope, Event, SessionId};
 
 use crate::ServerState;
 
-use super::location::LocationInfo;
-
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/event", get(subscribe))
@@ -28,9 +26,7 @@ struct EventPayload<T> {
     id: String,
     #[serde(rename = "type")]
     kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    location: Option<LocationInfo>,
-    data: T,
+    properties: T,
 }
 
 async fn subscribe(
@@ -39,52 +35,64 @@ async fn subscribe(
     let connected = json_event(&EventPayload {
         id: event_id(),
         kind: "server.connected",
-        location: None,
-        data: json!({}),
+        properties: json!({}),
     });
     let initial = stream::once(async move { Ok(connected) });
-    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(|result| async move {
-        match result {
-            Ok(envelope) => Some(Ok(json_event(&envelope_payload(envelope)))),
-            Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+    let live_st = st.clone();
+    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+        let st = live_st.clone();
+        async move {
+            match result {
+                Ok(envelope) => Some(Ok(json_event(&envelope_payload(&st, envelope).await))),
+                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+            }
         }
     });
     Sse::new(initial.chain(live))
 }
 
-fn envelope_payload(envelope: Envelope) -> Value {
-    if let Event::Error {
-        session,
-        code,
-        message,
-    } = &envelope.event
-    {
-        return session_error_payload(&envelope, *session, code, message);
+async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
+    match &envelope.event {
+        Event::Error {
+            session,
+            code,
+            message,
+        } => session_error_payload(&envelope, *session, code, message),
+        Event::SessionStatus { session, status } => {
+            session_status_payload(&envelope, *session, status)
+        }
+        Event::SessionCreated { session, .. } => {
+            session_payload(st, &envelope, *session, "session.created").await
+        }
+        Event::SessionTitled { session, .. } => {
+            session_payload(st, &envelope, *session, "session.updated").await
+        }
+        _ => serde_json::to_value(EventPayload {
+            id: format!("evt_yaca_{}", envelope.seq.0),
+            kind: "yaca.envelope",
+            properties: envelope,
+        })
+        .unwrap_or_else(|_| json!({})),
     }
-    if let Event::SessionStatus { session, status } = &envelope.event {
-        return session_status_payload(&envelope, *session, status);
-    }
-    if let Event::SessionCreated {
-        session, workdir, ..
-    } = &envelope.event
-    {
-        return session_created_payload(&envelope, *session, workdir);
-    }
-    serde_json::to_value(EventPayload {
-        id: format!("evt_yaca_{}", envelope.seq.0),
-        kind: "yaca.envelope",
-        location: None,
-        data: envelope,
-    })
-    .unwrap_or_else(|_| json!({}))
 }
 
-fn session_created_payload(envelope: &Envelope, session: SessionId, workdir: &str) -> Value {
+async fn session_payload(
+    st: &ServerState,
+    envelope: &Envelope,
+    session: SessionId,
+    kind: &'static str,
+) -> Value {
+    let session_id = session.to_string();
+    let mut properties = json!({ "sessionID": session_id });
+    if let Ok(snapshot) = super::load_session(st, session, None).await
+        && let Some(object) = properties.as_object_mut()
+    {
+        object.insert("info".to_string(), json!(snapshot.info));
+    }
     json!({
         "id": format!("evt_yaca_{}", envelope.seq.0),
-        "type": "session.created",
-        "location": { "directory": workdir },
-        "data": { "sessionID": session.to_string() },
+        "type": kind,
+        "properties": properties,
     })
 }
 

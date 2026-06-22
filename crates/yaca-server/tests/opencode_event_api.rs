@@ -87,8 +87,71 @@ async fn opencode_v2_event_route_streams_session_created_location() {
 
     let event = read_sse_json(&mut stream).await;
     assert_eq!(event["type"], "session.created");
-    assert_eq!(event["location"]["directory"], directory);
-    assert!(event["data"]["sessionID"].as_str().is_some());
+    assert!(event.get("location").is_none());
+    let session = event["properties"]["sessionID"].as_str().unwrap();
+    assert_eq!(event["properties"]["info"]["id"], session);
+    assert_eq!(event["properties"]["info"]["directory"], directory);
+}
+
+#[tokio::test]
+async fn opencode_v2_event_route_streams_session_updated_properties() {
+    let app = router(state().await);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    let connected = read_sse_json(&mut stream).await;
+    assert_eq!(connected["type"], "server.connected");
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let created_event = read_sse_json(&mut stream).await;
+    assert_eq!(created_event["type"], "session.created");
+    let session = created_event["properties"]["sessionID"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/session/{session}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"title": "Renamed"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+
+    let updated_event = read_sse_json(&mut stream).await;
+    assert_eq!(updated_event["type"], "session.updated");
+    assert!(updated_event.get("location").is_none());
+    assert_eq!(updated_event["properties"]["sessionID"], session);
+    assert_eq!(updated_event["properties"]["info"]["id"], session);
+    assert_eq!(updated_event["properties"]["info"]["title"], "Renamed");
 }
 
 async fn assert_event_stream(uri: &str) {
@@ -115,6 +178,7 @@ async fn assert_event_stream(uri: &str) {
     let event = read_sse_json(&mut stream).await;
     assert_eq!(event["type"], "server.connected");
     assert!(event.get("location").is_none());
+    assert_eq!(event["properties"], json!({}));
 }
 
 async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
