@@ -80,6 +80,28 @@ test("discovers OPENCODE_CONFIG_CONTENT plugins after config directories", async
   ])
 })
 
+test("resolves OPENCODE_CONFIG_CONTENT path plugins relative to the project directory", async () => {
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const inlinePlugin = path.join(directory, "inline-plugin.ts")
+  await mkdir(directory, { recursive: true })
+  await writeFile(inlinePlugin, "export default {}")
+
+  const specs = await discoverPluginSpecs({
+    directory,
+    worktree: directory,
+    inlineConfig: JSON.stringify({
+      plugin: [["./inline-plugin.ts", { source: "inline" }]],
+    }),
+    xdgConfigHome: path.join(root, "xdg"),
+    home: path.join(root, "home"),
+  })
+
+  expect(specs).toEqual([
+    [pathToFileURL(inlinePlugin).href, { source: "inline" }],
+  ])
+})
+
 test("discovers project opencode config files before config directories", async () => {
   const root = await makeTempDir()
   const worktree = path.join(root, "project")

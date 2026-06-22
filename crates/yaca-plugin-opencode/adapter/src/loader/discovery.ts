@@ -101,7 +101,7 @@ export async function discoverPluginSpecs(
     specs.push(...(await readConfigDirPluginSpecs(dir, OPENCODE_DIR_CONFIG_FILES)))
   }
   if (context.inlineConfig !== undefined && context.inlineConfig.length > 0) {
-    specs.push(...parseConfigOptions(context.inlineConfig).plugin)
+    specs.push(...(await readInlineConfigPluginSpecs(context.inlineConfig, context.directory)))
   }
   return deduplicatePluginSpecs(specs)
 }
@@ -157,6 +157,19 @@ async function readConfigFilePluginSpecs(
   const specs: PluginSpec[] = []
   for (const plugin of options.plugin) {
     specs.push(await resolveLocalPluginSpec(plugin, file))
+  }
+  return specs
+}
+
+async function readInlineConfigPluginSpecs(
+  raw: string,
+  directory: string,
+): Promise<readonly PluginSpec[]> {
+  const options = parseConfigOptions(raw)
+  const virtualFile = path.join(directory, "OPENCODE_CONFIG_CONTENT")
+  const specs: PluginSpec[] = []
+  for (const plugin of options.plugin) {
+    specs.push(await resolveLocalPluginSpec(plugin, virtualFile))
   }
   return specs
 }
