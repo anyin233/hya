@@ -17,7 +17,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::api::{
-    CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest, PromptResponse,
+    CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
+    PromptResponse,
 };
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
 
@@ -31,6 +32,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/sessions", post(create_session))
         .route("/sessions/:id/prompt", post(prompt))
+        .route("/sessions/:id/command", post(command))
         .route("/sessions/:id/events", get(events))
         .route("/sessions/:id/stream", get(stream))
         .with_state(state)
@@ -99,6 +101,34 @@ async fn prompt(
         .run_turn(session, &st.agent, CancellationToken::new())
         .await?;
     Ok(Json(PromptResponse { message, finish }))
+}
+
+async fn command(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<CommandRequest>,
+) -> Result<Json<PromptResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    let text = req
+        .text
+        .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
+    let message = st
+        .engine
+        .admit_command_prompt(session, req.command, req.arguments, text)
+        .await?;
+    let finish = st
+        .engine
+        .run_turn(session, &st.agent, CancellationToken::new())
+        .await?;
+    Ok(Json(PromptResponse { message, finish }))
+}
+
+fn command_prompt_text(command: &str, arguments: &str) -> String {
+    if arguments.trim().is_empty() {
+        format!("/{command}")
+    } else {
+        format!("/{command} {arguments}")
+    }
 }
 
 async fn events(
