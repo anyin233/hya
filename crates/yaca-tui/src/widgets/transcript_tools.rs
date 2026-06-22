@@ -45,10 +45,11 @@ pub fn push_tool_lines(
     } = status
     {
         for segment in output.lines() {
+            let color = output_line_color(segment, theme);
             lines.push(Line::from(vec![
                 Span::styled("   ", tool_style(theme.muted, selected, theme)),
-                Span::styled("▏ ", tool_style(theme.muted, selected, theme)),
-                Span::styled(segment.to_string(), tool_style(theme.text, selected, theme)),
+                Span::styled("▏ ", tool_style(color, selected, theme)),
+                Span::styled(segment.to_string(), tool_style(color, selected, theme)),
             ]));
         }
     }
@@ -127,6 +128,18 @@ fn status_suffix(status: &ToolStatus) -> String {
         ToolStatus::Pending | ToolStatus::Running => " …".to_string(),
         ToolStatus::Completed { time_ms, .. } => format!(" ✓ {time_ms}ms"),
         ToolStatus::Error { .. } => " ✗".to_string(),
+    }
+}
+
+fn output_line_color(line: &str, theme: &Theme) -> Color {
+    if line.starts_with("@@") {
+        theme.muted
+    } else if line.starts_with('+') && !line.starts_with("+++") {
+        theme.success
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        theme.error
+    } else {
+        theme.text
     }
 }
 
