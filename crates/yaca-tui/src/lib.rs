@@ -37,6 +37,7 @@ pub struct AppState {
     pub mcp: Vec<ConnectorView>,
     pub lsp_status: Option<String>,
     pub branch_label: Option<String>,
+    pub changed_files: Vec<ChangedFileView>,
     pub selected_message: Option<usize>,
 }
 
@@ -93,6 +94,13 @@ pub struct PromptAttachment {
     pub placeholder: String,
     pub source_path: Option<String>,
     pub mime: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedFileView {
+    pub path: String,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
 }
 
 pub struct GoalView {

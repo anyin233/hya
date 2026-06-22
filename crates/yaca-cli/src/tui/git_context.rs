@@ -1,28 +1,99 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-use yaca_tui::AppState;
-
-pub(super) fn branch_label_from_workdir(workdir: Option<&str>) -> Option<String> {
-    workdir.and_then(|path| branch_label(Path::new(path)))
-}
+use yaca_tui::{AppState, ChangedFileView};
 
 pub(super) fn refresh_app_branch(app: &mut AppState) {
-    app.branch_label = branch_label_from_workdir(app.projection.session.workdir.as_deref());
+    let workdir = app.projection.session.workdir.as_deref().map(Path::new);
+    app.branch_label = workdir.and_then(branch_label);
+    app.changed_files = workdir.map(changed_files).unwrap_or_default();
 }
 
 pub(super) fn branch_label(workdir: &Path) -> Option<String> {
+    let branch = git_stdout(workdir, ["branch", "--show-current"])?
+        .trim()
+        .to_string();
+    (!branch.is_empty()).then_some(branch)
+}
+
+pub(super) fn changed_files(workdir: &Path) -> Vec<ChangedFileView> {
+    let Some(status) = git_stdout(workdir, ["status", "--short", "--untracked-files=all"]) else {
+        return Vec::new();
+    };
+    let numstat = changed_file_numstat(workdir);
+    status
+        .lines()
+        .filter_map(status_path)
+        .map(|path| {
+            let counts = numstat.get(&path).copied();
+            ChangedFileView {
+                path,
+                additions: counts.map(|(additions, _)| additions),
+                deletions: counts.map(|(_, deletions)| deletions),
+            }
+        })
+        .collect()
+}
+
+fn changed_file_numstat(workdir: &Path) -> BTreeMap<String, (u32, u32)> {
+    let mut stats = BTreeMap::new();
+    if let Some(output) = git_stdout(workdir, ["diff", "--numstat", "--"]) {
+        merge_numstat(&mut stats, &output);
+    }
+    if let Some(output) = git_stdout(workdir, ["diff", "--cached", "--numstat", "--"]) {
+        merge_numstat(&mut stats, &output);
+    }
+    stats
+}
+
+fn merge_numstat(stats: &mut BTreeMap<String, (u32, u32)>, output: &str) {
+    for line in output.lines() {
+        let mut parts = line.split('\t');
+        let Some(additions) = parts.next().and_then(parse_numstat_count) else {
+            continue;
+        };
+        let Some(deletions) = parts.next().and_then(parse_numstat_count) else {
+            continue;
+        };
+        let Some(path) = parts.next().and_then(clean_path) else {
+            continue;
+        };
+        let entry = stats.entry(path).or_default();
+        entry.0 = entry.0.saturating_add(additions);
+        entry.1 = entry.1.saturating_add(deletions);
+    }
+}
+
+fn parse_numstat_count(value: &str) -> Option<u32> {
+    value.parse::<u32>().ok()
+}
+
+fn status_path(line: &str) -> Option<String> {
+    let raw = line.get(3..)?;
+    let path = raw.split_once(" -> ").map_or(raw, |(_, after)| after);
+    clean_path(path)
+}
+
+fn clean_path(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn git_stdout<const N: usize>(workdir: &Path, args: [&str; N]) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workdir)
-        .args(["branch", "--show-current"])
+        .args(args)
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!branch.is_empty()).then_some(branch)
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -96,6 +167,36 @@ mod tests {
 
         // Then: the app footer state follows the current branch.
         assert_eq!(app.branch_label.as_deref(), Some("feat/after"));
+
+        let _ = fs::remove_dir_all(repo);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_app_branch_tracks_modified_files() -> anyhow::Result<()> {
+        let Some(git) = git_command() else {
+            return Ok(());
+        };
+        let repo = unique_temp_dir("yaca-changed-files-repo");
+        fs::create_dir_all(&repo)?;
+        run_git(&git, &repo, &["init"])?;
+        run_git(&git, &repo, &["config", "user.email", "yaca@example.test"])?;
+        run_git(&git, &repo, &["config", "user.name", "yaca"])?;
+        fs::write(repo.join("tracked.txt"), "one\n")?;
+        run_git(&git, &repo, &["add", "tracked.txt"])?;
+        run_git(&git, &repo, &["commit", "-m", "seed"])?;
+        fs::write(repo.join("tracked.txt"), "one\ntwo\n")?;
+        let mut app = AppState::default();
+        app.projection.session.workdir = Some(repo.to_string_lossy().into_owned());
+
+        // Given: the TUI state points at a git worktree with one changed file.
+        refresh_app_branch(&mut app);
+
+        // Then: the context rail state carries the modified path and numstat.
+        assert_eq!(app.changed_files.len(), 1);
+        assert_eq!(app.changed_files[0].path, "tracked.txt");
+        assert_eq!(app.changed_files[0].additions, Some(1));
+        assert_eq!(app.changed_files[0].deletions, Some(0));
 
         let _ = fs::remove_dir_all(repo);
         Ok(())

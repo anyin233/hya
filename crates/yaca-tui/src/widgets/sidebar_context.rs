@@ -1,9 +1,11 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::sidebar_files::push_files;
 use super::sidebar_format::{
     connector_color, format_basis_points, format_number, saved_tokens, used_percent,
 };
+use super::sidebar_runtime::push_runtime;
 use super::sidebar_stats::{TranscriptStats, transcript_stats};
 use crate::AppState;
 use crate::theme::Theme;
@@ -16,6 +18,7 @@ pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     push_title(&mut lines, state, theme);
     push_context_pilot(&mut lines, state, theme, &stats);
     push_context(&mut lines, state, theme, &stats);
+    push_files(&mut lines, state, theme);
     push_mcp(&mut lines, state, theme);
     push_lsp(&mut lines, state, theme);
     push_agents(&mut lines, state, theme);
@@ -168,47 +171,12 @@ fn push_agents(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) 
     }
 }
 
-fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    if state.goal.is_none()
-        && state.loop_view.is_none()
-        && state.permission.is_none()
-        && !state.yolo
-        && state.reasoning_effort.is_none()
-    {
-        return;
-    }
-    lines.push(Line::from(""));
-    push_section(lines, "Runtime", theme.accent, theme);
-    if let Some(goal) = &state.goal {
-        lines.push(meta(
-            format!("GOAL:{} turns {}", goal.condition, goal.turns),
-            theme.text,
-        ));
-    }
-    if let Some(loop_view) = &state.loop_view {
-        lines.push(meta(
-            format!(
-                "LOOP:{} iter {}/{} score {}",
-                loop_view.target, loop_view.iteration, loop_view.budget, loop_view.last_score
-            ),
-            theme.text,
-        ));
-    }
-    if let Some(permission) = &state.permission {
-        lines.push(meta(
-            format!("permission {}", permission.title),
-            theme.warning,
-        ));
-    }
-    if state.yolo {
-        lines.push(meta("mode YOLO", theme.warning));
-    }
-    if let Some(effort) = &state.reasoning_effort {
-        lines.push(meta(format!("think {effort}"), theme.accent));
-    }
-}
-
-fn push_section(lines: &mut Vec<Line<'static>>, title: &str, color: Color, theme: &Theme) {
+pub(super) fn push_section(
+    lines: &mut Vec<Line<'static>>,
+    title: &str,
+    color: Color,
+    theme: &Theme,
+) {
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
@@ -221,7 +189,7 @@ fn push_section(lines: &mut Vec<Line<'static>>, title: &str, color: Color, theme
     ]));
 }
 
-fn meta(text: impl Into<String>, color: Color) -> Line<'static> {
+pub(super) fn meta(text: impl Into<String>, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),
         Span::styled(text.into(), Style::default().fg(color)),
