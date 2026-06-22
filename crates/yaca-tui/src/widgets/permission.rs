@@ -82,7 +82,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             Line::from(vec![
                 rail(),
                 Span::styled(
-                    "←/→ select · type a reply · Enter confirm · Esc reject",
+                    "⇆ select · type a reply · Enter confirm · Esc reject",
                     Style::default().fg(theme.muted),
                 ),
             ]),
@@ -105,7 +105,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             Line::from(vec![
                 rail(),
                 Span::styled(
-                    "←/→ select · Enter confirm · Esc cancel",
+                    "⇆ select · Enter confirm · Esc cancel",
                     Style::default().fg(theme.muted),
                 ),
             ]),

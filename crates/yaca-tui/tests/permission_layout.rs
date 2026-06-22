@@ -61,8 +61,12 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
     );
 
     assert!(
-        text.lines().any(|row| row.starts_with("  ▏ ←/→ select")),
-        "permission hint row should stay inside the left rail:\n{text}"
+        text.lines().any(|row| row.starts_with("  ▏ ⇆ select")),
+        "permission hint row should use OpenCode's select glyph inside the left rail:\n{text}"
+    );
+    assert!(
+        !text.contains("←/→ select"),
+        "permission hint should not expose legacy arrow-key wording:\n{text}"
     );
 }
 
@@ -125,6 +129,10 @@ fn permission_allow_always_stage_renders_confirm_prompt() {
     assert!(
         text.contains("Esc cancel"),
         "always stage should cancel back to the permission prompt:\n{text}"
+    );
+    assert!(
+        text.contains("⇆ select") && !text.contains("←/→ select"),
+        "always stage should use OpenCode's select glyph:\n{text}"
     );
     assert!(
         !text.contains("reply:") && !text.contains("not shown while confirming"),
