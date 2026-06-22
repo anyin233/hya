@@ -47,9 +47,10 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
         json!({ "query": "opencode tui layout" }),
         json!({ "numResults": 2 }),
     );
+    with_completed_tool(&mut state, 60, "skill", json!({ "name": "rust" }));
 
     // When: the transcript is rendered on a normal terminal width.
-    let output = render(&mut state, 120, 28);
+    let output = render(&mut state, 120, 36);
 
     // Then: yaca uses OpenCode's tool-specific glyphs, titles, and compact summaries.
     assert!(
@@ -75,6 +76,10 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
     assert!(
         output.contains("◈ Web Search \"opencode tui layout\" (2 results)"),
         "websearch should use OpenCode's label and result count:\n{output}"
+    );
+    assert!(
+        output.contains("→ Skill \"rust\""),
+        "skill should render like OpenCode's skill tool row instead of raw JSON:\n{output}"
     );
     assert!(
         !output.contains("completed ✓"),

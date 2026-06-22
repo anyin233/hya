@@ -16,6 +16,7 @@ pub(crate) fn summary(name: &str, value: &serde_json::Value) -> Option<String> {
         "ask_user" => tool_questions::summary(value),
         "task" => tool_tasks::summary(value),
         "todowrite" => tool_todos::summary(value),
+        "skill" => field_text(value, "name").map(|name| quoted(&name)),
         _ => None,
     }
 }
