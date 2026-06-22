@@ -136,7 +136,7 @@ function wireResultFromOutput(
   output: { readonly title: string; readonly output: string; readonly metadata: unknown },
 ): WireToolResult {
   if (original.status === "err") {
-    return { status: "err", message: output.output }
+    return original
   }
   const timing = original.time_ms === undefined ? {} : { time_ms: original.time_ms }
   return {
