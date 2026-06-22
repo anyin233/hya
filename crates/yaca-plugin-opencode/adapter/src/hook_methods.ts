@@ -2,6 +2,7 @@ import path from "node:path"
 import { z } from "zod"
 
 import { runChatParamsHooks } from "./chat_params_hooks"
+import { runCommandExecuteBeforeHooks } from "./command_hooks"
 import { runToolExecuteAfterHooks, runToolExecuteBeforeHooks } from "./hooks"
 import { runChatMessageHooks } from "./message_hooks"
 import { runPermissionAskHooks } from "./permission_hooks"
@@ -46,6 +47,15 @@ const ChatParamsParamsSchema = z
     session: z.string(),
     message: z.string(),
     request: WireCompletionRequestSchema,
+  })
+  .strict()
+
+const CommandExecuteBeforeParamsSchema = z
+  .object({
+    session: z.string(),
+    command: z.string(),
+    arguments: z.string(),
+    text: z.string(),
   })
   .strict()
 
@@ -124,6 +134,28 @@ export async function handleChatParams(
     }
   }
   const outcome = await runChatParamsHooks(context.hooks, params.data)
+  return {
+    response: okResponse(request.id, outcome),
+    shouldExit: false,
+  }
+}
+
+export async function handleCommandExecuteBefore(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = CommandExecuteBeforeParamsSchema.safeParse(request.params)
+  if (!params.success) {
+    return {
+      response: errorResponse(
+        request.id,
+        ERROR_CODES.INVALID_PARAMS,
+        params.error.message,
+      ),
+      shouldExit: false,
+    }
+  }
+  const outcome = await runCommandExecuteBeforeHooks(context.hooks, params.data)
   return {
     response: okResponse(request.id, outcome),
     shouldExit: false,

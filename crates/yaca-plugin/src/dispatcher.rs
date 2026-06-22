@@ -7,18 +7,19 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use yaca_core::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use yaca_proto::Envelope;
 use yaca_provider::{CompletionRequest, ReasoningEffort};
 
 use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
-    ChatParamsOutcomeWire, ChatParamsParams, HookName, HookPosture, MessageUserBeforeOutcomeWire,
-    MessageUserBeforeParams, ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams,
-    ToolExecuteBeforeParams, WireCompletionRequest, WireToolResult,
+    ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire, CommandExecuteBeforeParams,
+    HookName, HookPosture, MessageUserBeforeOutcomeWire, MessageUserBeforeParams,
+    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
+    WireCompletionRequest, WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -27,6 +28,30 @@ const GUARD_FAILED_SAFE: &str = "guard failed safe";
 impl HookDispatcher for PluginHost {
     fn dispatch_event(&self, envelope: &Envelope) {
         self.fan_out_event(envelope);
+    }
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        let mut text = input.text;
+        for conn in self.plugins() {
+            if conn.posture(HookName::CommandExecuteBefore).is_none() {
+                continue;
+            }
+            let params = CommandExecuteBeforeParams {
+                session: input.session,
+                command: input.command.clone(),
+                arguments: input.arguments.clone(),
+                text: text.clone(),
+            };
+            if let Some(CommandBeforeOutcomeWire::Continue { text: next }) =
+                enrich(conn, HookName::CommandExecuteBefore, &params).await
+            {
+                text = next;
+            }
+        }
+        CommandExecuteBeforeOutcome::Continue { text }
     }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {

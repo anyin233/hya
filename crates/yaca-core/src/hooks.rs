@@ -9,10 +9,25 @@ use yaca_provider::CompletionRequest;
 #[async_trait]
 pub trait HookDispatcher: Send + Sync {
     fn dispatch_event(&self, envelope: &Envelope);
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome;
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome;
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome;
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome;
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome;
+}
+
+pub struct CommandExecuteBeforeInput {
+    pub session: SessionId,
+    pub command: String,
+    pub arguments: String,
+    pub text: String,
+}
+
+pub enum CommandExecuteBeforeOutcome {
+    Continue { text: String },
 }
 
 pub struct MessageUserBeforeInput {
@@ -70,6 +85,13 @@ pub struct NoopHookHost;
 #[async_trait]
 impl HookDispatcher for NoopHookHost {
     fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         MessageUserBeforeOutcome::Continue { text: input.text }

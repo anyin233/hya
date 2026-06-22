@@ -6,6 +6,7 @@ export type HookRegistration = {
 
 const HOOK_MAPPINGS = [
   ["event", "event"],
+  ["command.execute.before", "command.execute.before"],
   ["chat.message", "message.user.before"],
   ["chat.params", "chat.params"],
   ["chat.headers", "chat.params"],
