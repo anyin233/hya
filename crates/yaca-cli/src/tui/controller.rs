@@ -133,6 +133,18 @@ impl Controller {
         if self.app.dialog.is_some() {
             return self.handle_dialog_key(key);
         }
+        let modified_enter = key.code == KeyCode::Enter
+            && (key.modifiers == KeyModifiers::SHIFT
+                || key.modifiers == KeyModifiers::CONTROL
+                || key.modifiers == KeyModifiers::ALT);
+        let ctrl_j = key.code == KeyCode::Char('j') && key.modifiers == KeyModifiers::CONTROL;
+        if modified_enter || ctrl_j {
+            self.app.input.push('\n');
+            self.history_cursor = None;
+            self.disarm_exit();
+            self.refresh_inline_popup();
+            return TuiEffect::None;
+        }
         if let Some(action) =
             selected_block_action(self.app.selected_message, &self.app.input, &key)
         {
@@ -885,6 +897,36 @@ mod tests {
                 controller.handle_key(key(KeyCode::Char(c))),
                 TuiEffect::None
             );
+        }
+    }
+
+    #[test]
+    fn input_newline_keybinds_insert_newline_without_submit() {
+        for (label, key) in [
+            (
+                "shift+enter",
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            ),
+            (
+                "ctrl+enter",
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+            ),
+            (
+                "alt+enter",
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+            ),
+            (
+                "ctrl+j",
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            ),
+        ] {
+            let mut controller = Controller::new(AppState {
+                input: "first".to_string(),
+                ..AppState::default()
+            });
+
+            assert_eq!(controller.handle_key(key), TuiEffect::None, "{label}");
+            assert_eq!(controller.app.input, "first\n", "{label}");
         }
     }
 
