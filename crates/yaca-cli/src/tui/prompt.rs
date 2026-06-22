@@ -22,7 +22,7 @@ impl PromptState {
         app.exit_armed = false;
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         if self.last_paste_pending_reveal {
-            self.reveal_last_paste(&mut app.input);
+            self.reveal_last_paste(app);
         }
         let pasted = normalized.trim();
         if pasted.is_empty() {
@@ -37,9 +37,7 @@ impl PromptState {
                 source_path: Some(path.clone()),
                 mime: mime.to_string(),
             });
-            app.input.push_str(&placeholder);
-            app.input.push(' ');
-            app.input_cursor = None;
+            Self::insert_text_with_separator(app, &placeholder);
             self.paste_entries.push(PasteEntry {
                 placeholder,
                 original: path,
@@ -52,9 +50,7 @@ impl PromptState {
         let line_count = pasted.matches('\n').count() + 1;
         if line_count >= 3 || pasted.chars().count() > 150 {
             let placeholder = format!("[Pasted Text #{}]", self.paste_entries.len() + 1);
-            app.input.push_str(&placeholder);
-            app.input.push(' ');
-            app.input_cursor = None;
+            Self::insert_text_with_separator(app, &placeholder);
             self.paste_entries.push(PasteEntry {
                 placeholder,
                 original: normalized,
@@ -64,8 +60,7 @@ impl PromptState {
                 refresh_popup: false,
             };
         }
-        app.input.push_str(&normalized);
-        app.input_cursor = None;
+        Self::insert_text(app, &normalized);
         self.last_paste_pending_reveal = false;
         PasteOutcome {
             refresh_popup: true,
@@ -175,12 +170,66 @@ impl PromptState {
             })
     }
 
-    fn reveal_last_paste(&mut self, input: &mut String) {
-        if let Some(entry) = self.paste_entries.last() {
-            *input = input.replace(&entry.placeholder, &entry.original);
+    fn insert_text(app: &mut AppState, text: &str) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input.insert_str(cursor, text);
+        app.input_cursor = Some(cursor + text.len());
+    }
+
+    fn insert_text_with_separator(app: &mut AppState, text: &str) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let suffix_separator_len = app.input[cursor..]
+            .chars()
+            .next()
+            .filter(|ch| ch.is_whitespace())
+            .map_or(0, char::len_utf8);
+        app.input.insert_str(cursor, text);
+        let after_text = cursor + text.len();
+        if suffix_separator_len == 0 {
+            app.input.insert(after_text, ' ');
+        }
+        app.input_cursor = Some(after_text + suffix_separator_len.max(1));
+    }
+
+    fn reveal_last_paste(&mut self, app: &mut AppState) {
+        if let Some(entry) = self.paste_entries.last()
+            && let Some(start) = app.input.find(&entry.placeholder)
+        {
+            let end = start + entry.placeholder.len();
+            let cursor = app
+                .input_cursor
+                .map(|idx| cursor_index(&app.input, Some(idx)));
+            app.input.replace_range(start..end, &entry.original);
+            if let Some(cursor) = cursor {
+                app.input_cursor = Some(adjust_cursor_after_replacement(
+                    cursor,
+                    start,
+                    end,
+                    entry.original.len(),
+                ));
+            }
         }
         self.last_paste_pending_reveal = false;
     }
+}
+
+fn adjust_cursor_after_replacement(
+    cursor: usize,
+    start: usize,
+    end: usize,
+    replacement_len: usize,
+) -> usize {
+    if cursor <= start {
+        return cursor;
+    }
+    if cursor >= end {
+        return if replacement_len >= end - start {
+            cursor + replacement_len - (end - start)
+        } else {
+            cursor.saturating_sub((end - start) - replacement_len)
+        };
+    }
+    start + replacement_len
 }
 
 fn image_paste(text: &str) -> Option<(String, &'static str)> {

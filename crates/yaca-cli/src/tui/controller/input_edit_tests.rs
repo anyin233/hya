@@ -220,3 +220,45 @@ fn home_and_end_move_to_input_buffer_edges_when_prompt_is_not_empty() {
     assert_eq!(controller.app.input, ">alpha\nbravo!");
     assert_eq!(controller.app.scroll_back, 12);
 }
+
+#[test]
+fn paste_inserts_text_at_cursor_and_preserves_suffix() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "a c".to_string(),
+        input_cursor: Some("a ".len()),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_paste("b"), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "a bc");
+    assert_eq!(controller.app.input_cursor, Some("a b".len()));
+}
+
+#[test]
+fn paste_placeholder_inserts_at_cursor_and_preserves_suffix() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "send now".to_string(),
+        input_cursor: Some("send ".len()),
+        ..AppState::default()
+    });
+    let pasted = "one\ntwo\nthree";
+
+    // When
+    assert_eq!(controller.handle_paste(pasted), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "send [Pasted Text #1] now");
+    assert_eq!(
+        controller.app.input_cursor,
+        Some("send [Pasted Text #1] ".len())
+    );
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Enter)),
+        TuiEffect::Submit("send one\ntwo\nthree now".to_string())
+    );
+}
