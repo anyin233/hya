@@ -3176,6 +3176,7 @@ name = "yaca-provider"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64",
  "eventsource-stream",
  "futures",
  "reqwest",

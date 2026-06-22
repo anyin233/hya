@@ -68,6 +68,13 @@ pub enum Part {
         id: PartId,
         text: String,
     },
+    Media {
+        id: PartId,
+        media_type: String,
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
     Tool {
         id: PartId,
         call_id: ToolCallId,

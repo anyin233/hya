@@ -328,6 +328,47 @@ fn google_encodes_system_user_and_tools() {
 }
 
 #[test]
+fn google_encodes_audio_and_video_media_parts() {
+    let req = CompletionRequest {
+        model: ModelRef::new("gemini-2.0-flash"),
+        system: None,
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![
+                Part::Text {
+                    id: PartId::new(),
+                    text: "inspect these".to_string(),
+                },
+                Part::Media {
+                    id: PartId::new(),
+                    media_type: "audio/wav".to_string(),
+                    data: "ZGF0YQ==".to_string(),
+                    filename: Some("clip.wav".to_string()),
+                },
+                Part::Media {
+                    id: PartId::new(),
+                    media_type: "video/mp4".to_string(),
+                    data: "ZGF0YQ==".to_string(),
+                    filename: Some("clip.mp4".to_string()),
+                },
+            ],
+        }],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let body = GoogleProtocol.encode(&req).unwrap();
+    let parts = body["contents"][0]["parts"].as_array().unwrap();
+    assert_eq!(parts[0]["text"], "inspect these");
+    assert_eq!(parts[1]["inlineData"]["mimeType"], "audio/wav");
+    assert_eq!(parts[1]["inlineData"]["data"], "ZGF0YQ==");
+    assert_eq!(parts[2]["inlineData"]["mimeType"], "video/mp4");
+    assert_eq!(parts[2]["inlineData"]["data"], "ZGF0YQ==");
+}
+
+#[test]
 fn openai_null_tool_input_becomes_empty_object_string() {
     let body = OpenAiChatProtocol
         .encode(&assistant_tool_request(serde_json::Value::Null))
