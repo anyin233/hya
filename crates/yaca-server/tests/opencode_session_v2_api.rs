@@ -214,7 +214,7 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
 }
 
 #[tokio::test]
-async fn opencode_v2_session_update_sets_title_and_searches_it() {
+async fn opencode_v2_session_update_sets_title_metadata_permission_archive_and_searches_it() {
     let app = router(state().await);
     let requested = SessionId::new().to_string();
     let (status, _) = post_json(
@@ -235,10 +235,46 @@ async fn opencode_v2_session_update_sets_title_and_searches_it() {
     assert_eq!(updated["data"]["id"], requested);
     assert_eq!(updated["data"]["title"], "OpenCode parity");
 
+    let (status, metadata_updated) = patch_json(
+        app.clone(),
+        format!("/api/session/{requested}"),
+        json!({
+            "metadata": {"lane": "v2"},
+            "permission": [{"permission": "bash", "pattern": "*", "action": "ask"}],
+            "time": {"archived": 99}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata_updated["data"]["metadata"]["lane"], "v2");
+    assert_eq!(
+        metadata_updated["data"]["permission"][0]["permission"],
+        "bash"
+    );
+    assert_eq!(metadata_updated["data"]["time"]["archived"], 99);
+
+    let (status, permission_merged) = patch_json(
+        app.clone(),
+        format!("/api/session/{requested}"),
+        json!({"permission": [{"permission": "edit", "pattern": "*.rs", "action": "allow"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        permission_merged["data"]["permission"]
+            .as_array()
+            .expect("permission rules")
+            .len(),
+        2
+    );
+
     let (status, listed) = get_json(app, "/api/session?search=OpenCode&limit=10".to_string()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["data"][0]["id"], requested);
     assert_eq!(listed["data"][0]["title"], "OpenCode parity");
+    assert_eq!(listed["data"][0]["metadata"]["lane"], "v2");
+    assert_eq!(listed["data"][0]["permission"][1]["permission"], "edit");
+    assert_eq!(listed["data"][0]["time"]["archived"], 99);
 }
 
 #[tokio::test]

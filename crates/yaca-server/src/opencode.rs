@@ -22,6 +22,7 @@ mod session_context;
 mod session_legacy;
 mod session_prompt;
 mod session_switch;
+mod session_update;
 mod session_v2;
 
 pub(crate) use project::ProjectState;

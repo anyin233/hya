@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Number, Value, json};
 use yaca_proto::{
     AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, PartProjection, Projection,
     Role, SessionId,
@@ -18,7 +18,11 @@ pub(super) struct OpenCodeSessionInfo {
     agent: String,
     model: OpenCodeModel,
     version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<Value>,
     time: OpenCodeSessionTime,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -28,10 +32,12 @@ pub(super) struct OpenCodeModel {
     provider_id: String,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct OpenCodeSessionTime {
     created: u64,
     updated: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archived: Option<Number>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -57,6 +63,10 @@ impl OpenCodeSessionInfo {
 
     pub(super) fn title(&self) -> &str {
         &self.title
+    }
+
+    pub(super) fn permission(&self) -> Option<&[Value]> {
+        self.permission.as_deref()
     }
 }
 
@@ -154,10 +164,13 @@ fn session_info(
             .to_string(),
         model: model_info(projection.session.model.as_ref().unwrap_or(&meta.model)),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        metadata: projection.session.metadata.clone(),
         time: OpenCodeSessionTime {
             created: millis(created),
             updated: millis(updated),
+            archived: projection.session.archived.clone(),
         },
+        permission: projection.session.permission.clone(),
     }
 }
 
