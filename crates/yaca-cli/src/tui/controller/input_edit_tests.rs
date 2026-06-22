@@ -7,6 +7,13 @@ fn ctrl(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
 }
 
+fn ctrl_shift(code: char) -> KeyEvent {
+    KeyEvent::new(
+        KeyCode::Char(code),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    )
+}
+
 fn alt(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::ALT)
 }
@@ -107,6 +114,57 @@ fn ctrl_k_deletes_to_current_line_end() {
     assert_eq!(effect, TuiEffect::None);
     assert_eq!(controller.app.input, "alpha !\ngamma");
     assert_eq!(controller.app.input_cursor, Some("alpha !".len()));
+}
+
+#[test]
+fn ctrl_shift_d_deletes_current_middle_line() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha\nbravo charlie\ndelta".to_string(),
+        input_cursor: Some("alpha\nbravo".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(ctrl_shift('D'));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "alpha\ndelta");
+    assert_eq!(controller.app.input_cursor, Some("alpha\n".len()));
+}
+
+#[test]
+fn ctrl_shift_d_deletes_current_last_line_without_trailing_blank_line() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha\nbravo".to_string(),
+        input_cursor: Some("alpha\nbravo".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(ctrl_shift('D'));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "alpha");
+    assert_eq!(controller.app.input_cursor, Some("alpha".len()));
+}
+
+#[test]
+fn ctrl_shift_d_deletes_line_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+
+    // When
+    let effect = controller.handle_key(ctrl_shift('D'));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "");
+    assert_eq!(controller.app.input_cursor, Some(0));
+    assert!(controller.app.dialog.is_none());
 }
 
 #[test]

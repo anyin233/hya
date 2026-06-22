@@ -63,6 +63,11 @@ fn provider_label_for_model(models: &[ModelEntry], model: &str) -> Option<String
         .filter(|label| !label.trim().is_empty())
 }
 
+fn is_ctrl_shift_d(key: &KeyEvent) -> bool {
+    key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+        && matches!(key.code, KeyCode::Char('d' | 'D'))
+}
+
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<ModelEntry>,
@@ -161,6 +166,9 @@ impl Controller {
         }
         if handle_message_scroll_key(&mut self.app, &key) {
             return TuiEffect::None;
+        }
+        if is_ctrl_shift_d(&key) {
+            return self.edit_prompt(|prompt, app| prompt.delete_current_line(app));
         }
         if key.modifiers == KeyModifiers::ALT {
             match key.code {
@@ -709,6 +717,9 @@ impl Controller {
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if is_ctrl_shift_d(&key) {
+            return self.edit_prompt(|prompt, app| prompt.delete_current_line(app));
+        }
         if key.modifiers == KeyModifiers::ALT {
             match key.code {
                 KeyCode::Char('b') | KeyCode::Left => {

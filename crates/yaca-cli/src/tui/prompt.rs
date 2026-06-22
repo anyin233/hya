@@ -160,6 +160,22 @@ impl PromptState {
         self.last_paste_pending_reveal = false;
     }
 
+    pub fn delete_current_line(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let start = line_start(&app.input, cursor);
+        let end = line_end(&app.input, cursor);
+        let (delete_start, delete_end, next_cursor) = if end < app.input.len() {
+            (start, end + 1, start)
+        } else if start > 0 {
+            (start - 1, end, start - 1)
+        } else {
+            (start, end, start)
+        };
+        app.input.replace_range(delete_start..delete_end, "");
+        app.input_cursor = Some(next_cursor);
+        self.last_paste_pending_reveal = false;
+    }
+
     pub fn delete_word_forward(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let next = next_word_boundary(&app.input, cursor);
