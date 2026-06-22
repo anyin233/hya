@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem, DialogView};
 
-use super::agent_cycle::next_agent_label;
+use super::agent_cycle::{next_agent_label, previous_agent_label};
 use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
 use super::prompt::{PromptState, mention_trigger_index};
@@ -172,6 +172,8 @@ impl Controller {
                 self.open_model_dialog();
                 TuiEffect::None
             }
+            KeyCode::BackTab => self.select_previous_agent(),
+            KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => self.select_previous_agent(),
             KeyCode::Tab => {
                 next_agent_label(&self.app.agent, &self.agents).map_or(TuiEffect::None, |agent| {
                     self.app.agent = agent.clone();
@@ -222,6 +224,14 @@ impl Controller {
             }
             _ => TuiEffect::None,
         }
+    }
+
+    fn select_previous_agent(&mut self) -> TuiEffect {
+        previous_agent_label(&self.app.agent, &self.agents).map_or(TuiEffect::None, |agent| {
+            self.app.agent = agent.clone();
+            self.disarm_exit();
+            TuiEffect::SelectAgent(agent)
+        })
     }
 
     fn select_previous_message(&mut self) -> TuiEffect {
@@ -1030,13 +1040,13 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_agents_when_no_popup_is_active() {
+    fn tab_and_shift_tab_cycle_agents_when_no_popup_is_active() {
         let mut controller = Controller::new(AppState {
             agent: "build".to_string(),
             ..AppState::default()
         });
         controller.set_agents(
-            ["build", "plan"]
+            ["build", "plan", "review"]
                 .into_iter()
                 .map(|label| DialogItem {
                     label: label.to_string(),
@@ -1053,6 +1063,22 @@ mod tests {
         assert!(!controller.app.yolo);
         assert_eq!(
             controller.handle_key(key(KeyCode::Tab)),
+            TuiEffect::SelectAgent("review".to_string())
+        );
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Tab)),
+            TuiEffect::SelectAgent("build".to_string())
+        );
+        assert_eq!(
+            controller.handle_key(key(KeyCode::BackTab)),
+            TuiEffect::SelectAgent("review".to_string())
+        );
+        assert_eq!(
+            controller.handle_key(key(KeyCode::BackTab)),
+            TuiEffect::SelectAgent("plan".to_string())
+        );
+        assert_eq!(
+            controller.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)),
             TuiEffect::SelectAgent("build".to_string())
         );
     }
