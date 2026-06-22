@@ -1,12 +1,13 @@
-use std::process::Command;
+use std::process::Command as StdCommand;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
+use tokio::process::Command;
 use yaca_proto::now_millis;
 
-use crate::ServerState;
+use crate::{ApiError, ServerState};
 
 use super::location;
 
@@ -16,6 +17,7 @@ pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/project", get(list))
         .route("/project/current", get(current))
+        .route("/project/git/init", post(init_git))
         .route("/project/:project/directories", get(directories))
 }
 
@@ -48,6 +50,22 @@ async fn current(State(st): State<ServerState>) -> Json<ProjectInfo> {
     Json(project_info(&st))
 }
 
+async fn init_git(State(st): State<ServerState>) -> Result<Json<ProjectInfo>, ApiError> {
+    let worktree = location::workdir(&st);
+    if !is_git_worktree(&worktree) {
+        let output = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&worktree)
+            .output()
+            .await
+            .map_err(|e| ApiError::internal(format!("git spawn failed: {e}")))?;
+        if !output.status.success() {
+            return Err(ApiError::internal(git_error("git init failed", &output)));
+        }
+    }
+    Ok(Json(project_info(&st)))
+}
+
 async fn directories(
     State(st): State<ServerState>,
     AxumPath(_project): AxumPath<String>,
@@ -73,9 +91,23 @@ fn project_info(st: &ServerState) -> ProjectInfo {
 }
 
 fn is_git_worktree(worktree: &std::path::Path) -> bool {
-    Command::new("git")
+    StdCommand::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(worktree)
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+fn git_error(prefix: &str, output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = stderr.trim();
+    if !detail.is_empty() {
+        return format!("{prefix}: {detail}");
+    }
+    let detail = stdout.trim();
+    if !detail.is_empty() {
+        return format!("{prefix}: {detail}");
+    }
+    prefix.to_string()
 }
