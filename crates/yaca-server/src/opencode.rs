@@ -14,6 +14,7 @@ use yaca_proto::{Projection, SessionId};
 use crate::{ApiError, ServerState, parse_session, runs};
 
 mod catalog;
+mod event;
 mod file;
 mod instance;
 mod location;
@@ -28,6 +29,7 @@ mod session_v2;
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .merge(catalog::router())
+        .merge(event::router())
         .merge(file::router())
         .merge(instance::router())
         .merge(metadata::router())
