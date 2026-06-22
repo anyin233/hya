@@ -60,6 +60,9 @@ fn envelope_payload(envelope: Envelope) -> Value {
     {
         return session_error_payload(&envelope, *session, code, message);
     }
+    if let Event::SessionStatus { session, status } = &envelope.event {
+        return session_status_payload(&envelope, *session, status);
+    }
     serde_json::to_value(EventPayload {
         id: format!("evt_yaca_{}", envelope.seq.0),
         kind: "yaca.envelope",
@@ -96,6 +99,17 @@ fn session_error_payload(
         "id": format!("evt_yaca_{}", envelope.seq.0),
         "type": "session.error",
         "properties": data,
+    })
+}
+
+fn session_status_payload(envelope: &Envelope, session: SessionId, status: &Value) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "session.status",
+        "properties": {
+            "sessionID": session.to_string(),
+            "status": status,
+        },
     })
 }
 

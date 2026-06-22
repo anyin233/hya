@@ -194,6 +194,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }

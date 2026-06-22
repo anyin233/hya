@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
+use serde_json::json;
 use yaca_proto::api::{CommandRequest, PromptRequest, ShellRequest};
 use yaca_proto::{Envelope, Event, MessageId, ModelRef, Projection, SessionId, now_millis};
 
@@ -194,8 +195,9 @@ async fn prompt_async(
     let engine = st.engine.clone();
     let agent = st.agent.clone();
     let cancel = run.token();
+    publish_session_status(&engine, session, "busy").await;
     std::mem::drop(tokio::spawn(async move {
-        let _guard = run;
+        let guard = run;
         let result = async {
             engine.admit_user_prompt(session, req.text).await?;
             engine.run_turn(session, &agent, cancel).await?;
@@ -205,8 +207,26 @@ async fn prompt_async(
         if let Err(error) = result {
             publish_background_error(&engine, session, error.to_string()).await;
         }
+        drop(guard);
+        publish_session_status(&engine, session, "idle").await;
     }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publish_session_status(
+    engine: &yaca_core::SessionEngine,
+    session: SessionId,
+    status_type: &'static str,
+) {
+    publish_background_event(
+        engine,
+        session,
+        Event::SessionStatus {
+            session,
+            status: json!({ "type": status_type }),
+        },
+    )
+    .await;
 }
 
 async fn publish_background_error(
@@ -219,6 +239,14 @@ async fn publish_background_error(
         code: "prompt_async".to_string(),
         message,
     };
+    publish_background_event(engine, session, event).await;
+}
+
+async fn publish_background_event(
+    engine: &yaca_core::SessionEngine,
+    session: SessionId,
+    event: Event,
+) {
     let Ok(seq) = engine.store().append_event(session, &event).await else {
         return;
     };

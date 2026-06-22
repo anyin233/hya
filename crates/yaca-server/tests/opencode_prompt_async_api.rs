@@ -180,3 +180,68 @@ async fn opencode_prompt_async_publishes_session_error_event_on_background_failu
     assert!(error_frame.contains("\"name\":\"UnknownError\""));
     assert!(error_frame.contains("unknown provider for model: missing"));
 }
+
+#[tokio::test]
+async fn opencode_prompt_async_publishes_session_status_events() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let event_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(event_resp.status(), StatusCode::OK);
+    let mut stream = event_resp.into_body().into_data_stream();
+    let connected = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("connected event")
+        .expect("body chunk")
+        .expect("valid chunk");
+    assert!(
+        String::from_utf8(connected.to_vec())
+            .unwrap()
+            .contains("server.connected")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/prompt_async"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "hello async"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let frames = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut combined = String::new();
+        loop {
+            let Some(chunk) = stream.next().await else {
+                panic!("event stream ended before status events");
+            };
+            let bytes = chunk.expect("body chunk");
+            combined.push_str(std::str::from_utf8(&bytes).unwrap());
+            let has_busy = combined.contains("\"type\":\"session.status\"")
+                && combined.contains("\"status\":{\"type\":\"busy\"}");
+            let has_idle = combined.contains("\"type\":\"session.status\"")
+                && combined.contains("\"status\":{\"type\":\"idle\"}");
+            if has_busy && has_idle {
+                break combined;
+            }
+        }
+    })
+    .await
+    .expect("session.status events");
+    assert!(frames.contains(&format!("\"sessionID\":\"{session}\"")));
+}
