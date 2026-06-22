@@ -1,0 +1,45 @@
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+
+use crate::AppState;
+use crate::theme::Theme;
+
+pub fn render_runtime_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(runtime_status_line(state, theme)).style(theme.base()),
+        area,
+    );
+}
+
+fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
+    let agent = if state.agent.is_empty() {
+        "build"
+    } else {
+        state.agent.as_str()
+    };
+    let model = if state.model.is_empty() {
+        "offline"
+    } else {
+        state.model.as_str()
+    };
+    let state_label = if state.running { "streaming" } else { "idle" };
+    let state_color = if state.running {
+        theme.warning
+    } else {
+        theme.muted
+    };
+    Line::from(vec![
+        Span::styled("  ▣ ", Style::default().fg(theme.primary)),
+        Span::styled(agent.to_string(), Style::default().fg(theme.info)),
+        Span::styled(" · ", Style::default().fg(theme.muted)),
+        Span::styled(model.to_string(), Style::default().fg(theme.text)),
+        Span::styled(" · ", Style::default().fg(theme.muted)),
+        Span::styled(state_label.to_string(), Style::default().fg(state_color)),
+    ])
+}

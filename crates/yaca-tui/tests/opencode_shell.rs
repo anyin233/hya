@@ -143,3 +143,37 @@ fn composer_metadata_anchors_commands_to_main_column_edge() {
         "composer commands should end at the main column edge, got {main_column:?}"
     );
 }
+
+#[test]
+fn active_runtime_strip_sits_above_the_composer() {
+    // Given: a running OpenCode-style shell with a selected agent and model.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        running: true,
+        ..AppState::default()
+    };
+
+    // When: the wide shell renders the grounded composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = rendered_row(&buffer, 120, 11);
+    let prompt_row = rendered_row(&buffer, 120, 12);
+
+    // Then: the active runtime strip is visible directly above the input row.
+    assert!(
+        status_row.contains("sisyphus"),
+        "runtime strip should show the active agent, got {status_row:?}"
+    );
+    assert!(
+        status_row.contains("kimi-k2"),
+        "runtime strip should show the active model, got {status_row:?}"
+    );
+    assert!(
+        status_row.contains("streaming"),
+        "runtime strip should expose the running state, got {status_row:?}"
+    );
+    assert!(
+        prompt_row.starts_with("▌"),
+        "composer input rail should remain directly below the runtime strip, got {prompt_row:?}"
+    );
+}

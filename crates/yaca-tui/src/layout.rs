@@ -2,6 +2,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 pub struct AppLayout {
     pub timeline: Rect,
+    pub runtime_status: Rect,
     pub sidebar: Option<Rect>,
     pub prompt: Rect,
     pub footer: Rect,
@@ -27,6 +28,7 @@ pub fn app_layout(area: Rect) -> AppLayout {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
+            Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Length(1),
         ])
@@ -36,8 +38,9 @@ pub fn app_layout(area: Rect) -> AppLayout {
 
     AppLayout {
         timeline: rows[0],
+        runtime_status: rows[1],
         sidebar,
-        prompt: rows[1],
-        footer: rows[2],
+        prompt: rows[2],
+        footer: rows[3],
     }
 }

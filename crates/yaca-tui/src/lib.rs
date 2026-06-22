@@ -161,6 +161,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     if let Some(sidebar) = layout.sidebar {
         widgets::render_sidebar(frame, sidebar, state, &theme);
     }
+    widgets::render_runtime_status(frame, layout.runtime_status, state, &theme);
     widgets::render_prompt(frame, layout.prompt, state, &theme);
     widgets::render_footer(frame, layout.footer, state, &theme);
 
