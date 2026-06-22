@@ -1,8 +1,10 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState, parse_session};
 
@@ -10,6 +12,9 @@ use super::{load_session, location};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/question", get(list_root_requests))
+        .route("/question/:request/reply", post(reply_root_request))
+        .route("/question/:request/reject", post(reject_root_request))
         .route("/api/question/request", get(list_requests))
         .route("/api/session/:id/question", get(list_session_requests))
         .route(
@@ -30,6 +35,12 @@ struct SessionQuestionList {
 #[derive(Deserialize)]
 struct ReplyPayload {
     answers: Vec<Vec<String>>,
+}
+
+async fn list_root_requests(
+    State(st): State<ServerState>,
+) -> Json<Vec<crate::pending::QuestionRequestView>> {
+    Json(st.question_requests.list().await)
 }
 
 async fn list_requests(
@@ -83,4 +94,68 @@ async fn reject_request(
             "question request not found: {request}"
         )))
     }
+}
+
+async fn reply_root_request(
+    State(st): State<ServerState>,
+    Path(request): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if !valid_question_request(&request) {
+        return ApiError::bad_request("invalid question request id").into_response();
+    }
+    if !st.question_requests.contains(&request).await {
+        return question_not_found(&request).into_response();
+    }
+    let Some(answers) = parse_answers(&payload) else {
+        return ApiError::bad_request("invalid question reply").into_response();
+    };
+    if st.question_requests.reply_any(&request, answers).await {
+        Json(true).into_response()
+    } else {
+        question_not_found(&request).into_response()
+    }
+}
+
+async fn reject_root_request(
+    State(st): State<ServerState>,
+    Path(request): Path<String>,
+) -> Response {
+    if !valid_question_request(&request) {
+        return ApiError::bad_request("invalid question request id").into_response();
+    }
+    if st.question_requests.reject_any(&request).await {
+        Json(true).into_response()
+    } else {
+        question_not_found(&request).into_response()
+    }
+}
+
+fn parse_answers(payload: &Value) -> Option<Vec<Vec<String>>> {
+    let answers = payload.get("answers")?.as_array()?;
+    answers
+        .iter()
+        .map(|answer| {
+            answer
+                .as_array()?
+                .iter()
+                .map(|label| label.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect()
+}
+
+fn valid_question_request(request: &str) -> bool {
+    request.starts_with("que") || request.starts_with("q_")
+}
+
+fn question_not_found(request: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "_tag": "QuestionNotFoundError",
+            "requestID": request,
+            "message": format!("Question request not found: {request}")
+        })),
+    )
 }

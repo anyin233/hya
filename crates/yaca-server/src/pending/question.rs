@@ -108,6 +108,29 @@ impl QuestionRequests {
         entry.reply.send(QuestionAnswer::Cancelled).is_ok()
     }
 
+    pub(crate) async fn contains(&self, id: &str) -> bool {
+        self.inner.lock().await.contains_key(id)
+    }
+
+    pub(crate) async fn reply_any(&self, id: &str, answers: Vec<Vec<String>>) -> bool {
+        let entry = self.take_any(id).await;
+        let Some(entry) = entry else {
+            return false;
+        };
+        entry
+            .reply
+            .send(answer_from_reply(entry.kind, answers))
+            .is_ok()
+    }
+
+    pub(crate) async fn reject_any(&self, id: &str) -> bool {
+        let entry = self.take_any(id).await;
+        let Some(entry) = entry else {
+            return false;
+        };
+        entry.reply.send(QuestionAnswer::Cancelled).is_ok()
+    }
+
     async fn take(&self, session: SessionId, id: &str) -> Option<PendingQuestion> {
         let mut pending = self.inner.lock().await;
         let entry = pending.get(id)?;
@@ -115,6 +138,10 @@ impl QuestionRequests {
             return None;
         }
         pending.remove(id)
+    }
+
+    async fn take_any(&self, id: &str) -> Option<PendingQuestion> {
+        self.inner.lock().await.remove(id)
     }
 }
 
