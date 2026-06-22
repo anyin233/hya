@@ -19,6 +19,18 @@ test("parses valid JSON-RPC requests", () => {
   }
 })
 
+test("parses valid JSON-RPC notifications", () => {
+  const parsed = parseJsonRpcRequest(
+    '{"jsonrpc":"2.0","method":"event","params":{"envelope":{"seq":1}}}',
+  )
+
+  expect(parsed.ok).toBe(true)
+  if (parsed.ok) {
+    expect(parsed.request.id).toBeUndefined()
+    expect(parsed.request.method).toBe("event")
+  }
+})
+
 test("rejects malformed JSON-RPC request lines", () => {
   const parsed = parseJsonRpcRequest("{not-json")
 
