@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use serde_json::{Value, json};
 
-use crate::{ApiError, ServerState};
+use crate::{ApiError, ServerState, parse_session};
 
 pub(super) async fn history(
     State(st): State<ServerState>,
@@ -35,6 +35,33 @@ pub(super) async fn history(
     }
     out.sort_by_key(|event| event["seq"].as_u64().unwrap_or_default());
     Ok(Json(out))
+}
+
+pub(super) async fn steal(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    if !query.contains_key("workspace") {
+        return Err(ApiError::bad_request("sync steal missing workspace"));
+    }
+    let Some(session_id) = payload.get("sessionID").and_then(Value::as_str) else {
+        return Err(ApiError::bad_request("sync steal missing sessionID"));
+    };
+    let session = parse_session(session_id)?;
+    let projection = st
+        .engine
+        .store()
+        .read_projection(session)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if projection.session.id.is_none() {
+        return Err(ApiError::bad_request(format!(
+            "Session not found: {session_id}"
+        )));
+    }
+    // ponytail: no workspace ownership column yet; add mutation when yaca stores it.
+    Ok(Json(json!({ "sessionID": session_id })))
 }
 
 fn history_event(aggregate: &str, env: &yaca_proto::Envelope) -> Result<Value, ApiError> {
