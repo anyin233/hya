@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
@@ -30,16 +31,17 @@ pub(super) fn router() -> Router<ServerState> {
 async fn context(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<ContextResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     let envs = st.engine.replay(session).await?;
     if envs.is_empty() {
-        return Err(ApiError::not_found("session not found"));
+        return Ok(super::errors::session_not_found(&id));
     }
     let projection = Projection::from_events(&envs);
     Ok(Json(ContextResponse {
         data: v2_messages(&envs, &projection),
-    }))
+    })
+    .into_response())
 }
 
 pub(in crate::opencode) fn v2_messages(envs: &[Envelope], projection: &Projection) -> Vec<Value> {

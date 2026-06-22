@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -69,9 +70,11 @@ async fn prompt(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<PromptV2Request>,
-) -> Result<Json<PromptAdmittedResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if st.engine.replay(session).await?.is_empty() {
+        return Ok(super::errors::session_not_found(&id));
+    }
     let message = match req.id.as_deref() {
         Some(id) => parse_message(id)?,
         None => MessageId::new(),
@@ -115,7 +118,8 @@ async fn prompt(
             time_created,
             promoted_seq: None,
         },
-    }))
+    })
+    .into_response())
 }
 
 async fn command(

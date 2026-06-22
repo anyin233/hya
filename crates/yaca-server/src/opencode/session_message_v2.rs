@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine;
@@ -62,7 +63,7 @@ async fn messages(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Query(query): Query<MessagesQuery>,
-) -> Result<Json<MessagesResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     if query.cursor.is_some() && query.order.is_some() {
         return Err(ApiError::bad_request(
             "cursor cannot be combined with order",
@@ -81,7 +82,7 @@ async fn messages(
     let session = parse_session(&id)?;
     let envs = st.engine.replay(session).await?;
     if envs.is_empty() {
-        return Err(ApiError::not_found("session not found"));
+        return Ok(super::errors::session_not_found(&id));
     }
     let projection = Projection::from_events(&envs);
     let mut items = super::session_context::v2_messages(&envs, &projection);
@@ -96,7 +97,8 @@ async fn messages(
     Ok(Json(MessagesResponse {
         cursor: response_cursor(&data, order)?,
         data,
-    }))
+    })
+    .into_response())
 }
 
 fn cursor_start(messages: &[Value], cursor: &MessageCursor, limit: usize) -> usize {
