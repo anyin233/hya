@@ -120,6 +120,20 @@ fn ctrl_x_then_x_requests_export_transcript() {
 }
 
 #[test]
+fn ctrl_x_then_q_requests_exit_without_typing() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+
+    // When
+    arm_leader(&mut controller);
+    let effect = controller.handle_key(key(KeyCode::Char('q')));
+
+    // Then
+    assert_eq!(effect, TuiEffect::Exit);
+    assert_eq!(controller.app.input, "");
+}
+
+#[test]
 fn unknown_leader_key_cancels_without_typing_and_is_one_shot() {
     // Given
     let mut controller = Controller::new(AppState::default());

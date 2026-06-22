@@ -14,6 +14,7 @@ pub(super) enum LeaderAction {
     SessionNew,
     SessionCompact,
     SessionExport,
+    Exit,
     Cancel,
 }
 
@@ -28,6 +29,7 @@ impl LeaderKey {
                 KeyCode::Char('n') if key.modifiers.is_empty() => LeaderAction::SessionNew,
                 KeyCode::Char('c') if key.modifiers.is_empty() => LeaderAction::SessionCompact,
                 KeyCode::Char('x') if key.modifiers.is_empty() => LeaderAction::SessionExport,
+                KeyCode::Char('q') if key.modifiers.is_empty() => LeaderAction::Exit,
                 KeyCode::Esc => LeaderAction::Cancel,
                 _ => LeaderAction::Cancel,
             });

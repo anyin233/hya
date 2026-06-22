@@ -267,6 +267,7 @@ impl Controller {
             LeaderAction::SessionNew => TuiEffect::NewSession,
             LeaderAction::SessionCompact => TuiEffect::CompactTranscript,
             LeaderAction::SessionExport => TuiEffect::ExportTranscript,
+            LeaderAction::Exit => TuiEffect::Exit,
         }
     }
 
