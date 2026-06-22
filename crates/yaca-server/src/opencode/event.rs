@@ -39,7 +39,7 @@ async fn subscribe(
     let connected = json_event(&EventPayload {
         id: event_id(),
         kind: "server.connected",
-        location: Some(super::location::info(&st)),
+        location: None,
         data: json!({}),
     });
     let initial = stream::once(async move { Ok(connected) });

@@ -77,6 +77,11 @@ async fn assert_event_stream(uri: &str) {
         .expect("valid chunk");
     let frame = String::from_utf8(chunk.to_vec()).unwrap();
     assert!(frame.contains("data:"));
-    assert!(frame.contains("\"type\":\"server.connected\""));
-    assert!(frame.contains("\"directory\":\"/tmp/yaca-opencode-event-api\""));
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("data line");
+    let event: serde_json::Value = serde_json::from_str(data).unwrap();
+    assert_eq!(event["type"], "server.connected");
+    assert!(event.get("location").is_none());
 }
