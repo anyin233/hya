@@ -63,12 +63,11 @@ async fn subscribe_api(
     let requested_directory = super::location::workdir_at(&st, &location)
         .to_string_lossy()
         .into_owned();
-    let connected = json_event(&json!({
-        "id": event_id(),
-        "type": "server.connected",
-        "location": location_info.clone(),
-        "data": {},
-    }));
+    let connected = json_event(&EventPayload {
+        id: event_id(),
+        kind: "server.connected",
+        properties: json!({}),
+    });
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {

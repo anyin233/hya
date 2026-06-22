@@ -105,9 +105,9 @@ async fn opencode_v2_event_route_streams_connected_event() {
     let mut stream = resp.into_body().into_data_stream();
     let event = read_sse_json(&mut stream).await;
     assert_eq!(event["type"], "server.connected");
-    assert_eq!(event["location"]["directory"], WORKDIR);
-    assert_eq!(event["data"], json!({}));
-    assert!(event.get("properties").is_none());
+    assert_eq!(event["properties"], json!({}));
+    assert!(event.get("location").is_none());
+    assert!(event.get("data").is_none());
 }
 
 #[tokio::test]
@@ -162,8 +162,8 @@ async fn opencode_v2_event_route_streams_session_created_location() {
     let mut stream = resp.into_body().into_data_stream();
     let connected = read_sse_json(&mut stream).await;
     assert_eq!(connected["type"], "server.connected");
-    assert_eq!(connected["location"]["directory"], directory);
-    assert_eq!(connected["data"], json!({}));
+    assert_eq!(connected["properties"], json!({}));
+    assert!(connected.get("location").is_none());
 
     let created = app
         .oneshot(
@@ -207,10 +207,9 @@ async fn opencode_v2_event_route_filters_session_events_by_location() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let mut stream = resp.into_body().into_data_stream();
-    assert_eq!(
-        read_sse_json(&mut stream).await["location"]["directory"],
-        visible
-    );
+    let connected = read_sse_json(&mut stream).await;
+    assert_eq!(connected["type"], "server.connected");
+    assert!(connected.get("location").is_none());
 
     let hidden_created = app
         .clone()
