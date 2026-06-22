@@ -353,7 +353,10 @@ impl Controller {
                     Some(DialogMode::Agent) => self
                         .agents
                         .get(selected)
-                        .map(|agent| TuiEffect::SelectAgent(agent.label.clone()))
+                        .map(|agent| {
+                            self.app.agent = agent.label.clone();
+                            TuiEffect::SelectAgent(agent.label.clone())
+                        })
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::Think) => ["off", "low", "medium", "high"]
                         .get(selected)

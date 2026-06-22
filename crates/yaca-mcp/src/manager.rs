@@ -23,13 +23,36 @@ pub struct McpServerConfig {
 
 pub struct McpManager {
     servers: Vec<McpServer>,
+    statuses: Vec<McpConnectionStatus>,
 }
 
 struct McpServer {
-    _name: String,
+    name: String,
     _client: McpClient,
     _guard: ChildGuard,
     tools: Vec<Arc<dyn Tool>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpConnectionState {
+    Connected,
+    NeedsAuth,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpConnectionStatus {
+    pub name: String,
+    pub state: McpConnectionState,
+}
+
+enum ConnectOutcome {
+    Connected(McpServer),
+    Failed {
+        name: String,
+        state: McpConnectionState,
+        error: McpError,
+    },
 }
 
 impl McpManager {
@@ -39,17 +62,38 @@ impl McpManager {
             if config.enabled == Some(false) {
                 continue;
             }
-            set.spawn(async move { connect_server(name, config).await });
+            set.spawn(async move {
+                match connect_server(name.clone(), config).await {
+                    Ok(server) => ConnectOutcome::Connected(server),
+                    Err(error) => ConnectOutcome::Failed {
+                        name,
+                        state: connection_state_for_error(&error),
+                        error,
+                    },
+                }
+            });
         }
         let mut servers = Vec::new();
+        let mut statuses = Vec::new();
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok(Ok(server)) => servers.push(server),
-                Ok(Err(error)) => tracing::warn!(%error, "mcp server unavailable"),
+                Ok(ConnectOutcome::Connected(server)) => {
+                    statuses.push(McpConnectionStatus {
+                        name: server.name.clone(),
+                        state: McpConnectionState::Connected,
+                    });
+                    servers.push(server);
+                }
+                Ok(ConnectOutcome::Failed { name, state, error }) => {
+                    statuses.push(McpConnectionStatus { name, state });
+                    tracing::warn!(%error, "mcp server unavailable");
+                }
                 Err(error) => tracing::warn!(%error, "mcp server task failed"),
             }
         }
-        Self { servers }
+        servers.sort_by(|a, b| a.name.cmp(&b.name));
+        statuses.sort_by(|a, b| a.name.cmp(&b.name));
+        Self { servers, statuses }
     }
 
     #[must_use]
@@ -58,6 +102,11 @@ impl McpManager {
             .iter()
             .flat_map(|server| server.tools.iter().cloned())
             .collect()
+    }
+
+    #[must_use]
+    pub fn statuses(&self) -> &[McpConnectionStatus] {
+        &self.statuses
     }
 }
 
@@ -79,11 +128,24 @@ async fn connect_server(name: String, config: McpServerConfig) -> Result<McpServ
         .filter_map(|tool| McpTool::try_new(&name, tool, client.clone(), timeout))
         .collect();
     Ok(McpServer {
-        _name: name,
+        name,
         _client: client,
         _guard: guard,
         tools,
     })
+}
+
+const fn connection_state_for_error(error: &McpError) -> McpConnectionState {
+    match error {
+        McpError::Rpc { .. } => McpConnectionState::NeedsAuth,
+        McpError::EmptyCommand
+        | McpError::MissingPipe(_)
+        | McpError::Io(_)
+        | McpError::Json(_)
+        | McpError::Timeout { .. }
+        | McpError::Closed
+        | McpError::OversizedLine => McpConnectionState::Unavailable,
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +168,20 @@ for line in sys.stdin:
     else:
         result = {"content": {"ok": True}, "isError": False}
     print(json.dumps({"jsonrpc":"2.0", "id": req["id"], "result": result}), flush=True)
+"#
+            .to_string(),
+        ]
+    }
+
+    fn auth_error_command() -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    print(json.dumps({"jsonrpc":"2.0", "id": req["id"], "error": {"code": -32001, "message": "unauthorized"}}), flush=True)
 "#
             .to_string(),
         ]
@@ -137,5 +213,54 @@ for line in sys.stdin:
             .map(|tool| tool.name().to_string())
             .collect();
         assert_eq!(names, vec!["mcp__good__ping".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn connection_statuses_include_connected_needs_auth_and_unavailable_servers() {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "auth".to_string(),
+            McpServerConfig {
+                command: auth_error_command(),
+                timeout_ms: Some(1000),
+                ..McpServerConfig::default()
+            },
+        );
+        configs.insert(
+            "missing".to_string(),
+            McpServerConfig {
+                command: vec!["definitely-not-yaca-mcp".to_string()],
+                ..McpServerConfig::default()
+            },
+        );
+        configs.insert(
+            "ok".to_string(),
+            McpServerConfig {
+                command: server_command(),
+                timeout_ms: Some(1000),
+                ..McpServerConfig::default()
+            },
+        );
+
+        let manager = McpManager::connect_all(configs).await;
+        let statuses = manager.statuses();
+
+        assert_eq!(
+            statuses,
+            &[
+                McpConnectionStatus {
+                    name: "auth".to_string(),
+                    state: McpConnectionState::NeedsAuth,
+                },
+                McpConnectionStatus {
+                    name: "missing".to_string(),
+                    state: McpConnectionState::Unavailable,
+                },
+                McpConnectionStatus {
+                    name: "ok".to_string(),
+                    state: McpConnectionState::Connected,
+                },
+            ]
+        );
     }
 }

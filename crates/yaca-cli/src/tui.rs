@@ -30,21 +30,25 @@ use yaca_provider::ReasoningEffort;
 use yaca_tool::{
     Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
 };
+use yaca_tui::ConnectorView;
 use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt};
 
 use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
+pub use self::mcp_view::connector_views as mcp_connector_views;
 use crate::config::ModelEntry;
 
 mod agents;
 mod block_action;
 mod commands;
 mod controller;
+mod git_context;
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
 mod harness_block_actions;
 mod history;
+mod mcp_view;
 mod prompt;
 mod reference;
 mod selection;
@@ -390,6 +394,7 @@ pub struct RunOptions {
     pub models: Vec<ModelEntry>,
     pub asks: mpsc::UnboundedReceiver<AskRequest>,
     pub questions: mpsc::UnboundedReceiver<QuestionRequest>,
+    pub mcp: Vec<ConnectorView>,
     pub initial_session: SessionId,
     pub initial_yolo: bool,
 }
@@ -404,6 +409,7 @@ pub async fn run(
         models,
         mut asks,
         mut questions,
+        mcp,
         initial_session,
         initial_yolo,
     } = options;
@@ -424,19 +430,23 @@ pub async fn run(
     hydrated_sessions.insert(session);
 
     let mut bus = engine.bus().subscribe();
+    let projection = engine
+        .read_projection(session)
+        .await
+        .context("prime projection")?;
     let app = AppState {
+        agent: agent.name.as_str().to_string(),
         model,
         session_label: session.to_string().chars().take(12).collect(),
-        projection: engine
-            .read_projection(session)
-            .await
-            .context("prime projection")?,
+        projection,
         yolo: initial_yolo,
+        mcp,
         reasoning_effort: agent.reasoning.map(|effort| effort.as_str().to_string()),
         ..AppState::default()
     };
     let mut controller =
         Controller::with_models_and_sessions(app, models, session_summaries(&history));
+    git_context::refresh_app_branch(&mut controller.app);
     controller.set_agents(agents::dialog_items(&profiles));
     controller.set_references(all_reference_items(&agent.workdir, &profiles));
     controller.set_custom_commands(custom_commands(&agent.workdir));
@@ -467,11 +477,13 @@ pub async fn run(
                     if env.event.session() == Some(session) {
                         controller.app.apply(&env);
                         let _ = history.append_envelope(session, &env);
+                        git_context::refresh_app_branch(&mut controller.app);
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
                     let projection = engine.read_projection(session).await.unwrap_or_default();
                     controller.app.projection = projection;
+                    git_context::refresh_app_branch(&mut controller.app);
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -480,6 +492,7 @@ pub async fn run(
                     if env.event.session() == Some(session) {
                         controller.app.apply(&env);
                         let _ = history.append_envelope(session, &env);
+                        git_context::refresh_app_branch(&mut controller.app);
                     }
                 }
                 controller.app.running = false;
@@ -560,6 +573,7 @@ pub async fn run(
                             TuiEffect::SelectAgent(name) => {
                                 if let Some(profile) = agents::profile_by_name(&profiles, &name) {
                                     agents::apply_profile(&mut agent, &base_system_prompt, profile);
+                                    controller.app.agent = agent.name.as_str().to_string();
                                     let _ = engine
                                         .inject_system_message(
                                             session,
@@ -641,6 +655,8 @@ pub async fn run(
                                     .read_projection(session)
                                     .await
                                     .context("read new session projection")?;
+                                git_context::refresh_app_branch(&mut controller.app);
+                                controller.app.agent = agent.name.as_str().to_string();
                                 controller.app.session_label =
                                     session.to_string().chars().take(12).collect();
                                 controller.app.input.clear();
@@ -661,6 +677,7 @@ pub async fn run(
                                     session = resume;
                                     if let Some(meta) = meta_for(&history, &id) {
                                         controller.app.model = meta.model.clone();
+                                        controller.app.agent = meta.agent.clone();
                                         agent.model = ModelRef::new(meta.model);
                                         let workdir = PathBuf::from(meta.workdir);
                                         controller.set_agents(agents::dialog_items(&profiles));
@@ -671,6 +688,7 @@ pub async fn run(
                                         .read_projection(session)
                                         .await
                                         .context("read resumed session projection")?;
+                                    git_context::refresh_app_branch(&mut controller.app);
                                     controller.app.session_label =
                                         session.to_string().chars().take(12).collect();
                                     controller.app.input.clear();
@@ -685,6 +703,7 @@ pub async fn run(
                                     &base_system_prompt,
                                     prompt,
                                 );
+                                controller.app.agent = agent.name.as_str().to_string();
                                 controller.app.running = true;
                                 turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(
@@ -715,6 +734,7 @@ pub async fn run(
                                     &base_system_prompt,
                                     prompt,
                                 );
+                                controller.app.agent = agent.name.as_str().to_string();
                                 controller.app.running = true;
                                 turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(

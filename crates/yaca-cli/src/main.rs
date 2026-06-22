@@ -528,8 +528,9 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, _mcp_manager) =
+    let (engine, asks, questions, mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
+    let mcp = tui::mcp_connector_views(mcp_manager.statuses());
     let agent = agent_with_model(&runtime.model);
     let session = match resume {
         Some(id) => {
@@ -555,6 +556,7 @@ async fn cmd_tui(
             models: runtime.models,
             asks,
             questions,
+            mcp,
             initial_session: session,
             initial_yolo: yolo,
         },

@@ -101,6 +101,7 @@ impl DummyHarness {
             )
             .expect("create harness history");
         let app = AppState {
+            agent: agent.name.as_str().to_string(),
             model: model.to_string(),
             session_label: session.to_string().chars().take(12).collect(),
             projection: engine.read_projection(session).await.expect("projection"),
