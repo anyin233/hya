@@ -9,8 +9,9 @@ OpenCode baseline: `sst/opencode` `origin/dev`
 `feat(core): expose session switching endpoints`).
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
-session, abort, file, instance metadata, VCS, prompt_async, and session
-switching compatibility increments.
+session, abort, file, instance metadata, VCS, prompt_async, session switching,
+session context, v2 prompt admission, and active provider/model compatibility
+increments.
 
 ## Status Summary
 
@@ -32,7 +33,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Project context | Implemented | CLI discovers `AGENTS.md`, builds an environment/context system prompt, and includes available skills. |
 | Skills | Implemented substrate | `.yaca/skills` and `~/.config/yaca/skills` discovery plus `skill` tool loading are present. |
 | Compaction | Native partial | Engine compaction and `ModelSummarizer` exist, with env-tunable thresholds. OpenCode's explicit `/session/:id/summarize` lifecycle is still missing. |
-| Providers | Partial | Native OpenAI-compatible, Anthropic, and Google API-key providers exist. |
+| Providers | Partial | Native OpenAI-compatible, Anthropic, and Google API-key providers exist; v2 `/api/provider`, `/api/provider/:providerID`, and `/api/model` expose the active server model in OpenCode response shapes. |
 | Plugin host | Partial | Native plugin protocol and bundled OpenCode adapter cover server hooks, plugin tools, chat params/messages transforms, command/message/text hooks, events, shell env, and permissions. |
 | MCP tools | Partial | yaca has MCP manager/bridge and can expose MCP tools through the tool registry. |
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, and OpenCode-shaped session info, children, message list, single-message, and basic paginated message reads are present. |
@@ -48,14 +49,14 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 | OpenCode area | Missing yaca parity |
 | --- | --- |
-| HTTP API compatibility | yaca now has native `/sessions/*`, an OpenCode `/session` read subset, and v2 `/api/session` list/create/get/switch coverage. OpenCode also exposes `/config`, `/file`, `/provider`, `/permission`, `/question`, `/mcp`, `/tui`, `/sync`, `/experimental/*`, `/pty`, `/project`, `/workspace`, `/control`, and `/global` groups. |
+| HTTP API compatibility | yaca now has native `/sessions/*`, an OpenCode `/session` read subset, v2 `/api/session` list/create/get/switch/context/prompt coverage, and active v2 `/api/provider` plus `/api/model` coverage. OpenCode also exposes `/api/agent`, `/api/command`, `/api/skill`, `/api/permission`, `/api/question`, `/api/mcp`, `/api/pty`, `/api/project-copy`, `/api/location`, `/api/event`, credential/integration/reference groups, legacy file/session routes, TUI/control/sync/experimental/workspace surfaces, and global control routes. |
 | Session lifecycle API | Missing exact OpenCode endpoints for scoped directory/project/workspace listing, todo, diff, update title/permissions/archive, delete, fork raw payload, init, share/unshare, summarize, revert/unrevert, permission respond, message deletion, part deletion, and part update. Compact/wait routes currently match OpenCode's unavailable status but not future execution semantics. Message and v2 session pagination exist but use yaca-owned cursor formats rather than OpenCode's timestamp-anchor cursors; v2 context omits agent/model switch pseudo-messages and full tool provider metadata; switched model variants are not preserved separately from provider/id yet. |
 | Abort/control | Basic busy status, abort, prompt_async, and v2 prompt admission exist. Missing OpenCode's richer runner behavior for background jobs, durable queue promotion, retry statuses, child job cancellation, and event publication for async failures/status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
 | File HTTP routes | Basic OpenCode legacy file HTTP routes are present, including root `.gitignore`/`.ignore` ignored flags for listing and common image/PDF MIME sniffing for binary content. Remaining gaps are exact filesystem service semantics, nested ignore file parity, and real LSP-backed symbol search when available. |
 | Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, and apply endpoints are present. Remaining gaps are exact branch-mode diff parity, OpenCode patch byte caps/empty patch behavior, real LSP/formatter status integration, and full command/agent config/plugin merging. |
-| Config routes | Missing OpenCode-compatible config get/update/provider metadata routes. yaca reads its own `~/.config/yaca/config.yaml`. |
-| Provider/auth breadth | Missing AI SDK provider breadth, models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
+| Config/catalog routes | Active provider/model v2 routes exist, but yaca has not moved the full resolved config/model catalog into server state. Missing full OpenCode config/catalog metadata and update semantics; yaca reads its own `~/.config/yaca/config.yaml`. |
+| Provider/auth breadth | Missing AI SDK provider breadth, full models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
 | PTY | Missing OpenCode PTY management and websocket connect-token flow. |
 | TUI control API | Missing `/tui/*` server control/event queue endpoints for append/open/help/models/themes/submit/clear/execute/toast/select/control. |
 | TUI full feature parity | Missing or incomplete OpenCode command palette, theme picker/bundled theme library, model variant picker, skill picker error UI (`9dadc24`), rich markdown/diff/code rendering, usage/cost display wiring, prompt stash, and full keymap/leader UX. |
