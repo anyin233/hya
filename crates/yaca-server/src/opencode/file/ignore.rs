@@ -44,8 +44,35 @@ impl Rule {
         if self.directory {
             return path.starts_with(&self.pattern);
         }
-        path == self.pattern || path.ends_with(&format!("/{}", self.pattern))
+        if self.pattern.contains('/') {
+            return pattern_matches(&self.pattern, path);
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        pattern_matches(&self.pattern, name)
     }
+}
+
+fn pattern_matches(pattern: &str, value: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == value;
+    }
+    let starts_with_wildcard = pattern.starts_with('*');
+    let ends_with_wildcard = pattern.ends_with('*');
+    let mut rest = value;
+    for (index, part) in pattern
+        .split('*')
+        .filter(|part| !part.is_empty())
+        .enumerate()
+    {
+        let Some(offset) = rest.find(part) else {
+            return false;
+        };
+        if index == 0 && !starts_with_wildcard && offset != 0 {
+            return false;
+        }
+        rest = &rest[offset + part.len()..];
+    }
+    ends_with_wildcard || rest.is_empty()
 }
 
 fn parse_rule(line: &str) -> Option<Rule> {
