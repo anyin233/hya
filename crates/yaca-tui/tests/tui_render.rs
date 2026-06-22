@@ -239,13 +239,6 @@ fn list_dialog_renders_selected_item_and_hints() {
 }
 
 #[test]
-fn default_state_renders_banner_and_hint() {
-    let text = render(&mut AppState::default(), 80, 20);
-    assert!(text.contains("yaca"), "status banner must render");
-    assert!(text.contains("Ask yaca"), "empty-state hint must render");
-}
-
-#[test]
 fn yolo_and_exit_armed_states_are_visible() {
     let mut state = AppState {
         yolo: true,

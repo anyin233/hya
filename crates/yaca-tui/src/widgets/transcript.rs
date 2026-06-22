@@ -66,12 +66,6 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         }
     }
 
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Ask yaca anything. Type below and press Enter.",
-            Style::default().fg(theme.muted),
-        )));
-    }
     lines
 }
 
