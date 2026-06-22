@@ -15,10 +15,18 @@ fn row_text(buffer: &Buffer, width: u16, y: u16) -> String {
     row
 }
 
-fn composer_metadata_row(buffer: &Buffer, width: u16, height: u16) -> String {
+fn row_containing(buffer: &Buffer, width: u16, height: u16, needle: &str) -> String {
     (0..height)
         .map(|y| row_text(buffer, width, y))
-        .find(|row| row.contains("ctrl+p commands"))
+        .find(|row| row.contains(needle))
+        .unwrap()
+}
+
+fn last_row_containing(buffer: &Buffer, width: u16, height: u16, needle: &str) -> String {
+    (0..height)
+        .rev()
+        .map(|y| row_text(buffer, width, y))
+        .find(|row| row.contains(needle))
         .unwrap()
 }
 
@@ -40,29 +48,30 @@ fn composer_metadata_hides_context_and_cost_below_compact_width() {
 
     // When: the footer renders just below OpenCode's compact metadata breakpoint.
     let buffer = render_buffer(&mut state, 79, 16);
-    let metadata_row = composer_metadata_row(&buffer, 79, 16);
+    let identity_row = last_row_containing(&buffer, 79, 16, "sisyphus");
+    let footer_row = row_containing(&buffer, 79, 16, "ctrl+p commands");
 
     // Then: high-priority agent identity and command affordance remain, while
     // lower-priority model/context/cost hints follow OpenCode's width policy.
     assert!(
-        metadata_row.contains("sisyphus"),
-        "agent identity should remain visible, got {metadata_row:?}"
+        identity_row.contains("sisyphus"),
+        "agent identity should remain visible, got {identity_row:?}"
     );
     assert!(
-        !metadata_row.contains("kimi-k2"),
-        "model identity should be hidden below OpenCode's model breakpoint, got {metadata_row:?}"
+        !identity_row.contains("kimi-k2"),
+        "model identity should be hidden below OpenCode's model breakpoint, got {identity_row:?}"
     );
     assert!(
-        metadata_row.contains("ctrl+p commands"),
-        "command hint should remain visible above the command breakpoint, got {metadata_row:?}"
+        footer_row.contains("ctrl+p commands"),
+        "command hint should remain visible above the command breakpoint, got {footer_row:?}"
     );
     assert!(
-        !metadata_row.contains("187.8K"),
-        "context usage should be hidden below compact width, got {metadata_row:?}"
+        !footer_row.contains("187.8K"),
+        "context usage should be hidden below compact width, got {footer_row:?}"
     );
     assert!(
-        !metadata_row.contains("$3.14"),
-        "billing should be hidden below compact width, got {metadata_row:?}"
+        !footer_row.contains("$3.14"),
+        "billing should be hidden below compact width, got {footer_row:?}"
     );
 }
 
@@ -78,7 +87,7 @@ fn composer_metadata_uses_bare_effort_without_manual_mode() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = composer_metadata_row(&buffer, 120, 16);
+    let metadata_row = last_row_containing(&buffer, 120, 16, "sisyphus");
 
     // Then: the effort reads like OpenCode's model variant label, not a prose mode.
     assert!(
@@ -106,7 +115,7 @@ fn composer_metadata_hides_absent_effort_instead_of_showing_off() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = composer_metadata_row(&buffer, 120, 16);
+    let metadata_row = last_row_containing(&buffer, 120, 16, "sisyphus");
 
     // Then: the statusline matches OpenCode's absent-variant behavior.
     assert!(

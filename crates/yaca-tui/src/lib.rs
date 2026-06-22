@@ -170,8 +170,7 @@ impl AppState {
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let theme = theme::Theme::yaca_dark();
     let area = frame.area();
-    let footer_visible = footer_visible(state);
-    let footer_height = u16::from(footer_visible);
+    let footer_height = 1;
     let prompt_height = widgets::prompt_height(state, layout::main_width(area));
     let layout = layout::app_layout(area, prompt_height, footer_height);
     widgets::render_timeline(frame, layout.timeline, state, &theme);
@@ -180,9 +179,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     }
     widgets::render_runtime_status(frame, layout.runtime_status, state, &theme);
     widgets::render_prompt(frame, layout.prompt, state, &theme, area.width);
-    if footer_visible {
-        widgets::render_footer(frame, layout.footer, state, &theme);
-    }
+    widgets::render_footer(frame, layout.footer, state, &theme, area.width);
 
     if let Some(prompt) = &state.permission {
         widgets::render_permission(frame, prompt, &theme);
@@ -195,12 +192,4 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     } else if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
         frame.set_cursor_position(cursor);
     }
-}
-
-fn footer_visible(state: &AppState) -> bool {
-    state.scroll_back > 0
-        || state.exit_armed
-        || state.yolo
-        || state.goal.is_some()
-        || state.loop_view.is_some()
 }

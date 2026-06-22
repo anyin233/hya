@@ -11,7 +11,7 @@ const COMPACT_METADATA_WIDTH: u16 = 80;
 const COMMAND_HINT_WIDTH: u16 = 66;
 const MODEL_METADATA_WIDTH: u16 = 120;
 
-pub(super) fn composer_metadata(
+pub(super) fn composer_identity_metadata(
     state: &AppState,
     theme: &Theme,
     render_width: u16,
@@ -26,18 +26,6 @@ pub(super) fn composer_metadata(
     };
     let effort = state.reasoning_effort.as_deref();
     let mode = state.yolo.then_some("YOLO");
-    let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
-    let context = if policy.show_context_hints {
-        composer_context_label(state).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let context_separator = if context.is_empty() { "" } else { " · " };
-    let command_hint = if policy.show_command_hint {
-        "   ctrl+p commands"
-    } else {
-        ""
-    };
     let model_width = if policy.show_model {
         UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(model)
     } else {
@@ -54,15 +42,7 @@ pub(super) fn composer_metadata(
         + model_width
         + effort_width
         + mode_width;
-    let right_width = UnicodeWidthStr::width(context.as_str())
-        + UnicodeWidthStr::width(context_separator)
-        + if policy.show_context_hints {
-            UnicodeWidthStr::width(cost)
-        } else {
-            0
-        }
-        + UnicodeWidthStr::width(command_hint);
-    let status_gap_width = usize::from(render_width).saturating_sub(left_width + right_width);
+    let status_gap_width = usize::from(render_width).saturating_sub(left_width);
     let mut spans = vec![
         Span::styled("  ", Style::default().bg(theme.element)),
         Span::styled(agent, Style::default().fg(theme.info).bg(theme.element)),
@@ -95,24 +75,64 @@ pub(super) fn composer_metadata(
         " ".repeat(status_gap_width),
         Style::default().bg(theme.element),
     ));
+    Line::from(spans)
+}
+
+pub(super) fn composer_footer_metadata(
+    state: &AppState,
+    theme: &Theme,
+    render_width: u16,
+    policy_width: u16,
+    left_text: String,
+) -> Line<'static> {
+    let policy = ComposerWidthPolicy::for_width(policy_width);
+    let context = if policy.show_context_hints {
+        composer_context_label(state).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let cost = if policy.show_context_hints {
+        state.cost_label.as_deref().unwrap_or("cost n/a")
+    } else {
+        ""
+    };
+    let context_separator = if context.is_empty() || cost.is_empty() {
+        ""
+    } else {
+        " · "
+    };
+    let command_hint = if policy.show_command_hint {
+        "ctrl+p commands"
+    } else {
+        ""
+    };
+    let command_separator = if command_hint.is_empty() || (context.is_empty() && cost.is_empty()) {
+        ""
+    } else {
+        "   "
+    };
+    let left_width = UnicodeWidthStr::width(left_text.as_str());
+    let right_width = UnicodeWidthStr::width(context.as_str())
+        + UnicodeWidthStr::width(context_separator)
+        + UnicodeWidthStr::width(cost)
+        + UnicodeWidthStr::width(command_separator)
+        + UnicodeWidthStr::width(command_hint);
+    let status_gap_width = usize::from(render_width).saturating_sub(left_width + right_width);
+    let footer_style = Style::default().fg(theme.muted).bg(theme.background);
+    let mut spans = vec![Span::styled(left_text, footer_style)];
+    spans.push(Span::styled(" ".repeat(status_gap_width), footer_style));
     if policy.show_context_hints {
         spans.extend([
-            Span::styled(context, Style::default().fg(theme.muted).bg(theme.element)),
-            Span::styled(
-                context_separator,
-                Style::default().fg(theme.muted).bg(theme.element),
-            ),
-            Span::styled(
-                cost.to_string(),
-                Style::default().fg(theme.muted).bg(theme.element),
-            ),
+            Span::styled(context, footer_style),
+            Span::styled(context_separator, footer_style),
+            Span::styled(cost.to_string(), footer_style),
         ]);
     }
     if policy.show_command_hint {
-        spans.push(Span::styled(
-            command_hint,
-            Style::default().fg(theme.muted).bg(theme.element),
-        ));
+        spans.extend([
+            Span::styled(command_separator, footer_style),
+            Span::styled(command_hint, footer_style),
+        ]);
     }
     Line::from(spans)
 }

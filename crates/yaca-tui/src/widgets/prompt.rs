@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::prompt_attachments::attachment_badges;
-use super::prompt_metadata::composer_metadata;
+use super::prompt_metadata::{composer_footer_metadata, composer_identity_metadata};
 use crate::AppState;
 use crate::theme::Theme;
 
@@ -39,7 +39,12 @@ pub fn render_prompt(
             ])
         })
         .collect::<Vec<_>>();
-    lines.push(composer_metadata(state, theme, area.width, policy_width));
+    lines.push(composer_identity_metadata(
+        state,
+        theme,
+        area.width,
+        policy_width,
+    ));
     if !state.attachments.is_empty() {
         lines.push(attachment_badges(state, theme, area.width));
     }
@@ -114,7 +119,13 @@ fn push_wrapped_segment(segment: &str, width: usize, lines: &mut Vec<String>) {
     lines.push(current);
 }
 
-pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+pub fn render_footer(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    policy_width: u16,
+) {
     let text = if state.scroll_back > 0 {
         format!(
             "scroll {} · End to return · Ctrl-C clear/interrupt",
@@ -130,10 +141,13 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         String::new()
     };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
+        Paragraph::new(composer_footer_metadata(
+            state,
+            theme,
+            area.width,
+            policy_width,
             text,
-            Style::default().fg(theme.muted),
-        )))
+        ))
         .style(theme.base()),
         area,
     );

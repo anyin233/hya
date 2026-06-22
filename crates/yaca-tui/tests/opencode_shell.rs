@@ -152,9 +152,9 @@ fn composer_metadata_includes_active_agent_role() {
         ..AppState::default()
     };
 
-    // When: the composer metadata row renders.
+    // When: the prompt identity row renders.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = find_row(&buffer, 120, 16, "ctrl+p commands");
+    let metadata_row = find_row(&buffer, 120, 16, "sisyphus - ultraworker retry");
 
     // Then: the same agent-role identity used by OpenCode appears before the model.
     assert!(

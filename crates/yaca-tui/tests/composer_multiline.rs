@@ -35,17 +35,23 @@ fn composer_body_expands_upward_for_multiline_input() {
     let height = 18;
     let buffer = render_buffer(&mut state, width, height);
 
-    // Then: every input row is visible directly above the metadata row.
+    // Then: every input row is visible directly above the prompt identity row,
+    // and usage/commands sit on the footer row beneath the prompt panel.
     let first = row_index(&buffer, width, height, "first line");
     let second = row_index(&buffer, width, height, "second line");
     let third = row_index(&buffer, width, height, "third line");
-    let metadata = row_index(&buffer, width, height, "ctrl+p commands");
+    let identity = third + 1;
+    let footer = row_index(&buffer, width, height, "ctrl+p commands");
     assert_eq!(second, first + 1);
     assert_eq!(third, second + 1);
-    assert_eq!(metadata, third + 1);
+    assert!(
+        row_text(&buffer, width, identity).contains("sisyphus"),
+        "prompt identity row should sit below multiline input"
+    );
+    assert_eq!(footer, identity + 1);
     assert_eq!(
-        metadata,
+        footer,
         height - 1,
-        "composer metadata should stay attached to the viewport bottom"
+        "composer footer should stay attached to the viewport bottom"
     );
 }
