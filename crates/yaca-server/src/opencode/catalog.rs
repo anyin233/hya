@@ -46,6 +46,8 @@ type LocationQuery = Query<BTreeMap<String, String>>;
 struct CatalogModel {
     provider_id: String,
     model_id: String,
+    tools: bool,
+    context: u32,
 }
 
 async fn legacy_config_get() -> Json<Value> {
@@ -157,7 +159,14 @@ async fn model_list(
 ) -> Json<LocationResponse<Vec<ModelInfo>>> {
     let data = catalog_models(&st)
         .into_iter()
-        .map(|model| model_info(&model.provider_id, &model.model_id))
+        .map(|model| {
+            model_info(
+                &model.provider_id,
+                &model.model_id,
+                model.tools,
+                model.context,
+            )
+        })
         .collect();
     Json(location_response(&st, &query, &headers, data))
 }
@@ -170,6 +179,8 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
         .map(|model| CatalogModel {
             provider_id: model.provider_id,
             model_id: model.model_id,
+            tools: model.capabilities.streaming_tool_calls,
+            context: model.capabilities.max_context,
         })
         .collect();
     if !models.is_empty() {
@@ -179,6 +190,8 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
     vec![CatalogModel {
         provider_id: active.provider_id,
         model_id: active.model_id,
+        tools: false,
+        context: 0,
     }]
 }
 

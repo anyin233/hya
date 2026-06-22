@@ -130,7 +130,12 @@ pub(super) fn provider_info(provider_id: &str) -> ProviderInfo {
     }
 }
 
-pub(super) fn model_info(provider_id: &str, model_id: &str) -> ModelInfo {
+pub(super) fn model_info(
+    provider_id: &str,
+    model_id: &str,
+    tools: bool,
+    context: u32,
+) -> ModelInfo {
     ModelInfo {
         id: model_id.to_string(),
         provider_id: provider_id.to_string(),
@@ -141,7 +146,7 @@ pub(super) fn model_info(provider_id: &str, model_id: &str) -> ModelInfo {
             settings: json!({}),
         },
         capabilities: ModelCapabilities {
-            tools: false,
+            tools,
             input: Vec::new(),
             output: Vec::new(),
         },
@@ -156,9 +161,6 @@ pub(super) fn model_info(provider_id: &str, model_id: &str) -> ModelInfo {
         cost: Vec::new(),
         status: "active",
         enabled: true,
-        limit: ModelLimit {
-            context: 0,
-            output: 0,
-        },
+        limit: ModelLimit { context, output: 0 },
     }
 }

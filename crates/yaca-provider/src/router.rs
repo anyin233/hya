@@ -32,8 +32,12 @@ impl ProviderRouter {
     #[must_use]
     pub fn catalog(&self) -> Vec<ProviderModel> {
         let mut models: Vec<_> = self.providers.iter().flat_map(|p| p.catalog()).collect();
-        models.sort();
-        models.dedup();
+        models.sort_by(|a, b| {
+            a.provider_id
+                .cmp(&b.provider_id)
+                .then(a.model_id.cmp(&b.model_id))
+        });
+        models.dedup_by(|a, b| a.provider_id == b.provider_id && a.model_id == b.model_id);
         models
     }
 

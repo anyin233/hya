@@ -105,4 +105,12 @@ async fn opencode_v2_catalog_routes_return_configured_provider_models() {
             ("openai", "gpt-5"),
         ]
     );
+    let gpt5 = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["providerID"] == "openai" && model["id"] == "gpt-5")
+        .unwrap();
+    assert_eq!(gpt5["capabilities"]["tools"], true);
+    assert_eq!(gpt5["limit"]["context"], 200_000);
 }
