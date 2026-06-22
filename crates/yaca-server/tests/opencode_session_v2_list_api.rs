@@ -38,7 +38,7 @@ async fn state() -> AppState {
 
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
@@ -92,4 +92,19 @@ async fn opencode_v2_session_list_filters_roots_start_and_limit() {
     let (status, future) = get_json(app, "/api/session?start=9223372036854775807").await;
     assert_eq!(status, StatusCode::OK);
     assert!(future["data"].as_array().expect("future list").is_empty());
+}
+
+#[tokio::test]
+async fn opencode_v2_session_list_invalid_cursor_returns_typed_error() {
+    let app = router(state().await);
+
+    let (status, body) = get_json(app, "/api/session?cursor=invalid").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "InvalidCursorError",
+            "message": "Invalid cursor",
+        })
+    );
 }

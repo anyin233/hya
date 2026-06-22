@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
@@ -85,7 +85,7 @@ pub(super) fn router() -> Router<ServerState> {
 async fn list(
     State(st): State<ServerState>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<SessionsResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
     if limit == 0 {
         return Err(ApiError::bad_request("limit must be positive"));
@@ -103,9 +103,9 @@ async fn list(
     if let Some(search) = query.search {
         sessions.retain(|session| session.title().contains(&search));
     }
-    let start = match query.cursor {
-        Some(cursor) => cursor_start(&sessions, &cursor, limit)?,
-        None => 0,
+    let start = match cursor_start(&sessions, query.cursor.as_deref(), limit) {
+        Ok(start) => start,
+        Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
     };
     let page: Vec<_> = sessions.into_iter().skip(start).take(limit).collect();
     let cursor = SessionCursors {
@@ -118,7 +118,7 @@ async fn list(
             .map(|session| encode_cursor(session.id(), CursorDirection::Next))
             .transpose()?,
     };
-    Ok(Json(SessionsResponse { data: page, cursor }))
+    Ok(Json(SessionsResponse { data: page, cursor }).into_response())
 }
 
 async fn create(
@@ -243,9 +243,12 @@ async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, Api
 
 fn cursor_start(
     sessions: &[OpenCodeSessionInfo],
-    cursor: &str,
+    cursor: Option<&str>,
     limit: usize,
-) -> Result<usize, ApiError> {
+) -> Result<usize, ()> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
     let cursor = decode_cursor(cursor)?;
     let Some(position) = sessions
         .iter()
@@ -265,9 +268,7 @@ fn encode_cursor(id: &str, direction: CursorDirection) -> Result<String, ApiErro
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn decode_cursor(cursor: &str) -> Result<SessionCursor, ApiError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(cursor)
-        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
-    serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("invalid cursor"))
+fn decode_cursor(cursor: &str) -> Result<SessionCursor, ()> {
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
+    serde_json::from_slice(&bytes).map_err(|_| ())
 }

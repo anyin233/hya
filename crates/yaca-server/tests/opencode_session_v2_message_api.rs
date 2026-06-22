@@ -123,10 +123,31 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(second["data"][0]["type"], "assistant");
 
-    let (status, _) = get_json(
-        app,
+    let (status, body) = get_json(
+        app.clone(),
         format!("/api/session/{session}/message?order=asc&cursor={cursor}"),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "InvalidCursorError",
+            "message": "Cursor cannot be combined with order",
+        })
+    );
+
+    let (status, body) = get_json(
+        app,
+        format!("/api/session/{session}/message?cursor=invalid"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "_tag": "InvalidCursorError",
+            "message": "Invalid cursor",
+        })
+    );
 }

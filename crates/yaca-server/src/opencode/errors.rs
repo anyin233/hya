@@ -14,3 +14,14 @@ pub(in crate::opencode) fn session_not_found(session_id: &str) -> Response {
     )
         .into_response()
 }
+
+pub(in crate::opencode) fn invalid_cursor(message: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "_tag": "InvalidCursorError",
+            "message": message,
+        })),
+    )
+        .into_response()
+}
