@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use yaca_core::{
     AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer, SessionEngine,
 };
-use yaca_proto::{AgentName, FinishReason, ModelRef};
+use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -115,4 +115,35 @@ async fn opencode_session_summarize_persists_summary_message() {
     assert_eq!(summary["parts"][0]["type"], "text");
     let summary_text = summary["parts"][0]["text"].as_str().expect("summary text");
     assert!(summary_text.contains("CONDENSED summary"), "{summary_text}");
+}
+
+#[tokio::test]
+async fn opencode_session_summarize_missing_session_returns_not_found() {
+    let (state, _) = state_with_session().await;
+    let app = router(state);
+    let missing = SessionId::new().to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{missing}/summarize"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"providerID": "yaca", "modelID": "fake", "auto": false}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
 }

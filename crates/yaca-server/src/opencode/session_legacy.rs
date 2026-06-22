@@ -190,9 +190,15 @@ async fn prompt_async(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<PromptRequest>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    match load_session(&st, session, None).await {
+        Ok(_) => {}
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            return Ok(super::errors::legacy_session_not_found(session));
+        }
+        Err(error) => return Err(error),
+    }
     let run = st
         .runs
         .start(session)
@@ -215,7 +221,7 @@ async fn prompt_async(
         drop(guard);
         publish_session_status(&engine, session, "idle").await;
     }));
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn publish_session_status(
