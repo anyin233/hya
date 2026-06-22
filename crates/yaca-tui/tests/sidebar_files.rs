@@ -48,8 +48,8 @@ fn context_rail_shows_modified_files() {
 
     // Then: changed files are visible as a first-class sidebar section.
     assert!(
-        text.contains("Files"),
-        "context rail should show a Files section"
+        text.contains("Modified Files"),
+        "context rail should show OpenCode's Modified Files section"
     );
     assert!(
         text.contains("sidebar.rs"),

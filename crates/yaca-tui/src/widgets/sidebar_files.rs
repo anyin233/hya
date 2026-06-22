@@ -13,7 +13,7 @@ pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme
         return;
     }
     lines.push(Line::from(""));
-    push_section(lines, "Files", theme.info, theme);
+    push_section(lines, "Modified Files", theme.info, theme);
     for file in state.changed_files.iter().take(MAX_VISIBLE_FILES) {
         lines.push(meta(file_label(file), theme.text));
     }
