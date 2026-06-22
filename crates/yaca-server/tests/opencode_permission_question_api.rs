@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use yaca_proto::{AgentName, ModelRef};
+use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -190,6 +190,34 @@ async fn opencode_legacy_session_permission_responds_by_session() {
     assert_eq!(reply.status(), StatusCode::OK);
     assert_eq!(body_json(reply).await, json!(true));
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn opencode_legacy_permission_missing_session_returns_not_found() {
+    let (permission, permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (engine, agent) = base_engine(permission, None, tempdir()).await;
+    let app = router(AppState::new(engine, agent).with_permission_requests(permission_rx));
+    let missing = SessionId::new().to_string();
+
+    let resp = request(
+        app,
+        "POST",
+        &format!("/session/{missing}/permissions/per_missing"),
+        Some(json!({"response": "always"})),
+    )
+    .await;
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
 }
 
 #[tokio::test]
