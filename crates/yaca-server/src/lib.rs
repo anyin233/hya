@@ -76,6 +76,7 @@ struct ServerState {
     question_requests: pending::QuestionRequests,
     mcp_manager: Arc<McpManager>,
     project: opencode::ProjectState,
+    tui: opencode::TuiState,
 }
 
 impl ServerState {
@@ -88,6 +89,7 @@ impl ServerState {
             question_requests: app.question_requests,
             mcp_manager: app.mcp_manager,
             project: opencode::ProjectState::new(),
+            tui: opencode::TuiState::new(),
         }
     }
 }
