@@ -9,6 +9,7 @@ use yaca_tool::{Action, AskRequest, Decision, Resource};
 #[derive(Clone, Default)]
 pub(crate) struct PermissionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingPermission>>>,
+    saved: Arc<Mutex<BTreeMap<String, SavedPermissionInfo>>>,
 }
 
 struct PendingPermission {
@@ -34,6 +35,15 @@ pub(crate) enum PermissionReply {
     Once,
     Always,
     Reject,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct SavedPermissionInfo {
+    id: String,
+    #[serde(rename = "projectID")]
+    project_id: String,
+    action: String,
+    resource: String,
 }
 
 impl PermissionRequests {
@@ -104,7 +114,11 @@ impl PermissionRequests {
         let Some(entry) = entry else {
             return false;
         };
+        let save_action = entry.action;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
+        if ok && matches!(reply, PermissionReply::Always) {
+            self.remember_saved(id, save_action).await;
+        }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
         }
@@ -139,11 +153,49 @@ impl PermissionRequests {
         let Some(entry) = entry else {
             return false;
         };
+        let save_action = entry.action;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
+        if ok && matches!(reply, PermissionReply::Always) {
+            self.remember_saved(id, save_action).await;
+        }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
         }
         ok
+    }
+
+    pub(crate) async fn list_saved(&self, project_id: Option<&str>) -> Vec<SavedPermissionInfo> {
+        self.saved
+            .lock()
+            .await
+            .values()
+            .filter(|entry| project_id.is_none_or(|project_id| entry.project_id == project_id))
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) async fn remove_saved(&self, id: &str) {
+        self.saved.lock().await.remove(id);
+    }
+
+    async fn remember_saved(&self, request_id: &str, action: Action) {
+        let action = action_name(action);
+        let mut saved = self.saved.lock().await;
+        if saved.values().any(|entry| {
+            entry.project_id == "global" && entry.action == action && entry.resource == "*"
+        }) {
+            return;
+        }
+        let id = format!("psv_{request_id}");
+        saved.insert(
+            id.clone(),
+            SavedPermissionInfo {
+                id,
+                project_id: "global".to_string(),
+                action,
+                resource: "*".to_string(),
+            },
+        );
     }
 }
 
