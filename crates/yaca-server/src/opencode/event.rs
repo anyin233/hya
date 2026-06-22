@@ -10,7 +10,9 @@ use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId};
+use yaca_proto::{
+    Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId, ToolPartState,
+};
 
 use crate::ServerState;
 
@@ -165,7 +167,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             *session,
             *message,
             *part,
-            *call,
+            call.to_string(),
             name.as_str(),
             json!({ "status": "pending", "input": {}, "raw": "" }),
         ),
@@ -181,7 +183,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             *session,
             *message,
             *part,
-            *call,
+            call.to_string(),
             name.as_str(),
             json!({ "status": "pending", "input": {}, "raw": delta }),
         ),
@@ -197,7 +199,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             *session,
             *message,
             *part,
-            *call,
+            call.to_string(),
             name.as_str(),
             json!({
                 "status": "running",
@@ -219,7 +221,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
                 *session,
                 *message,
                 *part,
-                *call,
+                call.to_string(),
                 "unknown",
                 json!({
                     "status": "completed",
@@ -245,7 +247,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             *session,
             *message,
             *part,
-            *call,
+            call.to_string(),
             "unknown",
             json!({
                 "status": "error",
@@ -257,6 +259,14 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
                 },
             }),
         ),
+        Event::ToolPartUpdated {
+            session,
+            message,
+            part,
+            state,
+        } => tool_part_snapshot_payload(st, &envelope, *session, *message, *part, state)
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::PartDeleted {
             session,
             message,
@@ -287,6 +297,38 @@ async fn session_payload(
         "type": kind,
         "properties": properties,
     })
+}
+
+async fn tool_part_snapshot_payload(
+    st: &ServerState,
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    state: &ToolPartState,
+) -> Option<Value> {
+    let snapshot = super::load_session(st, session, None).await.ok()?;
+    let part_id = part.to_string();
+    let message_id = message.to_string();
+    let part_value = snapshot
+        .messages
+        .iter()
+        .find(|item| item.id() == message_id)
+        .and_then(|item| item.part(&part_id))?;
+    if part_value["type"].as_str() != Some("tool") {
+        return None;
+    }
+    let call = part_value["callID"].as_str()?.to_string();
+    let tool = part_value["tool"].as_str()?;
+    Some(tool_part_updated_payload(
+        envelope,
+        session,
+        message,
+        part,
+        call,
+        tool,
+        tool_state_payload(envelope, state),
+    ))
 }
 
 fn message_payload(
@@ -405,7 +447,7 @@ fn tool_part_updated_payload(
     session: SessionId,
     message: MessageId,
     part: PartId,
-    call: ToolCallId,
+    call: String,
     tool: &str,
     state: Value,
 ) -> Value {
@@ -422,13 +464,54 @@ fn tool_part_updated_payload(
                 "sessionID": session_id,
                 "messageID": message_id,
                 "type": "tool",
-                "callID": call.to_string(),
+                "callID": call,
                 "tool": tool,
                 "state": state,
             },
             "time": envelope.ts_millis,
         },
     })
+}
+
+fn tool_state_payload(envelope: &Envelope, state: &ToolPartState) -> Value {
+    match state {
+        ToolPartState::Pending { input } => json!({
+            "status": "pending",
+            "input": object_or_empty(input),
+        }),
+        ToolPartState::Running { input } => json!({
+            "status": "running",
+            "input": object_or_empty(input),
+            "time": { "start": envelope.ts_millis },
+        }),
+        ToolPartState::Completed {
+            input,
+            output,
+            time_ms,
+        } => {
+            let elapsed = i64::try_from(*time_ms).unwrap_or(i64::MAX);
+            json!({
+                "status": "completed",
+                "input": object_or_empty(input),
+                "output": tool_output_text(output),
+                "title": "",
+                "metadata": {},
+                "time": {
+                    "start": envelope.ts_millis.saturating_sub(elapsed),
+                    "end": envelope.ts_millis,
+                },
+            })
+        }
+        ToolPartState::Error { input, message } => json!({
+            "status": "error",
+            "input": object_or_empty(input),
+            "error": message,
+            "time": {
+                "start": envelope.ts_millis,
+                "end": envelope.ts_millis,
+            },
+        }),
+    }
 }
 
 fn object_or_empty(value: &Value) -> Value {

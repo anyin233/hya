@@ -477,6 +477,7 @@ async fn opencode_v2_event_route_streams_tool_part_events() {
     let session = created_event["properties"]["sessionID"].as_str().unwrap();
 
     let shell = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -499,6 +500,8 @@ async fn opencode_v2_event_route_streams_tool_part_events() {
         "printf opencode-tool-event"
     );
     let part = running["properties"]["part"]["id"].as_str().unwrap();
+    let message = running["properties"]["part"]["messageID"].as_str().unwrap();
+    let call = running["properties"]["part"]["callID"].as_str().unwrap();
 
     let completed = read_next_tool_state(&mut stream, "completed").await;
     assert_eq!(completed["properties"]["part"]["id"], part);
@@ -506,6 +509,41 @@ async fn opencode_v2_event_route_streams_tool_part_events() {
         completed["properties"]["part"]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-tool-event"))
+    );
+
+    let updated = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/session/{session}/message/{message}/part/{part}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": part,
+                        "sessionID": session,
+                        "messageID": message,
+                        "type": "tool",
+                        "callID": call,
+                        "tool": "shell",
+                        "state": {
+                            "status": "error",
+                            "input": {"command": "printf opencode-tool-event"},
+                            "error": "forced error"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+
+    let error = read_next_tool_state(&mut stream, "error").await;
+    assert_eq!(error["properties"]["part"]["id"], part);
+    assert_eq!(
+        error["properties"]["part"]["state"]["error"],
+        "forced error"
     );
 }
 
