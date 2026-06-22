@@ -33,6 +33,7 @@ mod session_diff;
 mod session_fork;
 mod session_legacy;
 mod session_list;
+mod session_message_v2;
 mod session_part_update;
 mod session_prompt;
 mod session_revert;
@@ -72,6 +73,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(pty::router())
         .merge(question::router())
         .merge(session_context::router())
+        .merge(session_message_v2::router())
         .merge(session_prompt::router())
         .merge(session_revert::router())
         .merge(session_v2::router())
