@@ -15,6 +15,7 @@ use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
 const WORKDIR: &str = "/tmp/yaca-opencode-experimental-session-filter-api";
+const OTHER_WORKDIR: &str = "/tmp/yaca-opencode-experimental-session-filter-api-other";
 
 async fn state() -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
@@ -68,11 +69,15 @@ async fn body_json(response: axum::response::Response) -> Value {
 }
 
 async fn create_session(app: axum::Router) -> String {
+    create_session_in(app, WORKDIR).await
+}
+
+async fn create_session_in(app: axum::Router, workdir: &str) -> String {
     let (status, body) = request_json(
         app,
         "POST",
         "/sessions",
-        Some(json!({"agent": "build", "model": "fake", "workdir": WORKDIR})),
+        Some(json!({"agent": "build", "model": "fake", "workdir": workdir})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -150,6 +155,25 @@ async fn experimental_session_list_uses_updated_time_cursor() {
     assert!(second.headers().get("x-next-cursor").is_none());
     let second_page = body_json(second).await;
     assert_eq!(session_ids(&second_page), vec![opencode_id(&oldest)]);
+}
+
+#[tokio::test]
+async fn experimental_session_list_filters_directory() {
+    let app = router(state().await);
+    let included = create_session_in(app.clone(), WORKDIR).await;
+    let excluded = create_session_in(app.clone(), OTHER_WORKDIR).await;
+
+    let (status, sessions) = request_json(
+        app,
+        "GET",
+        &format!("/experimental/session?directory={WORKDIR}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = session_ids(&sessions);
+    assert!(ids.contains(&opencode_id(&included)));
+    assert!(!ids.contains(&opencode_id(&excluded)));
 }
 
 async fn touch_session(app: axum::Router, session: &str, title: &str, after: u64) -> u64 {

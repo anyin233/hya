@@ -13,6 +13,7 @@ pub(super) struct ListQuery {
     limit: Option<usize>,
     start: Option<i64>,
     cursor: Option<i64>,
+    directory: Option<String>,
     archived: Option<bool>,
 }
 
@@ -44,6 +45,13 @@ pub(super) async fn list_sessions(
         let info = super::load_session(&st, session.session, Some(session.started_millis))
             .await?
             .info;
+        if query
+            .directory
+            .as_ref()
+            .is_some_and(|directory| info.directory() != directory)
+        {
+            continue;
+        }
         if query.roots == Some(true) && info.parent_id().is_some() {
             continue;
         }
