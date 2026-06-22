@@ -87,3 +87,27 @@ fn composer_metadata_uses_bare_effort_without_manual_mode() {
         "composer metadata should not show manual mode in the OpenCode statusline, got {metadata_row:?}"
     );
 }
+
+#[test]
+fn composer_metadata_hides_absent_effort_instead_of_showing_off() {
+    // Given: the active model has no selected effort variant.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the composer metadata row renders at the model breakpoint.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = row_text(&buffer, 120, 13);
+
+    // Then: the statusline matches OpenCode's absent-variant behavior.
+    assert!(
+        metadata_row.contains("sisyphus · kimi-k2"),
+        "composer metadata should still show identity, got {metadata_row:?}"
+    );
+    assert!(
+        !metadata_row.contains("off"),
+        "composer metadata should omit absent effort instead of showing off, got {metadata_row:?}"
+    );
+}

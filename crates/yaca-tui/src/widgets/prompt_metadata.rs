@@ -24,7 +24,7 @@ pub(super) fn composer_metadata(
     } else {
         state.model.as_str()
     };
-    let effort = state.reasoning_effort.as_deref().unwrap_or("off");
+    let effort = state.reasoning_effort.as_deref();
     let mode = state.yolo.then_some("YOLO");
     let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
     let context = if policy.show_context_hints {
@@ -43,14 +43,16 @@ pub(super) fn composer_metadata(
     } else {
         0
     };
+    let effort_width = effort.map_or(0, |label| {
+        UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(label)
+    });
     let mode_width = mode.map_or(0, |label| {
         UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(label)
     });
     let left_width = UnicodeWidthStr::width("  ")
         + UnicodeWidthStr::width(agent.as_str())
         + model_width
-        + UnicodeWidthStr::width(" · ")
-        + UnicodeWidthStr::width(effort)
+        + effort_width
         + mode_width;
     let right_width = UnicodeWidthStr::width(context.as_str())
         + UnicodeWidthStr::width(context_separator)
@@ -74,13 +76,15 @@ pub(super) fn composer_metadata(
             ),
         ]);
     }
-    spans.extend([
-        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
-        Span::styled(
-            effort.to_string(),
-            Style::default().fg(theme.accent).bg(theme.element),
-        ),
-    ]);
+    if let Some(effort) = effort {
+        spans.extend([
+            Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
+            Span::styled(
+                effort.to_string(),
+                Style::default().fg(theme.accent).bg(theme.element),
+            ),
+        ]);
+    }
     if let Some(mode) = mode {
         spans.extend([
             Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
