@@ -160,6 +160,18 @@ impl PromptState {
         self.last_paste_pending_reveal = false;
     }
 
+    pub fn delete_word_forward(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let next = next_word_boundary(&app.input, cursor);
+        if next == cursor {
+            app.input_cursor = Some(cursor);
+            return;
+        }
+        app.input.replace_range(cursor..next, "");
+        app.input_cursor = Some(cursor);
+        self.last_paste_pending_reveal = false;
+    }
+
     pub fn delete_word_backward(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let end = trim_end_whitespace(&app.input[..cursor]);

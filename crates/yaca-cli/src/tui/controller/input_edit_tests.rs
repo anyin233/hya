@@ -35,6 +35,40 @@ fn command_completion_controller() -> Controller {
     controller
 }
 
+fn assert_deletes_word_forward(event: KeyEvent) {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta gamma".to_string(),
+        input_cursor: Some("alpha ".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(event);
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "alpha  gamma");
+    assert_eq!(controller.app.input_cursor, Some("alpha ".len()));
+}
+
+fn assert_deletes_word_backward(event: KeyEvent) {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta  gamma".to_string(),
+        input_cursor: Some("alpha beta  ".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(event);
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "alpha gamma");
+    assert_eq!(controller.app.input_cursor, Some("alpha ".len()));
+}
+
 #[test]
 fn ctrl_u_deletes_to_current_line_start() {
     // Given
@@ -89,6 +123,61 @@ fn ctrl_w_deletes_previous_word_from_input_end() {
     // Then
     assert_eq!(effect, TuiEffect::None);
     assert_eq!(controller.app.input, "alpha ");
+}
+
+#[test]
+fn alt_d_deletes_word_forward() {
+    assert_deletes_word_forward(alt('d'));
+}
+
+#[test]
+fn alt_delete_deletes_word_forward() {
+    assert_deletes_word_forward(modified_key(KeyCode::Delete, KeyModifiers::ALT));
+}
+
+#[test]
+fn ctrl_delete_deletes_word_forward() {
+    assert_deletes_word_forward(modified_key(KeyCode::Delete, KeyModifiers::CONTROL));
+}
+
+#[test]
+fn alt_backspace_deletes_word_backward() {
+    assert_deletes_word_backward(modified_key(KeyCode::Backspace, KeyModifiers::ALT));
+}
+
+#[test]
+fn ctrl_backspace_deletes_word_backward() {
+    assert_deletes_word_backward(modified_key(KeyCode::Backspace, KeyModifiers::CONTROL));
+}
+
+#[test]
+fn alt_d_deletes_word_forward_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+
+    // When
+    assert_eq!(controller.handle_key(alt('d')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "");
+    assert_eq!(controller.app.input_cursor, Some(0));
+}
+
+#[test]
+fn ctrl_backspace_deletes_word_backward_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Backspace, KeyModifiers::CONTROL)),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "");
+    assert_eq!(controller.app.input_cursor, Some(0));
 }
 
 #[test]

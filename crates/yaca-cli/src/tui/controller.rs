@@ -170,6 +170,12 @@ impl Controller {
                 KeyCode::Char('f') | KeyCode::Right => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
                 }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_forward(app));
+                }
+                KeyCode::Backspace => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
+                }
                 _ => {}
             }
         }
@@ -182,6 +188,12 @@ impl Controller {
                 }
                 KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
+                KeyCode::Delete if key.modifiers == KeyModifiers::CONTROL => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_forward(app));
+                }
+                KeyCode::Backspace if key.modifiers == KeyModifiers::CONTROL => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
                 }
                 KeyCode::Char('c') => return self.handle_ctrl_c(),
                 KeyCode::Char('a') => {
@@ -690,6 +702,12 @@ impl Controller {
                 KeyCode::Char('f') | KeyCode::Right => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
                 }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_forward(app));
+                }
+                KeyCode::Backspace => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
+                }
                 _ => {}
             }
         }
@@ -700,6 +718,12 @@ impl Controller {
                 }
                 KeyCode::Right => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
+                KeyCode::Delete => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_forward(app));
+                }
+                KeyCode::Backspace => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
                 }
                 KeyCode::Char('a') => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_line_start(app));
