@@ -171,6 +171,12 @@ impl Controller {
                 KeyCode::Up => return self.select_previous_message(),
                 KeyCode::Down => return self.select_next_message(),
                 KeyCode::Char('c') => return self.handle_ctrl_c(),
+                KeyCode::Char('u') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
+                }
+                KeyCode::Char('w') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
+                }
                 KeyCode::Char('p') => {
                     self.open_command_palette_dialog();
                     return TuiEffect::None;
@@ -326,6 +332,14 @@ impl Controller {
         if outcome.refresh_popup {
             self.refresh_inline_popup();
         }
+        TuiEffect::None
+    }
+
+    fn edit_prompt(&mut self, edit: impl FnOnce(&mut PromptState, &mut AppState)) -> TuiEffect {
+        edit(&mut self.prompt, &mut self.app);
+        self.history_cursor = None;
+        self.disarm_exit();
+        self.refresh_inline_popup();
         TuiEffect::None
     }
 
@@ -637,6 +651,17 @@ impl Controller {
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if key.modifiers == KeyModifiers::CONTROL {
+            match key.code {
+                KeyCode::Char('u') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
+                }
+                KeyCode::Char('w') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Esc => {
                 self.app.dialog = None;
@@ -958,6 +983,9 @@ mod app_exit_tests;
 
 #[cfg(test)]
 mod command_palette_tests;
+
+#[cfg(test)]
+mod input_edit_tests;
 
 #[cfg(test)]
 mod tests {

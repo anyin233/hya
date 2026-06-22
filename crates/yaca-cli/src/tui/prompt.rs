@@ -76,6 +76,29 @@ impl PromptState {
         self.last_paste_pending_reveal = false;
     }
 
+    pub fn delete_to_line_start(&mut self, app: &mut AppState) {
+        let line_start = app.input.rfind('\n').map_or(0, |idx| idx + 1);
+        app.input.truncate(line_start);
+        self.last_paste_pending_reveal = false;
+    }
+
+    pub fn delete_word_backward(&mut self, app: &mut AppState) {
+        let end = trim_end_whitespace(&app.input);
+        if end == 0 {
+            app.input.clear();
+            self.last_paste_pending_reveal = false;
+            return;
+        }
+        let prefix = &app.input[..end];
+        let word_start = prefix
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        app.input.truncate(word_start);
+        self.last_paste_pending_reveal = false;
+    }
+
     pub fn expanded_input(&self, input: &str) -> String {
         self.paste_entries
             .iter()
@@ -105,6 +128,14 @@ fn image_paste(text: &str) -> Option<(String, &'static str)> {
         }
     }
     None
+}
+
+fn trim_end_whitespace(value: &str) -> usize {
+    value
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map_or(0, |(idx, ch)| idx + ch.len_utf8())
 }
 
 fn markdown_image_path(text: &str) -> Option<String> {
