@@ -168,6 +168,16 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
         format!("ses_{}", session.replace('-', ""))
     );
 
+    let (status, future) = request_json(
+        app.clone(),
+        "GET",
+        "/experimental/session?start=9223372036854775807",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(future, json!([]));
+
     let (status, backgrounded) = request_json(
         app.clone(),
         "POST",
