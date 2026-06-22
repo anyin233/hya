@@ -205,6 +205,23 @@ async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, 
     (status, body)
 }
 
+async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
 async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     let resp = app
         .oneshot(
@@ -220,6 +237,33 @@ async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, body)
+}
+
+#[tokio::test]
+async fn opencode_session_read_delete_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let message = MessageId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    for uri in [
+        format!("/session/{missing}"),
+        format!("/session/{missing}/children"),
+        format!("/session/{missing}/todo"),
+        format!("/session/{missing}/message"),
+        format!("/session/{missing}/message/{message}"),
+    ] {
+        let (status, body) = get_json(app.clone(), uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, expected);
+    }
+
+    let (status, body) = delete_json(app, format!("/session/{missing}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]

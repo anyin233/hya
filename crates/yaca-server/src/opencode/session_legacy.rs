@@ -85,8 +85,11 @@ async fn status(State(st): State<ServerState>) -> Json<BTreeMap<String, runs::Ru
 async fn children(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<projection::OpenCodeSessionInfo>>, ApiError> {
+) -> Result<Response, ApiError> {
     let parent = parse_session(&id)?;
+    if let Err(response) = legacy_load_session(&st, parent, None).await? {
+        return Ok(response);
+    }
     let sessions = st
         .engine
         .store()
@@ -101,15 +104,18 @@ async fn children(
             out.push(snapshot.info);
         }
     }
-    Ok(Json(out))
+    Ok(Json(out).into_response())
 }
 
 async fn get_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<projection::OpenCodeSessionInfo>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    Ok(Json(load_session(&st, session, None).await?.info))
+    match legacy_load_session(&st, session, None).await? {
+        Ok(snapshot) => Ok(Json(snapshot.info).into_response()),
+        Err(response) => Ok(response),
+    }
 }
 
 async fn update_session(
@@ -130,21 +136,22 @@ async fn update_session(
 async fn remove_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<bool>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = legacy_load_session(&st, session, None).await? {
+        return Ok(response);
+    }
     st.runs.cancel(session);
     let deleted = st.engine.delete_session(session).await?;
-    Ok(Json(deleted))
+    Ok(Json(deleted).into_response())
 }
 
-async fn todo(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-) -> Result<Json<Vec<yaca_tool::TodoItem>>, ApiError> {
+async fn todo(State(st): State<ServerState>, Path(id): Path<String>) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
-    Ok(Json(st.engine.todos(session).await))
+    if let Err(response) = legacy_load_session(&st, session, None).await? {
+        return Ok(response);
+    }
+    Ok(Json(st.engine.todos(session).await).into_response())
 }
 
 async fn messages(
@@ -153,7 +160,10 @@ async fn messages(
     Query(query): Query<MessagesQuery>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    let messages = load_session(&st, session, None).await?.messages;
+    let messages = match legacy_load_session(&st, session, None).await? {
+        Ok(snapshot) => snapshot.messages,
+        Err(response) => return Ok(response),
+    };
     if query.limit.is_none() && query.before.is_some() {
         return Err(ApiError::bad_request("before requires limit"));
     }
@@ -171,19 +181,22 @@ async fn messages(
 async fn message(
     State(st): State<ServerState>,
     Path((id, message)): Path<(String, String)>,
-) -> Result<Json<projection::OpenCodeMessage>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     let message = message
         .parse::<yaca_proto::MessageId>()
         .map_err(|_| ApiError::bad_request("invalid message id"))?
         .to_string();
-    let snapshot = load_session(&st, session, None).await?;
-    snapshot
+    let snapshot = match legacy_load_session(&st, session, None).await? {
+        Ok(snapshot) => snapshot,
+        Err(response) => return Ok(response),
+    };
+    let message = snapshot
         .messages
         .into_iter()
         .find(|item| item.id() == message)
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("message not found"))
+        .ok_or_else(|| ApiError::not_found("message not found"))?;
+    Ok(Json(message).into_response())
 }
 
 async fn prompt_async(
@@ -401,6 +414,20 @@ pub(in crate::opencode) async fn load_session(
     let projection = Projection::from_events(&envs);
     projection::snapshot(session, &envs, &projection, started_hint)
         .ok_or_else(|| ApiError::not_found("session not found"))
+}
+
+async fn legacy_load_session(
+    st: &ServerState,
+    session: SessionId,
+    started_hint: Option<i64>,
+) -> Result<Result<projection::OpenCodeSessionSnapshot, Response>, ApiError> {
+    match load_session(st, session, started_hint).await {
+        Ok(snapshot) => Ok(Ok(snapshot)),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(Err(super::errors::legacy_session_not_found(session)))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn page_messages(
