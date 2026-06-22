@@ -140,6 +140,16 @@ impl Projection {
                     text.push_str(delta);
                 }
             }
+            Event::TextReplace {
+                message,
+                part,
+                text: replacement,
+                ..
+            } => {
+                if let Some(PartProjection::Text { text, .. }) = find_part(self, *message, *part) {
+                    *text = replacement.clone();
+                }
+            }
             Event::ReasoningStart { message, part, .. } => push_part(
                 self,
                 *message,

@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use yaca_proto::{Envelope, Message, MessageId, ModelRef, SessionId, ToolCallId, ToolSchema};
+use yaca_proto::{
+    Envelope, Message, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolSchema,
+};
 use yaca_tool::Action;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -21,6 +23,8 @@ pub enum HookName {
     Event,
     #[serde(rename = "command.execute.before")]
     CommandExecuteBefore,
+    #[serde(rename = "experimental.text.complete")]
+    TextComplete,
     #[serde(rename = "message.user.before")]
     MessageUserBefore,
     #[serde(rename = "chat.params")]
@@ -45,6 +49,7 @@ impl HookName {
         match self {
             HookName::Event => "event",
             HookName::CommandExecuteBefore => "command.execute.before",
+            HookName::TextComplete => "experimental.text.complete",
             HookName::MessageUserBefore => "message.user.before",
             HookName::ChatParams => "chat.params",
             HookName::ToolExecuteBefore => "tool.execute.before",
@@ -66,6 +71,7 @@ impl HookName {
         Some(match s {
             "event" => HookName::Event,
             "command.execute.before" => HookName::CommandExecuteBefore,
+            "experimental.text.complete" => HookName::TextComplete,
             "message.user.before" => HookName::MessageUserBefore,
             "chat.params" => HookName::ChatParams,
             "tool.execute.before" => HookName::ToolExecuteBefore,
@@ -228,6 +234,14 @@ pub struct CommandExecuteBeforeParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextCompleteParams {
+    pub session: SessionId,
+    pub message: MessageId,
+    pub part: PartId,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatParamsParams {
     pub session: SessionId,
     pub message: MessageId,
@@ -270,6 +284,12 @@ pub enum MessageUserBeforeOutcomeWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum CommandBeforeOutcomeWire {
+    Continue { text: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum TextCompleteOutcomeWire {
     Continue { text: String },
 }
 

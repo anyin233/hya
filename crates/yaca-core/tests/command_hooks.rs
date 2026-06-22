@@ -5,8 +5,8 @@ use std::sync::Arc;
 use yaca_core::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
     CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
-    SessionEngine, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome,
+    SessionEngine, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
 };
 use yaca_proto::{AgentName, Envelope, Event, ModelRef, PartProjection, Role};
 use yaca_provider::{DevProvider, ProviderRouter};
@@ -28,6 +28,10 @@ impl HookDispatcher for CommandMutatingHost {
         CommandExecuteBeforeOutcome::Continue {
             text: format!("{} with hook context", input.text),
         }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
     }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {

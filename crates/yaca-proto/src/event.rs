@@ -66,6 +66,12 @@ pub enum Event {
         part: PartId,
         delta: String,
     },
+    TextReplace {
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    },
     TextEnd {
         session: SessionId,
         message: MessageId,
@@ -149,6 +155,7 @@ impl Event {
             | Event::StepFinished { session, .. }
             | Event::TextStart { session, .. }
             | Event::TextDelta { session, .. }
+            | Event::TextReplace { session, .. }
             | Event::TextEnd { session, .. }
             | Event::ReasoningStart { session, .. }
             | Event::ReasoningDelta { session, .. }

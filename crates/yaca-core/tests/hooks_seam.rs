@@ -10,8 +10,9 @@ use tokio_util::sync::CancellationToken;
 use yaca_core::{
     AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, SessionEngine, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    MessageUserBeforeOutcome, SessionEngine, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use yaca_proto::{
     AgentName, Envelope, FinishReason, ModelRef, PartProjection, Role, ToolPartState,
@@ -82,6 +83,10 @@ impl HookDispatcher for CountingHost {
         CommandExecuteBeforeOutcome::Continue { text: input.text }
     }
 
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         self.counts.user_before.fetch_add(1, Ordering::SeqCst);
         MessageUserBeforeOutcome::Continue { text: input.text }
@@ -118,6 +123,10 @@ impl HookDispatcher for MaskingAfterHost {
         input: CommandExecuteBeforeInput,
     ) -> CommandExecuteBeforeOutcome {
         CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
     }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {

@@ -3,7 +3,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use yaca_proto::{Envelope, MessageId, SessionId, ToolCallId};
+use yaca_proto::{Envelope, MessageId, PartId, SessionId, ToolCallId};
 use yaca_provider::CompletionRequest;
 
 #[async_trait]
@@ -13,6 +13,7 @@ pub trait HookDispatcher: Send + Sync {
         &self,
         input: CommandExecuteBeforeInput,
     ) -> CommandExecuteBeforeOutcome;
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome;
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome;
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome;
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome;
@@ -27,6 +28,17 @@ pub struct CommandExecuteBeforeInput {
 }
 
 pub enum CommandExecuteBeforeOutcome {
+    Continue { text: String },
+}
+
+pub struct TextCompleteInput {
+    pub session: SessionId,
+    pub message: MessageId,
+    pub part: PartId,
+    pub text: String,
+}
+
+pub enum TextCompleteOutcome {
     Continue { text: String },
 }
 
@@ -91,6 +103,10 @@ impl HookDispatcher for NoopHookHost {
         input: CommandExecuteBeforeInput,
     ) -> CommandExecuteBeforeOutcome {
         CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
     }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {

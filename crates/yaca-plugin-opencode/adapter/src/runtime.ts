@@ -22,6 +22,7 @@ import {
   type RequestContext,
   type RuntimeOptions,
 } from "./runtime_types"
+import { handleTextComplete } from "./text_complete_method"
 import { handleToolCall } from "./tool_method"
 
 export { PROTOCOL_VERSION }
@@ -34,6 +35,7 @@ const METHOD_TOOL_CALL = "tool/call"
 const METHOD_MESSAGE_USER_BEFORE = "hook/message.user.before"
 const METHOD_CHAT_PARAMS = "hook/chat.params"
 const METHOD_COMMAND_EXECUTE_BEFORE = "hook/command.execute.before"
+const METHOD_TEXT_COMPLETE = "hook/experimental.text.complete"
 const METHOD_PERMISSION_ASK = "hook/permission.ask"
 const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
 const METHOD_TOOL_EXECUTE_AFTER = "hook/tool.execute.after"
@@ -88,6 +90,8 @@ function handleRequestWithResponse(
       return handleChatParams(request, context)
     case METHOD_COMMAND_EXECUTE_BEFORE:
       return handleCommandExecuteBefore(request, context)
+    case METHOD_TEXT_COMPLETE:
+      return handleTextComplete(request, context)
     case METHOD_PERMISSION_ASK:
       return handlePermissionAsk(request, context)
     case METHOD_TOOL_EXECUTE_BEFORE:
