@@ -1,7 +1,10 @@
 import { $ } from "bun"
 import { z } from "zod"
 
-import { createOpenCodeClientAdapter } from "./client_adapter"
+import {
+  createOpenCodeClientAdapter,
+  createOpenCodeProject,
+} from "./client_adapter"
 import {
   AdapterOptionsParseError,
   discoverPluginSpecs,
@@ -110,17 +113,17 @@ function pluginInput(
   directory: string,
   worktree: string,
 ): Readonly<Record<string, unknown>> {
+  const project = createOpenCodeProject(env, worktree)
   return {
-    client: createOpenCodeClientAdapter(stderr),
+    client: createOpenCodeClientAdapter(stderr, {
+      env,
+      directory,
+      worktree,
+      project,
+    }),
     directory,
     worktree,
-    project: {
-      id: env.YACA_PROJECT_ID ?? worktree,
-      worktree,
-      time: {
-        created: Date.now(),
-      },
-    },
+    project,
     serverUrl: new URL(env.YACA_SERVER_URL ?? "http://127.0.0.1:0"),
     $,
     experimental_workspace: {
