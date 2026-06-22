@@ -37,3 +37,56 @@ fn context_rail_shows_mcp_section_when_connectors_exist() {
     assert!(text.contains("MCP"));
     assert!(text.contains("codegraph Connected"));
 }
+
+#[test]
+fn context_rail_hides_mcp_expand_arrow_for_short_lists_like_opencode() {
+    // Given: OpenCode hides the MCP expand arrow for one or two connectors.
+    let mut state = AppState {
+        mcp: vec![
+            ConnectorView {
+                name: "codegraph".to_string(),
+                state: ConnectorState::Connected,
+            },
+            ConnectorView {
+                name: "context7".to_string(),
+                state: ConnectorState::Connected,
+            },
+        ],
+        ..AppState::default()
+    };
+
+    // When: a short MCP list renders.
+    let text = render(&mut state, 124, 28);
+
+    // Then: the title stays plain instead of advertising an unavailable collapse control.
+    assert!(text.contains("MCP"));
+    assert!(!text.contains("▾ MCP"));
+}
+
+#[test]
+fn context_rail_shows_mcp_expand_arrow_for_long_lists_like_opencode() {
+    // Given: OpenCode allows MCP lists with more than two connectors to collapse.
+    let mut state = AppState {
+        mcp: vec![
+            ConnectorView {
+                name: "codegraph".to_string(),
+                state: ConnectorState::Connected,
+            },
+            ConnectorView {
+                name: "context7".to_string(),
+                state: ConnectorState::Connected,
+            },
+            ConnectorView {
+                name: "linear".to_string(),
+                state: ConnectorState::NeedsAuth,
+            },
+        ],
+        ..AppState::default()
+    };
+
+    // When: a long MCP list renders.
+    let text = render(&mut state, 124, 28);
+
+    // Then: the title advertises the expandable section.
+    assert!(text.contains("▾ MCP"));
+}

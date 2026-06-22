@@ -130,7 +130,12 @@ fn push_mcp(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
         return;
     }
     lines.push(Line::from(""));
-    push_section(lines, "▾ MCP", theme.text, theme);
+    let title = if state.mcp.len() > 2 {
+        "▾ MCP"
+    } else {
+        "MCP"
+    };
+    push_section(lines, title, theme.text, theme);
     for connector in &state.mcp {
         lines.push(connector_line(
             &connector.name,
