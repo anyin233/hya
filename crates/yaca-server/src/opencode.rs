@@ -17,6 +17,7 @@ mod catalog;
 mod event;
 mod file;
 mod instance;
+mod integration;
 mod location;
 mod metadata;
 mod model_ref;
@@ -32,6 +33,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(event::router())
         .merge(file::router())
         .merge(instance::router())
+        .merge(integration::router())
         .merge(metadata::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
