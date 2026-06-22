@@ -22,6 +22,7 @@ pub struct SessionProjection {
     pub metadata: Option<serde_json::Value>,
     pub permission: Option<Vec<serde_json::Value>>,
     pub archived: Option<serde_json::Number>,
+    pub share: Option<String>,
     pub messages: Vec<MessageProjection>,
 }
 
@@ -116,6 +117,12 @@ impl Projection {
             }
             Event::SessionArchived { archived, .. } => {
                 self.session.archived = Some(archived.clone());
+            }
+            Event::SessionShareSet { url, .. } => {
+                self.session.share = Some(url.clone());
+            }
+            Event::SessionShareCleared { .. } => {
+                self.session.share = None;
             }
             Event::AgentSwitched { agent, .. } => {
                 self.session.agent = Some(agent.clone());

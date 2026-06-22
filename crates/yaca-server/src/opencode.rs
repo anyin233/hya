@@ -24,6 +24,7 @@ mod session_diff;
 mod session_legacy;
 mod session_part_update;
 mod session_prompt;
+mod session_share;
 mod session_switch;
 mod session_update;
 mod session_v2;

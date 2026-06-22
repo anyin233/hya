@@ -20,6 +20,8 @@ pub(super) struct OpenCodeSessionInfo {
     version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share: Option<OpenCodeSessionShare>,
     time: OpenCodeSessionTime,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<Vec<Value>>,
@@ -38,6 +40,11 @@ struct OpenCodeSessionTime {
     updated: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     archived: Option<Number>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OpenCodeSessionShare {
+    url: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -178,6 +185,11 @@ fn session_info(
         model: model_info(projection.session.model.as_ref().unwrap_or(&meta.model)),
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata: projection.session.metadata.clone(),
+        share: projection
+            .session
+            .share
+            .as_ref()
+            .map(|url| OpenCodeSessionShare { url: url.clone() }),
         time: OpenCodeSessionTime {
             created: millis(created),
             updated: millis(updated),

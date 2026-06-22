@@ -865,6 +865,59 @@ async fn opencode_session_diff_returns_empty_message_summary() {
 }
 
 #[tokio::test]
+async fn opencode_session_share_sets_and_clears_share_url() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let share = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/share"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(share.status(), StatusCode::OK);
+    let shared = body_json(share).await;
+    assert_eq!(shared["share"]["url"], format!("yaca://session/{session}"));
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(get).await["share"]["url"],
+        format!("yaca://session/{session}")
+    );
+
+    let unshare = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/session/{session}/share"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unshare.status(), StatusCode::OK);
+    let unshared = body_json(unshare).await;
+    assert!(!unshared.as_object().expect("session").contains_key("share"));
+}
+
+#[tokio::test]
 async fn opencode_session_todo_returns_todowrite_state() {
     let app = router(todo_state().await);
     let session = create_session(app.clone(), None).await;

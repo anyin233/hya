@@ -37,6 +37,13 @@ pub enum Event {
         session: SessionId,
         archived: serde_json::Number,
     },
+    SessionShareSet {
+        session: SessionId,
+        url: String,
+    },
+    SessionShareCleared {
+        session: SessionId,
+    },
     AgentSwitched {
         session: SessionId,
         agent: AgentName,
@@ -194,6 +201,8 @@ impl Event {
             | Event::SessionMetadataSet { session, .. }
             | Event::SessionPermissionSet { session, .. }
             | Event::SessionArchived { session, .. }
+            | Event::SessionShareSet { session, .. }
+            | Event::SessionShareCleared { session, .. }
             | Event::AgentSwitched { session, .. }
             | Event::ModelSwitched { session, .. }
             | Event::CommandExecuted { session, .. }
