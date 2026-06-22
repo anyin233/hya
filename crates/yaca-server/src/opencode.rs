@@ -5,6 +5,7 @@ use crate::ServerState;
 mod catalog;
 mod event;
 mod file;
+mod health;
 mod instance;
 mod integration;
 mod location;
@@ -24,6 +25,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(catalog::router())
         .merge(event::router())
         .merge(file::router())
+        .merge(health::router())
         .merge(instance::router())
         .merge(integration::router())
         .merge(metadata::router())
