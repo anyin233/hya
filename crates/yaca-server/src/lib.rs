@@ -75,6 +75,7 @@ struct ServerState {
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
     mcp_manager: Arc<McpManager>,
+    mcp_http: opencode::McpHttpState,
     project: opencode::ProjectState,
     tui: opencode::TuiState,
 }
@@ -88,6 +89,7 @@ impl ServerState {
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
             mcp_manager: app.mcp_manager,
+            mcp_http: opencode::McpHttpState::new(),
             project: opencode::ProjectState::new(),
             tui: opencode::TuiState::new(),
         }

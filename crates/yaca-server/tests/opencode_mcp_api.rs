@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -75,16 +75,22 @@ async fn body_json(resp: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn request(app: axum::Router, uri: &str) -> axum::response::Response {
-    app.oneshot(
-        Request::builder()
-            .method("GET")
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await
-    .unwrap()
+async fn request(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+) -> axum::response::Response {
+    let mut builder = Request::builder().method(method).uri(uri);
+    let request_body = if let Some(body) = body {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+        Body::from(serde_json::to_vec(&body).unwrap())
+    } else {
+        Body::empty()
+    };
+    app.oneshot(builder.body(request_body).unwrap())
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -115,7 +121,7 @@ async fn opencode_mcp_status_reports_configured_servers() {
     let mcp = McpManager::connect_all(configs).await;
     let app = router(state().await.with_mcp_manager(mcp));
 
-    let response = request(app, "/mcp").await;
+    let response = request(app, Method::GET, "/mcp", None).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
 
@@ -123,4 +129,140 @@ async fn opencode_mcp_status_reports_configured_servers() {
     assert_eq!(body["disabled"], json!({"status": "disabled"}));
     assert_eq!(body["bad"]["status"], "failed");
     assert!(body["bad"]["error"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+#[tokio::test]
+async fn opencode_mcp_add_accepts_disabled_local_server() {
+    let app = router(state().await);
+
+    let response = request(
+        app.clone(),
+        Method::POST,
+        "/mcp",
+        Some(json!({
+            "name": "httpapi-disabled",
+            "config": {
+                "type": "local",
+                "command": ["bun", "--version"],
+                "enabled": false
+            }
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["httpapi-disabled"], json!({"status": "disabled"}));
+
+    let response = request(app, Method::GET, "/mcp", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["httpapi-disabled"], json!({"status": "disabled"}));
+}
+
+#[tokio::test]
+async fn opencode_mcp_add_rejects_invalid_config() {
+    let app = router(state().await);
+
+    let response = request(
+        app,
+        Method::POST,
+        "/mcp",
+        Some(json!({
+            "name": "httpapi-invalid",
+            "config": { "type": "invalid" }
+        })),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_mcp_connect_disconnect_acknowledge_known_server() {
+    let app = router(state().await);
+    let added = request(
+        app.clone(),
+        Method::POST,
+        "/mcp",
+        Some(json!({
+            "name": "added",
+            "config": {
+                "type": "local",
+                "command": ["echo", "added"],
+                "enabled": false
+            }
+        })),
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+
+    let connected = request(app.clone(), Method::POST, "/mcp/added/connect", None).await;
+    assert_eq!(connected.status(), StatusCode::OK);
+    assert_eq!(body_json(connected).await, json!(true));
+
+    let disconnected = request(app, Method::POST, "/mcp/added/disconnect", None).await;
+    assert_eq!(disconnected.status(), StatusCode::OK);
+    assert_eq!(body_json(disconnected).await, json!(true));
+}
+
+#[tokio::test]
+async fn opencode_mcp_auth_routes_return_deterministic_responses_for_known_non_oauth_server() {
+    let app = router(state().await);
+    let added = request(
+        app.clone(),
+        Method::POST,
+        "/mcp",
+        Some(json!({
+            "name": "demo",
+            "config": {
+                "type": "local",
+                "command": ["echo", "demo"],
+                "enabled": false
+            }
+        })),
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::OK);
+
+    for path in ["/mcp/demo/auth", "/mcp/demo/auth/authenticate"] {
+        let response = request(app.clone(), Method::POST, path, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            json!({"error": "MCP server demo does not support OAuth"})
+        );
+    }
+
+    let response = request(app, Method::DELETE, "/mcp/demo/auth", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!({"success": true}));
+}
+
+#[tokio::test]
+async fn opencode_mcp_routes_return_typed_not_found_for_missing_server() {
+    let app = router(state().await);
+
+    for (method, path, body) in [
+        (Method::POST, "/mcp/missing/auth", None),
+        (Method::POST, "/mcp/missing/auth/authenticate", None),
+        (
+            Method::POST,
+            "/mcp/missing/auth/callback",
+            Some(json!({"code": "code"})),
+        ),
+        (Method::DELETE, "/mcp/missing/auth", None),
+        (Method::POST, "/mcp/missing/connect", None),
+        (Method::POST, "/mcp/missing/disconnect", None),
+    ] {
+        let response = request(app.clone(), method, path, body).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(response).await,
+            json!({
+                "_tag": "McpServerNotFoundError",
+                "name": "missing",
+                "message": "MCP server not found: missing"
+            })
+        );
+    }
 }
