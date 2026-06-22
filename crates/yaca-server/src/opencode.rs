@@ -8,11 +8,13 @@ use yaca_proto::{Projection, SessionId};
 use crate::{ApiError, ServerState, parse_session, runs};
 
 mod file;
+mod instance;
 mod projection;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .merge(file::router())
+        .merge(instance::router())
         .route("/session", get(list_sessions))
         .route("/session/status", get(status))
         .route("/session/:id", get(get_session))
