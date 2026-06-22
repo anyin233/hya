@@ -15,6 +15,7 @@ use crate::error::CoreError;
 use crate::hooks::HookDispatcher;
 
 mod admission;
+mod shell;
 mod stream_round;
 mod text_complete;
 mod turn;
