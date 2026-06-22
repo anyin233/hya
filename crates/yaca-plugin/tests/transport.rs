@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::time::Duration;
+use std::{collections::BTreeMap, time::SystemTime};
 
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex, split};
@@ -20,6 +21,26 @@ for line in sys.stdin:
             "tools": [{"name": "remember", "description": "", "inputSchema": {"type": "object"}}],
         }
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+"#;
+
+const SHUTDOWN_FIXTURE: &str = r#"
+import json, os, sys
+sentinel = os.environ["YACA_SHUTDOWN_SENTINEL"]
+for line in sys.stdin:
+    req = json.loads(line)
+    if req.get("method") == "initialize":
+        result = {
+            "protocol_version": 1,
+            "plugin": {"id": "shutdown-fixture", "version": "0.1.0", "kind": "rust"},
+            "hooks": [],
+            "tools": [],
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+    elif req.get("method") == "shutdown":
+        with open(sentinel, "w", encoding="utf-8") as f:
+            f.write("shutdown")
+        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": True}), flush=True)
+        break
 "#;
 
 #[tokio::test]
@@ -103,4 +124,48 @@ async fn handshake_with_fixture_reports_hooks_and_tools() {
     assert!(hook_names.contains(&HookName::Event));
     assert_eq!(init.tools.len(), 1);
     assert_eq!(init.tools[0].name, "remember");
+}
+
+#[tokio::test]
+async fn child_guard_sends_shutdown_before_terminating_child() {
+    let dir = std::env::temp_dir().join(format!(
+        "yaca-plugin-shutdown-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sentinel = dir.join("shutdown.txt");
+    let mut env = BTreeMap::new();
+    env.insert(
+        "YACA_SHUTDOWN_SENTINEL".to_string(),
+        sentinel.to_string_lossy().into_owned(),
+    );
+    let command = vec![
+        "python3".to_string(),
+        "-c".to_string(),
+        SHUTDOWN_FIXTURE.to_string(),
+    ];
+    let (client, guard) = PluginClient::spawn(&command, Some(&env)).unwrap();
+    client
+        .initialize(HostInfo {
+            name: "yaca".to_string(),
+            version: "0.0.0".to_string(),
+        })
+        .await
+        .unwrap();
+
+    drop(guard);
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !sentinel.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "shutdown");
+    let _ = std::fs::remove_dir_all(dir);
 }

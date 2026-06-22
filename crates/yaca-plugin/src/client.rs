@@ -1,7 +1,3 @@
-//! Per-plugin RPC client over a child process's stdio (modeled on
-//! `yaca_mcp::client`): id-correlated request/reply, per-call timeout, and a
-//! `ChildGuard` that kills the child on drop.
-
 use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -9,7 +5,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
@@ -17,12 +13,14 @@ use tokio::sync::{Mutex, oneshot};
 use crate::codec::MAX_LINE_BYTES;
 use crate::error::PluginError;
 use crate::messages::{
-    HostInfo, InitializeParams, InitializeResult, METHOD_INITIALIZE, PROTOCOL_VERSION,
+    HostInfo, InitializeParams, InitializeResult, METHOD_INITIALIZE, METHOD_SHUTDOWN,
+    PROTOCOL_VERSION,
 };
 use crate::protocol::{Frame, JsonRpcNotification, JsonRpcRequest};
 
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, PluginError>>>>>;
 
@@ -39,16 +37,43 @@ struct ClientInner {
 
 pub struct ChildGuard {
     child: StdMutex<Option<Child>>,
+    client: PluginClient,
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.child.lock()
-            && let Some(mut child) = guard.take()
-        {
-            let _ = child.start_kill();
+        let child = match self.child.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(mut child) = child {
+            let client = self.client.clone();
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(async move {
+                        let _ = client
+                            .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
+                            .await;
+                        terminate_child(&mut child).await;
+                    });
+                }
+                Err(_) => {
+                    let _ = child.start_kill();
+                }
+            }
         }
     }
+}
+
+async fn terminate_child(child: &mut Child) {
+    if matches!(
+        tokio::time::timeout(SHUTDOWN_TIMEOUT, child.wait()).await,
+        Ok(Ok(_))
+    ) {
+        return;
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 impl PluginClient {
@@ -94,12 +119,12 @@ impl PluginClient {
             .stdin
             .take()
             .ok_or(PluginError::MissingPipe("stdin"))?;
-        Ok((
-            Self::new(stdout, stdin),
-            ChildGuard {
-                child: StdMutex::new(Some(child)),
-            },
-        ))
+        let client = Self::new(stdout, stdin);
+        let guard = ChildGuard {
+            child: StdMutex::new(Some(child)),
+            client: client.clone(),
+        };
+        Ok((client, guard))
     }
 
     /// # Errors
