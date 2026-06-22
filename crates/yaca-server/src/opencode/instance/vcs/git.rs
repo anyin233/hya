@@ -6,6 +6,8 @@ use serde::Serialize;
 
 use crate::ApiError;
 
+mod status;
+
 #[derive(Serialize)]
 pub(super) struct FileStatus {
     file: String,
@@ -52,7 +54,7 @@ pub(super) fn is_repo(workdir: &Path) -> bool {
 pub(super) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
     let has_head = has_head(workdir);
     let mut out = Vec::new();
-    for item in status_items(workdir)? {
+    for item in status::items(workdir)? {
         let (additions, deletions) = stats(workdir, &item, has_head)?;
         out.push(FileStatus {
             file: item.file,
@@ -93,7 +95,7 @@ pub(super) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
             chunks.push(tracked);
         }
     }
-    for item in status_items(workdir)?
+    for item in status::items(workdir)?
         .into_iter()
         .filter(|item| item.code == "??")
     {
@@ -124,7 +126,7 @@ pub(super) fn apply_patch(workdir: &Path, patch: &str) -> Result<(), ()> {
 
 fn diff_items(workdir: &Path, mode: &str) -> Result<Vec<GitItem>, ApiError> {
     match mode {
-        "git" => status_items(workdir),
+        "git" => status::items(workdir),
         "branch" => branch_items(workdir),
         _ => Err(ApiError::bad_request("invalid vcs diff mode")),
     }
@@ -143,22 +145,6 @@ fn branch_items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
     };
     let out = text(workdir, &["diff", "--name-status", &base])?;
     Ok(out.lines().filter_map(item_from_name_status).collect())
-}
-
-fn status_items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
-    let out = text(workdir, &["status", "--porcelain=v1"])?;
-    let mut items: Vec<_> = out.lines().filter_map(item_from_status).collect();
-    items.sort_by(|a, b| a.file.cmp(&b.file));
-    Ok(items)
-}
-
-fn item_from_status(line: &str) -> Option<GitItem> {
-    let code = line.get(0..2)?;
-    Some(GitItem {
-        file: line.get(3..)?.to_string(),
-        code: code.to_string(),
-        status: status_name(code),
-    })
 }
 
 fn item_from_name_status(line: &str) -> Option<GitItem> {
