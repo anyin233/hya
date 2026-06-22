@@ -43,10 +43,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             .enumerate()
             .flat_map(|(idx, label)| {
                 let style = if idx == prompt.selected {
-                    Style::default()
-                        .fg(theme.background)
-                        .bg(theme.primary)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.background).bg(theme.warning)
                 } else {
                     Style::default().fg(theme.muted)
                 };

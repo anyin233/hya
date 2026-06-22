@@ -2,7 +2,8 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use render_support::with_assistant_message;
+use ratatui::style::{Color, Modifier};
+use render_support::{find_rendered_text, render_buffer, with_assistant_message};
 use yaca_tui::{AppState, PermissionPrompt, PermissionPromptStage};
 
 #[allow(dead_code)]
@@ -68,6 +69,43 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
         !text.contains("←/→ select"),
         "permission hint should not expose legacy arrow-key wording:\n{text}"
     );
+}
+
+#[test]
+fn permission_selected_option_uses_opencode_warning_chip() {
+    // Given: the first OpenCode permission option is selected.
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash".to_string(),
+            detail: "git status".to_string(),
+            selected: 0,
+            reply: String::new(),
+            stage: PermissionPromptStage::Permission,
+        }),
+        ..AppState::default()
+    };
+    let width = 100;
+    let height = 24;
+
+    // When: the permission panel renders.
+    let buffer = render_buffer(&mut state, width, height);
+
+    // Then: selection mirrors OpenCode's warning chip instead of yaca's primary chip.
+    let (allow_x, allow_y) = find_rendered_text(&buffer, width, height, "Allow once")
+        .unwrap_or_else(|| panic!("selected option missing"));
+    let selected = &buffer[(allow_x, allow_y)];
+    assert_eq!(selected.bg, Color::Rgb(245, 167, 66));
+    assert_eq!(selected.fg, Color::Rgb(10, 10, 10));
+    assert!(
+        !selected.modifier.contains(Modifier::BOLD),
+        "OpenCode permission options are color chips, not bold pills"
+    );
+
+    let (reject_x, reject_y) = find_rendered_text(&buffer, width, height, "Reject")
+        .unwrap_or_else(|| panic!("inactive option missing"));
+    let inactive = &buffer[(reject_x, reject_y)];
+    assert_eq!(inactive.fg, Color::Rgb(128, 128, 128));
+    assert_ne!(inactive.bg, Color::Rgb(245, 167, 66));
 }
 
 #[test]
