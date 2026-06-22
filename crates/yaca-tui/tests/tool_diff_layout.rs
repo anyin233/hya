@@ -80,6 +80,27 @@ fn edit_diff_output_renders_opencode_line_numbers() {
     );
 }
 
+#[test]
+fn edit_diff_output_renders_opencode_snapshot_title() {
+    // Given: an edit tool completed with unified-diff output for a known file path.
+    let mut state = AppState::default();
+    with_completed_edit_diff(&mut state, "@@ -1 +1 @@\n-old line\n+new line");
+
+    // When: the transcript renders the completed diff block.
+    let width = 100;
+    let height = 24;
+    let buffer = render_buffer(&mut state, width, height);
+
+    // Then: the structured diff has the same title line OpenCode emits before the diff body.
+    let (title_x, title_y) = find_text(&buffer, width, height, "# Edited src/lib.rs");
+    let (_, hunk_y) = find_text(&buffer, width, height, "@@ -1 +1 @@");
+    assert!(
+        title_y < hunk_y,
+        "diff snapshot title should render before the hunk body"
+    );
+    assert_eq!(buffer[(title_x, title_y)].fg, Color::Rgb(128, 128, 128));
+}
+
 fn rendered_text(buffer: &Buffer, width: u16, height: u16) -> String {
     let mut output = String::new();
     for y in 0..height {

@@ -46,6 +46,9 @@ pub fn push_tool_lines(
     } = status
     {
         if let Some(diff_lines) = diff_output_lines(name, output) {
+            if let Some(title) = diff_output_title(name, input) {
+                push_output_line(&title, theme.muted, selected, theme, lines);
+            }
             for segment in diff_lines {
                 push_output_line(
                     &segment.text,
@@ -67,6 +70,17 @@ pub fn push_tool_lines(
                 lines,
             );
         }
+    }
+}
+
+fn diff_output_title(name: &str, input: &str) -> Option<String> {
+    if input.is_empty() {
+        return None;
+    }
+    match name {
+        "edit" => Some(format!("# Edited {input}")),
+        "write" => Some(format!("# Wrote {input}")),
+        _ => None,
     }
 }
 
