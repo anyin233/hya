@@ -90,3 +90,27 @@ async fn opencode_workspace_warp_detaches_existing_session_to_local_project() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
+
+#[tokio::test]
+async fn opencode_workspace_warp_missing_workspace_returns_not_found() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let response = request(
+        app,
+        "POST",
+        "/experimental/workspace/warp",
+        Some(json!({
+            "id": "wrk_missing",
+            "sessionID": format!("ses_{}", session.replace('-', "")),
+            "copyChanges": false
+        })),
+    )
+    .await;
+    let status = response.status();
+    let body = body_json(response).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["name"], "NotFoundError");
+    assert_eq!(body["data"]["message"], "Workspace not found: wrk_missing");
+}

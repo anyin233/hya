@@ -125,8 +125,12 @@ async fn workspace_warp(
             )));
         }
     };
-    if !payload.get("id").is_some_and(Value::is_null) {
-        return Ok(workspace_warp_error("Workspace warp is unavailable"));
+    match payload.get("id") {
+        Some(Value::Null) => {}
+        Some(Value::String(id)) => {
+            return Ok(not_found_error(format!("Workspace not found: {id}")));
+        }
+        _ => return Ok(workspace_warp_error("Workspace warp is unavailable")),
     }
     let projection = st
         .engine
@@ -221,6 +225,17 @@ fn workspace_warp_error(message: impl Into<String>) -> Response {
         StatusCode::BAD_REQUEST,
         Json(json!({
             "name": "WorkspaceWarpError",
+            "data": { "message": message.into() },
+        })),
+    )
+        .into_response()
+}
+
+fn not_found_error(message: impl Into<String>) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "name": "NotFoundError",
             "data": { "message": message.into() },
         })),
     )
