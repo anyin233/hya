@@ -111,6 +111,7 @@ async fn opencode_v2_session_switch_routes_update_selected_agent_and_model() {
     assert_eq!(body["agent"], "plan");
     assert_eq!(body["model"]["providerID"], "anthropic");
     assert_eq!(body["model"]["id"], "claude-sonnet");
+    assert_eq!(body["model"]["variant"], "fast");
 
     let missing = format!("ses_{}", SessionId::new().as_uuid().simple());
     let missing_status = post_json(
