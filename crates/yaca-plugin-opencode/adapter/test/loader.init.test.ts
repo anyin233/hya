@@ -45,6 +45,96 @@ test("loads local plugin hooks sequentially and passes tuple options", async () 
   ])
 })
 
+test("loads npm plugin server entrypoints from config-relative node_modules", async () => {
+  // Given: an installed npm OpenCode plugin package beside the declaring config.
+  const root = await makeTempDir()
+  const configFile = path.join(root, ".opencode", "opencode.json")
+  const packageDir = path.join(
+    root,
+    "node_modules",
+    "yaca-test-opencode-plugin",
+  )
+  await mkdir(path.dirname(configFile), { recursive: true })
+  await mkdir(packageDir, { recursive: true })
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "yaca-test-opencode-plugin",
+      type: "module",
+      main: "./wrong.js",
+      exports: {
+        "./server": "./server.js",
+      },
+    }),
+  )
+  await writeFile(
+    path.join(packageDir, "wrong.js"),
+    'export default { id: "wrong", server: async () => ({ marker: "wrong" }) }',
+  )
+  await writeFile(
+    path.join(packageDir, "server.js"),
+    'export default { id: "npm", server: async (_input, options) => ({ marker: "npm", options }) }',
+  )
+
+  // When: the loader receives the package name from an OpenCode config entry.
+  const loaded = await loadLocalPluginHooks(
+    [["yaca-test-opencode-plugin", { source: "config" }]],
+    {},
+    configFile,
+  )
+
+  // Then: it imports the server entrypoint and initializes the hooks.
+  expect(loaded.errors).toEqual([])
+  expect(loaded.hooks.map((hook) => HookSchema.parse(hook))).toEqual([
+    { marker: "npm", options: { source: "config" } },
+  ])
+})
+
+test("loads npm plugin main when no server export exists", async () => {
+  // Given: an installed npm plugin package that exposes server code through main.
+  const root = await makeTempDir()
+  const configFile = path.join(root, ".opencode", "opencode.json")
+  const packageDir = path.join(
+    root,
+    "node_modules",
+    "yaca-test-main-plugin",
+  )
+  await mkdir(path.dirname(configFile), { recursive: true })
+  await mkdir(packageDir, { recursive: true })
+  await writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "yaca-test-main-plugin",
+      type: "module",
+      main: "./server.js",
+      exports: {
+        ".": "./wrong.js",
+      },
+    }),
+  )
+  await writeFile(
+    path.join(packageDir, "wrong.js"),
+    'export default { id: "wrong", server: async () => ({ marker: "wrong" }) }',
+  )
+  await writeFile(
+    path.join(packageDir, "server.js"),
+    'export default { id: "main", server: async () => ({ marker: "main" }) }',
+  )
+
+  // When: the loader receives that package name from an OpenCode config entry.
+  const loaded = await loadLocalPluginHooks(
+    ["yaca-test-main-plugin"],
+    {},
+    configFile,
+  )
+
+  // Then: it imports the package main as OpenCode server plugin code.
+  expect(loaded.errors).toEqual([])
+  expect(loaded.hooks.map((hook) => HookSchema.parse(hook))).toEqual([
+    { marker: "main" },
+  ])
+})
+
 test("isolates import and init failures while preserving later plugins", async () => {
   const root = await makeTempDir()
   const badImport = path.join(root, "bad-import.ts")

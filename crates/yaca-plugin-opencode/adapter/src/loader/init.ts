@@ -5,6 +5,7 @@ import {
   resolveLocalPluginSpec,
   type ServerPlugin,
 } from "./shape"
+import { resolveNpmPluginImportSpec } from "./package"
 
 export type OpenCodeHooks = Readonly<Record<string, unknown>>
 
@@ -30,9 +31,14 @@ export async function loadLocalPluginHooks(
       configFilepath === undefined
         ? original
         : await resolveLocalPluginSpec(original, configFilepath)
-    const spec = pluginSpecifier(plugin)
-    if (!isPathPluginSpec(spec)) {
-      errors.push({ spec, message: "npm plugin specs are not supported yet" })
+    const requested = pluginSpecifier(plugin)
+    const spec = await resolvePluginImportSpec(requested, configFilepath).catch(
+      (caught: unknown) => {
+        errors.push({ spec: requested, message: errorMessage(caught) })
+        return undefined
+      },
+    )
+    if (spec === undefined) {
       continue
     }
     const loaded = await loadOnePlugin(spec, input, pluginOptions(plugin))
@@ -40,6 +46,16 @@ export async function loadLocalPluginHooks(
     errors.push(...loaded.errors)
   }
   return { hooks, errors }
+}
+
+async function resolvePluginImportSpec(
+  spec: string,
+  configFilepath: string | undefined,
+): Promise<string> {
+  if (isPathPluginSpec(spec)) {
+    return spec
+  }
+  return resolveNpmPluginImportSpec(spec, configFilepath)
 }
 
 async function loadOnePlugin(
