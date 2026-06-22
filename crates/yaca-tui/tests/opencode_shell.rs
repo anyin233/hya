@@ -203,3 +203,22 @@ fn active_runtime_strip_includes_current_team_role() {
         "runtime strip should keep the active model visible, got {status_row:?}"
     );
 }
+
+#[test]
+fn context_rail_title_uses_session_label_when_available() {
+    // Given: the wide context rail has an OpenCode-style session title.
+    let mut state = AppState {
+        session_label: "borderless input parity".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the shell renders with the right context rail visible.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let title_row = rendered_row(&buffer, 120, 0);
+
+    // Then: the rail title keeps the GUI prefix but uses the session label.
+    assert!(
+        title_row.contains("GUI borderless input parity"),
+        "context rail should show the active session title, got {title_row:?}"
+    );
+}

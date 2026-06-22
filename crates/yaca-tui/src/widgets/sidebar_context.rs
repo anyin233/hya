@@ -13,7 +13,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
 pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let stats = transcript_stats(state);
     let mut lines = Vec::new();
-    push_title(&mut lines, theme);
+    push_title(&mut lines, state, theme);
     push_context_pilot(&mut lines, state, theme, &stats);
     push_context(&mut lines, state, theme, &stats);
     push_mcp(&mut lines, state, theme);
@@ -23,7 +23,12 @@ pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
-fn push_title(lines: &mut Vec<Line<'static>>, theme: &Theme) {
+fn push_title(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
+    let title = if state.session_label.trim().is_empty() {
+        "context".to_string()
+    } else {
+        state.session_label.trim().to_string()
+    };
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
@@ -33,7 +38,10 @@ fn push_title(lines: &mut Vec<Line<'static>>, theme: &Theme) {
                 .bg(theme.panel)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" context", Style::default().fg(theme.muted).bg(theme.panel)),
+        Span::styled(
+            format!(" {title}"),
+            Style::default().fg(theme.muted).bg(theme.panel),
+        ),
     ]));
     lines.push(Line::from(""));
 }
