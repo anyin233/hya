@@ -28,7 +28,10 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/experimental/tool", get(tool_list))
         .route("/experimental/tool/ids", get(tool_ids))
-        .route("/experimental/session", get(session_list))
+        .route(
+            "/experimental/session",
+            get(super::session_list::list_sessions),
+        )
         .route(
             "/experimental/session/:session/background",
             post(session_background),
@@ -216,26 +219,6 @@ fn workspace_warp_error(message: impl Into<String>) -> Response {
         })),
     )
         .into_response()
-}
-
-async fn session_list(
-    State(st): State<ServerState>,
-) -> Result<Json<Vec<super::projection::OpenCodeSessionInfo>>, ApiError> {
-    let sessions = st
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut out = Vec::new();
-    for session in sessions {
-        out.push(
-            super::load_session(&st, session.session, Some(session.started_millis))
-                .await?
-                .info,
-        );
-    }
-    Ok(Json(out))
 }
 
 async fn session_background(
