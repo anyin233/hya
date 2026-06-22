@@ -22,6 +22,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/session/status", get(status))
         .route("/session/:id", get(get_session))
         .route("/session/:id/children", get(children))
+        .route("/session/:id/todo", get(todo))
         .route("/session/:id/message", get(messages))
         .route("/session/:id/message/:message", get(message))
         .route("/session/:id/prompt_async", post(prompt_async))
@@ -92,6 +93,15 @@ async fn get_session(
 ) -> Result<Json<projection::OpenCodeSessionInfo>, ApiError> {
     let session = parse_session(&id)?;
     Ok(Json(load_session(&st, session, None).await?.info))
+}
+
+async fn todo(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<yaca_tool::TodoItem>>, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    Ok(Json(st.engine.todos(session).await))
 }
 
 async fn messages(
