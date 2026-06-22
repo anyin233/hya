@@ -68,6 +68,13 @@ struct LegacyConfigProviders {
 }
 
 #[derive(Serialize)]
+struct ProviderAuthMethod {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    label: &'static str,
+}
+
+#[derive(Serialize)]
 struct ModelInfo {
     id: String,
     #[serde(rename = "providerID")]
@@ -171,8 +178,17 @@ async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProvi
     })
 }
 
-async fn legacy_provider_auth() -> Json<Value> {
-    Json(json!({}))
+async fn legacy_provider_auth(
+    State(st): State<ServerState>,
+) -> Json<BTreeMap<String, Vec<ProviderAuthMethod>>> {
+    let active = model_ref_parts(&st.agent.model);
+    Json(BTreeMap::from([(
+        active.provider_id,
+        vec![ProviderAuthMethod {
+            kind: "api",
+            label: "API key",
+        }],
+    )]))
 }
 
 async fn legacy_provider_oauth_authorize(

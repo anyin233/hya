@@ -216,7 +216,9 @@ async fn opencode_legacy_provider_routes_return_active_catalog_and_reject_bad_oa
 
     let (status, auth) = get_json(app.clone(), "/provider/auth").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(auth, json!({}));
+    assert_eq!(auth.as_object().unwrap().len(), 1);
+    assert_eq!(auth["openai"][0]["type"], "api");
+    assert_eq!(auth["openai"][0]["label"], "API key");
 
     let status = request_status(
         app.clone(),
