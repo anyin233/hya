@@ -64,6 +64,10 @@ type OpenCodePath = {
   readonly directory: string
 }
 
+type OpenCodeVcsInfo = {
+  readonly branch: string
+}
+
 type OpenCodeClientContext = {
   readonly env: RuntimeEnv
   readonly directory: string
@@ -80,6 +84,9 @@ export type OpenCodeClientAdapter = {
   }
   readonly project: {
     readonly current: () => Promise<OpenCodeClientResponse<OpenCodeProject>>
+  }
+  readonly vcs: {
+    readonly get: () => Promise<OpenCodeClientResponse<OpenCodeVcsInfo>>
   }
 }
 
@@ -109,6 +116,9 @@ export function createOpenCodeClientAdapter(
     },
     project: {
       current: async () => ok(context.project),
+    },
+    vcs: {
+      get: async () => ok(await vcsInfo(context)),
     },
   }
 }
@@ -157,4 +167,22 @@ function pathInfo(context: OpenCodeClientContext): OpenCodePath {
     worktree: context.worktree,
     directory: context.directory,
   }
+}
+
+async function vcsInfo(
+  context: OpenCodeClientContext,
+): Promise<OpenCodeVcsInfo> {
+  const proc = Bun.spawn(["git", "-C", context.directory, "branch", "--show-current"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, , exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  if (exitCode !== 0) {
+    return { branch: "" }
+  }
+  return { branch: stdout.trim() }
 }

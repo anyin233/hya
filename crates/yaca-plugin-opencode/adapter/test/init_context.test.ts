@@ -112,6 +112,31 @@ test("initialize passes OpenCode project and path clients to local plugins", asy
   expect(result.hooks).toEqual([{ name: "event" }])
 })
 
+test("initialize passes an OpenCode vcs client to local plugins", async () => {
+  const root = await makeTempDir()
+  await runCommand(root, ["git", "init", "--initial-branch", "main"])
+  const pluginFile = path.join(root, "vcs-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "vcs",',
+      "  server: async (input) => {",
+      "    const vcs = await input.client.vcs.get()",
+      '    if (vcs.response.status !== 200) throw new Error("vcs status mismatch")',
+      '    if (vcs.data.branch !== "main") throw new Error("branch mismatch")',
+      "    return { event: async () => {} }",
+      "  },",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(root, pluginFile)
+
+  const result = InitializeResultSchema.parse(responses[0]?.result)
+  expect(result.hooks).toEqual([{ name: "event" }])
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,
@@ -167,4 +192,20 @@ async function makeTempDir(): Promise<string> {
   await mkdir(created, { recursive: true })
   tempDirs.push(created)
   return created
+}
+
+async function runCommand(cwd: string, command: string[]): Promise<void> {
+  const proc = Bun.spawn(command, {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  if (exitCode !== 0) {
+    throw new Error(`${command.join(" ")} failed: ${stdout}${stderr}`)
+  }
 }
