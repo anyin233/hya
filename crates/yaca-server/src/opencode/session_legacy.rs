@@ -212,16 +212,17 @@ async fn prompt_async(
         }
         Err(error) => return Err(error),
     }
-    let run = st
-        .runs
-        .start(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let runs = st.runs.clone();
     let engine = st.engine.clone();
     let agent = st.agent.clone();
-    let cancel = run.token();
-    publish_session_status(&engine, session, "busy").await;
     std::mem::drop(tokio::spawn(async move {
+        let Some(run) = runs.start(session) else {
+            publish_background_error(&engine, session, "session busy".to_string()).await;
+            return;
+        };
+        let cancel = run.token();
         let guard = run;
+        publish_session_status(&engine, session, "busy").await;
         let result = async {
             engine.admit_user_prompt(session, req.text).await?;
             engine.run_turn(session, &agent, cancel).await?;
