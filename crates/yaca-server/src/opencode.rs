@@ -3,6 +3,7 @@ use axum::Router;
 use crate::ServerState;
 
 mod catalog;
+mod control;
 mod event;
 mod file;
 mod health;
@@ -40,6 +41,7 @@ pub(crate) use tui::TuiState;
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .merge(catalog::router())
+        .merge(control::router())
         .merge(event::router())
         .merge(file::router())
         .merge(health::router())
