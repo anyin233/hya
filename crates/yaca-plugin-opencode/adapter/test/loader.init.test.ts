@@ -135,6 +135,16 @@ test("loads npm plugin main when no server export exists", async () => {
   ])
 })
 
+test("ignores deprecated OpenCode plugin package names", async () => {
+  const loaded = await loadLocalPluginHooks(
+    ["opencode-openai-codex-auth", "opencode-copilot-auth"],
+    {},
+  )
+
+  expect(loaded.errors).toEqual([])
+  expect(loaded.hooks).toEqual([])
+})
+
 test("isolates import and init failures while preserving later plugins", async () => {
   const root = await makeTempDir()
   const badImport = path.join(root, "bad-import.ts")
