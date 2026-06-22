@@ -5,6 +5,7 @@ import {
   discoverPluginSpecs,
   parseAdapterOptions,
 } from "./loader/discovery"
+import { runToolExecuteBeforeHooks } from "./hooks"
 import { loadLocalPluginHooks, type OpenCodeHooks } from "./loader/init"
 import {
   ERROR_CODES,
@@ -25,6 +26,7 @@ export const PROTOCOL_VERSION = 1
 const METHOD_INITIALIZE = "initialize"
 const METHOD_SHUTDOWN = "shutdown"
 const METHOD_TOOL_CALL = "tool/call"
+const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
 
 const InitializeParamsSchema = z
   .object({
@@ -41,6 +43,16 @@ const ToolCallParamsSchema = z
     tool: z.string(),
     session: z.string(),
     call: z.string(),
+    input: z.unknown(),
+  })
+  .strict()
+
+const ToolExecuteBeforeParamsSchema = z
+  .object({
+    session: z.string(),
+    message: z.string(),
+    call: z.string(),
+    tool: z.string(),
     input: z.unknown(),
   })
   .strict()
@@ -68,6 +80,7 @@ type RequestContext = {
   readonly version: string
   readonly env: RuntimeEnv
   readonly stderr: TextSink
+  readonly hooks: OpenCodeHooks[]
   readonly tools: Map<string, OpenCodeToolDefinition>
 }
 
@@ -106,6 +119,8 @@ export function handleRequest(
       return { response: okResponse(request.id, {}), shouldExit: true }
     case METHOD_TOOL_CALL:
       return handleToolCall(request, context)
+    case METHOD_TOOL_EXECUTE_BEFORE:
+      return handleToolExecuteBefore(request, context)
     default:
       return {
         response: errorResponse(
@@ -123,6 +138,7 @@ export async function runAdapter(options: RuntimeOptions): Promise<void> {
     version: options.version,
     env: options.env ?? process.env,
     stderr: options.stderr,
+    hooks: [],
     tools: new Map<string, OpenCodeToolDefinition>(),
   }
   for await (const line of readLines(options.input)) {
@@ -162,6 +178,7 @@ async function handleInitialize(
     return loaded.response
   }
   const registry = buildToolRegistry(loaded.hooks)
+  context.hooks.splice(0, context.hooks.length, ...loaded.hooks)
   context.tools.clear()
   for (const [name, tool] of registry.tools) {
     context.tools.set(name, tool)
@@ -204,6 +221,28 @@ async function handleToolCall(
   })
   return {
     response: okResponse(request.id, reply),
+    shouldExit: false,
+  }
+}
+
+async function handleToolExecuteBefore(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = ToolExecuteBeforeParamsSchema.safeParse(request.params)
+  if (!params.success) {
+    return {
+      response: errorResponse(
+        request.id,
+        ERROR_CODES.INVALID_PARAMS,
+        params.error.message,
+      ),
+      shouldExit: false,
+    }
+  }
+  const outcome = await runToolExecuteBeforeHooks(context.hooks, params.data)
+  return {
+    response: okResponse(request.id, outcome),
     shouldExit: false,
   }
 }
