@@ -5,6 +5,7 @@ mod prompt;
 mod sidebar;
 mod status;
 mod transcript;
+mod transcript_tools;
 
 pub use overlays::{render_dialog, render_picker, render_question};
 pub use permission::render_permission;

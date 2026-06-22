@@ -6,9 +6,10 @@ use ratatui::widgets::{Paragraph, Wrap};
 use yaca_proto::Role;
 
 use super::error::is_system_error_text;
+use super::transcript_tools::{push_tool_lines, status_label};
 use crate::AppState;
 use crate::theme::Theme;
-use crate::view_model::{TimelinePart, ToolStatus, timeline_items};
+use crate::view_model::{TimelinePart, timeline_items};
 
 pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme) {
     let lines = timeline_lines(state, theme);
@@ -84,24 +85,22 @@ fn assistant_lines(
     lines: &mut Vec<Line<'static>>,
 ) {
     lines.push(message_header("yaca", idx, selected, theme, theme.success));
+    let mut has_visible_part = false;
+    let mut previous_was_tool = false;
     for part in parts {
         match part {
             TimelinePart::Text(text) => {
-                for (idx, segment) in text.trim().split('\n').enumerate() {
-                    let label = if idx == 0 { "yaca " } else { "     " };
+                for segment in text.trim().split('\n') {
                     lines.push(Line::from(vec![
                         Span::styled("   ", block_style(theme.muted, selected, theme)),
-                        Span::styled(
-                            label.to_string(),
-                            block_style(theme.success, selected, theme)
-                                .add_modifier(Modifier::BOLD),
-                        ),
                         Span::styled(
                             segment.to_string(),
                             block_style(theme.text, selected, theme),
                         ),
                     ]));
                 }
+                has_visible_part = true;
+                previous_was_tool = false;
             }
             TimelinePart::Reasoning(text) => {
                 if !text.trim().is_empty() {
@@ -109,6 +108,8 @@ fn assistant_lines(
                         Span::styled("   ", block_style(theme.muted, selected, theme)),
                         Span::styled("Thinking", block_style(theme.warning, selected, theme)),
                     ]));
+                    has_visible_part = true;
+                    previous_was_tool = false;
                 }
             }
             TimelinePart::Tool {
@@ -116,30 +117,12 @@ fn assistant_lines(
                 input,
                 status,
             } => {
-                lines.push(Line::from(vec![
-                    Span::styled("   ", block_style(theme.muted, selected, theme)),
-                    Span::styled("⚙ ", block_style(theme.accent, selected, theme)),
-                    Span::styled(
-                        format!("{name} "),
-                        block_style(theme.accent, selected, theme).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        if input.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{input} ")
-                        },
-                        block_style(theme.muted, selected, theme),
-                    ),
-                    Span::styled(
-                        format!("tool {name} {}", status.label()),
-                        block_style(status.color(theme), selected, theme),
-                    ),
-                    Span::styled(
-                        status.suffix(),
-                        block_style(status.color(theme), selected, theme),
-                    ),
-                ]));
+                if has_visible_part && !previous_was_tool {
+                    lines.push(Line::from(""));
+                }
+                push_tool_lines(name, input, status, selected, theme, lines);
+                has_visible_part = true;
+                previous_was_tool = true;
             }
         }
     }
@@ -224,42 +207,9 @@ fn text_from_parts(parts: &[TimelinePart]) -> String {
                 if !text.is_empty() {
                     text.push('\n');
                 }
-                text.push_str(&format!("tool {name} {}", status.label()));
+                text.push_str(&format!("tool {name} {}", status_label(status)));
             }
         }
     }
     text
-}
-
-trait TimelineStatusExt {
-    fn label(&self) -> &'static str;
-    fn color(&self, theme: &Theme) -> Color;
-    fn suffix(&self) -> String;
-}
-
-impl TimelineStatusExt for ToolStatus {
-    fn label(&self) -> &'static str {
-        match self {
-            ToolStatus::Pending => "pending",
-            ToolStatus::Running => "running",
-            ToolStatus::Completed { .. } => "completed",
-            ToolStatus::Error { .. } => "error",
-        }
-    }
-
-    fn color(&self, theme: &Theme) -> Color {
-        match self {
-            ToolStatus::Pending | ToolStatus::Running => theme.warning,
-            ToolStatus::Completed { .. } => theme.muted,
-            ToolStatus::Error { .. } => theme.error,
-        }
-    }
-
-    fn suffix(&self) -> String {
-        match self {
-            ToolStatus::Pending | ToolStatus::Running => " …".to_string(),
-            ToolStatus::Completed { time_ms } => format!(" ✓ {time_ms}ms"),
-            ToolStatus::Error { message } => format!(" ✗ {message}"),
-        }
-    }
 }
