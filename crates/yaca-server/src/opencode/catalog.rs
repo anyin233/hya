@@ -43,6 +43,11 @@ pub(super) fn router() -> Router<ServerState> {
 
 type LocationQuery = Query<BTreeMap<String, String>>;
 
+struct CatalogModel {
+    provider_id: String,
+    model_id: String,
+}
+
 async fn legacy_config_get() -> Json<Value> {
     Json(json!({}))
 }
@@ -60,33 +65,39 @@ async fn legacy_config_update(Json(payload): Json<Value>) -> Result<Json<Value>,
 }
 
 async fn legacy_config_providers(State(st): State<ServerState>) -> Json<LegacyConfigProviders> {
-    let active = model_ref_parts(&st.agent.model);
+    let models = catalog_models(&st);
     Json(LegacyConfigProviders {
-        providers: vec![provider_info(&active)],
-        default: BTreeMap::from([(active.provider_id, active.model_id)]),
+        providers: provider_infos(&models),
+        default: default_models(&models),
     })
 }
 
 async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProviderList> {
-    let active = model_ref_parts(&st.agent.model);
+    let models = catalog_models(&st);
     Json(LegacyProviderList {
-        all: vec![provider_info(&active)],
-        default: BTreeMap::from([(active.provider_id.clone(), active.model_id.clone())]),
-        connected: vec![active.provider_id],
+        all: provider_infos(&models),
+        default: default_models(&models),
+        connected: provider_ids(&models),
     })
 }
 
 async fn legacy_provider_auth(
     State(st): State<ServerState>,
 ) -> Json<BTreeMap<String, Vec<ProviderAuthMethod>>> {
-    let active = model_ref_parts(&st.agent.model);
-    Json(BTreeMap::from([(
-        active.provider_id,
-        vec![ProviderAuthMethod {
-            kind: "api",
-            label: "API key",
-        }],
-    )]))
+    Json(
+        provider_ids(&catalog_models(&st))
+            .into_iter()
+            .map(|provider_id| {
+                (
+                    provider_id,
+                    vec![ProviderAuthMethod {
+                        kind: "api",
+                        label: "API key",
+                    }],
+                )
+            })
+            .collect(),
+    )
 }
 
 async fn legacy_provider_oauth_authorize(
@@ -108,13 +119,8 @@ async fn provider_list(
     Query(query): LocationQuery,
     headers: HeaderMap,
 ) -> Json<LocationResponse<Vec<ProviderInfo>>> {
-    let active = model_ref_parts(&st.agent.model);
-    Json(location_response(
-        &st,
-        &query,
-        &headers,
-        vec![provider_info(&active)],
-    ))
+    let data = provider_infos(&catalog_models(&st));
+    Json(location_response(&st, &query, &headers, data))
 }
 
 async fn provider_get(
@@ -123,8 +129,7 @@ async fn provider_get(
     Path(provider_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let active = model_ref_parts(&st.agent.model);
-    if provider_id != active.provider_id {
+    if !provider_ids(&catalog_models(&st)).contains(&provider_id) {
         let message = format!("Provider not found: {provider_id}");
         return Ok((
             StatusCode::NOT_FOUND,
@@ -140,7 +145,7 @@ async fn provider_get(
         &st,
         &query,
         &headers,
-        provider_info(&active),
+        provider_info(&provider_id),
     ))
     .into_response())
 }
@@ -150,13 +155,57 @@ async fn model_list(
     Query(query): LocationQuery,
     headers: HeaderMap,
 ) -> Json<LocationResponse<Vec<ModelInfo>>> {
+    let data = catalog_models(&st)
+        .into_iter()
+        .map(|model| model_info(&model.provider_id, &model.model_id))
+        .collect();
+    Json(location_response(&st, &query, &headers, data))
+}
+
+fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
+    let models: Vec<_> = st
+        .engine
+        .provider_catalog()
+        .into_iter()
+        .map(|model| CatalogModel {
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+        })
+        .collect();
+    if !models.is_empty() {
+        return models;
+    }
     let active = model_ref_parts(&st.agent.model);
-    Json(location_response(
-        &st,
-        &query,
-        &headers,
-        vec![model_info(&active)],
-    ))
+    vec![CatalogModel {
+        provider_id: active.provider_id,
+        model_id: active.model_id,
+    }]
+}
+
+fn provider_ids(models: &[CatalogModel]) -> Vec<String> {
+    models
+        .iter()
+        .map(|model| model.provider_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn provider_infos(models: &[CatalogModel]) -> Vec<ProviderInfo> {
+    provider_ids(models)
+        .into_iter()
+        .map(|provider_id| provider_info(&provider_id))
+        .collect()
+}
+
+fn default_models(models: &[CatalogModel]) -> BTreeMap<String, String> {
+    let mut defaults = BTreeMap::new();
+    for model in models {
+        defaults
+            .entry(model.provider_id.clone())
+            .or_insert_with(|| model.model_id.clone());
+    }
+    defaults
 }
 
 fn location_response<T>(

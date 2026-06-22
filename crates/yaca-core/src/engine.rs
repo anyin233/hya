@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, now_millis};
-use yaca_provider::{ProviderRouter, ReasoningEffort};
+use yaca_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
     InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane, TodoItem, TodoPlane,
@@ -133,6 +133,11 @@ impl SessionEngine {
     #[must_use]
     pub fn store(&self) -> &SessionStore {
         &self.store
+    }
+
+    #[must_use]
+    pub fn provider_catalog(&self) -> Vec<ProviderModel> {
+        self.providers.catalog()
     }
 
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, CoreError> {

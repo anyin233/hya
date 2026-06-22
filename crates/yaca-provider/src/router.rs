@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use yaca_proto::{MessageId, ModelRef, SessionId};
 
-use crate::{CompletionRequest, EventStream, Provider, ProviderError};
+use crate::{CompletionRequest, EventStream, Provider, ProviderError, ProviderModel};
 
 #[derive(Default, Clone)]
 pub struct ProviderRouter {
@@ -27,6 +27,14 @@ impl ProviderRouter {
             .iter()
             .find(|p| p.capabilities(model).is_some())
             .cloned()
+    }
+
+    #[must_use]
+    pub fn catalog(&self) -> Vec<ProviderModel> {
+        let mut models: Vec<_> = self.providers.iter().flat_map(|p| p.catalog()).collect();
+        models.sort();
+        models.dedup();
+        models
     }
 
     pub async fn stream(
