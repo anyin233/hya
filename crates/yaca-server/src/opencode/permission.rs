@@ -107,11 +107,17 @@ async fn reply_legacy_request(
     State(st): State<ServerState>,
     Path((id, request)): Path<(String, String)>,
     Json(payload): Json<LegacyReplyPayload>,
-) -> Result<Json<bool>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    match load_session(&st, session, None).await {
+        Ok(_) => {}
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            return Ok(super::errors::legacy_session_not_found(session));
+        }
+        Err(error) => return Err(error),
+    }
     if reply_to_pending(&st, session, &request, payload.response, None).await {
-        Ok(Json(true))
+        Ok(Json(true).into_response())
     } else {
         Err(ApiError::not_found(format!(
             "permission request not found: {request}"

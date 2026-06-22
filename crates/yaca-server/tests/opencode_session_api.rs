@@ -1179,6 +1179,22 @@ async fn opencode_session_diff_returns_empty_message_summary() {
 }
 
 #[tokio::test]
+async fn opencode_session_diff_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+
+    let (status, body) = get_json(app, format!("/session/{missing}/diff")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
+}
+
+#[tokio::test]
 async fn opencode_session_share_sets_and_clears_share_url() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
