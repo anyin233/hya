@@ -2,7 +2,7 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use yaca_tui::{AppState, PermissionPrompt};
+use yaca_tui::{AppState, PermissionPrompt, PermissionPromptStage};
 
 #[test]
 fn permission_panel_uses_opencode_left_rail_without_box_border() {
@@ -14,6 +14,7 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
             detail: "quick".to_string(),
             selected: 0,
             reply: String::new(),
+            stage: PermissionPromptStage::Permission,
         }),
         ..AppState::default()
     };
@@ -70,6 +71,7 @@ fn permission_reply_ellipsizes_cjk_without_wrapping_off_rail() {
             detail: "quick".to_string(),
             selected: 2,
             reply: "请先列出目录然后解释每一个文件为什么需要删除".to_string(),
+            stage: PermissionPromptStage::Permission,
         }),
         ..AppState::default()
     };
@@ -89,6 +91,40 @@ fn permission_reply_ellipsizes_cjk_without_wrapping_off_rail() {
     assert!(
         text.lines().all(|row| !row.trim_start().starts_with("后")),
         "reply continuation should not wrap onto an unrailed row:\n{text}"
+    );
+}
+
+#[test]
+fn permission_allow_always_stage_renders_confirm_prompt() {
+    // Given: the user selected OpenCode's persistent allow option.
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash".to_string(),
+            detail: "rm -rf /tmp/x".to_string(),
+            selected: 0,
+            reply: "not shown while confirming".to_string(),
+            stage: PermissionPromptStage::Always,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the confirmation stage renders.
+    let text = render(&mut state, 100, 20);
+
+    // Then: yaca mirrors OpenCode's second confirmation prompt.
+    assert!(
+        text.contains("Always allow"),
+        "confirm title renders:\n{text}"
+    );
+    assert!(text.contains("Confirm"), "confirm option renders:\n{text}");
+    assert!(text.contains("Cancel"), "cancel option renders:\n{text}");
+    assert!(
+        text.contains("Esc cancel"),
+        "always stage should cancel back to the permission prompt:\n{text}"
+    );
+    assert!(
+        !text.contains("reply:") && !text.contains("not shown while confirming"),
+        "always stage should not keep the reject reply editor visible:\n{text}"
     );
 }
 

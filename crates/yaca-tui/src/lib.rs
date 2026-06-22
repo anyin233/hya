@@ -131,16 +131,23 @@ pub struct PermissionPrompt {
     pub detail: String,
     pub selected: usize,
     pub reply: String,
+    pub stage: PermissionPromptStage,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PermissionPromptStage {
+    #[default]
+    Permission,
+    Always,
 }
 
 impl PermissionPrompt {
     #[must_use]
-    pub fn options(&self) -> [String; 3] {
-        [
-            "Allow once".to_string(),
-            "Allow always".to_string(),
-            "Reject".to_string(),
-        ]
+    pub fn options(&self) -> &'static [&'static str] {
+        match self.stage {
+            PermissionPromptStage::Permission => &["Allow once", "Allow always", "Reject"],
+            PermissionPromptStage::Always => &["Confirm", "Cancel"],
+        }
     }
 }
 

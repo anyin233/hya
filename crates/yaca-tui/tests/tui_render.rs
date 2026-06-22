@@ -169,6 +169,7 @@ fn permission_panel_renders_options_and_reply() {
         detail: "rm -rf /tmp/x".to_string(),
         selected: 2,
         reply: "use ls instead".to_string(),
+        stage: yaca_tui::PermissionPromptStage::Permission,
     });
     let text = render(&mut state, 100, 20);
     assert!(text.contains("Permission required"), "panel title renders");

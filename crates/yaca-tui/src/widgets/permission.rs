@@ -5,8 +5,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use super::overlays::ellipsize;
-use crate::PermissionPrompt;
 use crate::theme::Theme;
+use crate::{PermissionPrompt, PermissionPromptStage};
 
 pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &Theme) {
     let area = frame.area();
@@ -49,55 +49,84 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
                 vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
             }),
     );
-    let lines = vec![
-        Line::from(vec![
-            rail(),
-            Span::styled(
-                "△",
-                Style::default()
-                    .fg(theme.warning)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " Permission required",
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            rail(),
-            Span::styled("→ ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{} wants to run:", prompt.title),
-                Style::default().fg(theme.text),
-            ),
-        ]),
-        Line::from(vec![
-            rail(),
-            Span::raw(ellipsize(&prompt.detail, inner_width)),
-        ]),
-        Line::from(vec![rail()]),
-        Line::from(option_spans),
-        Line::from(vec![
-            rail(),
-            Span::styled("reply: ", Style::default().fg(theme.muted)),
-            Span::styled(
-                ellipsize(&prompt.reply, reply_width),
-                Style::default().fg(theme.text),
-            ),
-            Span::styled("█", Style::default().fg(theme.primary)),
-        ]),
-        Line::from(vec![
-            rail(),
-            Span::styled(
-                "←/→ select · type a reply · Enter confirm · Esc reject",
-                Style::default().fg(theme.muted),
-            ),
-        ]),
-    ];
+    let lines = match prompt.stage {
+        PermissionPromptStage::Permission => vec![
+            header_line(rail(), theme, "Permission required"),
+            Line::from(vec![
+                rail(),
+                Span::styled("→ ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    format!("{} wants to run:", prompt.title),
+                    Style::default().fg(theme.text),
+                ),
+            ]),
+            Line::from(vec![
+                rail(),
+                Span::raw(ellipsize(&prompt.detail, inner_width)),
+            ]),
+            Line::from(vec![rail()]),
+            Line::from(option_spans),
+            Line::from(vec![
+                rail(),
+                Span::styled("reply: ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    ellipsize(&prompt.reply, reply_width),
+                    Style::default().fg(theme.text),
+                ),
+                Span::styled("█", Style::default().fg(theme.primary)),
+            ]),
+            Line::from(vec![
+                rail(),
+                Span::styled(
+                    "←/→ select · type a reply · Enter confirm · Esc reject",
+                    Style::default().fg(theme.muted),
+                ),
+            ]),
+        ],
+        PermissionPromptStage::Always => vec![
+            header_line(rail(), theme, "Always allow"),
+            Line::from(vec![
+                rail(),
+                Span::styled(
+                    format!("This will allow {} until yaca is restarted.", prompt.title),
+                    Style::default().fg(theme.text),
+                ),
+            ]),
+            Line::from(vec![
+                rail(),
+                Span::raw(ellipsize(&prompt.detail, inner_width)),
+            ]),
+            Line::from(vec![rail()]),
+            Line::from(option_spans),
+            Line::from(vec![
+                rail(),
+                Span::styled(
+                    "←/→ select · Enter confirm · Esc cancel",
+                    Style::default().fg(theme.muted),
+                ),
+            ]),
+        ],
+    };
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.element))
             .wrap(Wrap { trim: false }),
         rect,
     );
+}
+
+fn header_line<'a>(rail: Span<'a>, theme: &Theme, title: &'static str) -> Line<'a> {
+    Line::from(vec![
+        rail,
+        Span::styled(
+            "△",
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {title}"),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
