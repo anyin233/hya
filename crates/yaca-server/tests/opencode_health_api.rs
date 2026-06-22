@@ -42,6 +42,41 @@ async fn opencode_global_health_route_reports_ready() {
     assert_health("/global/health").await;
 }
 
+#[tokio::test]
+async fn opencode_cors_preflight_mirrors_origin_and_request_headers() {
+    let resp = router(state().await)
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/global/config")
+                .header(header::ORIGIN, "http://localhost:3000")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(
+                    header::ACCESS_CONTROL_REQUEST_HEADERS,
+                    "content-type, x-opencode-directory",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!([StatusCode::OK, StatusCode::NO_CONTENT].contains(&resp.status()));
+    assert_eq!(
+        resp.headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:3000")
+    );
+    let vary = resp
+        .headers()
+        .get(header::VARY)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(vary.contains("origin"));
+    assert!(vary.contains("access-control-request-headers"));
+}
+
 async fn assert_health(uri: &str) {
     let resp = router(state().await)
         .oneshot(
