@@ -2,7 +2,11 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use render_support::with_assistant_message;
 use yaca_tui::{AppState, PermissionPrompt, PermissionPromptStage};
+
+#[allow(dead_code)]
+mod render_support;
 
 #[test]
 fn permission_panel_uses_opencode_left_rail_without_box_border() {
@@ -153,6 +157,44 @@ fn permission_prompt_is_not_duplicated_in_sidebar_runtime() {
     assert!(
         !text.contains("Runtime") && !text.contains("permission bash"),
         "permission prompt should not be duplicated in the sidebar runtime section:\n{text}"
+    );
+}
+
+#[test]
+fn permission_panel_keeps_footer_blocker_status_visible() {
+    // Given: an active permission prompt owns the footer body.
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash".to_string(),
+            detail: "rm -rf /tmp/x".to_string(),
+            selected: 0,
+            reply: String::new(),
+            stage: PermissionPromptStage::Permission,
+        }),
+        scroll_back: 5,
+        ..AppState::default()
+    };
+    with_assistant_message(
+        &mut state,
+        "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\nthirteen\nfourteen\nfifteen\nsixteen",
+    );
+
+    // When: the TUI renders the OpenCode-style permission footer.
+    let text = render(&mut state, 100, 20);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: the statusline remains visible below the permission body.
+    assert!(
+        bottom_row.contains("awaiting permission"),
+        "footer statusline should expose the permission blocker, got {bottom_row:?} in:\n{text}"
+    );
+    assert!(
+        bottom_row.contains("ctrl+p commands"),
+        "footer statusline should keep the command hint visible, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("scroll 5"),
+        "permission blocker should take precedence over scrollback, got {bottom_row:?}"
     );
 }
 

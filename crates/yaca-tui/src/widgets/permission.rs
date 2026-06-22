@@ -10,9 +10,13 @@ use crate::{PermissionPrompt, PermissionPromptStage};
 
 pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &Theme) {
     let area = frame.area();
-    let height = 9u16.min(area.height);
+    let footer_height = u16::from(area.height > 1);
+    let height = 9u16.min(area.height.saturating_sub(footer_height));
+    if height == 0 {
+        return;
+    }
     let width = area.width.saturating_sub(4).max(12);
-    let y = area.y + area.height.saturating_sub(height);
+    let y = area.y + area.height.saturating_sub(height + footer_height);
     let clear_rect = Rect {
         x: area.x,
         y,
