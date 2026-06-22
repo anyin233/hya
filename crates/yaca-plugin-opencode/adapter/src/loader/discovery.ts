@@ -39,6 +39,8 @@ export type AdapterOptions = {
 export type DiscoveryContext = {
   readonly directory: string
   readonly worktree?: string
+  readonly customConfigDir?: string
+  readonly disableProjectConfig?: boolean
   readonly xdgConfigHome?: string
   readonly home?: string
 }
@@ -91,7 +93,16 @@ export function opencodeConfigDirs(
   if (global !== undefined) {
     dirs.push(global)
   }
-  dirs.push(...projectConfigDirs(context.directory, context.worktree))
+  if (context.disableProjectConfig !== true) {
+    dirs.push(...projectConfigDirs(context.directory, context.worktree))
+  }
+  const home = homeConfigDir(context)
+  if (home !== undefined) {
+    dirs.push(home)
+  }
+  if (context.customConfigDir !== undefined && context.customConfigDir.length > 0) {
+    dirs.push(context.customConfigDir)
+  }
   return [...new Set(dirs)]
 }
 
@@ -217,6 +228,14 @@ function globalConfigDir(context: DiscoveryContext): string | undefined {
     return undefined
   }
   return path.join(home, ".config", "opencode")
+}
+
+function homeConfigDir(context: DiscoveryContext): string | undefined {
+  const home = context.home ?? process.env.HOME
+  if (home === undefined || home.length === 0) {
+    return undefined
+  }
+  return path.join(home, ".opencode")
 }
 
 function normalizePluginSpec(spec: ParsedPluginSpec): PluginSpec {
