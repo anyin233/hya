@@ -6,8 +6,8 @@ OpenCode baseline: `sst/opencode` `origin/dev`
 `9dadc2455fff77bb461135e12e9a775c3c14c98a`
 (`fix(tui): render skill load errors inline (#33298)`).
 
-yaca baseline: `5802460` (`docs: record OpenCode parity gaps`) plus current
-OpenCode session-read compatibility work.
+yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
+session, abort, file, and instance metadata compatibility increments.
 
 ## Status Summary
 
@@ -35,6 +35,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, and OpenCode-shaped `GET /session`, `GET /session/:sessionID`, and `GET /session/:sessionID/message` reads are present. |
 | OpenCode session read API | Partial | yaca accepts prefixed `ses_...` IDs and returns OpenCode-style session info and `[{ info, parts }]` message lists for the basic no-pagination read paths. |
 | OpenCode file API | Partial | yaca exposes OpenCode-shaped `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, and `/file/status` routes over the server workdir. Symbol and status match OpenCode's current empty handler behavior. |
+| OpenCode instance metadata API | Partial | yaca exposes `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/instance/dispose`, and basic `/vcs` routes. LSP/formatter are empty status arrays for now. |
 | Branching | Partial | Session parent/child support and branch/resume exist, but OpenCode's full session tree HTTP surface is incomplete. |
 | Integration modes | Implemented native | `exec --json` and `yaca rpc` JSONL mode exist. |
 | TUI base | Partial | Ratatui app has opencode-dark theme, session picker, permission/question overlays, slash commands, model switching, and render tests. |
@@ -48,7 +49,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Abort/control | Basic busy status and abort exist. Missing OpenCode's richer runner behavior for background jobs, retry statuses, prompt_async lifecycle, child job cancellation, and event publication for status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
 | File HTTP routes | Basic OpenCode legacy file HTTP routes are present. Remaining gaps are gitignore-aware `ignored` flags, exact filesystem service semantics, richer binary MIME detection, and real LSP-backed symbol search when available. |
-| Instance routes | Missing OpenCode-compatible path, VCS info/status/diff/raw diff/apply, command list, agent list, skill list, LSP status, and formatter status endpoints. |
+| Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, and VCS info endpoints are present. Missing exact VCS status/diff/raw diff/apply semantics, real LSP/formatter status integration, and full command/agent config/plugin merging. |
 | Config routes | Missing OpenCode-compatible config get/update/provider metadata routes. yaca reads its own `~/.config/yaca/config.yaml`. |
 | Provider/auth breadth | Missing AI SDK provider breadth, models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
 | PTY | Missing OpenCode PTY management and websocket connect-token flow. |
@@ -63,10 +64,9 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 ## Next Implementation Candidates
 
-1. Add instance metadata routes for path, VCS, skill list, command list, and LSP
-   status using existing yaca subsystems.
-2. Add OpenCode-compatible session pagination, single-message reads, and children
+1. Add OpenCode-compatible session pagination, single-message reads, and children
    listing over the existing store/projection.
+2. Add exact VCS status/diff/raw diff/apply semantics for instance routes.
 3. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
    statuses and status events.
 4. Add gitignore-aware file listing, binary MIME detection, and LSP-backed
