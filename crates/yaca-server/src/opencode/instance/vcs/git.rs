@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::ApiError;
 
+mod patch;
 mod status;
 
 #[derive(Serialize)]
@@ -77,7 +78,7 @@ pub(super) fn diff(
     for item in items {
         let (additions, deletions) = stats(workdir, &item, has_head)?;
         out.push(FileDiff {
-            patch: patch(workdir, &item, has_head, context)?,
+            patch: patch::for_item(workdir, &item, has_head, context)?,
             file: item.file,
             additions,
             deletions,
@@ -99,7 +100,7 @@ pub(super) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
         .into_iter()
         .filter(|item| item.code == "??")
     {
-        chunks.push(patch_untracked(workdir, &item.file)?);
+        chunks.push(patch::untracked_raw(workdir, &item.file)?);
     }
     Ok(chunks.join("\n"))
 }
@@ -187,36 +188,6 @@ fn stats(workdir: &Path, item: &GitItem, has_head: bool) -> Result<(usize, usize
 
 fn parse_usize(value: Option<&str>) -> usize {
     value.and_then(|text| text.parse().ok()).unwrap_or(0)
-}
-
-fn patch(
-    workdir: &Path,
-    item: &GitItem,
-    has_head: bool,
-    context: Option<usize>,
-) -> Result<String, ApiError> {
-    if item.code == "??" || !has_head {
-        return patch_untracked(workdir, &item.file);
-    }
-    let unified = format!("--unified={}", context.unwrap_or(2_147_483_647));
-    text(workdir, &["diff", &unified, "HEAD", "--", &item.file])
-}
-
-fn patch_untracked(workdir: &Path, file: &str) -> Result<String, ApiError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("diff")
-        .arg("--no-index")
-        .arg("--")
-        .arg("/dev/null")
-        .arg(workdir.join(file))
-        .output()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if matches!(output.status.code(), Some(0) | Some(1)) {
-        return String::from_utf8(output.stdout).map_err(|e| ApiError::internal(e.to_string()));
-    }
-    Err(ApiError::internal(stderr(&output.stderr)))
 }
 
 fn has_head(workdir: &Path) -> bool {
