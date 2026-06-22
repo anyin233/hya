@@ -34,6 +34,10 @@ pub(super) fn router() -> Router<ServerState> {
             post(super::session_share::share).delete(super::session_share::unshare),
         )
         .route("/session/:id/fork", post(super::session_fork::fork))
+        .route(
+            "/session/:id/summarize",
+            post(super::session_summarize::summarize),
+        )
         .route("/session/:id/message", get(messages))
         .route(
             "/session/:id/message/:message",
