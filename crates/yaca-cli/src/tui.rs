@@ -50,6 +50,7 @@ mod harness;
 mod harness_block_actions;
 mod history;
 mod mcp_view;
+mod message_scroll;
 mod prompt;
 mod reference;
 mod selection;

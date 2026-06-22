@@ -6,6 +6,7 @@ use yaca_tui::{AppState, DialogItem, DialogView};
 use super::agent_cycle::{next_agent_label, previous_agent_label};
 use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
+use super::message_scroll::handle_message_scroll_key;
 use super::prompt::{PromptState, mention_trigger_index};
 use super::selection::{MessageSelectionStep, next_selected_message};
 use crate::config::ModelEntry;
@@ -149,6 +150,9 @@ impl Controller {
             selected_block_action(self.app.selected_message, &self.app.input, &key)
         {
             return TuiEffect::SelectedBlock(action);
+        }
+        if handle_message_scroll_key(&mut self.app, &key) {
+            return TuiEffect::None;
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -882,6 +886,9 @@ fn is_exact_slash_command(input: &str, custom_commands: &[CustomCommand]) -> boo
             || commands::find_custom(custom_commands, command).is_some()
     })
 }
+
+#[cfg(test)]
+mod scroll_tests;
 
 #[cfg(test)]
 mod tests {
