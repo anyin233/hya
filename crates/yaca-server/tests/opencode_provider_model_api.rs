@@ -102,6 +102,33 @@ async fn request_status(app: axum::Router, method: Method, uri: &str, body: Valu
     resp.status()
 }
 
+async fn request_json(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, body)
+}
+
 #[tokio::test]
 async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
     let app = router(state(WORKDIR).await);
@@ -208,4 +235,37 @@ async fn opencode_legacy_provider_routes_return_active_catalog_and_reject_bad_oa
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_legacy_config_routes_return_active_provider_data() {
+    let app = router(state(WORKDIR).await);
+
+    let (status, config) = get_json(app.clone(), "/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(config.is_object());
+
+    let (status, updated) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/config",
+        json!({"username": "httpapi-local"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["username"], "httpapi-local");
+
+    let status = request_status(
+        app.clone(),
+        Method::PATCH,
+        "/config",
+        json!({"username": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, providers) = get_json(app, "/config/providers").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(providers["providers"][0]["id"], "openai");
+    assert_eq!(providers["default"]["openai"], "gpt-5");
 }
