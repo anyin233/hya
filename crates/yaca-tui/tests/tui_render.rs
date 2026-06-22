@@ -272,7 +272,7 @@ fn yolo_and_exit_armed_states_are_visible() {
     let text = render(&mut state, 100, 20);
     assert!(text.contains("YOLO"), "yolo mode should be visible");
     assert!(
-        text.contains("Ctrl-C again"),
+        text.contains("ctrl+c again"),
         "armed exit hint should be visible"
     );
 }

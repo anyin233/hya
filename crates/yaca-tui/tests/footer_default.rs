@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod render_support;
 
-use render_support::render;
+use render_support::{render, with_assistant_message};
 use yaca_tui::{AppState, ConnectorState, ConnectorView};
 
 #[test]
@@ -103,4 +103,41 @@ fn footer_renders_project_mcp_without_app_version() {
         bottom_row.contains("ctrl+p commands"),
         "footer should keep command affordance visible, got {bottom_row:?}"
     );
+}
+
+#[test]
+fn transient_footer_shortcuts_use_opencode_key_style() {
+    // Given: transient footer states expose keyboard shortcuts.
+    let mut scrolled = AppState {
+        scroll_back: 3,
+        ..AppState::default()
+    };
+    with_assistant_message(
+        &mut scrolled,
+        "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten",
+    );
+    let mut exit_armed = AppState {
+        exit_armed: true,
+        ..AppState::default()
+    };
+
+    // When: the footer renders each transient state.
+    let scroll_text = render(&mut scrolled, 100, 16);
+    let exit_text = render(&mut exit_armed, 100, 16);
+
+    // Then: key names use OpenCode's lowercase shortcut style.
+    assert!(
+        scroll_text.contains("end to return · ctrl+c clear/interrupt"),
+        "scroll footer should use OpenCode shortcut casing:\n{scroll_text}"
+    );
+    assert!(
+        exit_text.contains("ctrl+c again to exit · type to cancel"),
+        "exit footer should use OpenCode shortcut casing:\n{exit_text}"
+    );
+    for legacy in ["End to return", "Ctrl-C"] {
+        assert!(
+            !scroll_text.contains(legacy) && !exit_text.contains(legacy),
+            "transient footers should not expose legacy shortcut {legacy:?}"
+        );
+    }
 }

@@ -13,12 +13,12 @@ pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
     }
     if state.scroll_back > 0 {
         return format!(
-            "scroll {} · End to return · Ctrl-C clear/interrupt",
+            "scroll {} · end to return · ctrl+c clear/interrupt",
             state.scroll_back
         );
     }
     if state.exit_armed {
-        return "Ctrl-C again to exit · type to cancel".to_string();
+        return "ctrl+c again to exit · type to cancel".to_string();
     }
     if state.yolo {
         return "YOLO mode · /yolo disables auto-allow · / commands · @ references".to_string();
