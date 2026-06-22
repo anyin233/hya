@@ -16,6 +16,8 @@ use crate::{ApiError, ServerState, parse_session, runs};
 mod catalog;
 mod file;
 mod instance;
+mod location;
+mod metadata;
 mod model_ref;
 mod projection;
 mod session_context;
@@ -28,6 +30,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(catalog::router())
         .merge(file::router())
         .merge(instance::router())
+        .merge(metadata::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
         .merge(session_v2::router())
