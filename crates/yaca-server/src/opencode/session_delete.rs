@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Response};
 use yaca_proto::{MessageId, PartId};
 
 use crate::{ApiError, ServerState, parse_session};
@@ -7,11 +8,14 @@ use crate::{ApiError, ServerState, parse_session};
 pub(super) async fn delete_message(
     State(st): State<ServerState>,
     Path((id, message)): Path<(String, String)>,
-) -> Result<Json<bool>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     let message = parse_message(&message)?;
     let message_id = message.to_string();
     let snapshot = super::load_session(&st, session, None).await?;
+    if st.runs.is_busy(session) {
+        return Ok(super::errors::session_busy(session));
+    }
     if !snapshot
         .messages
         .iter()
@@ -20,7 +24,7 @@ pub(super) async fn delete_message(
         return Err(ApiError::not_found("message not found"));
     }
     st.engine.delete_message(session, message).await?;
-    Ok(Json(true))
+    Ok(Json(true).into_response())
 }
 
 pub(super) async fn delete_part(
