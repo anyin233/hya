@@ -6,6 +6,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use yaca_proto::Role;
 
 use super::error::{display_system_error_segment, is_system_error_text};
+use super::transcript_metadata::assistant_metadata_label;
 use super::transcript_tools::{push_tool_lines, status_label};
 use crate::AppState;
 use crate::theme::Theme;
@@ -42,7 +43,9 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         let start = lines.len();
         match item.role {
             Role::User => user_lines(&item.parts, idx, selected, theme, &mut lines),
-            Role::Assistant => assistant_lines(&item.parts, idx, selected, theme, &mut lines),
+            Role::Assistant => {
+                assistant_lines(&item.parts, idx, selected, state, theme, &mut lines)
+            }
             Role::System => system_lines(&item.parts, idx, selected, theme, &mut lines),
         }
         if selected {
@@ -101,6 +104,7 @@ fn assistant_lines(
     parts: &[TimelinePart],
     idx: usize,
     selected: bool,
+    state: &AppState,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
@@ -145,6 +149,15 @@ fn assistant_lines(
                 previous_was_tool = true;
             }
         }
+    }
+    if has_visible_part {
+        lines.push(Line::from(vec![
+            Span::styled("   ", block_style(theme.muted, selected, theme)),
+            Span::styled(
+                assistant_metadata_label(state),
+                block_style(theme.muted, selected, theme),
+            ),
+        ]));
     }
     lines.push(Line::from(""));
 }
