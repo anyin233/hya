@@ -4,6 +4,7 @@ mod overlays;
 mod permission;
 mod prompt;
 mod prompt_attachments;
+mod prompt_metadata;
 mod sidebar;
 mod sidebar_context;
 mod sidebar_files;

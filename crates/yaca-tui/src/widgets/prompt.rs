@@ -5,9 +5,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::identity::active_agent_label;
 use super::prompt_attachments::attachment_badges;
-use super::sidebar_format::used_percent;
+use super::prompt_metadata::composer_metadata;
 use crate::AppState;
 use crate::theme::Theme;
 
@@ -74,101 +73,6 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         .style(theme.base()),
         area,
     );
-}
-
-fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
-    let agent = active_agent_label(state);
-    let model = if state.model.is_empty() {
-        "offline"
-    } else {
-        state.model.as_str()
-    };
-    let effort = state.reasoning_effort.as_deref().unwrap_or("off");
-    let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
-    let mode = if state.yolo { "YOLO" } else { "manual" };
-    let context = composer_context_label(state).unwrap_or_default();
-    let context_separator = if context.is_empty() { "" } else { " · " };
-    let left_width = [
-        "  ",
-        agent.as_str(),
-        " · ",
-        model,
-        " · think ",
-        effort,
-        " · ",
-        mode,
-    ]
-    .into_iter()
-    .map(UnicodeWidthStr::width)
-    .sum::<usize>();
-    let right_width = UnicodeWidthStr::width(context.as_str())
-        + UnicodeWidthStr::width(context_separator)
-        + UnicodeWidthStr::width(cost)
-        + UnicodeWidthStr::width("   ctrl+p commands");
-    let status_gap_width = usize::from(width).saturating_sub(left_width + right_width);
-    Line::from(vec![
-        Span::styled("  ", Style::default().bg(theme.element)),
-        Span::styled(agent, Style::default().fg(theme.info).bg(theme.element)),
-        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
-        Span::styled(
-            model.to_string(),
-            Style::default().fg(theme.text).bg(theme.element),
-        ),
-        Span::styled(
-            " · think ",
-            Style::default().fg(theme.muted).bg(theme.element),
-        ),
-        Span::styled(
-            effort.to_string(),
-            Style::default().fg(theme.accent).bg(theme.element),
-        ),
-        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
-        Span::styled(
-            mode.to_string(),
-            Style::default().fg(theme.warning).bg(theme.element),
-        ),
-        Span::styled(
-            " ".repeat(status_gap_width),
-            Style::default().bg(theme.element),
-        ),
-        Span::styled(context, Style::default().fg(theme.muted).bg(theme.element)),
-        Span::styled(
-            context_separator,
-            Style::default().fg(theme.muted).bg(theme.element),
-        ),
-        Span::styled(
-            cost.to_string(),
-            Style::default().fg(theme.muted).bg(theme.element),
-        ),
-        Span::styled(
-            "   ctrl+p commands",
-            Style::default().fg(theme.muted).bg(theme.element),
-        ),
-    ])
-}
-
-fn composer_context_label(state: &AppState) -> Option<String> {
-    let current = state.context.current_tokens?;
-    match state.context.context_window_tokens {
-        Some(window) => Some(format!(
-            "{} ({}%)",
-            compact_tokens(current),
-            used_percent(current, window)
-        )),
-        None => Some(compact_tokens(current)),
-    }
-}
-
-fn compact_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        let tenths = tokens.saturating_add(50_000) / 100_000;
-        format!("{}.{:01}M", tenths / 10, tenths % 10)
-    } else if tokens >= 1_000 {
-        let tenths = tokens.saturating_add(50) / 100;
-        format!("{}.{:01}K", tenths / 10, tenths % 10)
-    } else {
-        tokens.to_string()
-    }
 }
 
 fn runtime_footer_text(state: &AppState) -> String {
