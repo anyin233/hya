@@ -74,11 +74,14 @@ pub(super) fn diff(
 ) -> Result<Vec<FileDiff>, ApiError> {
     let items = diff_items(workdir, mode)?;
     let has_head = has_head(workdir);
+    let mut total_patch_bytes = 0;
     let mut out = Vec::new();
     for item in items {
         let (additions, deletions) = stats(workdir, &item, has_head)?;
+        let patch = patch::for_item(workdir, &item, has_head, context, total_patch_bytes)?;
+        total_patch_bytes = total_patch_bytes.saturating_add(patch.len());
         out.push(FileDiff {
-            patch: patch::for_item(workdir, &item, has_head, context)?,
+            patch,
             file: item.file,
             additions,
             deletions,
