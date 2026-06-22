@@ -14,13 +14,16 @@ pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockS
     } else {
         state.model.as_str()
     };
-    let status = match status {
-        AssistantBlockStatus::Completed { duration_ms } => duration_ms
-            .map(format_duration)
-            .unwrap_or_else(|| "completed".to_string()),
-        AssistantBlockStatus::Streaming => "streaming".to_string(),
-    };
-    format!("▣ {} · {model} · {status}", active_agent_label(state))
+    let identity = format!("▣ {} · {model}", active_agent_label(state));
+    match status {
+        AssistantBlockStatus::Completed { duration_ms } => format!(
+            "{identity} · {}",
+            duration_ms
+                .map(format_duration)
+                .unwrap_or_else(|| "completed".to_string())
+        ),
+        AssistantBlockStatus::Streaming => identity,
+    }
 }
 
 pub(super) fn format_duration(ms: u64) -> String {

@@ -100,7 +100,7 @@ fn assistant_metadata_footer_uses_finished_turn_duration() {
 }
 
 #[test]
-fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
+fn running_assistant_block_omits_synthetic_streaming_status() {
     let mut state = AppState {
         agent: "sisyphus".to_string(),
         model: "kimi-k2".to_string(),
@@ -111,7 +111,7 @@ fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
     with_text_message(&mut state, 10, Role::Assistant, "second response");
 
     let buffer = render_buffer(&mut state, 100, 20);
-    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "Sisyphus · kimi-k2 ·");
+    let metadata_rows = assistant_metadata_rows(&buffer, 100, 20, "Sisyphus · kimi-k2");
 
     assert_eq!(
         metadata_rows.len(),
@@ -124,8 +124,13 @@ fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
         metadata_rows[0]
     );
     assert!(
-        metadata_rows[1].contains("Sisyphus · kimi-k2 · streaming"),
-        "latest assistant block should report streaming, got {:?}",
+        metadata_rows[1].contains("Sisyphus · kimi-k2"),
+        "latest assistant block should keep identity visible, got {:?}",
+        metadata_rows[1]
+    );
+    assert!(
+        !metadata_rows[1].contains("streaming"),
+        "OpenCode running assistant footer omits synthetic streaming text, got {:?}",
         metadata_rows[1]
     );
 }

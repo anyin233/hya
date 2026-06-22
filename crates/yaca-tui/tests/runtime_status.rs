@@ -86,10 +86,14 @@ fn runtime_status_shows_subagent_view_hint_while_running() {
     let buffer = render_buffer(&mut state, 120, 16);
     let status_row = find_row(&buffer, 120, 16, "view subagents");
 
-    // Then: it exposes OpenCode's subagent viewer affordance.
+    // Then: it exposes OpenCode's subagent viewer affordance without a synthetic state label.
     assert!(
         status_row.contains("ctrl+x down view subagents"),
         "runtime strip should expose the subagent viewer shortcut, got {status_row:?}"
+    );
+    assert!(
+        !status_row.contains("streaming"),
+        "OpenCode running assistant footer omits synthetic streaming text, got {status_row:?}"
     );
 }
 

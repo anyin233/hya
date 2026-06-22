@@ -199,7 +199,7 @@ fn active_runtime_strip_sits_above_the_composer() {
 
     // When: the wide shell renders the grounded composer.
     let buffer = render_buffer(&mut state, 120, 16);
-    let status_y = find_row_index(&buffer, 120, 16, "streaming");
+    let status_y = find_row_index(&buffer, 120, 16, "Sisyphus · kimi-k2");
     let status_row = rendered_row(&buffer, 120, status_y);
     let padding_row = status_y + 1;
     let prompt_row = rendered_row(&buffer, 120, status_y + 2);
@@ -214,8 +214,8 @@ fn active_runtime_strip_sits_above_the_composer() {
         "runtime strip should show the active model, got {status_row:?}"
     );
     assert!(
-        status_row.contains("streaming"),
-        "runtime strip should expose the running state, got {status_row:?}"
+        !status_row.contains("streaming"),
+        "runtime strip should omit synthetic streaming text, got {status_row:?}"
     );
     assert!(
         !rendered_row(&buffer, 120, padding_row).contains("▌"),
@@ -245,7 +245,7 @@ fn active_runtime_strip_includes_current_team_role() {
 
     // When: the wide shell renders the runtime strip above the composer.
     let buffer = render_buffer(&mut state, 120, 16);
-    let status_row = find_row(&buffer, 120, 16, "streaming");
+    let status_row = find_row(&buffer, 120, 16, "Sisyphus - Ultraworker Retry");
 
     // Then: the strip uses the active agent plus role before the model.
     assert!(

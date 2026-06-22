@@ -64,7 +64,7 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
 
 fn runtime_state_label(state: &AppState) -> Option<String> {
     if state.running {
-        Some("streaming".to_string())
+        None
     } else {
         latest_assistant_duration_ms(&state.projection).map(format_duration)
     }
