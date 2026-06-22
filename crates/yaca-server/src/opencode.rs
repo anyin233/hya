@@ -16,6 +16,7 @@ mod permission;
 mod project;
 mod project_copy;
 mod projection;
+mod pty;
 mod question;
 mod session_context;
 mod session_legacy;
@@ -39,6 +40,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(permission::router())
         .merge(project::router())
         .merge(project_copy::router())
+        .merge(pty::router())
         .merge(question::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
