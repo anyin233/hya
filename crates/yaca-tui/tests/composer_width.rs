@@ -35,15 +35,15 @@ fn composer_metadata_hides_context_and_cost_below_compact_width() {
     let buffer = render_buffer(&mut state, 79, 16);
     let metadata_row = row_text(&buffer, 79, 13);
 
-    // Then: high-priority identity and command affordance remain, while
-    // lower-priority context/cost hints are withheld instead of crowding the row.
+    // Then: high-priority agent identity and command affordance remain, while
+    // lower-priority model/context/cost hints follow OpenCode's width policy.
     assert!(
         metadata_row.contains("sisyphus"),
         "agent identity should remain visible, got {metadata_row:?}"
     );
     assert!(
-        metadata_row.contains("kimi-k2"),
-        "model identity should remain visible, got {metadata_row:?}"
+        !metadata_row.contains("kimi-k2"),
+        "model identity should be hidden below OpenCode's model breakpoint, got {metadata_row:?}"
     );
     assert!(
         metadata_row.contains("ctrl+p commands"),

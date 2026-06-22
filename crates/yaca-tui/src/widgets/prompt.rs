@@ -10,7 +10,13 @@ use super::prompt_metadata::composer_metadata;
 use crate::AppState;
 use crate::theme::Theme;
 
-pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+pub fn render_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    theme: &Theme,
+    policy_width: u16,
+) {
     frame.render_widget(
         Block::default().style(Style::default().bg(theme.element)),
         area,
@@ -28,7 +34,7 @@ pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
                 Style::default().fg(theme.text).bg(theme.element),
             ),
         ]),
-        composer_metadata(state, theme, area.width),
+        composer_metadata(state, theme, area.width, policy_width),
     ];
     if !state.attachments.is_empty() {
         lines.push(attachment_badges(state, theme, area.width));

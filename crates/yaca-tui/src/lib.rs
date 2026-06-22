@@ -164,13 +164,14 @@ impl AppState {
 
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let theme = theme::Theme::yaca_dark();
-    let layout = layout::app_layout(frame.area());
+    let area = frame.area();
+    let layout = layout::app_layout(area);
     widgets::render_timeline(frame, layout.timeline, state, &theme);
     if let Some(sidebar) = layout.sidebar {
         widgets::render_sidebar(frame, sidebar, state, &theme);
     }
     widgets::render_runtime_status(frame, layout.runtime_status, state, &theme);
-    widgets::render_prompt(frame, layout.prompt, state, &theme);
+    widgets::render_prompt(frame, layout.prompt, state, &theme, area.width);
     widgets::render_footer(frame, layout.footer, state, &theme);
 
     if let Some(prompt) = &state.permission {

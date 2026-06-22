@@ -9,9 +9,15 @@ use crate::theme::Theme;
 
 const COMPACT_METADATA_WIDTH: u16 = 80;
 const COMMAND_HINT_WIDTH: u16 = 66;
+const MODEL_METADATA_WIDTH: u16 = 120;
 
-pub(super) fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
-    let policy = ComposerWidthPolicy::for_width(width);
+pub(super) fn composer_metadata(
+    state: &AppState,
+    theme: &Theme,
+    render_width: u16,
+    policy_width: u16,
+) -> Line<'static> {
+    let policy = ComposerWidthPolicy::for_width(policy_width);
     let agent = active_agent_label(state);
     let model = if state.model.is_empty() {
         "offline"
@@ -32,19 +38,18 @@ pub(super) fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> 
     } else {
         ""
     };
-    let left_width = [
-        "  ",
-        agent.as_str(),
-        " · ",
-        model,
-        " · think ",
-        effort,
-        " · ",
-        mode,
-    ]
-    .into_iter()
-    .map(UnicodeWidthStr::width)
-    .sum::<usize>();
+    let model_width = if policy.show_model {
+        UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(model)
+    } else {
+        0
+    };
+    let left_width = UnicodeWidthStr::width("  ")
+        + UnicodeWidthStr::width(agent.as_str())
+        + model_width
+        + UnicodeWidthStr::width(" · think ")
+        + UnicodeWidthStr::width(effort)
+        + UnicodeWidthStr::width(" · ")
+        + UnicodeWidthStr::width(mode);
     let right_width = UnicodeWidthStr::width(context.as_str())
         + UnicodeWidthStr::width(context_separator)
         + if policy.show_context_hints {
@@ -53,15 +58,21 @@ pub(super) fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> 
             0
         }
         + UnicodeWidthStr::width(command_hint);
-    let status_gap_width = usize::from(width).saturating_sub(left_width + right_width);
+    let status_gap_width = usize::from(render_width).saturating_sub(left_width + right_width);
     let mut spans = vec![
         Span::styled("  ", Style::default().bg(theme.element)),
         Span::styled(agent, Style::default().fg(theme.info).bg(theme.element)),
-        Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
-        Span::styled(
-            model.to_string(),
-            Style::default().fg(theme.text).bg(theme.element),
-        ),
+    ];
+    if policy.show_model {
+        spans.extend([
+            Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
+            Span::styled(
+                model.to_string(),
+                Style::default().fg(theme.text).bg(theme.element),
+            ),
+        ]);
+    }
+    spans.extend([
         Span::styled(
             " · think ",
             Style::default().fg(theme.muted).bg(theme.element),
@@ -79,7 +90,7 @@ pub(super) fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> 
             " ".repeat(status_gap_width),
             Style::default().bg(theme.element),
         ),
-    ];
+    ]);
     if policy.show_context_hints {
         spans.extend([
             Span::styled(context, Style::default().fg(theme.muted).bg(theme.element)),
@@ -103,6 +114,7 @@ pub(super) fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> 
 }
 
 struct ComposerWidthPolicy {
+    show_model: bool,
     show_context_hints: bool,
     show_command_hint: bool,
 }
@@ -110,6 +122,7 @@ struct ComposerWidthPolicy {
 impl ComposerWidthPolicy {
     const fn for_width(width: u16) -> Self {
         Self {
+            show_model: width >= MODEL_METADATA_WIDTH,
             show_context_hints: width >= COMPACT_METADATA_WIDTH,
             show_command_hint: width >= COMMAND_HINT_WIDTH,
         }
