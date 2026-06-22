@@ -47,6 +47,7 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         .map(|_| items.len().saturating_sub(1));
     for (idx, item) in items.iter().enumerate() {
         let selected = state.selected_message == Some(idx);
+        let is_user = matches!(item.role, Role::User);
         let start = lines.len();
         match item.role {
             Role::User => user_lines(&item.parts, selected, theme, &mut lines),
@@ -62,8 +63,11 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         }
         if selected {
             fill_selected_surface(&mut lines[start..], theme, width);
-        } else if matches!(item.role, Role::User) {
+        } else if is_user {
             fill_panel_surface(&mut lines[start..], theme, width);
+        }
+        if is_user {
+            lines.push(Line::from(""));
         }
     }
 

@@ -170,3 +170,33 @@ fn transcript_rails_do_not_use_box_drawing_border_glyphs() {
         "transcript rows should still have a visible tonal rail:\n{text}"
     );
 }
+
+#[test]
+fn user_panel_block_keeps_background_gap_before_following_assistant_message() {
+    let mut state = AppState::default();
+    // Given: a user prompt followed by an assistant response.
+    with_text_message(&mut state, 1, Role::User, "review this diff");
+    with_text_message(&mut state, 10, Role::Assistant, "I will review it.");
+
+    // When: the transcript renders both messages.
+    let buffer = render_buffer(&mut state, 80, 24);
+
+    // Then: the user panel has a bottom padding row plus an external background gap.
+    let (_, user_y) = find_rendered_text(&buffer, 80, 24, "review this diff").unwrap();
+    let (_, assistant_y) = find_rendered_text(&buffer, 80, 24, "I will review it.").unwrap();
+    assert_eq!(
+        assistant_y,
+        user_y + 3,
+        "assistant text should start after user panel bottom padding and a background gap"
+    );
+    assert_eq!(
+        buffer[(2, user_y + 1)].bg,
+        Color::Rgb(20, 20, 20),
+        "the row directly below user text should remain part of the panel block"
+    );
+    assert_eq!(
+        buffer[(2, user_y + 2)].bg,
+        Color::Rgb(10, 10, 10),
+        "the row after user panel padding should be the outer transcript background"
+    );
+}
