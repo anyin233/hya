@@ -4,7 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{AppState, ContextView, draw};
+use yaca_tui::{AppState, ContextView, PromptAttachment, draw};
 
 fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     let backend = TestBackend::new(width, height);
@@ -220,5 +220,32 @@ fn context_rail_title_uses_session_label_when_available() {
     assert!(
         title_row.contains("GUI borderless input parity"),
         "context rail should show the active session title, got {title_row:?}"
+    );
+}
+
+#[test]
+fn composer_renders_prompt_attachment_badges() {
+    // Given: the prompt owns an OpenCode-style local image attachment.
+    let mut state = AppState {
+        attachments: vec![PromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            source_path: Some("/tmp/screenshots/CleanShot.png".to_string()),
+            mime: "image/png".to_string(),
+        }],
+        ..AppState::default()
+    };
+
+    // When: the grounded composer renders its reserved attachment row.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let attachment_row = rendered_row(&buffer, 120, 14);
+
+    // Then: the attachment is visible as a compact prompt badge.
+    assert!(
+        attachment_row.contains("[Image #1]"),
+        "composer should expose the attachment placeholder, got {attachment_row:?}"
+    );
+    assert!(
+        attachment_row.contains("CleanShot.png"),
+        "composer should show the attachment filename, got {attachment_row:?}"
     );
 }

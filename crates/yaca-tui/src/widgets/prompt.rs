@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use super::prompt_attachments::attachment_badges;
 use super::sidebar_format::used_percent;
 use crate::AppState;
 use crate::theme::Theme;
@@ -19,7 +20,7 @@ pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     } else {
         theme.primary
     };
-    let lines = vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("▌ ", Style::default().fg(rail).bg(theme.element)),
             Span::styled(
@@ -29,6 +30,9 @@ pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         ]),
         composer_metadata(state, theme, area.width),
     ];
+    if !state.attachments.is_empty() {
+        lines.push(attachment_badges(state, theme, area.width));
+    }
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().fg(theme.text).bg(theme.element)),
         area,

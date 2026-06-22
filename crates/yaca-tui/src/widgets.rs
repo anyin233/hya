@@ -2,6 +2,7 @@ mod error;
 mod overlays;
 mod permission;
 mod prompt;
+mod prompt_attachments;
 mod sidebar;
 mod sidebar_context;
 mod sidebar_footer;
