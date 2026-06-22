@@ -27,16 +27,16 @@ async fn state() -> AppState {
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
-    AppState {
-        engine: Arc::new(engine),
-        agent: Arc::new(AgentSpec {
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
             workdir: WORKDIR.into(),
             reasoning: None,
         }),
-    }
+    )
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {

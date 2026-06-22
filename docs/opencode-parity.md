@@ -23,6 +23,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | --- | --- | --- |
 | Core turn loop | Implemented | `SessionEngine::run_turn` supports multi-round tool calls, cancellation, compaction, provider streaming, and event projection. |
 | Direct shell execution | Implemented | `SessionEngine::run_shell` and `POST /sessions/:id/shell` execute the real shell tool and record a synthetic user message plus assistant tool result. |
+| Run status and abort | Partial | Server routes now maintain per-session run tokens, expose OpenCode-shaped `GET /session/status`, and support `POST /session/:sessionID/abort`; shell cancellation kills the spawned Unix process group. |
 | Core tools | Mostly implemented | Builtins include `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `shell`, `question`, `lsp`, `skill`, `task`, plus `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit` aliases matching OpenCode names. |
 | Permission system | Native superset | yaca has explicit `PermissionPlane`, rules, child-session derivation, TUI approval, headless scoped/read-only/yolo policies, and OpenCode plugin permission hook mapping. |
 | Project context | Implemented | CLI discovers `AGENTS.md`, builds an environment/context system prompt, and includes available skills. |
@@ -42,8 +43,8 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | OpenCode area | Missing yaca parity |
 | --- | --- |
 | HTTP API compatibility | yaca now has native `/sessions/*` plus a minimal OpenCode `/session` read subset. OpenCode also exposes `/config`, `/file`, `/provider`, `/permission`, `/question`, `/mcp`, `/tui`, `/sync`, `/experimental/*`, `/pty`, `/project`, `/workspace`, `/control`, and `/global` groups. |
-| Session lifecycle API | Missing exact OpenCode endpoints for status, scoped/root/path-filtered listing, children, todo, diff, paginated messages, individual message, update title/metadata/permissions/archive, delete, fork raw payload, abort, init, share/unshare, summarize, prompt_async, revert/unrevert, permission respond, message deletion, part deletion, and part update. |
-| Abort/control | yaca turn cancellation tokens exist internally, but the server does not maintain per-session run handles or expose OpenCode-equivalent abort/status controls. |
+| Session lifecycle API | Missing exact OpenCode endpoints for scoped/root/path-filtered listing, children, todo, diff, paginated messages, individual message, update title/metadata/permissions/archive, delete, fork raw payload, init, share/unshare, summarize, prompt_async, revert/unrevert, permission respond, message deletion, part deletion, and part update. |
+| Abort/control | Basic busy status and abort exist. Missing OpenCode's richer runner behavior for background jobs, retry statuses, prompt_async lifecycle, child job cancellation, and event publication for status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
 | File HTTP routes | OpenCode exposes file text search, file search, symbol search, list, content, and status routes. yaca has equivalent tool-level read/grep/glob/find behavior, but not the HTTP API surface. |
 | Instance routes | Missing OpenCode-compatible path, VCS info/status/diff/raw diff/apply, command list, agent list, skill list, LSP status, and formatter status endpoints. |
@@ -61,13 +62,14 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 ## Next Implementation Candidates
 
-1. Add server-side run-state handles and `POST /session/:sessionID/abort`.
-2. Add OpenCode-compatible file HTTP routes backed by existing `read`, `grep`,
+1. Add OpenCode-compatible file HTTP routes backed by existing `read`, `grep`,
    `glob`, and `find` implementations.
-3. Add instance metadata routes for path, VCS, skill list, command list, and LSP
+2. Add instance metadata routes for path, VCS, skill list, command list, and LSP
    status using existing yaca subsystems.
-4. Add OpenCode-compatible session pagination, single-message reads, and children
+3. Add OpenCode-compatible session pagination, single-message reads, and children
    listing over the existing store/projection.
+4. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
+   statuses and status events.
 5. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
 
 Each candidate should be implemented with a red test first, verified with

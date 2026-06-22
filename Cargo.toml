@@ -42,6 +42,7 @@ regex = "1"
 similar = "2"
 schemars = { version = "0.8", features = ["derive"] }
 jsonschema = "0.18"
+libc = "0.2"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "json", "uuid", "time", "macros", "migrate"] }
 thiserror = "1"
 anyhow = "1"

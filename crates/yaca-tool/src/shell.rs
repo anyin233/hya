@@ -18,6 +18,12 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 static NEXT_OUTPUT_ID: AtomicU64 = AtomicU64::new(0);
 
+enum ShellWait {
+    Completed(std::io::Result<std::process::ExitStatus>),
+    TimedOut,
+    Cancelled,
+}
+
 #[derive(Deserialize)]
 struct ShellInput {
     command: String,
@@ -89,6 +95,8 @@ impl Tool for ShellTool {
                 .current_dir(&cwd)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
+            #[cfg(unix)]
+            proc.process_group(0);
             if !env.is_empty() {
                 proc.envs(&env);
             }
@@ -97,14 +105,27 @@ impl Tool for ShellTool {
 
         let read_stdout = tokio::spawn(read_pipe(child.stdout.take()));
         let read_stderr = tokio::spawn(read_pipe(child.stderr.take()));
-        let wait = tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait()).await;
+        let wait = tokio::select! {
+            () = ctx.cancel.cancelled() => ShellWait::Cancelled,
+            result = tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait()) => {
+                match result {
+                    Ok(status) => ShellWait::Completed(status),
+                    Err(_) => ShellWait::TimedOut,
+                }
+            }
+        };
 
         let (status_code, timed_out) = match wait {
-            Ok(status) => (status?.code(), false),
-            Err(_) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+            ShellWait::Completed(status) => (status?.code(), false),
+            ShellWait::TimedOut => {
+                terminate_child(&mut child).await;
                 (None, true)
+            }
+            ShellWait::Cancelled => {
+                terminate_child(&mut child).await;
+                let _ = read_stdout.await;
+                let _ = read_stderr.await;
+                return Err(ToolError::Cancelled);
             }
         };
         let stdout = read_stdout
@@ -158,6 +179,24 @@ impl Tool for ShellTool {
             "metadata": metadata,
         }))
     }
+}
+
+#[cfg(unix)]
+async fn terminate_child(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+        // SAFETY: pid is the spawned child id; a negative pid targets its process group.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[cfg(not(unix))]
+async fn terminate_child(child: &mut tokio::process::Child) {
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 fn cwd(ctx: &ToolCtx, workdir: Option<&str>) -> PathBuf {

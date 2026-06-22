@@ -13,7 +13,6 @@ use axum::routing::{get, post};
 use futures::Stream;
 use futures::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
-use tokio_util::sync::CancellationToken;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
@@ -22,6 +21,7 @@ use yaca_proto::api::{
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
 
 mod opencode;
+mod runs;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -29,7 +29,32 @@ pub struct AppState {
     pub agent: Arc<AgentSpec>,
 }
 
+impl AppState {
+    #[must_use]
+    pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
+        Self { engine, agent }
+    }
+}
+
+#[derive(Clone)]
+struct ServerState {
+    engine: Arc<SessionEngine>,
+    agent: Arc<AgentSpec>,
+    runs: runs::RunRegistry,
+}
+
+impl ServerState {
+    fn new(app: AppState) -> Self {
+        Self {
+            engine: app.engine,
+            agent: app.agent,
+            runs: runs::RunRegistry::default(),
+        }
+    }
+}
+
 pub fn router(state: AppState) -> Router {
+    let state = ServerState::new(state);
     Router::new()
         .merge(opencode::router())
         .route("/sessions", post(create_session))
@@ -67,6 +92,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<yaca_core::CoreError> for ApiError {
@@ -90,7 +122,7 @@ fn parse_session(id: &str) -> Result<SessionId, ApiError> {
 }
 
 async fn create_session(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<CreateSessionResponse>, ApiError> {
     let session = st
@@ -106,25 +138,30 @@ async fn create_session(
 }
 
 async fn prompt(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<PromptRequest>,
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
     let message = st.engine.admit_user_prompt(session, req.text).await?;
-    let finish = st
-        .engine
-        .run_turn(session, &st.agent, CancellationToken::new())
-        .await?;
+    let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
     Ok(Json(PromptResponse { message, finish }))
 }
 
 async fn command(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
     let text = req
         .text
         .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
@@ -132,22 +169,23 @@ async fn command(
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
-    let finish = st
-        .engine
-        .run_turn(session, &st.agent, CancellationToken::new())
-        .await?;
+    let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
     Ok(Json(PromptResponse { message, finish }))
 }
 
 async fn shell(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<ShellRequest>,
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
     let (message, finish) = st
         .engine
-        .run_shell(session, &st.agent, req.command, CancellationToken::new())
+        .run_shell(session, &st.agent, req.command, run.token())
         .await?;
     Ok(Json(PromptResponse { message, finish }))
 }
@@ -161,7 +199,7 @@ fn command_prompt_text(command: &str, arguments: &str) -> String {
 }
 
 async fn events(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<Vec<Envelope>>, ApiError> {
@@ -178,7 +216,7 @@ async fn events(
 }
 
 async fn stream(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
     let session = parse_session(&id)?;
