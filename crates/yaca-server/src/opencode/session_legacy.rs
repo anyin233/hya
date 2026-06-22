@@ -10,7 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use yaca_proto::api::{CommandRequest, PromptRequest, ShellRequest};
-use yaca_proto::{Event, MessageId, ModelRef, Projection, SessionId};
+use yaca_proto::{Envelope, Event, MessageId, ModelRef, Projection, SessionId, now_millis};
 
 use crate::{ApiError, ServerState, parse_session, runs};
 
@@ -196,11 +196,37 @@ async fn prompt_async(
     let cancel = run.token();
     std::mem::drop(tokio::spawn(async move {
         let _guard = run;
-        if engine.admit_user_prompt(session, req.text).await.is_ok() {
-            let _ = engine.run_turn(session, &agent, cancel).await;
+        let result = async {
+            engine.admit_user_prompt(session, req.text).await?;
+            engine.run_turn(session, &agent, cancel).await?;
+            Ok::<(), yaca_core::CoreError>(())
+        }
+        .await;
+        if let Err(error) = result {
+            publish_background_error(&engine, session, error.to_string()).await;
         }
     }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publish_background_error(
+    engine: &yaca_core::SessionEngine,
+    session: SessionId,
+    message: String,
+) {
+    let event = Event::Error {
+        session: Some(session),
+        code: "prompt_async".to_string(),
+        message,
+    };
+    let Ok(seq) = engine.store().append_event(session, &event).await else {
+        return;
+    };
+    engine.bus().publish(Envelope {
+        seq,
+        ts_millis: now_millis(),
+        event,
+    });
 }
 
 async fn init_session(
