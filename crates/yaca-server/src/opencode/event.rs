@@ -94,6 +94,12 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         Event::SessionTitled { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
         }
+        Event::CommandExecuted {
+            session,
+            command,
+            arguments,
+            message,
+        } => command_executed_payload(&envelope, *session, command, arguments, *message),
         Event::MessageStarted {
             session,
             message,
@@ -459,6 +465,25 @@ fn message_removed_payload(envelope: &Envelope, session: SessionId, message: Mes
         "type": "message.removed",
         "properties": {
             "sessionID": session.to_string(),
+            "messageID": message.to_string(),
+        },
+    })
+}
+
+fn command_executed_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    command: &str,
+    arguments: &str,
+    message: MessageId,
+) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "command.executed",
+        "properties": {
+            "name": command,
+            "sessionID": session.to_string(),
+            "arguments": arguments,
             "messageID": message.to_string(),
         },
     })

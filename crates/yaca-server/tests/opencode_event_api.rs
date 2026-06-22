@@ -307,6 +307,12 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
     assert_eq!(delta["properties"]["field"], "text");
     assert_eq!(delta["properties"]["delta"], "/init audit");
 
+    let command_event = read_next_command_executed(&mut stream).await;
+    assert_eq!(command_event["properties"]["sessionID"], session);
+    assert_eq!(command_event["properties"]["messageID"], message);
+    assert_eq!(command_event["properties"]["name"], "init");
+    assert_eq!(command_event["properties"]["arguments"], "audit");
+
     let assistant_finished = read_next_message(&mut stream, "assistant", Some("stop")).await;
     assert_eq!(assistant_finished["properties"]["sessionID"], session);
     assert_eq!(
@@ -550,6 +556,16 @@ async fn read_next_part_delta(
         }
     }
     panic!("message.part.delta {part} not found");
+}
+
+async fn read_next_command_executed(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
+    for _ in 0..32 {
+        let event = read_sse_json(stream).await;
+        if event["type"] == "command.executed" {
+            return event;
+        }
+    }
+    panic!("command.executed not found");
 }
 
 async fn read_next_tool_state(
