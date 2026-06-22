@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,9 +69,72 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     let body = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes).unwrap_or_else(|err| {
+            panic!(
+                "non-json response {status}: {} ({err})",
+                String::from_utf8_lossy(&bytes)
+            )
+        })
     };
     (status, body)
+}
+
+async fn get_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+fn git(workdir: &PathBuf, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_git_repo(workdir: &PathBuf) {
+    git(workdir, &["init"]);
+    git(workdir, &["config", "user.email", "test@example.com"]);
+    git(workdir, &["config", "user.name", "Test User"]);
+    std::fs::write(workdir.join("tracked.txt"), "old\n").unwrap();
+    git(workdir, &["add", "tracked.txt"]);
+    git(workdir, &["commit", "-m", "initial"]);
+    std::fs::write(workdir.join("tracked.txt"), "new\nextra\n").unwrap();
+    std::fs::write(workdir.join("untracked.txt"), "fresh\n").unwrap();
 }
 
 #[tokio::test]
@@ -123,4 +187,48 @@ async fn opencode_instance_routes_return_metadata() {
     let (status, vcs) = get_json(app, "/vcs").await;
     assert_eq!(status, StatusCode::OK);
     assert!(vcs.is_object());
+}
+
+#[tokio::test]
+async fn opencode_vcs_routes_return_status_diff_and_apply_patch() {
+    let workdir = tempdir();
+    init_git_repo(&workdir);
+    let app = router(state(workdir.clone()).await);
+
+    let (status, status_body) = get_json(app.clone(), "/vcs/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        status_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == "tracked.txt" && item["status"] == "modified")
+    );
+
+    let (status, diff) = get_json(app.clone(), "/vcs/diff?mode=git&context=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(diff.as_array().unwrap().iter().any(
+        |item| item["file"] == "tracked.txt" && item["patch"].as_str().unwrap().contains("new")
+    ));
+    assert!(
+        diff.as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == "untracked.txt" && item["status"] == "added")
+    );
+
+    let (status, raw) = get_text(app.clone(), "/vcs/diff/raw").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(raw.contains("diff --git"));
+    assert!(raw.contains("tracked.txt"));
+
+    let patch = "diff --git a/applied.txt b/applied.txt\nnew file mode 100644\nindex 0000000..257cc56\n--- /dev/null\n+++ b/applied.txt\n@@ -0,0 +1 @@\n+applied\n";
+    let (status, applied) =
+        post_json(app, "/vcs/apply", serde_json::json!({ "patch": patch })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(applied["applied"], true);
+    assert_eq!(
+        std::fs::read_to_string(workdir.join("applied.txt")).unwrap(),
+        "applied\n"
+    );
 }

@@ -35,7 +35,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, and OpenCode-shaped session info, children, message list, single-message, and basic paginated message reads are present. |
 | OpenCode session read API | Partial | yaca accepts prefixed `ses_...` and `msg_...` IDs and returns OpenCode-style session info, children, `[{ info, parts }]` message lists, single-message reads, and `limit`/`before` pagination headers. |
 | OpenCode file API | Partial | yaca exposes OpenCode-shaped `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, and `/file/status` routes over the server workdir. Symbol and status match OpenCode's current empty handler behavior. |
-| OpenCode instance metadata API | Partial | yaca exposes `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/instance/dispose`, and basic `/vcs` routes. LSP/formatter are empty status arrays for now. |
+| OpenCode instance metadata API | Partial | yaca exposes `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/instance/dispose`, `/vcs`, `/vcs/status`, `/vcs/diff`, `/vcs/diff/raw`, and `/vcs/apply`. LSP/formatter are empty status arrays for now. |
 | Branching | Partial | Session parent/child support and branch/resume exist, but OpenCode's full session tree HTTP surface is incomplete. |
 | Integration modes | Implemented native | `exec --json` and `yaca rpc` JSONL mode exist. |
 | TUI base | Partial | Ratatui app has opencode-dark theme, session picker, permission/question overlays, slash commands, model switching, and render tests. |
@@ -49,7 +49,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Abort/control | Basic busy status and abort exist. Missing OpenCode's richer runner behavior for background jobs, retry statuses, prompt_async lifecycle, child job cancellation, and event publication for status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
 | File HTTP routes | Basic OpenCode legacy file HTTP routes are present. Remaining gaps are gitignore-aware `ignored` flags, exact filesystem service semantics, richer binary MIME detection, and real LSP-backed symbol search when available. |
-| Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, and VCS info endpoints are present. Missing exact VCS status/diff/raw diff/apply semantics, real LSP/formatter status integration, and full command/agent config/plugin merging. |
+| Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, and apply endpoints are present. Remaining gaps are exact branch-mode diff parity, OpenCode patch byte caps/empty patch behavior, real LSP/formatter status integration, and full command/agent config/plugin merging. |
 | Config routes | Missing OpenCode-compatible config get/update/provider metadata routes. yaca reads its own `~/.config/yaca/config.yaml`. |
 | Provider/auth breadth | Missing AI SDK provider breadth, models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
 | PTY | Missing OpenCode PTY management and websocket connect-token flow. |
@@ -64,12 +64,13 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 ## Next Implementation Candidates
 
-1. Add exact VCS status/diff/raw diff/apply semantics for instance routes.
-2. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
+1. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
    statuses and status events.
-3. Add gitignore-aware file listing, binary MIME detection, and LSP-backed
+2. Add gitignore-aware file listing, binary MIME detection, and LSP-backed
    `/find/symbol` results for the file HTTP API.
-4. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
+3. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
+4. Tighten VCS branch-mode diff parity, patch byte caps, and empty patch
+   behavior to match OpenCode's `project/vcs.ts` exactly.
 5. Add OpenCode-compatible todo, diff, summarize, update, delete, share, fork,
    revert, and part/message mutation session lifecycle routes.
 
