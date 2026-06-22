@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use axum::Json;
 use axum::Router;
@@ -9,12 +8,13 @@ use serde_json::{Value, json};
 
 use crate::ServerState;
 
+mod vcs;
+
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .merge(vcs::router())
         .route("/instance/dispose", post(dispose))
         .route("/path", get(path))
-        .route("/vcs", get(vcs))
-        .route("/vcs/status", get(empty_array))
         .route("/command", get(command))
         .route("/agent", get(agent))
         .route("/skill", get(skill))
@@ -65,14 +65,6 @@ struct SkillInfo {
     description: String,
     location: String,
     content: String,
-}
-
-#[derive(Serialize)]
-struct VcsInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default_branch: Option<String>,
 }
 
 async fn dispose() -> Json<bool> {
@@ -140,21 +132,6 @@ async fn skill(
     axum::extract::State(st): axum::extract::State<ServerState>,
 ) -> Json<Vec<SkillInfo>> {
     Json(discover_skills(&workdir(&st)))
-}
-
-async fn vcs(axum::extract::State(st): axum::extract::State<ServerState>) -> Json<VcsInfo> {
-    let workdir = workdir(&st);
-    Json(VcsInfo {
-        branch: git_output(&workdir, &["branch", "--show-current"]),
-        default_branch: git_output(
-            &workdir,
-            &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-        )
-        .map(|branch| match branch.strip_prefix("origin/") {
-            Some(name) => name.to_string(),
-            None => branch,
-        }),
-    })
 }
 
 async fn empty_array() -> Json<Vec<Value>> {
@@ -236,7 +213,7 @@ fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn workdir(st: &ServerState) -> PathBuf {
+pub(super) fn workdir(st: &ServerState) -> PathBuf {
     match std::fs::canonicalize(&st.agent.workdir) {
         Ok(path) => path,
         Err(_) => st.agent.workdir.clone(),
@@ -255,19 +232,4 @@ fn env_path(var: &str, home: &Path, suffix: &str) -> String {
         .unwrap_or_else(|| home.join(suffix))
         .to_string_lossy()
         .into_owned()
-}
-
-fn git_output(workdir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(output.stdout).ok()?;
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
