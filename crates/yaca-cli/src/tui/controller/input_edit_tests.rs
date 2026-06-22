@@ -11,6 +11,10 @@ fn alt(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::ALT)
 }
 
+fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::empty())
 }
@@ -22,6 +26,13 @@ fn type_text(controller: &mut Controller, text: &str) {
             TuiEffect::None
         );
     }
+}
+
+fn command_completion_controller() -> Controller {
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "/model");
+    assert!(controller.app.dialog.is_some());
+    controller
 }
 
 #[test]
@@ -186,6 +197,130 @@ fn alt_b_and_alt_f_move_by_words() {
 
     // Then
     assert_eq!(controller.app.input, "alpha? beta !gamma");
+}
+
+#[test]
+fn alt_arrow_keys_move_by_words() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta gamma".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Left, KeyModifiers::ALT)),
+        TuiEffect::None
+    );
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT)),
+        TuiEffect::None
+    );
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('?'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "alpha? beta !gamma");
+}
+
+#[test]
+fn ctrl_arrow_keys_move_by_words() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta gamma".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Left, KeyModifiers::CONTROL)),
+        TuiEffect::None
+    );
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Right, KeyModifiers::CONTROL)),
+        TuiEffect::None
+    );
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('?'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "alpha? beta !gamma");
+}
+
+#[test]
+fn alt_left_moves_by_word_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Left, KeyModifiers::ALT)),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input_cursor, Some(0));
+}
+
+#[test]
+fn ctrl_left_moves_by_word_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Left, KeyModifiers::CONTROL)),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input_cursor, Some(0));
+}
+
+#[test]
+fn alt_right_moves_by_word_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT)),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input_cursor, Some("/model".len()));
+}
+
+#[test]
+fn ctrl_right_moves_by_word_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+
+    // When
+    assert_eq!(
+        controller.handle_key(modified_key(KeyCode::Right, KeyModifiers::CONTROL)),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input_cursor, Some("/model".len()));
 }
 
 #[test]

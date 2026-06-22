@@ -164,10 +164,10 @@ impl Controller {
         }
         if key.modifiers == KeyModifiers::ALT {
             match key.code {
-                KeyCode::Char('b') => {
+                KeyCode::Char('b') | KeyCode::Left => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
                 }
-                KeyCode::Char('f') => {
+                KeyCode::Char('f') | KeyCode::Right => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
                 }
                 _ => {}
@@ -177,6 +177,12 @@ impl Controller {
             match key.code {
                 KeyCode::Up => return self.select_previous_message(),
                 KeyCode::Down => return self.select_next_message(),
+                KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
+                }
+                KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
                 KeyCode::Char('c') => return self.handle_ctrl_c(),
                 KeyCode::Char('a') => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_line_start(app));
@@ -678,10 +684,10 @@ impl Controller {
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
         if key.modifiers == KeyModifiers::ALT {
             match key.code {
-                KeyCode::Char('b') => {
+                KeyCode::Char('b') | KeyCode::Left => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
                 }
-                KeyCode::Char('f') => {
+                KeyCode::Char('f') | KeyCode::Right => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
                 }
                 _ => {}
@@ -689,6 +695,12 @@ impl Controller {
         }
         if key.modifiers == KeyModifiers::CONTROL {
             match key.code {
+                KeyCode::Left => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
+                }
+                KeyCode::Right => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
                 KeyCode::Char('a') => {
                     return self.edit_prompt(|prompt, app| prompt.move_cursor_line_start(app));
                 }
