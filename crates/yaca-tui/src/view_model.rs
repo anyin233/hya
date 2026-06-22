@@ -29,6 +29,17 @@ pub struct TimelineItem {
 }
 
 #[must_use]
+pub(crate) fn latest_assistant_duration_ms(projection: &Projection) -> Option<u64> {
+    projection
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::Assistant)
+        .and_then(|message| message_duration_ms(message.started_millis, message.completed_millis))
+}
+
+#[must_use]
 pub fn timeline_items(projection: &Projection) -> Vec<TimelineItem> {
     projection
         .session

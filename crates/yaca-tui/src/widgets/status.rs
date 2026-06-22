@@ -5,8 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::identity::active_agent_label;
+use super::transcript_metadata::format_duration;
 use crate::AppState;
 use crate::theme::Theme;
+use crate::view_model::latest_assistant_duration_ms;
 
 pub fn render_runtime_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     if area.height == 0 || area.width == 0 {
@@ -24,7 +26,7 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
     } else {
         state.model.as_str()
     };
-    let state_label = if state.running { "streaming" } else { "idle" };
+    let state_label = runtime_state_label(state);
     let state_color = if state.running {
         theme.warning
     } else {
@@ -36,6 +38,16 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
         Span::styled(" · ", Style::default().fg(theme.muted)),
         Span::styled(model.to_string(), Style::default().fg(theme.text)),
         Span::styled(" · ", Style::default().fg(theme.muted)),
-        Span::styled(state_label.to_string(), Style::default().fg(state_color)),
+        Span::styled(state_label, Style::default().fg(state_color)),
     ])
+}
+
+fn runtime_state_label(state: &AppState) -> String {
+    if state.running {
+        "streaming".to_string()
+    } else {
+        latest_assistant_duration_ms(&state.projection)
+            .map(format_duration)
+            .unwrap_or_else(|| "idle".to_string())
+    }
 }

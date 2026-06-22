@@ -23,7 +23,7 @@ pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockS
     format!("▣ {} · {model} · {status}", active_agent_label(state))
 }
 
-fn format_duration(ms: u64) -> String {
+pub(super) fn format_duration(ms: u64) -> String {
     if ms < 1_000 {
         return format!("{ms}ms");
     }
