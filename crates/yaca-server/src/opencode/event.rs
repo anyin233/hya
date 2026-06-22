@@ -10,7 +10,7 @@ use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::{Envelope, Event, SessionId};
+use yaca_proto::{Envelope, Event, FinishReason, MessageId, Role, SessionId};
 
 use crate::ServerState;
 
@@ -67,12 +67,20 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         Event::SessionTitled { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
         }
-        _ => serde_json::to_value(EventPayload {
-            id: format!("evt_yaca_{}", envelope.seq.0),
-            kind: "yaca.envelope",
-            properties: envelope,
-        })
-        .unwrap_or_else(|_| json!({})),
+        Event::MessageStarted {
+            session,
+            message,
+            role,
+        } => message_payload(&envelope, *session, *message, *role, None)
+            .unwrap_or_else(|| fallback_payload(&envelope)),
+        Event::MessageFinished {
+            session,
+            message,
+            role,
+            finish,
+        } => message_payload(&envelope, *session, *message, *role, Some(*finish))
+            .unwrap_or_else(|| fallback_payload(&envelope)),
+        _ => fallback_payload(&envelope),
     }
 }
 
@@ -94,6 +102,87 @@ async fn session_payload(
         "type": kind,
         "properties": properties,
     })
+}
+
+fn message_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    role: Role,
+    finish: Option<FinishReason>,
+) -> Option<Value> {
+    let session_id = session.to_string();
+    let message_id = message.to_string();
+    let role = match role {
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::System => return None,
+    };
+    let mut info = match role {
+        "user" => json!({
+            "id": message_id,
+            "sessionID": session_id,
+            "role": role,
+            "time": { "created": envelope.ts_millis },
+            "agent": "yaca",
+            "model": { "providerID": "yaca", "modelID": "unknown" },
+        }),
+        _ => json!({
+            "id": message_id,
+            "sessionID": session_id,
+            "role": role,
+            "time": { "created": envelope.ts_millis },
+            "parentID": "",
+            "modelID": "unknown",
+            "providerID": "yaca",
+            "mode": "build",
+            "agent": "yaca",
+            "path": { "cwd": "", "root": "" },
+            "cost": 0,
+            "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": { "read": 0, "write": 0 },
+            },
+        }),
+    };
+    if let Some(finish) = finish
+        && role == "assistant"
+        && let Some(object) = info.as_object_mut()
+    {
+        object.insert("finish".to_string(), json!(finish_name(finish)));
+        if let Some(time) = object.get_mut("time").and_then(Value::as_object_mut) {
+            time.insert("completed".to_string(), json!(envelope.ts_millis));
+        }
+    }
+    Some(json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.updated",
+        "properties": {
+            "sessionID": session.to_string(),
+            "info": info,
+        },
+    }))
+}
+
+fn fallback_payload(envelope: &Envelope) -> Value {
+    serde_json::to_value(EventPayload {
+        id: format!("evt_yaca_{}", envelope.seq.0),
+        kind: "yaca.envelope",
+        properties: envelope,
+    })
+    .unwrap_or_else(|_| json!({}))
+}
+
+fn finish_name(finish: FinishReason) -> &'static str {
+    match finish {
+        FinishReason::Stop => "stop",
+        FinishReason::ToolCalls => "tool-calls",
+        FinishReason::Length => "length",
+        FinishReason::Cancelled => "cancelled",
+        FinishReason::Error => "error",
+    }
 }
 
 fn session_error_payload(
