@@ -9,7 +9,9 @@ use serde_json::json;
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::{CreateSessionResponse, PromptResponse};
-use yaca_proto::{AgentName, Envelope, FinishReason, ModelRef, Projection};
+use yaca_proto::{
+    AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, Projection, Role,
+};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -103,6 +105,76 @@ async fn create_prompt_and_replay_events() {
         resumed.apply(e);
     }
     assert_eq!(resumed, full);
+}
+
+#[tokio::test]
+async fn command_endpoint_admits_command_prompt_and_emits_event() {
+    let app = router(state().await);
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"agent": "build", "model": "fake", "workdir": "/tmp"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created: CreateSessionResponse = serde_json::from_value(body_json(create).await).unwrap();
+    let uuid = created.session.as_uuid();
+
+    let command = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/{uuid}/command"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"command": "review", "arguments": "diff"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command.status(), StatusCode::OK);
+    let response: PromptResponse = serde_json::from_value(body_json(command).await).unwrap();
+    assert_eq!(response.finish, FinishReason::Stop);
+
+    let events = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/sessions/{uuid}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let envs: Vec<Envelope> = serde_json::from_value(body_json(events).await).unwrap();
+    let projection = Projection::from_events(&envs);
+    let user = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::User)
+        .expect("user message");
+    assert!(user.parts.iter().any(|part| {
+        matches!(part, PartProjection::Text { text, .. } if text == "/review diff")
+    }));
+    assert!(envs.iter().any(|envelope| {
+        matches!(
+            &envelope.event,
+            Event::CommandExecuted { command, arguments, message, .. }
+                if command == "review" && arguments == "diff" && *message == response.message
+        )
+    }));
 }
 
 #[tokio::test]
