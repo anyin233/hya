@@ -26,6 +26,8 @@ impl TextPartAccumulator {
             Event::TextEnd { part, .. } => self.parts.get(part).map(|text| (*part, text.clone())),
             Event::SessionCreated { .. }
             | Event::SessionTitled { .. }
+            | Event::AgentSwitched { .. }
+            | Event::ModelSwitched { .. }
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
             | Event::MessageFinished { .. }

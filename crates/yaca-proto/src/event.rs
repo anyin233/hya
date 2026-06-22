@@ -25,6 +25,14 @@ pub enum Event {
         session: SessionId,
         title: String,
     },
+    AgentSwitched {
+        session: SessionId,
+        agent: AgentName,
+    },
+    ModelSwitched {
+        session: SessionId,
+        model: ModelRef,
+    },
     CommandExecuted {
         session: SessionId,
         command: String,
@@ -150,6 +158,8 @@ impl Event {
         match self {
             Event::SessionCreated { session, .. }
             | Event::SessionTitled { session, .. }
+            | Event::AgentSwitched { session, .. }
+            | Event::ModelSwitched { session, .. }
             | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::MessageFinished { session, .. }

@@ -168,4 +168,18 @@ impl SessionEngine {
         .await?;
         Ok(id)
     }
+
+    pub async fn switch_agent(
+        &self,
+        session: SessionId,
+        agent: AgentName,
+    ) -> Result<(), CoreError> {
+        self.emit(session, Event::AgentSwitched { session, agent })
+            .await
+    }
+
+    pub async fn switch_model(&self, session: SessionId, model: ModelRef) -> Result<(), CoreError> {
+        self.emit(session, Event::ModelSwitched { session, model })
+            .await
+    }
 }
