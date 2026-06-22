@@ -214,3 +214,16 @@ async fn opencode_v2_pty_routes_wrap_location_and_manage_session_metadata() {
     let (status, _) = request(app, "POST", "/api/pty/pty_missing/connect-token", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn opencode_pty_connect_reports_missing_session_before_ticket_validation() {
+    let app = router(state().await);
+
+    let (status, missing) = request(app.clone(), "GET", "/pty/pty_missing/connect", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["_tag"], "PtyNotFoundError");
+
+    let (status, missing) = request(app, "GET", "/api/pty/pty_missing/connect", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["_tag"], "PtyNotFoundError");
+}
