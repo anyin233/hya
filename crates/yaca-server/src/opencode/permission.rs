@@ -18,6 +18,10 @@ pub(super) fn router() -> Router<ServerState> {
             "/api/session/:id/permission/:request/reply",
             post(reply_request),
         )
+        .route(
+            "/session/:id/permissions/:request",
+            post(reply_legacy_request),
+        )
 }
 
 #[derive(Serialize)]
@@ -43,6 +47,11 @@ struct SessionPermissionList {
 struct ReplyPayload {
     reply: WirePermissionReply,
     message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LegacyReplyPayload {
+    response: WirePermissionReply,
 }
 
 #[derive(Deserialize)]
@@ -78,22 +87,46 @@ async fn reply_request(
 ) -> Result<StatusCode, ApiError> {
     let session = parse_session(&id)?;
     load_session(&st, session, None).await?;
-    let reply = match payload.reply {
-        WirePermissionReply::Once => crate::pending::PermissionReply::Once,
-        WirePermissionReply::Always => crate::pending::PermissionReply::Always,
-        WirePermissionReply::Reject => crate::pending::PermissionReply::Reject,
-    };
-    if st
-        .permission_requests
-        .reply(session, &request, reply, payload.message)
-        .await
-    {
+    if reply_to_pending(&st, session, &request, payload.reply, payload.message).await {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(format!(
             "permission request not found: {request}"
         )))
     }
+}
+
+async fn reply_legacy_request(
+    State(st): State<ServerState>,
+    Path((id, request)): Path<(String, String)>,
+    Json(payload): Json<LegacyReplyPayload>,
+) -> Result<Json<bool>, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    if reply_to_pending(&st, session, &request, payload.response, None).await {
+        Ok(Json(true))
+    } else {
+        Err(ApiError::not_found(format!(
+            "permission request not found: {request}"
+        )))
+    }
+}
+
+async fn reply_to_pending(
+    st: &ServerState,
+    session: yaca_proto::SessionId,
+    request: &str,
+    reply: WirePermissionReply,
+    message: Option<String>,
+) -> bool {
+    let reply = match reply {
+        WirePermissionReply::Once => crate::pending::PermissionReply::Once,
+        WirePermissionReply::Always => crate::pending::PermissionReply::Always,
+        WirePermissionReply::Reject => crate::pending::PermissionReply::Reject,
+    };
+    st.permission_requests
+        .reply(session, request, reply, message)
+        .await
 }
 
 async fn list_saved() -> Json<SavedPermissionList> {

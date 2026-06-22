@@ -152,6 +152,47 @@ async fn opencode_permission_request_lists_and_replies_by_session() {
 }
 
 #[tokio::test]
+async fn opencode_legacy_session_permission_responds_by_session() {
+    let (permission, permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let scoped_permission = permission.clone();
+    let (engine, agent) = base_engine(permission, None, tempdir()).await;
+    let session = create_session(&engine, &agent).await;
+    let other_session = create_session(&engine, &agent).await;
+    let app = router(AppState::new(engine, agent).with_permission_requests(permission_rx));
+
+    let task_session = session.parse().unwrap();
+    let task = tokio::spawn(async move {
+        scoped_permission
+            .for_session(task_session)
+            .assert(Action::Bash, Resource::Command("pwd".to_string()))
+            .await
+    });
+
+    let listed = wait_for_data(app.clone(), &format!("/api/session/{session}/permission")).await;
+    let request_id = listed["data"][0]["id"].as_str().unwrap().to_string();
+
+    let wrong_session = request(
+        app.clone(),
+        "POST",
+        &format!("/session/{other_session}/permissions/{request_id}"),
+        Some(json!({"response": "always"})),
+    )
+    .await;
+    assert_eq!(wrong_session.status(), StatusCode::NOT_FOUND);
+
+    let reply = request(
+        app,
+        "POST",
+        &format!("/session/{session}/permissions/{request_id}"),
+        Some(json!({"response": "always"})),
+    )
+    .await;
+    assert_eq!(reply.status(), StatusCode::OK);
+    assert_eq!(body_json(reply).await, json!(true));
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn opencode_question_request_lists_replies_and_rejects() {
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
     let (interaction, question_rx) = InteractionPlane::new();
