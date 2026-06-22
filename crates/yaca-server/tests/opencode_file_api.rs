@@ -32,6 +32,10 @@ fn tempdir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(dir.join("README.md"), "# yaca\n\nhello docs\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "ignored.log\nbuild/\n").unwrap();
+    std::fs::write(dir.join("ignored.log"), "skip\n").unwrap();
+    std::fs::create_dir_all(dir.join("build")).unwrap();
+    std::fs::write(dir.join("build/cache.txt"), "skip\n").unwrap();
     dir
 }
 
@@ -92,6 +96,23 @@ async fn opencode_file_routes_return_legacy_shapes() {
     assert_eq!(listing[0]["path"], "src/main.rs");
     assert_eq!(listing[0]["type"], "file");
     assert_eq!(listing[0]["ignored"], false);
+
+    let (status, root_listing) = get_json(app.clone(), "/file?path=.").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        root_listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "ignored.log" && entry["ignored"] == true)
+    );
+    assert!(
+        root_listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "build" && entry["ignored"] == true)
+    );
 
     let (status, matches) = get_json(app.clone(), "/find?pattern=hello").await;
     assert_eq!(status, StatusCode::OK);
