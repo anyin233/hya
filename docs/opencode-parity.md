@@ -3,8 +3,9 @@
 Last refreshed: 2026-06-22.
 
 OpenCode baseline: `sst/opencode` `origin/dev`
-`494123a8754d4d6fc28563c8a380a6ff9f39bbb0`
-(`chore: generate`, after
+`c5a4a8288cbe115f673f3f9933fe217402c85406`
+(`fix: dont show gpt-5.5-pro when using codex oauth (#33400)`;
+also includes the generated schema refresh after
 `refactor(core): simplify session run coordination (#33388)`).
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
@@ -15,8 +16,8 @@ permission/question queue, project copy, project metadata/init/update, MCP
 status plus disabled-add HTTP compatibility, v2 location-scoped filesystem
 compatibility, PTY
 shells/list discovery, OpenCode `/log` and `/auth/:providerID`, global
-health/event/config/dispose/upgrade routes, legacy event route, OpenAPI `/doc`
-and `/openapi.json` implemented-path skeleton discovery, legacy config and provider
+health/event/config/dispose/upgrade routes, legacy and native v2 event routes,
+OpenAPI `/doc` and `/openapi.json` implemented-path skeleton discovery, legacy config and provider
 catalog/auth-method routes, legacy session todo compatibility, and queued TUI
 HTTP route increments, basic provider auth list/logout CLI support, plus
 empty-backend v2 credential/integration mutation route compatibility, and
@@ -70,7 +71,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, apply, and v2 location/agent/command/skill endpoints are present. VCS status plus git/branch-mode diff list untracked files, preserve special paths, and cap oversized single-file and total patch output with OpenCode-format empty patch placeholders. Remaining gaps are branch-mode edge-case parity, OpenCode batch-patch behavior, real LSP/formatter status integration, and full command/agent/skill config/plugin merging. |
 | Config/catalog routes | Legacy `/config`/`/config/providers` and active provider/model v2 routes exist, including OpenCode location query/header wrappers for v2 catalog responses, but yaca has not moved the full resolved config/model catalog into server state. Missing full OpenCode config/catalog metadata, durable update semantics, and models.dev-backed provider metadata; yaca reads its own `~/.config/yaca/config.yaml`. |
 | Global control routes | `/global/health`, `/global/event`, `/global/config`, `/global/dispose`, and `/global/upgrade` are present. Global config is runtime-only, dispose returns OpenCode-shaped success without full lifecycle teardown/events, and upgrade validates request shape but reports unavailable instead of performing an installation update. Missing durable global config persistence, global instance disposal lifecycle, upgrade/uninstall behavior, and update events. |
-| Provider/auth breadth | OpenCode `/auth/:providerID` accepts `api`, `oauth`, and `wellknown` payloads and persists the effective token to yaca's local token file; legacy `/provider` and v2 provider/model routes expose the active yaca model; legacy `/provider/auth` exposes an API key method for the active provider; unsupported provider OAuth authorize/callback payloads return 400; CLI supports `login`, `auth list`, and `auth logout`; v2 credential update/remove and integration connect/attempt routes now match OpenCode's empty-backend observable statuses. The already constructed provider router is not hot-reloaded after token mutation. Missing AI SDK provider breadth, OpenAI websocket pool/retry behavior, full models.dev metadata/autoload, provider status/cost/limit metadata, real OAuth authorize/callback flows, plugin-supplied provider auth methods, real credential storage, real integration providers/auth flows, and Console/org switching. |
+| Provider/auth breadth | OpenCode `/auth/:providerID` accepts `api`, `oauth`, and `wellknown` payloads and persists the effective token to yaca's local token file; legacy `/provider` and v2 provider/model routes expose the active yaca model; legacy `/provider/auth` exposes an API key method for the active provider; unsupported provider OAuth authorize/callback payloads return 400; CLI supports `login`, `auth list`, and `auth logout`; v2 credential update/remove and integration connect/attempt routes now match OpenCode's empty-backend observable statuses. The already constructed provider router is not hot-reloaded after token mutation. Missing AI SDK provider breadth, OpenAI websocket pool/retry behavior, full models.dev metadata/autoload, provider status/cost/limit metadata, real OAuth authorize/callback flows, Codex OAuth model filtering such as OpenCode's `gpt-5.5-pro` suppression, plugin-supplied provider auth methods, real credential storage, real integration providers/auth flows, and Console/org switching. |
 | PTY | `/pty` and `/api/pty` expose OpenCode-shaped in-process PTY metadata lifecycle routes: shell discovery, list/create/get/update/remove, typed not-found responses, v2 location wrapping, CSRF-style connect-token rejection/random issuance, and one-time ticket consumption. Missing real pseudo-terminal process creation, retained output buffers, exit-state retention, and websocket attach I/O flow. |
 | TUI control API | `/tui/publish`, direct `/tui/append-prompt`, `/tui/open-help`, `/tui/open-sessions`, `/tui/open-themes`, `/tui/open-models`, `/tui/submit-prompt`, `/tui/clear-prompt`, `/tui/execute-command`, `/tui/show-toast`, `/tui/select-session`, and `/tui/control/next`/`response` queue routes exist. Missing real TUI main-loop integration and event-bus delivery parity. |
 | TUI full feature parity | Missing or incomplete OpenCode command palette, theme picker/bundled theme library, model variant picker, skill picker error UI (`9dadc24`), rich markdown/diff/code rendering, usage/cost display wiring, prompt stash, and full keymap/leader UX. |
