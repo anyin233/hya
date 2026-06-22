@@ -38,6 +38,7 @@ export type AdapterOptions = {
 
 export type DiscoveryContext = {
   readonly directory: string
+  readonly worktree?: string
   readonly xdgConfigHome?: string
   readonly home?: string
 }
@@ -90,8 +91,29 @@ export function opencodeConfigDirs(
   if (global !== undefined) {
     dirs.push(global)
   }
-  dirs.push(path.join(context.directory, ".opencode"))
+  dirs.push(...projectConfigDirs(context.directory, context.worktree))
   return [...new Set(dirs)]
+}
+
+function projectConfigDirs(
+  directory: string,
+  worktree: string | undefined,
+): readonly string[] {
+  const dirs: string[] = []
+  const stop = worktree === undefined ? undefined : path.resolve(worktree)
+  let current = path.resolve(directory)
+  while (true) {
+    dirs.push(path.join(current, ".opencode"))
+    if (current === stop) {
+      break
+    }
+    const parent = path.dirname(current)
+    if (parent === current) {
+      break
+    }
+    current = parent
+  }
+  return dirs
 }
 
 async function scanPluginDir(dir: string): Promise<readonly string[]> {

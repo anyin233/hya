@@ -52,6 +52,7 @@ test("discovers project and global OpenCode plugin files", async () => {
 
   const specs = await discoverPluginSpecs({
     directory,
+    worktree: directory,
     xdgConfigHome,
     home: path.join(root, "home"),
   })
@@ -81,6 +82,7 @@ test("discovers OpenCode config plugin entries relative to their config file", a
   // When: the adapter discovers OpenCode plugin specs for the project.
   const specs = await discoverPluginSpecs({
     directory,
+    worktree: directory,
     xdgConfigHome: path.join(root, "xdg"),
     home: path.join(root, "home"),
   })
@@ -113,6 +115,7 @@ test("discovers OpenCode JSONC config plugin entries", async () => {
   // When: the adapter discovers OpenCode plugin specs for the project.
   const specs = await discoverPluginSpecs({
     directory,
+    worktree: directory,
     xdgConfigHome: path.join(root, "xdg"),
     home: path.join(root, "home"),
   })
@@ -146,6 +149,7 @@ test("deduplicates OpenCode config npm plugins by package name", async () => {
   // When: the adapter discovers merged OpenCode plugin specs.
   const specs = await discoverPluginSpecs({
     directory,
+    worktree: directory,
     xdgConfigHome,
     home: path.join(root, "home"),
   })
@@ -155,6 +159,44 @@ test("deduplicates OpenCode config npm plugins by package name", async () => {
     "global-only@1.0.0",
     ["shared-plugin@2.0.0", { source: "local" }],
     "local-only@1.0.0",
+  ])
+})
+
+test("discovers child OpenCode config directories before parent directories", async () => {
+  // Given: parent and child project directories both declare OpenCode plugins.
+  const root = await makeTempDir()
+  const parent = path.join(root, "project")
+  const child = path.join(parent, "nested")
+  const parentConfig = path.join(parent, ".opencode", "opencode.json")
+  const childConfig = path.join(child, ".opencode", "opencode.json")
+  await mkdir(path.dirname(parentConfig), { recursive: true })
+  await mkdir(path.dirname(childConfig), { recursive: true })
+  await writeFile(
+    parentConfig,
+    JSON.stringify({
+      plugin: [["shared-plugin@2.0.0", { source: "parent" }], "parent-plugin"],
+    }),
+  )
+  await writeFile(
+    childConfig,
+    JSON.stringify({
+      plugin: ["child-plugin", "shared-plugin@1.0.0"],
+    }),
+  )
+
+  // When: discovery starts from the nested directory.
+  const specs = await discoverPluginSpecs({
+    directory: child,
+    worktree: parent,
+    xdgConfigHome: path.join(root, "xdg"),
+    home: path.join(root, "home"),
+  })
+
+  // Then: child config is scanned first while parent duplicates still win.
+  expect(specs).toEqual([
+    "child-plugin",
+    ["shared-plugin@2.0.0", { source: "parent" }],
+    "parent-plugin",
   ])
 })
 
