@@ -197,4 +197,9 @@ impl SessionEngine {
         self.emit(session, Event::ModelSwitched { session, model })
             .await
     }
+
+    pub async fn set_title(&self, session: SessionId, title: String) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionTitled { session, title })
+            .await
+    }
 }
