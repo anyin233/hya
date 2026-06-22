@@ -25,6 +25,10 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
         Line::from(Span::styled(
+            dialog.title.clone(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
             dialog.subtitle.clone(),
             Style::default().fg(theme.muted),
         )),
@@ -61,12 +65,6 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.element))
-            .block(
-                Block::default()
-                    .title(dialog.title.clone())
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_active)),
-            )
             .wrap(Wrap { trim: false }),
         rect,
     );

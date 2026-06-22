@@ -205,6 +205,12 @@ fn list_dialog_renders_selected_item_and_hints() {
 
     let text = render(&mut state, 100, 24);
     assert!(text.contains("select model"), "dialog title renders");
+    for glyph in ["┌", "┐", "└", "┘"] {
+        assert!(
+            !text.contains(glyph),
+            "OpenCode command dialogs should not draw box border corner {glyph}"
+        );
+    }
     assert!(
         text.contains("next turn uses the selected model"),
         "dialog subtitle renders"
