@@ -7,6 +7,7 @@
 //! offline echo provider keeps the whole stack runnable.
 
 mod auth;
+mod auth_cmd;
 mod commands;
 mod config;
 mod permission;
@@ -43,6 +44,7 @@ use yaca_plugin::config::PluginSpec;
 use yaca_plugin::{HostInfo, PermissionBridge, PluginHost};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
+use auth_cmd::AuthCommand;
 
 #[derive(Parser)]
 #[command(
@@ -108,6 +110,11 @@ enum Command {
         provider: String,
         /// The bearer/API token to store.
         token: String,
+    },
+    /// Inspect or remove saved provider auth tokens.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
     },
     /// List sessions stored in a database.
     Sessions {
@@ -754,12 +761,6 @@ async fn cmd_sessions(db: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_login(provider: String, token: String) -> anyhow::Result<()> {
-    auth::save_token(&provider, &token).with_context(|| format!("save token for {provider}"))?;
-    println!("Saved auth token for provider '{provider}'.");
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -775,7 +776,8 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, yolo, json).await,
         Some(Command::Serve { bind, db }) => cmd_serve(bind, db, model, yolo).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
-        Some(Command::Login { provider, token }) => cmd_login(provider, token).await,
+        Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
+        Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Sessions { db }) => cmd_sessions(db).await,
         Some(Command::Rpc) => cmd_rpc(model, yolo).await,
     }
