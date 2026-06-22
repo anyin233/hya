@@ -59,4 +59,16 @@ async fn opencode_doc_route_returns_openapi_document() {
     assert!(body["info"].is_object());
     assert!(body["paths"]["/global/health"].is_object());
     assert!(body["paths"]["/session"].is_object());
+    assert!(body["paths"]["/provider"].is_object());
+    assert!(body["paths"]["/provider/auth"].is_object());
+    assert!(body["paths"]["/file"].is_object());
+    assert!(body["paths"]["/find"].is_object());
+    assert!(body["paths"]["/find/file"].is_object());
+    assert!(body["paths"]["/find/symbol"].is_object());
+    assert!(body["paths"]["/permission"].is_object());
+    assert!(body["paths"]["/api/provider"].is_object());
+    assert!(body["paths"]["/api/model"].is_object());
+    assert!(body["paths"]["/api/fs/list"].is_object());
+    assert!(body["paths"]["/api/fs/find"].is_object());
+    assert!(body["paths"]["/api/permission/request"].is_object());
 }
