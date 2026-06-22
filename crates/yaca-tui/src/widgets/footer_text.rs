@@ -46,7 +46,6 @@ fn default_footer_text(state: &AppState, width: u16) -> String {
     if let Some(label) = mcp_label(state) {
         segments.push(label);
     }
-    segments.push(env!("CARGO_PKG_VERSION").to_string());
     segments.join(" · ")
 }
 

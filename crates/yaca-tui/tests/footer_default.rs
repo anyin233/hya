@@ -66,7 +66,7 @@ fn default_footer_shows_agent_shortcut_until_usage_exists() {
 }
 
 #[test]
-fn footer_renders_project_mcp_and_version() {
+fn footer_renders_project_mcp_without_app_version() {
     // Given: an idle OpenCode-style footer with worktree, branch, and MCP state.
     let mut state = AppState {
         branch_label: Some("feat/footer".to_string()),
@@ -96,8 +96,8 @@ fn footer_renders_project_mcp_and_version() {
         "footer should expose the OpenCode status command, got {bottom_row:?}"
     );
     assert!(
-        bottom_row.contains("0.0.0"),
-        "footer should show the yaca version, got {bottom_row:?}"
+        !bottom_row.contains("0.0.0"),
+        "bottom footer should not duplicate the sidebar app version, got {bottom_row:?}"
     );
     assert!(
         bottom_row.contains("ctrl+p commands"),
