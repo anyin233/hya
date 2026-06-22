@@ -2,8 +2,11 @@
 //! store (read path) and the client (SSE reconnect); idempotent by `EventSeq` so
 //! re-delivered events are no-ops.
 
+mod helpers;
+
 use serde::{Deserialize, Serialize};
 
+use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{MessageId, PartId, SessionId, ToolCallId};
 use crate::message::{FinishReason, Role, ToolPartState};
@@ -225,60 +228,10 @@ impl Projection {
             Event::TextEnd { .. }
             | Event::ReasoningEnd { .. }
             | Event::ToolInputDelta { .. }
+            | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::Error { .. } => {}
         }
-    }
-}
-
-fn push_part(p: &mut Projection, msg: MessageId, part: PartProjection) {
-    if let Some(m) = p.message_mut(msg)
-        && !m.parts.iter().any(|x| x.id() == part.id())
-    {
-        m.parts.push(part);
-    }
-}
-
-fn find_part(p: &mut Projection, msg: MessageId, part: PartId) -> Option<&mut PartProjection> {
-    p.message_mut(msg)?
-        .parts
-        .iter_mut()
-        .find(|x| x.id() == part)
-}
-
-fn upsert_tool(
-    p: &mut Projection,
-    msg: MessageId,
-    part: PartId,
-    call: ToolCallId,
-    name: ToolName,
-    state: ToolPartState,
-) {
-    if let Some(PartProjection::Tool {
-        state: existing, ..
-    }) = find_part(p, msg, part)
-    {
-        *existing = state;
-    } else {
-        push_part(
-            p,
-            msg,
-            PartProjection::Tool {
-                id: part,
-                call,
-                name,
-                state,
-            },
-        );
-    }
-}
-
-fn tool_input(state: &ToolPartState) -> serde_json::Value {
-    match state {
-        ToolPartState::Pending { input }
-        | ToolPartState::Running { input }
-        | ToolPartState::Completed { input, .. }
-        | ToolPartState::Error { input, .. } => input.clone(),
     }
 }

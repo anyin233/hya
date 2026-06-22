@@ -40,6 +40,8 @@ function openCodeEventFromEnvelope(envelope: EventEnvelope): OpenCodeEvent | und
   switch (event.type) {
     case "session_created":
       return sessionCreatedEvent(envelope)
+    case "command_executed":
+      return commandExecutedEvent(envelope)
     case "error":
       return errorEvent(envelope)
     case "text_delta":
@@ -72,6 +74,31 @@ function sessionCreatedEvent(envelope: EventEnvelope): OpenCodeEvent | undefined
         version: "0",
         time: { created: envelope.ts_millis, updated: envelope.ts_millis },
       },
+    },
+  }
+}
+
+function commandExecutedEvent(envelope: EventEnvelope): OpenCodeEvent | undefined {
+  const session = stringField(envelope.event, "session")
+  const command = stringField(envelope.event, "command")
+  const argumentsValue = stringField(envelope.event, "arguments")
+  const message = stringField(envelope.event, "message")
+  if (
+    session === undefined ||
+    command === undefined ||
+    argumentsValue === undefined ||
+    message === undefined
+  ) {
+    return undefined
+  }
+  return {
+    id: String(envelope.seq),
+    type: "command.executed",
+    properties: {
+      name: command,
+      sessionID: session,
+      arguments: argumentsValue,
+      messageID: message,
     },
   }
 }

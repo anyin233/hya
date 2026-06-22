@@ -305,8 +305,8 @@ impl SessionEngine {
             match hooks
                 .command_execute_before(CommandExecuteBeforeInput {
                     session,
-                    command,
-                    arguments,
+                    command: command.clone(),
+                    arguments: arguments.clone(),
                     text,
                 })
                 .await
@@ -316,7 +316,18 @@ impl SessionEngine {
         } else {
             text
         };
-        self.admit_user_prompt(session, text).await
+        let message = self.admit_user_prompt(session, text).await?;
+        self.emit(
+            session,
+            Event::CommandExecuted {
+                session,
+                command,
+                arguments,
+                message,
+            },
+        )
+        .await?;
+        Ok(message)
     }
 
     pub async fn run_turn(

@@ -85,6 +85,65 @@ test("event notification fans out to OpenCode event hooks", async () => {
   })
 })
 
+test("command executed events map to OpenCode command events", async () => {
+  const root = await makeTempDir()
+  const markerFile = path.join(root, "command-event.json")
+  const pluginFile = path.join(root, "command-event.ts")
+  await writeFile(
+    pluginFile,
+    [
+      'import { writeFile } from "node:fs/promises"',
+      "export default {",
+      '  id: "command-event",',
+      "  server: async () => ({",
+      "    event: async (input) => {",
+      "      await writeFile(process.env.YACA_EVENT_MARKER, JSON.stringify(input.event))",
+      "    },",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  await runAdapter(
+    root,
+    pluginFile,
+    [
+      initializeRequest(11),
+      {
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          envelope: {
+            seq: 19,
+            ts_millis: 20,
+            event: {
+              type: "command_executed",
+              session: "session-1",
+              command: "review",
+              arguments: "commit",
+              message: "message-1",
+            },
+          },
+        },
+      },
+      shutdownRequest(12),
+    ],
+    { YACA_EVENT_MARKER: markerFile },
+  )
+
+  const event = JSON.parse(await readFile(markerFile, "utf8")) as unknown
+  expect(event).toEqual({
+    id: "19",
+    type: "command.executed",
+    properties: {
+      name: "review",
+      sessionID: "session-1",
+      arguments: "commit",
+      messageID: "message-1",
+    },
+  })
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,
