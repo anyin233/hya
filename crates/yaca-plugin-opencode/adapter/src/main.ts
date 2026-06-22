@@ -1,3 +1,5 @@
+import { runAdapter } from "./runtime"
+
 const VERSION = "0.0.0"
 
 function printHelp() {
@@ -17,7 +19,9 @@ if (arg === "--help" || arg === "-h") {
   process.exit(0)
 }
 
-console.error(
-  "yaca-opencode-adapter skeleton: OpenCode plugin loading is not implemented yet",
-)
-process.exit(1)
+await runAdapter({
+  input: Bun.stdin.stream(),
+  stdout: { write: (data) => process.stdout.write(data) },
+  stderr: { write: (data) => process.stderr.write(data) },
+  version: VERSION,
+})
