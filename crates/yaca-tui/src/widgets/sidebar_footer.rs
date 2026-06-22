@@ -30,7 +30,7 @@ fn workdir_footer_label(state: &AppState, width: u16) -> String {
         .filter(|branch| !branch.is_empty())
     {
         Some(branch) => format!("{workdir}:{branch}"),
-        None => format!("{workdir}:"),
+        None => workdir,
     };
     let content_width = usize::from(width).saturating_sub(FOOTER_PADDING_WIDTH);
     ellipsize_tail(&label, content_width)
