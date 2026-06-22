@@ -30,7 +30,7 @@ async fn revert(
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     if st.runs.is_busy(session) {
-        return Ok(busy_response(session));
+        return Ok(super::errors::session_busy(session));
     }
     let snapshot = match load_session(&st, session).await? {
         Ok(snapshot) => snapshot,
@@ -63,7 +63,7 @@ async fn unrevert(
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     if st.runs.is_busy(session) {
-        return Ok(busy_response(session));
+        return Ok(super::errors::session_busy(session));
     }
     let snapshot = match load_session(&st, session).await? {
         Ok(snapshot) => snapshot,
@@ -102,18 +102,6 @@ fn not_found_response(session: yaca_proto::SessionId) -> Response {
         Json(json!({
             "name": "NotFoundError",
             "data": { "message": format!("Session not found: {session}") },
-        })),
-    )
-        .into_response()
-}
-
-fn busy_response(session: yaca_proto::SessionId) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({
-            "_tag": "SessionBusyError",
-            "sessionID": session.to_string(),
-            "message": format!("Session is busy: {session}"),
         })),
     )
         .into_response()

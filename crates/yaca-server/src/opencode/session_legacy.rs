@@ -292,18 +292,17 @@ async fn shell(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<ShellRequest>,
-) -> Result<Json<projection::OpenCodeMessage>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     load_session(&st, session, None).await?;
-    let run = st
-        .runs
-        .start(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let Some(run) = st.runs.start(session) else {
+        return Ok(super::errors::session_busy(session));
+    };
     let (message, _finish) = st
         .engine
         .run_shell(session, &st.agent, req.command, run.token())
         .await?;
-    Ok(Json(load_message(&st, session, message).await?))
+    Ok(Json(load_message(&st, session, message).await?).into_response())
 }
 
 async fn abort(
