@@ -4,7 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, PartId, Role, SessionId};
-use yaca_tui::{AppState, draw};
+use yaca_tui::{AppState, ContextView, draw};
 
 fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     let backend = TestBackend::new(width, height);
@@ -83,5 +83,40 @@ fn main_stream_starts_at_top_without_status_banner() {
     assert!(
         !first_row.contains(" · build · fake · sess-1"),
         "OpenCode shell should not reserve a top status banner"
+    );
+}
+
+#[test]
+fn composer_metadata_includes_context_usage_before_cost() {
+    // Given: the runtime has OpenCode-style context and billing metadata.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        reasoning_effort: Some("max".to_string()),
+        cost_label: Some("$3.14".to_string()),
+        context: ContextView {
+            current_tokens: Some(187_750),
+            context_window_tokens: Some(988_000),
+            ..ContextView::default()
+        },
+        ..AppState::default()
+    };
+
+    // When: the composer renders in the OpenCode shell.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = rendered_row(&buffer, 120, 13);
+
+    // Then: token usage appears before billing and command affordances.
+    assert!(
+        metadata_row.contains("187.8K (19%)"),
+        "composer metadata should show compact context usage, got {metadata_row:?}"
+    );
+    assert!(
+        metadata_row.contains("$3.14"),
+        "composer metadata should keep billing visible"
+    );
+    assert!(
+        metadata_row.contains("ctrl+p commands"),
+        "composer metadata should keep command affordance visible"
     );
 }

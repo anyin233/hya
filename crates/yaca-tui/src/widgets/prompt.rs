@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use super::sidebar_format::used_percent;
 use crate::AppState;
 use crate::theme::Theme;
 
@@ -84,6 +85,8 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
     let effort = state.reasoning_effort.as_deref().unwrap_or("off");
     let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
     let mode = if state.yolo { "YOLO" } else { "manual" };
+    let context = composer_context_label(state);
+    let context_separator = if context.is_some() { " · " } else { "" };
     Line::from(vec![
         Span::styled("  ", Style::default().bg(theme.element)),
         Span::styled(
@@ -110,6 +113,14 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
         ),
         Span::styled("   ", Style::default().bg(theme.element)),
         Span::styled(
+            context.unwrap_or_default(),
+            Style::default().fg(theme.muted).bg(theme.element),
+        ),
+        Span::styled(
+            context_separator,
+            Style::default().fg(theme.muted).bg(theme.element),
+        ),
+        Span::styled(
             cost.to_string(),
             Style::default().fg(theme.muted).bg(theme.element),
         ),
@@ -118,6 +129,30 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
             Style::default().fg(theme.muted).bg(theme.element),
         ),
     ])
+}
+
+fn composer_context_label(state: &AppState) -> Option<String> {
+    let current = state.context.current_tokens?;
+    match state.context.context_window_tokens {
+        Some(window) => Some(format!(
+            "{} ({}%)",
+            compact_tokens(current),
+            used_percent(current, window)
+        )),
+        None => Some(compact_tokens(current)),
+    }
+}
+
+fn compact_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        let tenths = tokens.saturating_add(50_000) / 100_000;
+        format!("{}.{:01}M", tenths / 10, tenths % 10)
+    } else if tokens >= 1_000 {
+        let tenths = tokens.saturating_add(50) / 100;
+        format!("{}.{:01}K", tenths / 10, tenths % 10)
+    } else {
+        tokens.to_string()
+    }
 }
 
 fn runtime_footer_text(state: &AppState) -> String {
