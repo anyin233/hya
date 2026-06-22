@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -124,4 +126,32 @@ async fn opencode_v2_session_list_invalid_workspace_returns_typed_error() {
             "field": "workspace",
         })
     );
+}
+
+#[tokio::test]
+async fn opencode_v2_session_list_cursor_preserves_query_shape() {
+    let app = router(state().await);
+    create_session(app.clone(), None).await;
+    create_session(app.clone(), None).await;
+
+    let (status, first) = get_json(
+        app.clone(),
+        &format!("/api/session?limit=1&order=asc&search=Untitled&directory={WORKDIR}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = first["data"][0]["id"].as_str().expect("session id");
+    let cursor = first["cursor"]["next"].as_str().expect("next cursor");
+    let decoded: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(cursor).expect("cursor b64")).unwrap();
+    assert_eq!(decoded["order"], "asc");
+    assert_eq!(decoded["search"], "Untitled");
+    assert_eq!(decoded["directory"], WORKDIR);
+    assert_eq!(decoded["anchor"]["id"], session);
+    assert_eq!(decoded["anchor"]["direction"], "next");
+    assert!(decoded["anchor"]["time"].as_u64().is_some());
+
+    let (status, second) = get_json(app, &format!("/api/session?cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(second["data"][0]["id"], session);
 }

@@ -66,6 +66,10 @@ impl OpenCodeSessionInfo {
         self.time.updated
     }
 
+    pub(super) fn created_millis(&self) -> u64 {
+        self.time.created
+    }
+
     pub(super) fn title(&self) -> &str {
         &self.title
     }

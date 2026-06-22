@@ -21,6 +21,7 @@ struct ListQuery {
     start: Option<u64>,
     search: Option<String>,
     cursor: Option<String>,
+    directory: Option<String>,
     workspace: Option<String>,
 }
 
@@ -71,8 +72,25 @@ async fn list(
     {
         return Ok(super::errors::invalid_workspace_query());
     }
+    let decoded = match query
+        .cursor
+        .as_deref()
+        .map(super::session_v2_cursor::decode_cursor)
+        .transpose()
+    {
+        Ok(decoded) => decoded,
+        Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
+    };
+    let order = decoded
+        .as_ref()
+        .and_then(|cursor| cursor.order.as_deref())
+        .or(query.order.as_deref());
+    let search = decoded
+        .as_ref()
+        .and_then(|cursor| cursor.search.as_deref())
+        .or(query.search.as_deref());
     let mut sessions = load_sessions(&st).await?;
-    if query.order.as_deref() == Some("asc") {
+    if order == Some("asc") {
         sessions.reverse();
     }
     if query.roots == Some(true) {
@@ -81,16 +99,29 @@ async fn list(
     if let Some(start) = query.start {
         sessions.retain(|session| session.updated_millis() >= start);
     }
-    if let Some(search) = query.search {
-        sessions.retain(|session| session.title().contains(&search));
+    if let Some(search) = search {
+        sessions.retain(|session| session.title().contains(search));
     }
-    let start =
-        match super::session_v2_cursor::cursor_start(&sessions, query.cursor.as_deref(), limit) {
-            Ok(start) => start,
-            Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
-        };
+    let start = decoded
+        .as_ref()
+        .map(|cursor| super::session_v2_cursor::cursor_start(&sessions, cursor, limit))
+        .unwrap_or(0);
     let page: Vec<_> = sessions.into_iter().skip(start).take(limit).collect();
-    let cursor = super::session_v2_cursor::response_cursor(&page)?;
+    let cursor = super::session_v2_cursor::response_cursor(
+        &page,
+        super::session_v2_cursor::CursorParams {
+            order,
+            search,
+            directory: decoded
+                .as_ref()
+                .and_then(|cursor| cursor.directory.as_deref())
+                .or(query.directory.as_deref()),
+            workspace: decoded
+                .as_ref()
+                .and_then(|cursor| cursor.workspace.as_deref())
+                .or(query.workspace.as_deref()),
+        },
+    )?;
     Ok(Json(super::session_v2_cursor::SessionsResponse { data: page, cursor }).into_response())
 }
 
