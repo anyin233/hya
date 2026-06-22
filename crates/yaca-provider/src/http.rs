@@ -183,6 +183,7 @@ impl Provider for HttpProvider {
             .map(|model| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
+                capabilities: self.caps.clone(),
             })
             .collect()
     }

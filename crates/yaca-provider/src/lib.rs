@@ -63,10 +63,11 @@ pub struct Capabilities {
     pub max_context: u32,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderModel {
     pub provider_id: String,
     pub model_id: String,
+    pub capabilities: Capabilities,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
