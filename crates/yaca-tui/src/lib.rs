@@ -141,6 +141,7 @@ pub enum PermissionPromptStage {
     #[default]
     Permission,
     Always,
+    Reject,
 }
 
 impl PermissionPrompt {
@@ -149,6 +150,7 @@ impl PermissionPrompt {
         match self.stage {
             PermissionPromptStage::Permission => &["Allow once", "Allow always", "Reject"],
             PermissionPromptStage::Always => &["Confirm", "Cancel"],
+            PermissionPromptStage::Reject => &[],
         }
     }
 }

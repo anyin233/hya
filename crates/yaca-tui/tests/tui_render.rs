@@ -35,20 +35,9 @@ fn wide_layout_renders_sidebar_and_surface_labels() {
     let mut state = rich_state();
     let text = render(&mut state, 124, 36);
     assert!(
-        text.contains("GUI sess-1"),
-        "wide layout should show the session title in the context rail"
-    );
-    assert!(
-        text.contains("ContextPilot"),
-        "sidebar should show OpenCode-style context pilot"
-    );
-    assert!(
-        text.contains("Agents"),
-        "sidebar should include agents panel"
-    );
-    assert!(
-        text.contains("alice - active"),
-        "sidebar should summarize team"
+        ["GUI sess-1", "ContextPilot", "Agents", "alice - active"]
+            .into_iter()
+            .all(|expected| text.contains(expected))
     );
 }
 
@@ -162,7 +151,7 @@ fn sidebar_summarizes_transcript_tools_and_errors() {
 }
 
 #[test]
-fn permission_panel_renders_options_and_reply() {
+fn permission_panel_renders_options_without_reply_editor() {
     let mut state = AppState::default();
     state.permission = Some(PermissionPrompt {
         title: "bash".to_string(),
@@ -172,15 +161,18 @@ fn permission_panel_renders_options_and_reply() {
         stage: yaca_tui::PermissionPromptStage::Permission,
     });
     let text = render(&mut state, 100, 20);
-    assert!(text.contains("Permission required"), "panel title renders");
-    assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
-    assert!(text.contains("Allow once"), "allow-once option renders");
     assert!(
-        text.contains("Allow always"),
-        "persistent allow option matches OpenCode"
+        [
+            "Permission required",
+            "rm -rf /tmp/x",
+            "Allow once",
+            "Allow always",
+            "Reject"
+        ]
+        .into_iter()
+        .all(|expected| text.contains(expected))
     );
-    assert!(text.contains("Reject"), "reject option renders");
-    assert!(text.contains("use ls instead"), "reply text renders");
+    assert!(!text.contains("use ls instead") && !text.contains("reply:"));
 }
 
 #[test]

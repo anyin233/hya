@@ -13,12 +13,23 @@ pub(super) fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option
             prompt.selected = 1;
             None
         }
+        KeyCode::Esc if prompt.stage == PermissionPromptStage::Reject => {
+            prompt.stage = PermissionPromptStage::Permission;
+            prompt.selected = 2;
+            None
+        }
         KeyCode::Esc => Some(Decision::Reject { feedback: None }),
         KeyCode::Enter
             if prompt.stage == PermissionPromptStage::Permission && prompt.selected == 1 =>
         {
             prompt.stage = PermissionPromptStage::Always;
             prompt.selected = 0;
+            None
+        }
+        KeyCode::Enter
+            if prompt.stage == PermissionPromptStage::Permission && prompt.selected == 2 =>
+        {
+            prompt.stage = PermissionPromptStage::Reject;
             None
         }
         KeyCode::Enter if prompt.stage == PermissionPromptStage::Always && prompt.selected == 1 => {
@@ -28,19 +39,23 @@ pub(super) fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option
         }
         KeyCode::Enter => Some(decision_from(prompt)),
         KeyCode::Left | KeyCode::Char('h') => {
-            prompt.selected = previous_option(prompt);
+            if prompt.stage != PermissionPromptStage::Reject {
+                prompt.selected = previous_option(prompt);
+            }
             None
         }
         KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => {
-            prompt.selected = next_option(prompt);
+            if prompt.stage != PermissionPromptStage::Reject {
+                prompt.selected = next_option(prompt);
+            }
             None
         }
-        KeyCode::Backspace if prompt.stage == PermissionPromptStage::Permission => {
+        KeyCode::Backspace if prompt.stage == PermissionPromptStage::Reject => {
             prompt.reply.pop();
             None
         }
         KeyCode::Char(c) => {
-            if prompt.stage == PermissionPromptStage::Permission
+            if prompt.stage == PermissionPromptStage::Reject
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
             {
                 prompt.reply.push(c);
@@ -77,6 +92,9 @@ fn decision_from(prompt: &PermissionPrompt) -> Decision {
             },
         },
         PermissionPromptStage::Always => Decision::AllowAlways,
+        PermissionPromptStage::Reject => Decision::Reject {
+            feedback: (!prompt.reply.trim().is_empty()).then(|| prompt.reply.clone()),
+        },
     }
 }
 
@@ -137,6 +155,65 @@ mod tests {
             prompt,
             Some(prompt)
                 if prompt.stage == PermissionPromptStage::Permission && prompt.selected == 1
+        ));
+    }
+
+    #[test]
+    fn reject_waits_for_feedback_stage() {
+        // Given: the OpenCode reject option is selected on the permission stage.
+        let mut app = app_with_permission(2, PermissionPromptStage::Permission);
+
+        // When: the user confirms the reject option.
+        let decision = handle_permission_key(key(KeyCode::Enter), &mut app);
+
+        // Then: yaca opens the dedicated reject feedback stage before sending a decision.
+        let prompt = app.permission.as_ref();
+        assert_eq!(decision, None);
+        assert!(matches!(
+            prompt,
+            Some(prompt) if prompt.stage == PermissionPromptStage::Reject
+        ));
+    }
+
+    #[test]
+    fn reject_feedback_confirms_or_cancels_like_opencode() {
+        // Given: the dedicated reject feedback stage is open.
+        let mut app = app_with_permission(0, PermissionPromptStage::Reject);
+
+        // When: the user types feedback and confirms it.
+        assert_eq!(
+            handle_permission_key(key(KeyCode::Char('u')), &mut app),
+            None
+        );
+        assert_eq!(
+            handle_permission_key(key(KeyCode::Char('s')), &mut app),
+            None
+        );
+        assert_eq!(
+            handle_permission_key(key(KeyCode::Char('e')), &mut app),
+            None
+        );
+        let decision = handle_permission_key(key(KeyCode::Enter), &mut app);
+
+        // Then: yaca sends the reject decision with the feedback text.
+        assert_eq!(
+            decision,
+            Some(Decision::Reject {
+                feedback: Some("use".to_string())
+            })
+        );
+
+        // When: the user cancels the reject feedback stage.
+        let mut app = app_with_permission(0, PermissionPromptStage::Reject);
+        let decision = handle_permission_key(key(KeyCode::Esc), &mut app);
+
+        // Then: yaca returns to the reject option on the permission stage.
+        let prompt = app.permission.as_ref();
+        assert_eq!(decision, None);
+        assert!(matches!(
+            prompt,
+            Some(prompt)
+                if prompt.stage == PermissionPromptStage::Permission && prompt.selected == 2
         ));
     }
 

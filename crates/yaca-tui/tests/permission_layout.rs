@@ -55,13 +55,9 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
         !text.contains('┌') && !text.contains('└') && !text.contains('─') && !text.contains('│'),
         "permission panel should not render box border glyphs:\n{text}"
     );
-    let reply_row = text
-        .lines()
-        .find(|row| row.contains("reply:"))
-        .unwrap_or_else(|| panic!("permission reply row missing:\n{text}"));
     assert!(
-        reply_row.starts_with("  ▏ reply:"),
-        "permission reply row should own its left gutter:\n{reply_row}"
+        !text.contains("reply:") && !text.contains("type a reply"),
+        "main permission stage should not render reject feedback input:\n{text}"
     );
 
     assert!(
@@ -120,7 +116,7 @@ fn permission_reply_ellipsizes_cjk_without_wrapping_off_rail() {
             detail: "quick".to_string(),
             selected: 2,
             reply: "请先列出目录然后解释每一个文件为什么需要删除".to_string(),
-            stage: PermissionPromptStage::Permission,
+            stage: PermissionPromptStage::Reject,
         }),
         ..AppState::default()
     };
@@ -128,14 +124,30 @@ fn permission_reply_ellipsizes_cjk_without_wrapping_off_rail() {
     // When: the TUI renders in a compact terminal.
     let text = render(&mut state, 40, 20);
 
-    // Then: the reply stays on the railed reply row instead of wrapping as loose text.
+    // Then: the reply stays on the reject-stage input row instead of the main prompt.
+    assert!(
+        text.contains("Reject permission"),
+        "reject feedback stage title renders:\n{text}"
+    );
+    assert!(
+        text.contains("Tell OpenCode what to do"),
+        "reject feedback stage guidance renders:\n{text}"
+    );
+    assert!(
+        text.contains("enter confirm") && text.contains("esc cancel"),
+        "reject feedback stage footer mirrors OpenCode:\n{text}"
+    );
     let reply_row = text
         .lines()
-        .find(|row| row.contains("reply:"))
-        .unwrap_or_else(|| panic!("permission reply row missing:\n{text}"));
+        .find(|row| row.contains('请'))
+        .unwrap_or_else(|| panic!("permission reject reply row missing:\n{text}"));
     assert!(
         reply_row.contains('…'),
         "long CJK reply should be ellipsized on the reply row:\n{reply_row}"
+    );
+    assert!(
+        reply_row.starts_with("  ▏ 请"),
+        "reject feedback should render inside the left rail:\n{reply_row}"
     );
     assert!(
         text.lines().all(|row| !row.trim_start().starts_with("后")),
