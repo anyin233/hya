@@ -20,7 +20,7 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/experimental/workspace/status", get(empty_array))
         .route("/experimental/workspace/sync-list", post(no_content))
-        .route("/experimental/workspace/warp", post(unavailable))
+        .route("/experimental/workspace/warp", post(workspace_warp))
         .route("/experimental/workspace/:id", delete(ok_true))
         .route(
             "/experimental/control-plane/move-session",
@@ -75,6 +75,38 @@ async fn unavailable() -> Result<Json<Value>, ApiError> {
     Err(ApiError::bad_request("experimental route is unavailable"))
 }
 
+async fn workspace_warp(
+    State(st): State<ServerState>,
+    Json(payload): Json<Value>,
+) -> Result<Response, ApiError> {
+    let Some(session_id) = payload.get("sessionID").and_then(Value::as_str) else {
+        return Ok(workspace_warp_error("Missing sessionID"));
+    };
+    let session = match parse_session(session_id) {
+        Ok(session) => session,
+        Err(_) => {
+            return Ok(workspace_warp_error(format!(
+                "Session not found: {session_id}"
+            )));
+        }
+    };
+    if !payload.get("id").is_some_and(Value::is_null) {
+        return Ok(workspace_warp_error("Workspace warp is unavailable"));
+    }
+    let projection = st
+        .engine
+        .store()
+        .read_projection(session)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if projection.session.id.is_none() {
+        return Ok(workspace_warp_error(format!(
+            "Session not found: {session_id}"
+        )));
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 async fn move_session(
     State(st): State<ServerState>,
     Json(payload): Json<Value>,
@@ -118,6 +150,17 @@ fn move_session_error(message: impl Into<String>) -> Response {
         StatusCode::BAD_REQUEST,
         Json(json!({
             "name": "MoveSessionError",
+            "data": { "message": message.into() },
+        })),
+    )
+        .into_response()
+}
+
+fn workspace_warp_error(message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "name": "WorkspaceWarpError",
             "data": { "message": message.into() },
         })),
     )
