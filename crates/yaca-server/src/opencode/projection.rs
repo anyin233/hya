@@ -5,6 +5,8 @@ use yaca_proto::{
     Role, SessionId,
 };
 
+pub(super) const REVERT_METADATA_KEY: &str = "_yacaOpenCodeRevert";
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct OpenCodeSessionInfo {
     id: String,
@@ -25,6 +27,8 @@ pub(super) struct OpenCodeSessionInfo {
     time: OpenCodeSessionTime,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revert: Option<OpenCodeSessionRevert>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -45,6 +49,14 @@ struct OpenCodeSessionTime {
 #[derive(Clone, Debug, Serialize)]
 struct OpenCodeSessionShare {
     url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct OpenCodeSessionRevert {
+    #[serde(rename = "messageID")]
+    message_id: String,
+    #[serde(rename = "partID", skip_serializing_if = "Option::is_none")]
+    part_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,6 +99,14 @@ impl OpenCodeSessionInfo {
 
     pub(super) fn permission(&self) -> Option<&[Value]> {
         self.permission.as_deref()
+    }
+
+    pub(super) fn metadata(&self) -> Option<&Value> {
+        self.metadata.as_ref()
+    }
+
+    pub(super) fn revert(&self) -> bool {
+        self.revert.is_some()
     }
 }
 
@@ -165,6 +185,7 @@ fn session_info(
     updated: i64,
 ) -> OpenCodeSessionInfo {
     let id = session.to_string();
+    let (metadata, revert) = session_metadata(projection.session.metadata.clone());
     OpenCodeSessionInfo {
         id: id.clone(),
         slug: id,
@@ -184,7 +205,7 @@ fn session_info(
             .to_string(),
         model: model_info(projection.session.model.as_ref().unwrap_or(&meta.model)),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        metadata: projection.session.metadata.clone(),
+        metadata,
         share: projection
             .session
             .share
@@ -196,7 +217,34 @@ fn session_info(
             archived: projection.session.archived.clone(),
         },
         permission: projection.session.permission.clone(),
+        revert,
     }
+}
+
+fn session_metadata(metadata: Option<Value>) -> (Option<Value>, Option<OpenCodeSessionRevert>) {
+    match metadata {
+        Some(Value::Object(mut object)) => {
+            let revert = object
+                .remove(REVERT_METADATA_KEY)
+                .and_then(revert_from_value);
+            let metadata = (!object.is_empty()).then_some(Value::Object(object));
+            (metadata, revert)
+        }
+        other => (other, None),
+    }
+}
+
+fn revert_from_value(value: Value) -> Option<OpenCodeSessionRevert> {
+    let object = value.as_object()?;
+    let message_id = object.get("messageID")?.as_str()?.to_string();
+    let part_id = object
+        .get("partID")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    Some(OpenCodeSessionRevert {
+        message_id,
+        part_id,
+    })
 }
 
 pub(super) fn model_info(model: &ModelRef) -> OpenCodeModel {

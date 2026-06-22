@@ -30,6 +30,7 @@ mod session_legacy;
 mod session_list;
 mod session_part_update;
 mod session_prompt;
+mod session_revert;
 mod session_share;
 mod session_summarize;
 mod session_switch;
@@ -65,6 +66,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(question::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
+        .merge(session_revert::router())
         .merge(session_v2::router())
         .merge(session_switch::router())
         .merge(session_legacy::router())
