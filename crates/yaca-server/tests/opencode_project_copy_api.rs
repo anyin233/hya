@@ -232,3 +232,29 @@ async fn opencode_project_copy_generates_short_names() {
             .is_some_and(|name| !name.is_empty())
     );
 }
+
+#[tokio::test]
+async fn opencode_project_routes_return_current_directory() {
+    let repo = init_repo();
+    let app = router(state(repo.clone()).await);
+    let repo_text = repo.to_string_lossy().into_owned();
+
+    let current = request(app.clone(), "GET", "/project/current", None).await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current_body = body_json(current).await;
+    assert_eq!(current_body["id"], "global");
+    assert_eq!(current_body["worktree"], repo_text.as_str());
+    assert_eq!(current_body["vcs"], "git");
+    assert_eq!(current_body["sandboxes"], json!([]));
+
+    let list = request(app.clone(), "GET", "/project", None).await;
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(body_json(list).await[0]["worktree"], repo_text.as_str());
+
+    let directories = request(app, "GET", "/project/global/directories", None).await;
+    assert_eq!(directories.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(directories).await,
+        json!([{ "directory": repo_text }])
+    );
+}
