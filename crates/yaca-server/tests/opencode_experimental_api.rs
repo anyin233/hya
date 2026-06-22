@@ -215,12 +215,35 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!(true));
 
-    let (status, _body) = request_json(
-        app,
+    let (status, missing) = request_json(
+        app.clone(),
         "POST",
         "/experimental/control-plane/move-session",
-        Some(json!({})),
+        Some(json!({
+            "sessionID": "ses_00000000000000000000000000000000",
+            "destination": { "directory": "/tmp/yaca-moved" },
+            "moveChanges": true
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing["name"], "MoveSessionError");
+    assert!(
+        missing["data"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Session not found"))
+    );
+
+    let moved = request(
+        app,
+        "POST",
+        "/experimental/control-plane/move-session",
+        Some(json!({
+            "sessionID": format!("ses_{}", session.replace('-', "")),
+            "destination": { "directory": "/tmp/yaca-moved" },
+            "moveChanges": true
+        })),
+    )
+    .await;
+    assert_eq!(moved.status(), StatusCode::NO_CONTENT);
 }
