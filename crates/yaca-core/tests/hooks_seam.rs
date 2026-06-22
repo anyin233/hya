@@ -8,9 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use yaca_core::{
-    AgentSpec, ChatParamsInput, ChatParamsOutcome, CreateSession, EventBus, HookDispatcher,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, SessionEngine, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
+    CommandExecuteBeforeOutcome, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, SessionEngine, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use yaca_proto::{
     AgentName, Envelope, FinishReason, ModelRef, PartProjection, Role, ToolPartState,
@@ -74,6 +75,13 @@ impl HookDispatcher for CountingHost {
         self.counts.event.fetch_add(1, Ordering::SeqCst);
     }
 
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         self.counts.user_before.fetch_add(1, Ordering::SeqCst);
         MessageUserBeforeOutcome::Continue { text: input.text }
@@ -104,6 +112,13 @@ struct MaskingAfterHost;
 #[async_trait::async_trait]
 impl HookDispatcher for MaskingAfterHost {
     fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
         MessageUserBeforeOutcome::Continue { text: input.text }

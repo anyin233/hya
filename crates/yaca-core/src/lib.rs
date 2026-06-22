@@ -27,9 +27,10 @@ pub use completion::{
 pub use engine::{AgentSpec, CreateSession, SessionEngine};
 pub use error::CoreError;
 pub use hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, NoopHookHost, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, NoopHookHost,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,

@@ -1,5 +1,6 @@
 import {
   handleChatParams,
+  handleCommandExecuteBefore,
   handleMessageUserBefore,
   handlePermissionAsk,
   handleToolExecuteAfter,
@@ -32,6 +33,7 @@ const METHOD_EVENT = "event"
 const METHOD_TOOL_CALL = "tool/call"
 const METHOD_MESSAGE_USER_BEFORE = "hook/message.user.before"
 const METHOD_CHAT_PARAMS = "hook/chat.params"
+const METHOD_COMMAND_EXECUTE_BEFORE = "hook/command.execute.before"
 const METHOD_PERMISSION_ASK = "hook/permission.ask"
 const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
 const METHOD_TOOL_EXECUTE_AFTER = "hook/tool.execute.after"
@@ -84,6 +86,8 @@ function handleRequestWithResponse(
       return handleMessageUserBefore(request, context)
     case METHOD_CHAT_PARAMS:
       return handleChatParams(request, context)
+    case METHOD_COMMAND_EXECUTE_BEFORE:
+      return handleCommandExecuteBefore(request, context)
     case METHOD_PERMISSION_ASK:
       return handlePermissionAsk(request, context)
     case METHOD_TOOL_EXECUTE_BEFORE:

@@ -18,9 +18,9 @@ use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, Summarizer, compact_with};
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 
 pub struct CreateSession {
@@ -292,6 +292,31 @@ impl SessionEngine {
         )
         .await?;
         Ok(message)
+    }
+
+    pub async fn admit_command_prompt(
+        &self,
+        session: SessionId,
+        command: String,
+        arguments: String,
+        text: String,
+    ) -> Result<MessageId, CoreError> {
+        let text = if let Some(hooks) = &self.hooks {
+            match hooks
+                .command_execute_before(CommandExecuteBeforeInput {
+                    session,
+                    command,
+                    arguments,
+                    text,
+                })
+                .await
+            {
+                CommandExecuteBeforeOutcome::Continue { text } => text,
+            }
+        } else {
+            text
+        };
+        self.admit_user_prompt(session, text).await
     }
 
     pub async fn run_turn(

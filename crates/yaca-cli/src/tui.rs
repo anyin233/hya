@@ -223,6 +223,7 @@ fn spawn_turn(
     agent: &AgentSpec,
     session: SessionId,
     prompt: String,
+    command: Option<(String, String)>,
     done_tx: &mpsc::UnboundedSender<()>,
     cancel: &CancellationToken,
 ) -> JoinHandle<()> {
@@ -231,7 +232,15 @@ fn spawn_turn(
     let done_tx = done_tx.clone();
     let cancel = cancel.clone();
     tokio::spawn(async move {
-        if let Err(e) = engine.admit_user_prompt(session, prompt).await {
+        let admitted = match command {
+            Some((name, arguments)) => {
+                engine
+                    .admit_command_prompt(session, name, arguments, prompt)
+                    .await
+            }
+            None => engine.admit_user_prompt(session, prompt).await,
+        };
+        if let Err(e) = admitted {
             let _ = engine
                 .inject_system_message(session, format!("input error: {e}"))
                 .await;
@@ -574,12 +583,18 @@ pub async fn run(
                                         let _ = engine.inject_system_message(session, msg).await;
                                     }
                                 }
-                                Some(commands::Slash::Template(name)) => {
+                                Some(commands::Slash::Template { name, arguments }) => {
                                     match commands::resolve_template(&name, &template_dirs) {
                                         Some(tpl) => {
                                             app.running = true;
                                             current_turn = Some(spawn_turn(
-                                                &engine, &agent, session, tpl, &done_tx, &cancel,
+                                                &engine,
+                                                &agent,
+                                                session,
+                                                tpl,
+                                                Some((name, arguments)),
+                                                &done_tx,
+                                                &cancel,
                                             ));
                                         }
                                         None => {
@@ -595,7 +610,7 @@ pub async fn run(
                                 None => {
                                     app.running = true;
                                     current_turn = Some(spawn_turn(
-                                        &engine, &agent, session, input, &done_tx, &cancel,
+                                        &engine, &agent, session, input, None, &done_tx, &cancel,
                                     ));
                                 }
                             },

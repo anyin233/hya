@@ -9,7 +9,7 @@ pub enum Slash {
     Sessions,
     Yolo(Option<bool>),
     Think(String),
-    Template(String),
+    Template { name: String, arguments: String },
 }
 
 #[must_use]
@@ -30,7 +30,10 @@ pub fn parse_slash(input: &str) -> Option<Slash> {
             _ => None,
         }),
         "think" => Slash::Think(arg.to_string()),
-        other if !other.is_empty() => Slash::Template(other.to_string()),
+        other if !other.is_empty() => Slash::Template {
+            name: other.to_string(),
+            arguments: arg.to_string(),
+        },
         _ => Slash::Help,
     })
 }
@@ -90,9 +93,23 @@ mod tests {
         assert_eq!(parse_slash("/sessions"), Some(Slash::Sessions));
         assert_eq!(
             parse_slash("/review"),
-            Some(Slash::Template("review".to_string()))
+            Some(Slash::Template {
+                name: "review".to_string(),
+                arguments: String::new()
+            })
         );
         assert_eq!(parse_slash("hello world"), None);
+    }
+
+    #[test]
+    fn parses_template_arguments() {
+        assert_eq!(
+            parse_slash("/review commit"),
+            Some(Slash::Template {
+                name: "review".to_string(),
+                arguments: "commit".to_string()
+            })
+        );
     }
 
     #[test]
