@@ -1,5 +1,6 @@
 use axum::extract::{Path, Query, State};
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -68,6 +69,8 @@ pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/session", get(list).post(create))
         .route("/api/session/:id", get(get_one))
+        .route("/api/session/:id/compact", post(compact))
+        .route("/api/session/:id/wait", post(wait))
 }
 
 async fn list(
@@ -140,6 +143,32 @@ async fn get_one(
     let session = parse_session(&id)?;
     let data = super::load_session(&st, session, None).await?.info;
     Ok(Json(DataResponse { data }))
+}
+
+async fn compact(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    unavailable_operation(&st, &id, "compact").await
+}
+
+async fn wait(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    unavailable_operation(&st, &id, "wait").await
+}
+
+async fn unavailable_operation(
+    st: &ServerState,
+    id: &str,
+    operation: &str,
+) -> Result<StatusCode, ApiError> {
+    let session = parse_session(id)?;
+    super::load_session(st, session, None).await?;
+    Err(ApiError::service_unavailable(format!(
+        "Session {operation} is not available yet"
+    )))
 }
 
 async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, ApiError> {
