@@ -64,6 +64,12 @@ fn envelope_payload(envelope: Envelope) -> Value {
     if let Event::SessionStatus { session, status } = &envelope.event {
         return session_status_payload(&envelope, *session, status);
     }
+    if let Event::SessionCreated {
+        session, workdir, ..
+    } = &envelope.event
+    {
+        return session_created_payload(&envelope, *session, workdir);
+    }
     serde_json::to_value(EventPayload {
         id: format!("evt_yaca_{}", envelope.seq.0),
         kind: "yaca.envelope",
@@ -71,6 +77,15 @@ fn envelope_payload(envelope: Envelope) -> Value {
         data: envelope,
     })
     .unwrap_or_else(|_| json!({}))
+}
+
+fn session_created_payload(envelope: &Envelope, session: SessionId, workdir: &str) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "session.created",
+        "location": { "directory": workdir },
+        "data": { "sessionID": session.to_string() },
+    })
 }
 
 fn session_error_payload(
