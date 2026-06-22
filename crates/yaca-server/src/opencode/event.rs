@@ -10,7 +10,7 @@ use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::{Envelope, Event, FinishReason, MessageId, Role, SessionId};
+use yaca_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
 
 use crate::ServerState;
 
@@ -80,6 +80,23 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             finish,
         } => message_payload(&envelope, *session, *message, *role, Some(*finish))
             .unwrap_or_else(|| fallback_payload(&envelope)),
+        Event::TextStart {
+            session,
+            message,
+            part,
+        } => text_part_updated_payload(&envelope, *session, *message, *part, ""),
+        Event::TextDelta {
+            session,
+            message,
+            part,
+            delta,
+        } => text_part_delta_payload(&envelope, *session, *message, *part, delta),
+        Event::TextReplace {
+            session,
+            message,
+            part,
+            text,
+        } => text_part_updated_payload(&envelope, *session, *message, *part, text),
         _ => fallback_payload(&envelope),
     }
 }
@@ -164,6 +181,54 @@ fn message_payload(
             "info": info,
         },
     }))
+}
+
+fn text_part_updated_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    text: &str,
+) -> Value {
+    let session_id = session.to_string();
+    let message_id = message.to_string();
+    let part_id = part.to_string();
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.updated",
+        "properties": {
+            "sessionID": session_id,
+            "part": {
+                "id": part_id,
+                "sessionID": session_id,
+                "messageID": message_id,
+                "type": "text",
+                "text": text,
+                "time": { "start": envelope.ts_millis },
+            },
+            "time": envelope.ts_millis,
+        },
+    })
+}
+
+fn text_part_delta_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    delta: &str,
+) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.delta",
+        "properties": {
+            "sessionID": session.to_string(),
+            "messageID": message.to_string(),
+            "partID": part.to_string(),
+            "field": "text",
+            "delta": delta,
+        },
+    })
 }
 
 fn fallback_payload(envelope: &Envelope) -> Value {
