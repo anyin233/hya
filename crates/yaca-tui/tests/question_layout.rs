@@ -77,3 +77,71 @@ fn question_panel_keeps_footer_row_background_separate() {
     // Then: the blocker body does not overwrite the bottom footer row.
     assert_ne!(buffer[(2, height - 2)].bg, buffer[(2, height - 1)].bg);
 }
+
+#[test]
+fn question_panel_uses_opencode_option_labels_and_hint() {
+    // Given: a single-choice question prompt with two selectable options.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 0,
+            input: String::new(),
+            allow_custom: false,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the question footer renders.
+    let text = render(&mut state, 100, 20);
+
+    // Then: option rows and hint copy match OpenCode's question footer.
+    assert!(
+        text.contains("1."),
+        "first option should be numbered:\n{text}"
+    );
+    assert!(
+        text.contains("2."),
+        "second option should be numbered:\n{text}"
+    );
+    assert!(
+        text.contains("↑↓ select   enter submit   esc dismiss"),
+        "question hint should use OpenCode's compact shortcut copy:\n{text}"
+    );
+    assert!(
+        !text.contains("Up/Down") && !text.contains("Esc cancel"),
+        "question footer should omit legacy shortcut copy:\n{text}"
+    );
+}
+
+#[test]
+fn question_panel_renders_custom_answer_like_opencode() {
+    // Given: an allow-custom question with an in-progress custom answer.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 2,
+            input: "slow and safe".to_string(),
+            allow_custom: true,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the custom question footer renders.
+    let text = render(&mut state, 100, 20);
+
+    // Then: the custom answer is a numbered OpenCode option with edit-mode hinting.
+    assert!(
+        text.contains("3.") && text.contains("Type your own answer"),
+        "custom answer should render as the next numbered option:\n{text}"
+    );
+    assert!(
+        text.contains("slow and safe"),
+        "custom answer text should render under the custom option:\n{text}"
+    );
+    assert!(
+        text.contains("enter save   esc cancel"),
+        "custom answer editing should use OpenCode's save/cancel hint:\n{text}"
+    );
+}

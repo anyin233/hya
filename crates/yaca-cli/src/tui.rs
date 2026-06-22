@@ -53,9 +53,12 @@ mod leader_key;
 mod mcp_view;
 mod message_scroll;
 mod prompt;
+mod question_input;
 mod reference;
 mod selection;
 mod session_fork;
+
+use self::question_input::handle_question_key;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -323,47 +326,6 @@ fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> 
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
             {
                 prompt.reply.push(c);
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn handle_question_key(key: KeyEvent, app: &mut AppState) -> Option<QuestionAnswer> {
-    let question = app.question.as_mut()?;
-    match key.code {
-        KeyCode::Esc => Some(QuestionAnswer::Cancelled),
-        KeyCode::Enter => {
-            if question.options.is_empty() || (question.allow_custom && !question.input.is_empty())
-            {
-                Some(QuestionAnswer::FreeText(std::mem::take(
-                    &mut question.input,
-                )))
-            } else {
-                Some(QuestionAnswer::Selected(question.selected))
-            }
-        }
-        KeyCode::Up => {
-            question.selected = question.selected.saturating_sub(1);
-            None
-        }
-        KeyCode::Down => {
-            if !question.options.is_empty() {
-                question.selected =
-                    (question.selected + 1).min(question.options.len().saturating_sub(1));
-            }
-            None
-        }
-        KeyCode::Backspace => {
-            question.input.pop();
-            None
-        }
-        KeyCode::Char(c) => {
-            if (question.options.is_empty() || question.allow_custom)
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
-            {
-                question.input.push(c);
             }
             None
         }

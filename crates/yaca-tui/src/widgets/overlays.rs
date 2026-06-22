@@ -6,7 +6,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
-use crate::{DialogView, Picker, QuestionPrompt};
+use crate::{DialogView, Picker};
 
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     let area = frame.area();
@@ -60,83 +60,6 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Up/Down or Tab select · Enter confirm · Esc cancel",
-        Style::default().fg(theme.muted),
-    )));
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().fg(theme.text).bg(theme.element))
-            .wrap(Wrap { trim: false }),
-        rect,
-    );
-}
-
-pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &Theme) {
-    let area = frame.area();
-    let footer_height = u16::from(area.height > 1);
-    let extra = u16::try_from(question.options.len()).unwrap_or(u16::MAX);
-    let height = (7u16.saturating_add(extra)).min(area.height.saturating_sub(footer_height));
-    if height == 0 {
-        return;
-    }
-    let width = area.width.saturating_sub(4).max(12);
-    let y = area.y + area.height.saturating_sub(height + footer_height);
-    let clear_rect = Rect {
-        x: area.x,
-        y,
-        width: area.width,
-        height,
-    };
-    let rect = Rect {
-        x: area.x + 2,
-        y,
-        width,
-        height,
-    };
-    frame.render_widget(Clear, clear_rect);
-    let inner_width = usize::from(width).saturating_sub(6);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "question",
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            ellipsize(&question.prompt, inner_width),
-            Style::default()
-                .fg(theme.primary)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-    ];
-    for (idx, option) in question.options.iter().enumerate() {
-        let style = if idx == question.selected {
-            Style::default()
-                .fg(theme.background)
-                .bg(theme.primary)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.text)
-        };
-        lines.push(Line::from(Span::styled(
-            format!(" {} ", ellipsize(option, inner_width)),
-            style,
-        )));
-    }
-    if question.options.is_empty() || question.allow_custom {
-        lines.push(Line::from(vec![
-            Span::styled("> ", Style::default().fg(theme.primary)),
-            Span::styled(question.input.clone(), Style::default().fg(theme.text)),
-        ]));
-    }
-    let hint = if question.options.is_empty() {
-        "type your answer · Enter confirm · Esc cancel"
-    } else if question.allow_custom {
-        "Up/Down select · type for custom · Enter confirm · Esc cancel"
-    } else {
-        "Up/Down select · Enter confirm · Esc cancel"
-    };
-    lines.push(Line::from(Span::styled(
-        hint,
         Style::default().fg(theme.muted),
     )));
 
