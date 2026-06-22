@@ -52,6 +52,10 @@ pub enum Event {
         session: SessionId,
         model: ModelRef,
     },
+    SessionStatus {
+        session: SessionId,
+        status: serde_json::Value,
+    },
     CommandExecuted {
         session: SessionId,
         command: String,
@@ -205,6 +209,7 @@ impl Event {
             | Event::SessionShareCleared { session, .. }
             | Event::AgentSwitched { session, .. }
             | Event::ModelSwitched { session, .. }
+            | Event::SessionStatus { session, .. }
             | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::MessageFinished { session, .. }

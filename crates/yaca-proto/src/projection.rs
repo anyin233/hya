@@ -292,6 +292,7 @@ impl Projection {
             }
             Event::TextEnd { .. }
             | Event::ReasoningEnd { .. }
+            | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
