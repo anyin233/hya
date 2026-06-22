@@ -172,6 +172,9 @@ async fn connect(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
     let Some(ticket) = query.get("ticket") else {
+        if st.pty.get(&id).await.is_none() {
+            return pty_not_found(&id);
+        }
         return forbidden();
     };
     match st.pty.consume_ticket(&id, ticket).await {
