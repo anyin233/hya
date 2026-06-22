@@ -12,6 +12,7 @@ mod location;
 mod metadata;
 mod model_ref;
 mod permission;
+mod project_copy;
 mod projection;
 mod question;
 mod session_context;
@@ -32,6 +33,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(integration::router())
         .merge(metadata::router())
         .merge(permission::router())
+        .merge(project_copy::router())
         .merge(question::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
