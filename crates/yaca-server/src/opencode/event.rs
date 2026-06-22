@@ -18,6 +18,7 @@ use super::location::LocationInfo;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/event", get(subscribe))
         .route("/api/event", get(subscribe))
         .route("/global/event", get(subscribe))
 }
