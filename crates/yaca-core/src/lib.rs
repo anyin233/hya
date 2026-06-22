@@ -29,8 +29,8 @@ pub use error::CoreError;
 pub use hooks::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
     HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, NoopHookHost,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,

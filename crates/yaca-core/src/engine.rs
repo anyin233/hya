@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 use yaca_proto::{
     AgentName, Envelope, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId,
@@ -22,6 +21,9 @@ use crate::hooks::{
     HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, ToolExecuteAfterInput,
     ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+
+mod stream_round;
+mod text_complete;
 
 pub struct CreateSession {
     pub parent: Option<SessionId>,
@@ -388,48 +390,23 @@ impl SessionEngine {
             } else {
                 request
             };
-            let mut stream = self.providers.stream(request, session, message).await?;
+            let stream = self.providers.stream(request, session, message).await?;
+            let stream_round = self.collect_stream_round(session, message, stream).await?;
 
-            let mut tool_calls: Vec<ToolCallReq> = Vec::new();
-            let mut finish = FinishReason::Stop;
-            while let Some(item) = stream.next().await {
-                let event = item?;
-                if let Event::ToolCallRequested {
-                    part,
-                    call,
-                    name,
-                    input,
-                    ..
-                } = &event
-                {
-                    tool_calls.push(ToolCallReq {
-                        part: *part,
-                        call: *call,
-                        name: name.to_string(),
-                        input: input.clone(),
-                    });
-                }
-                if let Event::MessageFinished { finish: f, .. } = &event {
-                    finish = *f;
-                    continue;
-                }
-                self.emit(session, event).await?;
-            }
-
-            if tool_calls.is_empty() {
+            if stream_round.tool_calls.is_empty() {
                 self.emit(
                     session,
                     Event::MessageFinished {
                         session,
                         message,
-                        finish,
+                        finish: stream_round.finish,
                     },
                 )
                 .await?;
-                return Ok(finish);
+                return Ok(stream_round.finish);
             }
 
-            for mut tc in tool_calls {
+            for mut tc in stream_round.tool_calls {
                 if let Some(hooks) = &self.hooks {
                     let input = std::mem::take(&mut tc.input);
                     match hooks
@@ -577,13 +554,6 @@ impl SessionEngine {
             }
         }
     }
-}
-
-struct ToolCallReq {
-    part: PartId,
-    call: yaca_proto::ToolCallId,
-    name: String,
-    input: serde_json::Value,
 }
 
 fn collect_text(parts: &[PartProjection]) -> String {

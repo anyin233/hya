@@ -8,8 +8,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use yaca_core::hooks::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
-    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use yaca_proto::Envelope;
 use yaca_provider::{CompletionRequest, ReasoningEffort};
@@ -18,8 +19,8 @@ use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
     ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire, CommandExecuteBeforeParams,
     HookName, HookPosture, MessageUserBeforeOutcomeWire, MessageUserBeforeParams,
-    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
-    WireCompletionRequest, WireToolResult,
+    TextCompleteOutcomeWire, TextCompleteParams, ToolAfterOutcomeWire, ToolBeforeOutcomeWire,
+    ToolExecuteAfterParams, ToolExecuteBeforeParams, WireCompletionRequest, WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -52,6 +53,27 @@ impl HookDispatcher for PluginHost {
             }
         }
         CommandExecuteBeforeOutcome::Continue { text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        let mut text = input.text;
+        for conn in self.plugins() {
+            if conn.posture(HookName::TextComplete).is_none() {
+                continue;
+            }
+            let params = TextCompleteParams {
+                session: input.session,
+                message: input.message,
+                part: input.part,
+                text: text.clone(),
+            };
+            if let Some(TextCompleteOutcomeWire::Continue { text: next }) =
+                enrich(conn, HookName::TextComplete, &params).await
+            {
+                text = next;
+            }
+        }
+        TextCompleteOutcome::Continue { text }
     }
 
     async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
