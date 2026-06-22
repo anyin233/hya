@@ -139,6 +139,7 @@ fn status_symbol(name: &str, status: &ToolStatus) -> &'static str {
         ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => match name {
             "edit" | "write" => "←",
             "grep" | "glob" => "✱",
+            "todowrite" => "#",
             "webfetch" => "%",
             "websearch" => "◈",
             _ => "→",
@@ -154,6 +155,7 @@ fn action_label(name: &str) -> String {
         "write" => "Write".to_string(),
         "grep" => "Grep".to_string(),
         "glob" => "Glob".to_string(),
+        "todowrite" => "Todos".to_string(),
         "webfetch" => "WebFetch".to_string(),
         "websearch" => "WebSearch".to_string(),
         other => title_case_ascii(other),

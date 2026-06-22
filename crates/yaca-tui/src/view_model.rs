@@ -1,5 +1,7 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::tool_todos;
+
 pub enum TimelinePart {
     Text(String),
     Reasoning(String),
@@ -64,22 +66,26 @@ fn part_to_timeline(part: &PartProjection) -> TimelinePart {
         PartProjection::Reasoning { text, .. } => TimelinePart::Reasoning(text.clone()),
         PartProjection::Tool { name, state, .. } => {
             let name = name.to_string();
+            let status = match state {
+                ToolPartState::Pending { .. } => ToolStatus::Pending,
+                ToolPartState::Running { .. } => ToolStatus::Running,
+                ToolPartState::Completed {
+                    input,
+                    time_ms,
+                    output,
+                    ..
+                } => ToolStatus::Completed {
+                    time_ms: *time_ms,
+                    output: completed_tool_output_text(&name, input, output),
+                },
+                ToolPartState::Error { message, .. } => ToolStatus::Error {
+                    message: ellipsize(message, 40),
+                },
+            };
             TimelinePart::Tool {
                 input: tool_input(&name, state),
                 name,
-                status: match state {
-                    ToolPartState::Pending { .. } => ToolStatus::Pending,
-                    ToolPartState::Running { .. } => ToolStatus::Running,
-                    ToolPartState::Completed {
-                        time_ms, output, ..
-                    } => ToolStatus::Completed {
-                        time_ms: *time_ms,
-                        output: completed_output_text(output),
-                    },
-                    ToolPartState::Error { message, .. } => ToolStatus::Error {
-                        message: ellipsize(message, 40),
-                    },
-                },
+                status,
             }
         }
     }
@@ -114,6 +120,7 @@ fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
         "glob" => field_text(value, "pattern"),
         "webfetch" => field_text(value, "url"),
         "websearch" => field_text(value, "query"),
+        "todowrite" => tool_todos::summary(value),
         _ => None,
     }
 }
@@ -157,6 +164,18 @@ fn ellipsize(s: &str, max: usize) -> String {
         let head: String = cleaned.chars().take(max).collect();
         format!("{head}…")
     }
+}
+
+fn completed_tool_output_text(
+    name: &str,
+    input: &serde_json::Value,
+    output: &serde_json::Value,
+) -> Option<String> {
+    if name == "todowrite" {
+        return tool_todos::snapshot_text(input);
+    }
+
+    completed_output_text(output)
 }
 
 fn completed_output_text(output: &serde_json::Value) -> Option<String> {
