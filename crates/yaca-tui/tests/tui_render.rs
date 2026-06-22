@@ -20,7 +20,7 @@ use render_support::{
 fn renders_chat_with_input_status_and_panels() {
     let mut state = rich_state();
 
-    let text = render(&mut state, 120, 24);
+    let text = render(&mut state, 124, 24);
     assert!(text.contains("HELLOTUI"), "assistant text must render");
     assert!(text.contains("fake"), "status must show model");
     assert!(text.contains("type here"), "input box must show typed text");
@@ -33,7 +33,7 @@ fn renders_chat_with_input_status_and_panels() {
 #[test]
 fn wide_layout_renders_sidebar_and_surface_labels() {
     let mut state = rich_state();
-    let text = render(&mut state, 120, 36);
+    let text = render(&mut state, 124, 36);
     assert!(
         text.contains("GUI sess-1"),
         "wide layout should show the session title in the context rail"
@@ -145,7 +145,7 @@ fn sidebar_summarizes_transcript_tools_and_errors() {
         "turn error: http: 403 Forbidden",
     );
 
-    let text = render(&mut state, 120, 36);
+    let text = render(&mut state, 124, 36);
     assert!(
         text.contains("Context"),
         "sidebar should include a context section"

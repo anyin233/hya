@@ -43,8 +43,8 @@ fn context_rail_shows_modified_files() {
     };
 
     // When: the OpenCode-style context rail renders.
-    let buffer = render_buffer(&mut state, 120, 28);
-    let text = buffer_text(&buffer, 120, 28);
+    let buffer = render_buffer(&mut state, 124, 28);
+    let text = buffer_text(&buffer, 124, 28);
 
     // Then: changed files are visible as a first-class sidebar section.
     assert!(

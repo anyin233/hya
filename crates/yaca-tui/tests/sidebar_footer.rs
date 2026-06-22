@@ -63,11 +63,11 @@ fn context_rail_footer_stays_anchored_to_bottom() {
     with_session(&mut state, "/tmp/yaca-footer");
 
     // When: the rail renders with extra vertical space.
-    let buffer = render_buffer(&mut state, 120, 36);
+    let buffer = render_buffer(&mut state, 124, 36);
 
     // Then: the worktree footer is anchored near the rail bottom, not after Agents.
-    let workdir_row = row_containing(&buffer, 120, 36, "/tmp/yaca-footer").unwrap();
-    let branch_row = row_containing(&buffer, 120, 36, "feat/footer").unwrap();
+    let workdir_row = row_containing(&buffer, 124, 36, "/tmp/yaca-footer").unwrap();
+    let branch_row = row_containing(&buffer, 124, 36, "feat/footer").unwrap();
     assert!(
         workdir_row >= 31,
         "worktree footer should be bottom anchored, found at row {workdir_row}"
@@ -86,11 +86,11 @@ fn context_rail_footer_marks_workdir_as_context_prefix() {
     with_session(&mut state, "/tmp/yaca-footer");
 
     // When: the OpenCode-style sidebar footer renders.
-    let buffer = render_buffer(&mut state, 120, 36);
+    let buffer = render_buffer(&mut state, 124, 36);
 
     // Then: the worktree row reads like a context prefix, not a bare path.
-    let workdir_row = row_containing(&buffer, 120, 36, "/tmp/yaca-footer").unwrap();
-    let rendered = row_text(&buffer, 120, workdir_row);
+    let workdir_row = row_containing(&buffer, 124, 36, "/tmp/yaca-footer").unwrap();
+    let rendered = row_text(&buffer, 124, workdir_row);
     assert!(
         rendered.contains("/tmp/yaca-footer:"),
         "worktree footer should include an OpenCode-style trailing colon, got {rendered:?}"
@@ -107,11 +107,11 @@ fn context_rail_footer_keeps_long_workdir_tail_and_colon_visible() {
     );
 
     // When: the wide OpenCode-style context rail renders.
-    let buffer = render_buffer(&mut state, 120, 36);
+    let buffer = render_buffer(&mut state, 124, 36);
 
     // Then: the footer preserves the project tail and trailing context colon.
-    let version_row = row_containing(&buffer, 120, 36, "yaca 0.0.0").unwrap();
-    let rendered = row_text(&buffer, 120, version_row.saturating_sub(1));
+    let version_row = row_containing(&buffer, 124, 36, "yaca 0.0.0").unwrap();
+    let rendered = row_text(&buffer, 124, version_row.saturating_sub(1));
     assert!(
         rendered.contains("opencode-gui-parity:"),
         "long worktree footer should keep the tail and colon visible, got {rendered:?}"

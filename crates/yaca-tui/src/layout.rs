@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-const SIDEBAR_BREAKPOINT: u16 = 110;
-const SIDEBAR_WIDTH: u16 = 38;
+const SIDEBAR_BREAKPOINT: u16 = 120;
+const SIDEBAR_WIDTH: u16 = 42;
 
 pub struct AppLayout {
     pub timeline: Rect,
@@ -13,7 +13,7 @@ pub struct AppLayout {
 
 #[must_use]
 pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayout {
-    let show_sidebar = area.width >= SIDEBAR_BREAKPOINT;
+    let show_sidebar = area.width > SIDEBAR_BREAKPOINT;
     let columns = if show_sidebar {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -50,7 +50,7 @@ pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayo
 
 #[must_use]
 pub const fn main_width(area: Rect) -> u16 {
-    if area.width >= SIDEBAR_BREAKPOINT {
+    if area.width > SIDEBAR_BREAKPOINT {
         area.width.saturating_sub(SIDEBAR_WIDTH)
     } else {
         area.width

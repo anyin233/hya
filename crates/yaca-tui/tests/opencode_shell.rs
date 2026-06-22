@@ -169,8 +169,8 @@ fn composer_metadata_anchors_commands_to_main_column_edge() {
     };
 
     // When: the composer metadata row is rendered in the main output column.
-    let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = find_row(&buffer, 120, 16, "ctrl+p commands");
+    let buffer = render_buffer(&mut state, 124, 16);
+    let metadata_row = find_row(&buffer, 124, 16, "ctrl+p commands");
     let main_column: String = metadata_row.chars().take(82).collect();
 
     // Then: the command affordance is anchored to the main column's right edge.
@@ -250,8 +250,8 @@ fn context_rail_title_uses_session_label_when_available() {
     };
 
     // When: the shell renders with the right context rail visible.
-    let buffer = render_buffer(&mut state, 120, 16);
-    let title_row = rendered_row(&buffer, 120, 0);
+    let buffer = render_buffer(&mut state, 124, 16);
+    let title_row = rendered_row(&buffer, 124, 0);
 
     // Then: the rail title keeps the GUI prefix but uses the session label.
     assert!(

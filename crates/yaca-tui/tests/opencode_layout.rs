@@ -141,7 +141,7 @@ fn sidebar_uses_tonal_column_without_border_title() {
 
     // Given: a wide terminal with the context rail visible.
     // When: the app renders the shell layout.
-    let text = render(&mut state, 120, 36);
+    let text = render(&mut state, 124, 36);
 
     // Then: the rail has a title but no bordered block title.
     assert!(text.contains("GUI"), "sidebar keeps a clear title");
@@ -164,7 +164,7 @@ fn sidebar_matches_opencode_context_rail_sections() {
 
     // Given: a session with transcript content and worktree context.
     // When: the wide context rail renders.
-    let text = render(&mut state, 120, 42);
+    let text = render(&mut state, 124, 42);
 
     // Then: it exposes the OpenCode-style information groups.
     assert!(text.contains("ContextPilot"));
