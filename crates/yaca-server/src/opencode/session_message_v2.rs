@@ -65,15 +65,18 @@ async fn messages(
     Query(query): Query<MessagesQuery>,
 ) -> Result<Response, ApiError> {
     if query.cursor.is_some() && query.order.is_some() {
-        return Err(ApiError::bad_request(
-            "cursor cannot be combined with order",
+        return Ok(super::errors::invalid_cursor(
+            "Cursor cannot be combined with order",
         ));
     }
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
     if !(1..=MAX_LIMIT).contains(&limit) {
         return Err(ApiError::bad_request("limit must be between 1 and 200"));
     }
-    let decoded = query.cursor.as_deref().map(decode_cursor).transpose()?;
+    let decoded = match query.cursor.as_deref().map(decode_cursor).transpose() {
+        Ok(decoded) => decoded,
+        Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
+    };
     let order = decoded
         .as_ref()
         .map(|cursor| cursor.order)
@@ -147,9 +150,7 @@ fn encode_cursor(
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn decode_cursor(cursor: &str) -> Result<MessageCursor, ApiError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(cursor)
-        .map_err(|_| ApiError::bad_request("invalid cursor"))?;
-    serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("invalid cursor"))
+fn decode_cursor(cursor: &str) -> Result<MessageCursor, ()> {
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
+    serde_json::from_slice(&bytes).map_err(|_| ())
 }
