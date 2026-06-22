@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::http::header::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -7,6 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use yaca_proto::api::PromptRequest;
 use yaca_proto::{Projection, SessionId};
 
 use crate::{ApiError, ServerState, parse_session, runs};
@@ -25,6 +27,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/session/:id/children", get(children))
         .route("/session/:id/message", get(messages))
         .route("/session/:id/message/:message", get(message))
+        .route("/session/:id/prompt_async", post(prompt_async))
         .route("/session/:id/abort", post(abort))
 }
 
@@ -131,6 +134,29 @@ async fn message(
         .find(|item| item.id() == message)
         .map(Json)
         .ok_or_else(|| ApiError::not_found("message not found"))
+}
+
+async fn prompt_async(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<PromptRequest>,
+) -> Result<StatusCode, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let engine = st.engine.clone();
+    let agent = st.agent.clone();
+    let cancel = run.token();
+    std::mem::drop(tokio::spawn(async move {
+        let _guard = run;
+        if engine.admit_user_prompt(session, req.text).await.is_ok() {
+            let _ = engine.run_turn(session, &agent, cancel).await;
+        }
+    }));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn abort(
