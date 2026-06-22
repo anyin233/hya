@@ -8,8 +8,8 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
-use yaca_proto::{AgentName, ModelRef, SessionId};
-use yaca_provider::{FakeProvider, ProviderRouter};
+use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
+use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -17,7 +17,10 @@ use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 const WORKDIR: &str = "/tmp/yaca-opencode-session-v2-api";
 
 async fn state() -> AppState {
-    let provider = FakeProvider::scripted_turns(vec![]);
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("assistant answer".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
@@ -85,6 +88,16 @@ async fn post_empty(app: axum::Router, uri: String) -> StatusCode {
     .await
     .unwrap()
     .status()
+}
+
+async fn post_prompt(app: axum::Router, session: &str) -> StatusCode {
+    let (status, _) = post_json(
+        app,
+        &format!("/sessions/{session}/prompt"),
+        json!({"text": "hello"}),
+    )
+    .await;
+    status
 }
 
 #[tokio::test]
@@ -166,4 +179,30 @@ async fn opencode_v2_session_compact_and_wait_report_unavailable() {
     let missing = SessionId::new().to_string();
     let missing_compact = post_empty(app, format!("/api/session/{missing}/compact")).await;
     assert_eq!(missing_compact, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn opencode_v2_session_context_returns_v2_messages() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+    assert_eq!(post_prompt(app.clone(), session).await, StatusCode::OK);
+
+    let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["data"][0]["type"], "user");
+    assert_eq!(context["data"][0]["text"], "hello");
+    assert!(context["data"][0]["time"]["created"].as_u64().is_some());
+    assert_eq!(context["data"][1]["type"], "assistant");
+    assert_eq!(context["data"][1]["agent"], "build");
+    assert_eq!(context["data"][1]["model"]["id"], "fake");
+    assert_eq!(context["data"][1]["content"][0]["type"], "text");
+    assert_eq!(context["data"][1]["content"][0]["text"], "assistant answer");
+    assert_eq!(context["data"][1]["finish"], "stop");
 }

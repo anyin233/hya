@@ -17,6 +17,7 @@ mod file;
 mod instance;
 mod model_ref;
 mod projection;
+mod session_context;
 mod session_switch;
 mod session_v2;
 
@@ -24,6 +25,7 @@ pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .merge(file::router())
         .merge(instance::router())
+        .merge(session_context::router())
         .merge(session_v2::router())
         .merge(session_switch::router())
         .route("/session", get(list_sessions))
