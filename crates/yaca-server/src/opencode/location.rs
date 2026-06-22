@@ -65,10 +65,6 @@ pub(super) fn response_at<T>(
     }
 }
 
-pub(super) fn info(st: &ServerState) -> LocationInfo {
-    info_at(st, &LocationRef::default())
-}
-
 pub(super) fn info_at(st: &ServerState, location: &LocationRef) -> LocationInfo {
     let directory = workdir_at(st, location).to_string_lossy().into_owned();
     LocationInfo {
