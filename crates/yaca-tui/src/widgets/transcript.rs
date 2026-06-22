@@ -15,7 +15,7 @@ use super::transcript_text::text_from_parts;
 use super::transcript_tools::push_tool_lines;
 use crate::AppState;
 use crate::theme::Theme;
-use crate::view_model::{TimelinePart, timeline_items};
+use crate::view_model::{TimelinePart, ToolStatus, timeline_items};
 
 pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme) {
     let inner_height = area.height.max(1);
@@ -77,10 +77,10 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> TimelineLines 
             Role::System => system_lines(&item.parts, selected, theme, &mut lines),
         }
         if selected {
-            fill_selected_surface(&mut lines[start..], theme, width);
+            fill_surface(&mut lines[start..], theme.text, theme.block, width);
             selected_message_range = Some(start..lines.len());
         } else if is_user {
-            fill_panel_surface(&mut lines[start..], theme, width);
+            fill_surface(&mut lines[start..], theme.text, theme.panel, width);
         }
         if is_user {
             lines.push(Line::from(""));
@@ -103,14 +103,6 @@ fn assistant_status(
     } else {
         AssistantBlockStatus::Completed { duration_ms }
     }
-}
-
-fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
-    fill_surface(lines, theme.text, theme.block, width);
-}
-
-fn fill_panel_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
-    fill_surface(lines, theme.text, theme.panel, width);
 }
 
 fn fill_surface(lines: &mut [Line<'static>], fg: Color, bg: Color, width: u16) {
@@ -161,6 +153,7 @@ fn assistant_lines(
 ) {
     let mut has_visible_part = false;
     let mut previous_was_tool = false;
+    let mut previous_tool_output_block = false;
     for part in parts {
         match part {
             TimelinePart::Text(text) => {
@@ -175,12 +168,14 @@ fn assistant_lines(
                 }
                 has_visible_part = true;
                 previous_was_tool = false;
+                previous_tool_output_block = false;
             }
             TimelinePart::Reasoning(text) => {
                 if !text.trim().is_empty() {
                     push_reasoning_lines(text, selected, theme, lines);
                     has_visible_part = true;
                     previous_was_tool = false;
+                    previous_tool_output_block = false;
                 }
             }
             TimelinePart::Tool {
@@ -189,12 +184,19 @@ fn assistant_lines(
                 input,
                 status,
             } => {
-                if has_visible_part && !previous_was_tool {
+                if has_visible_part && (!previous_was_tool || previous_tool_output_block) {
                     lines.push(Line::from(""));
                 }
                 push_tool_lines((name, label, input, status), width, selected, theme, lines);
                 has_visible_part = true;
                 previous_was_tool = true;
+                previous_tool_output_block = matches!(
+                    status,
+                    ToolStatus::Completed {
+                        output: Some(output),
+                        ..
+                    } if output.contains('\n')
+                );
             }
         }
     }
