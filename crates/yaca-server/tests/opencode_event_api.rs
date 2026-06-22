@@ -216,6 +216,27 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
     assert_eq!(started["properties"]["info"]["role"], "user");
     assert!(started["properties"]["info"].get("finish").is_none());
 
+    let part_started = read_sse_json(&mut stream).await;
+    assert_eq!(part_started["type"], "message.part.updated");
+    assert_eq!(part_started["properties"]["sessionID"], session);
+    assert_eq!(
+        part_started["properties"]["time"],
+        part_started["properties"]["part"]["time"]["start"]
+    );
+    assert_eq!(part_started["properties"]["part"]["sessionID"], session);
+    assert_eq!(part_started["properties"]["part"]["messageID"], message);
+    assert_eq!(part_started["properties"]["part"]["type"], "text");
+    assert_eq!(part_started["properties"]["part"]["text"], "");
+    let part = part_started["properties"]["part"]["id"].as_str().unwrap();
+
+    let delta = read_sse_json(&mut stream).await;
+    assert_eq!(delta["type"], "message.part.delta");
+    assert_eq!(delta["properties"]["sessionID"], session);
+    assert_eq!(delta["properties"]["messageID"], message);
+    assert_eq!(delta["properties"]["partID"], part);
+    assert_eq!(delta["properties"]["field"], "text");
+    assert_eq!(delta["properties"]["delta"], "/init audit");
+
     let assistant_finished = read_next_message(&mut stream, "assistant", Some("stop")).await;
     assert_eq!(assistant_finished["properties"]["sessionID"], session);
     assert_eq!(
