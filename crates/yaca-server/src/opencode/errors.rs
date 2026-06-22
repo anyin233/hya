@@ -25,3 +25,16 @@ pub(in crate::opencode) fn invalid_cursor(message: &'static str) -> Response {
     )
         .into_response()
 }
+
+pub(in crate::opencode) fn invalid_workspace_query() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "_tag": "InvalidRequestError",
+            "message": "Invalid workspace query parameter",
+            "kind": "Query",
+            "field": "workspace",
+        })),
+    )
+        .into_response()
+}
