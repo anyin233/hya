@@ -142,6 +142,14 @@ impl PromptState {
         self.last_paste_pending_reveal = false;
     }
 
+    pub fn delete_to_line_end(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let line_end = line_end(&app.input, cursor);
+        app.input.replace_range(cursor..line_end, "");
+        app.input_cursor = Some(cursor);
+        self.last_paste_pending_reveal = false;
+    }
+
     pub fn delete_word_backward(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let end = trim_end_whitespace(&app.input[..cursor]);

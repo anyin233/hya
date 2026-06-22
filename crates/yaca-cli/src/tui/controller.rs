@@ -182,6 +182,9 @@ impl Controller {
                 KeyCode::Char('u') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
                 }
+                KeyCode::Char('k') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_to_line_end(app));
+                }
                 KeyCode::Char('w') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));
                 }
@@ -678,6 +681,9 @@ impl Controller {
                 }
                 KeyCode::Char('u') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
+                }
+                KeyCode::Char('k') => {
+                    return self.edit_prompt(|prompt, app| prompt.delete_to_line_end(app));
                 }
                 KeyCode::Char('w') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_word_backward(app));

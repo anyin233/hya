@@ -39,6 +39,28 @@ fn ctrl_u_deletes_to_current_line_start() {
 }
 
 #[test]
+fn ctrl_k_deletes_to_current_line_end() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta\ngamma".to_string(),
+        input_cursor: Some("alpha ".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(ctrl('k'));
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "alpha !\ngamma");
+    assert_eq!(controller.app.input_cursor, Some("alpha !".len()));
+}
+
+#[test]
 fn ctrl_w_deletes_previous_word_from_input_end() {
     // Given
     let mut controller = Controller::new(AppState {
