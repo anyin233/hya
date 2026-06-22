@@ -39,8 +39,10 @@ export type AdapterOptions = {
 export type DiscoveryContext = {
   readonly directory: string
   readonly worktree?: string
+  readonly customConfigFile?: string
   readonly customConfigDir?: string
   readonly disableProjectConfig?: boolean
+  readonly inlineConfig?: string
   readonly xdgConfigHome?: string
   readonly home?: string
 }
@@ -76,11 +78,21 @@ export async function discoverPluginSpecs(
   context: DiscoveryContext,
 ): Promise<readonly PluginSpec[]> {
   const specs: PluginSpec[] = []
-  for (const dir of opencodeConfigDirs(context)) {
-    specs.push(...(await readConfigPluginSpecs(dir)))
-    for (const child of ["plugin", "plugins"] as const) {
-      specs.push(...(await scanPluginDir(path.join(dir, child))))
-    }
+  const dirs = opencodeConfigDirs(context)
+  const global = globalConfigDir(context)
+  const [first, ...rest] = dirs
+  const configDirs = first !== undefined && first === global ? rest : dirs
+  if (first !== undefined && first === global) {
+    specs.push(...(await readConfigDirPluginSpecs(first)))
+  }
+  if (context.customConfigFile !== undefined && context.customConfigFile.length > 0) {
+    specs.push(...(await readConfigFilePluginSpecs(context.customConfigFile)))
+  }
+  for (const dir of configDirs) {
+    specs.push(...(await readConfigDirPluginSpecs(dir)))
+  }
+  if (context.inlineConfig !== undefined && context.inlineConfig.length > 0) {
+    specs.push(...parseConfigOptions(context.inlineConfig).plugin)
   }
   return deduplicatePluginSpecs(specs)
 }
@@ -153,18 +165,28 @@ async function scanPluginDir(dir: string): Promise<readonly string[]> {
     .map((name) => pathToFileURL(path.join(dir, name)).href)
 }
 
-async function readConfigPluginSpecs(dir: string): Promise<readonly PluginSpec[]> {
+async function readConfigDirPluginSpecs(dir: string): Promise<readonly PluginSpec[]> {
   const specs: PluginSpec[] = []
   for (const name of CONFIG_FILES) {
-    const file = path.join(dir, name)
-    const raw = await readConfigFile(file)
-    if (raw === undefined) {
-      continue
-    }
-    const options = parseConfigOptions(raw)
-    for (const plugin of options.plugin) {
-      specs.push(await resolveLocalPluginSpec(plugin, file))
-    }
+    specs.push(...(await readConfigFilePluginSpecs(path.join(dir, name))))
+  }
+  for (const child of ["plugin", "plugins"] as const) {
+    specs.push(...(await scanPluginDir(path.join(dir, child))))
+  }
+  return specs
+}
+
+async function readConfigFilePluginSpecs(
+  file: string,
+): Promise<readonly PluginSpec[]> {
+  const raw = await readConfigFile(file)
+  if (raw === undefined) {
+    return []
+  }
+  const options = parseConfigOptions(raw)
+  const specs: PluginSpec[] = []
+  for (const plugin of options.plugin) {
+    specs.push(await resolveLocalPluginSpec(plugin, file))
   }
   return specs
 }
