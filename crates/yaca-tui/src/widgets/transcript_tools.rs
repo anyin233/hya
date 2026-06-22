@@ -2,15 +2,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
+use super::transcript_output::collapsed_tool_output;
 use super::transcript_pending::pending_tool_label;
 use crate::theme::Theme;
 use crate::tool_labels::status_symbol;
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 48;
-const TOOL_OUTPUT_PREVIEW_LINES: usize = 10;
-const TOOL_OUTPUT_MIN_LINE_CHARS: usize = 20;
-const TOOL_OUTPUT_GUTTER_CHARS: u16 = 6;
 
 pub fn push_tool_lines(
     tool: (&str, &str, &str, &ToolStatus),
@@ -77,7 +75,7 @@ pub fn push_tool_lines(
             return;
         }
 
-        let preview = collapsed_output(output, width);
+        let preview = collapsed_tool_output(name, output, width);
         for segment in preview.lines() {
             push_output_line(
                 segment,
@@ -87,32 +85,6 @@ pub fn push_tool_lines(
                 lines,
             );
         }
-    }
-}
-
-fn collapsed_output(output: &str, width: u16) -> String {
-    let max_chars = TOOL_OUTPUT_PREVIEW_LINES
-        * usize::from(width.saturating_sub(TOOL_OUTPUT_GUTTER_CHARS))
-            .max(TOOL_OUTPUT_MIN_LINE_CHARS);
-    let lines = output.lines().collect::<Vec<_>>();
-    if lines.len() <= TOOL_OUTPUT_PREVIEW_LINES && output.chars().count() <= max_chars {
-        return output.to_string();
-    }
-
-    let preview = lines
-        .iter()
-        .take(TOOL_OUTPUT_PREVIEW_LINES)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    if preview.chars().count() > max_chars {
-        let head = preview
-            .chars()
-            .take(max_chars.saturating_sub(1))
-            .collect::<String>();
-        format!("{head}…")
-    } else {
-        format!("{preview}\n…")
     }
 }
 
