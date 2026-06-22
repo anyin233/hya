@@ -1,3 +1,4 @@
+use unicode_width::UnicodeWidthChar;
 use yaca_tui::{AppState, PromptAttachment};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +125,47 @@ impl PromptState {
     pub fn move_cursor_word_forward(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         app.input_cursor = Some(next_word_boundary(&app.input, cursor));
+    }
+
+    pub fn move_cursor_up(&mut self, app: &mut AppState) -> bool {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let start = line_start(&app.input, cursor);
+        if start == 0 {
+            if cursor == 0 {
+                return false;
+            }
+            app.input_cursor = Some(0);
+            return true;
+        }
+        let column = line_display_column(&app.input, start, cursor);
+        let previous_end = start.saturating_sub(1);
+        let previous_start = line_start(&app.input, previous_end);
+        app.input_cursor = Some(line_offset_for_display_column(
+            &app.input,
+            previous_start,
+            previous_end,
+            column,
+        ));
+        true
+    }
+
+    pub fn move_cursor_down(&mut self, app: &mut AppState) -> bool {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let end = line_end(&app.input, cursor);
+        if end == app.input.len() {
+            if cursor == app.input.len() {
+                return false;
+            }
+            app.input_cursor = Some(app.input.len());
+            return true;
+        }
+        let column = line_display_column(&app.input, line_start(&app.input, cursor), cursor);
+        let next_start = end + 1;
+        let next_end = line_end(&app.input, next_start);
+        app.input_cursor = Some(line_offset_for_display_column(
+            &app.input, next_start, next_end, column,
+        ));
+        true
     }
 
     pub fn move_cursor_line_start(&mut self, app: &mut AppState) {
@@ -355,6 +397,25 @@ fn line_start(input: &str, cursor: usize) -> usize {
 
 fn line_end(input: &str, cursor: usize) -> usize {
     cursor + input[cursor..].find('\n').unwrap_or(input.len() - cursor)
+}
+
+fn line_display_column(input: &str, start: usize, cursor: usize) -> usize {
+    input[start..cursor]
+        .chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn line_offset_for_display_column(input: &str, start: usize, end: usize, column: usize) -> usize {
+    let mut width = 0usize;
+    for (idx, ch) in input[start..end].char_indices() {
+        let next_width = width.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(0));
+        if next_width > column {
+            return start + idx;
+        }
+        width = next_width;
+    }
+    end
 }
 
 fn markdown_image_path(text: &str) -> Option<String> {

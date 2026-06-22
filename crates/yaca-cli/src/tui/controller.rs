@@ -280,11 +280,19 @@ impl Controller {
                 TuiEffect::None
             }
             KeyCode::Up => {
-                self.previous_input_history();
+                if self.should_navigate_input_history() {
+                    self.previous_input_history();
+                } else {
+                    self.move_prompt_cursor(|prompt, app| prompt.move_cursor_up(app));
+                }
                 TuiEffect::None
             }
             KeyCode::Down => {
-                self.next_input_history();
+                if self.should_navigate_input_history() {
+                    self.next_input_history();
+                } else {
+                    self.move_prompt_cursor(|prompt, app| prompt.move_cursor_down(app));
+                }
                 TuiEffect::None
             }
             KeyCode::Char(c)
@@ -388,6 +396,28 @@ impl Controller {
         self.disarm_exit();
         self.refresh_inline_popup();
         TuiEffect::None
+    }
+
+    fn move_prompt_cursor(
+        &mut self,
+        move_cursor: impl FnOnce(&mut PromptState, &mut AppState) -> bool,
+    ) {
+        if move_cursor(&mut self.prompt, &mut self.app) {
+            self.disarm_exit();
+            self.refresh_inline_popup();
+        }
+    }
+
+    fn should_navigate_input_history(&self) -> bool {
+        if self.app.input.is_empty() {
+            return true;
+        }
+        self.history_cursor.is_some() && self.input_cursor_at_history_boundary()
+    }
+
+    fn input_cursor_at_history_boundary(&self) -> bool {
+        let cursor = cursor_index(&self.app.input, self.app.input_cursor);
+        cursor == 0 || cursor == self.app.input.len()
     }
 
     fn handle_ctrl_c(&mut self) -> TuiEffect {
@@ -571,7 +601,7 @@ impl Controller {
         self.history_cursor = Some(idx);
         if let Some(value) = self.input_history.get(idx) {
             self.app.input = value.clone();
-            self.app.input_cursor = None;
+            self.app.input_cursor = Some(0);
             self.refresh_inline_popup();
         }
     }

@@ -3698,6 +3698,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "unicode-width",
  "uuid",
  "yaca-core",
  "yaca-mcp",

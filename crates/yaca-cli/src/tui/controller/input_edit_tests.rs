@@ -443,6 +443,156 @@ fn ctrl_arrow_keys_move_by_words() {
 }
 
 #[test]
+fn up_moves_cursor_to_previous_input_line() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "ab\ncde".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Up)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "ab!\ncde");
+    assert_eq!(controller.app.input_cursor, Some("ab!".len()));
+}
+
+#[test]
+fn down_moves_cursor_to_next_input_line() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "ab\ncde".to_string(),
+        input_cursor: Some("a".len()),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "ab\nc!de");
+    assert_eq!(controller.app.input_cursor, Some("ab\nc!".len()));
+}
+
+#[test]
+fn up_moves_cursor_by_display_column_across_cjk_lines() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "你a\nab".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Up)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "你!a\nab");
+    assert_eq!(controller.app.input_cursor, Some("你!".len()));
+}
+
+#[test]
+fn down_moves_cursor_by_display_column_across_cjk_lines() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "你\nab".to_string(),
+        input_cursor: Some("你".len()),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "你\nab!");
+    assert_eq!(controller.app.input_cursor, Some("你\nab!".len()));
+}
+
+#[test]
+fn up_inside_multiline_input_does_not_replace_prompt_with_history() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "older");
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Enter)),
+        TuiEffect::Submit("older".to_string())
+    );
+    type_text(&mut controller, "ab");
+    assert_eq!(controller.handle_key(ctrl('j')), TuiEffect::None);
+    type_text(&mut controller, "cde");
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Up)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "ab!\ncde");
+}
+
+#[test]
+fn up_on_nonempty_single_line_moves_to_prompt_start_without_history() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "older");
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Enter)),
+        TuiEffect::Submit("older".to_string())
+    );
+    type_text(&mut controller, "draft");
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Up)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "!draft");
+}
+
+#[test]
+fn down_on_nonempty_single_line_moves_to_prompt_end_without_scrolling() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "draft".to_string(),
+        input_cursor: Some("d".len()),
+        scroll_back: 5,
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "draft!");
+    assert_eq!(controller.app.scroll_back, 5);
+}
+
+#[test]
 fn alt_left_moves_by_word_inside_completion_popup() {
     // Given
     let mut controller = command_completion_controller();
