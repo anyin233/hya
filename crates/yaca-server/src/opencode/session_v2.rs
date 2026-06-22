@@ -83,7 +83,10 @@ enum CursorDirection {
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/session", get(list).post(create))
-        .route("/api/session/:id", get(get_one).patch(update))
+        .route(
+            "/api/session/:id",
+            get(get_one).patch(update).delete(remove),
+        )
         .route("/api/session/:id/compact", post(compact))
         .route("/api/session/:id/wait", post(wait))
 }
@@ -170,6 +173,17 @@ async fn update(
     let data =
         super::session_legacy::apply_session_update(&st, session, req.title, has_unsupported)
             .await?;
+    Ok(Json(DataResponse { data }))
+}
+
+async fn remove(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<DataResponse<bool>>, ApiError> {
+    let session = parse_session(&id)?;
+    super::load_session(&st, session, None).await?;
+    st.runs.cancel(session);
+    let data = st.engine.delete_session(session).await?;
     Ok(Json(DataResponse { data }))
 }
 

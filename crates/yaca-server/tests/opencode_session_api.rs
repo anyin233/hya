@@ -182,6 +182,23 @@ async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, 
     (status, body)
 }
 
+async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
 #[tokio::test]
 async fn opencode_session_routes_list_get_and_messages() {
     let app = router(state().await);
@@ -327,6 +344,49 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
         shell["parts"][0]["state"]["output"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_session_delete_removes_session() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, deleted) = delete_json(app.clone(), format!("/session/{session}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deleted, json!(true));
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::NOT_FOUND);
+
+    let list = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert!(
+        body_json(list)
+            .await
+            .as_array()
+            .expect("sessions")
+            .iter()
+            .all(|item| item["id"] != session)
     );
 }
 

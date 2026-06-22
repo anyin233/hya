@@ -21,7 +21,12 @@ pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/session", get(list_sessions))
         .route("/session/status", get(status))
-        .route("/session/:id", get(get_session).patch(update_session))
+        .route(
+            "/session/:id",
+            get(get_session)
+                .patch(update_session)
+                .delete(remove_session),
+        )
         .route("/session/:id/children", get(children))
         .route("/session/:id/todo", get(todo))
         .route("/session/:id/message", get(messages))
@@ -121,6 +126,17 @@ async fn update_session(
     let has_unsupported = payload.has_unsupported_fields();
     let info = apply_session_update(&st, session, payload.title, has_unsupported).await?;
     Ok(Json(info))
+}
+
+async fn remove_session(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<bool>, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    st.runs.cancel(session);
+    let deleted = st.engine.delete_session(session).await?;
+    Ok(Json(deleted))
 }
 
 async fn todo(

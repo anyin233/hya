@@ -112,6 +112,21 @@ impl SessionStore {
         Ok(out)
     }
 
+    pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
+        let key = session.as_uuid().as_bytes().to_vec();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM token_ledger WHERE session_id = ?")
+            .bind(key.clone())
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM event_log WHERE session_id = ?")
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
         Ok(Projection::from_events(&self.replay(session).await?))
     }
