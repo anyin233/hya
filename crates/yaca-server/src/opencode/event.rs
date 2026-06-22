@@ -91,7 +91,14 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         Event::SessionCreated { session, .. } => {
             session_payload(st, &envelope, *session, "session.created").await
         }
-        Event::SessionTitled { session, .. } => {
+        Event::SessionTitled { session, .. }
+        | Event::SessionMetadataSet { session, .. }
+        | Event::SessionPermissionSet { session, .. }
+        | Event::SessionArchived { session, .. }
+        | Event::SessionShareSet { session, .. }
+        | Event::SessionShareCleared { session }
+        | Event::AgentSwitched { session, .. }
+        | Event::ModelSwitched { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
         }
         Event::CommandExecuted {
