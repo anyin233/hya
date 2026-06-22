@@ -89,6 +89,14 @@ async fn list(
         .as_ref()
         .and_then(|cursor| cursor.search.as_deref())
         .or(query.search.as_deref());
+    let directory = decoded
+        .as_ref()
+        .and_then(|cursor| cursor.directory.as_deref())
+        .or(query.directory.as_deref());
+    let workspace = decoded
+        .as_ref()
+        .and_then(|cursor| cursor.workspace.as_deref())
+        .or(query.workspace.as_deref());
     let mut sessions = load_sessions(&st).await?;
     if order == Some("asc") {
         sessions.reverse();
@@ -102,6 +110,9 @@ async fn list(
     if let Some(search) = search {
         sessions.retain(|session| session.title().contains(search));
     }
+    if let Some(directory) = directory {
+        sessions.retain(|session| session.directory() == directory);
+    }
     let start = decoded
         .as_ref()
         .map(|cursor| super::session_v2_cursor::cursor_start(&sessions, cursor, limit))
@@ -112,14 +123,8 @@ async fn list(
         super::session_v2_cursor::CursorParams {
             order,
             search,
-            directory: decoded
-                .as_ref()
-                .and_then(|cursor| cursor.directory.as_deref())
-                .or(query.directory.as_deref()),
-            workspace: decoded
-                .as_ref()
-                .and_then(|cursor| cursor.workspace.as_deref())
-                .or(query.workspace.as_deref()),
+            directory,
+            workspace,
         },
     )?;
     Ok(Json(super::session_v2_cursor::SessionsResponse { data: page, cursor }).into_response())
