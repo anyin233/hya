@@ -26,8 +26,8 @@ pub(super) fn router() -> Router<ServerState> {
             "/experimental/control-plane/move-session",
             post(move_session),
         )
-        .route("/experimental/tool", get(empty_array))
-        .route("/experimental/tool/ids", get(empty_array))
+        .route("/experimental/tool", get(tool_list))
+        .route("/experimental/tool/ids", get(tool_ids))
         .route("/experimental/session", get(session_list))
         .route(
             "/experimental/session/:session/background",
@@ -61,6 +61,34 @@ async fn empty_array() -> Json<Vec<Value>> {
 
 async fn resource() -> Json<Value> {
     Json(json!({}))
+}
+
+async fn tool_list(State(st): State<ServerState>) -> Json<Vec<Value>> {
+    let mut schemas = st.engine.tool_schemas();
+    schemas.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    Json(
+        schemas
+            .into_iter()
+            .map(|schema| {
+                json!({
+                    "id": schema.name.to_string(),
+                    "description": schema.description,
+                    "parameters": schema.input_schema,
+                })
+            })
+            .collect(),
+    )
+}
+
+async fn tool_ids(State(st): State<ServerState>) -> Json<Vec<String>> {
+    let mut ids: Vec<_> = st
+        .engine
+        .tool_schemas()
+        .into_iter()
+        .map(|schema| schema.name.to_string())
+        .collect();
+    ids.sort();
+    Json(ids)
 }
 
 async fn no_content() -> StatusCode {

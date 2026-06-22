@@ -128,14 +128,32 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
         "/experimental/workspace/adapter",
         "/experimental/workspace",
         "/experimental/workspace/status",
-        "/experimental/tool?provider=opencode&model=test",
-        "/experimental/tool/ids",
         "/experimental/worktree",
     ] {
         let (status, body) = request_json(app.clone(), "GET", uri, None).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.as_array().is_some());
     }
+
+    let (status, tools) = request_json(
+        app.clone(),
+        "GET",
+        "/experimental/tool?provider=opencode&model=test",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["id"] == "read" && tool["parameters"].is_object())
+    );
+
+    let (status, tool_ids) = request_json(app.clone(), "GET", "/experimental/tool/ids", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(tool_ids.as_array().unwrap().iter().any(|id| id == "read"));
 
     let (status, sessions) = request_json(
         app.clone(),
