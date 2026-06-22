@@ -116,10 +116,15 @@ async fn update_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(payload): Json<super::session_update::UpdateSessionPayload>,
-) -> Result<Json<projection::OpenCodeSessionInfo>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    let info = super::session_update::apply(&st, session, payload).await?;
-    Ok(Json(info))
+    match super::session_update::apply(&st, session, payload).await {
+        Ok(info) => Ok(Json(info).into_response()),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(super::errors::legacy_session_not_found(session))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn remove_session(

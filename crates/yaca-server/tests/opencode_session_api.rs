@@ -369,6 +369,26 @@ async fn opencode_session_update_sets_title_metadata_permission_and_archive() {
 }
 
 #[tokio::test]
+async fn opencode_session_update_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let (status, body) = patch_json(
+        app,
+        format!("/session/{missing}"),
+        json!({"title": "never"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
+}
+
+#[tokio::test]
 async fn opencode_session_command_and_shell_routes_return_created_messages() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
@@ -1136,6 +1156,25 @@ async fn opencode_session_share_sets_and_clears_share_url() {
 }
 
 #[tokio::test]
+async fn opencode_session_share_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    let (status, body) =
+        post_json(app.clone(), format!("/session/{missing}/share"), json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+
+    let (status, body) = delete_json(app, format!("/session/{missing}/share")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+}
+
+#[tokio::test]
 async fn opencode_session_fork_copies_metadata_and_messages() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
@@ -1190,6 +1229,20 @@ async fn opencode_session_fork_copies_metadata_and_messages() {
     assert_eq!(body.as_array().expect("messages").len(), 2);
     assert_eq!(body[0]["parts"][0]["text"], "hello");
     assert_eq!(body[1]["parts"][0]["text"], "assistant answer");
+}
+
+#[tokio::test]
+async fn opencode_session_fork_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    let (status, body) = post_json(app, format!("/session/{missing}/fork"), json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]

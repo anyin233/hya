@@ -1,26 +1,46 @@
 use axum::Json;
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use yaca_proto::SessionId;
 
 use crate::{ApiError, ServerState, parse_session};
 
 pub(super) async fn share(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<super::projection::OpenCodeSessionInfo>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if let Err(response) = ensure_session(&st, session).await? {
+        return Ok(response);
+    }
     st.engine
         .set_share(session, format!("yaca://session/{session}"))
         .await?;
-    Ok(Json(super::load_session(&st, session, None).await?.info))
+    Ok(Json(super::load_session(&st, session, None).await?.info).into_response())
 }
 
 pub(super) async fn unshare(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<super::projection::OpenCodeSessionInfo>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if let Err(response) = ensure_session(&st, session).await? {
+        return Ok(response);
+    }
     st.engine.clear_share(session).await?;
-    Ok(Json(super::load_session(&st, session, None).await?.info))
+    Ok(Json(super::load_session(&st, session, None).await?.info).into_response())
+}
+
+async fn ensure_session(
+    st: &ServerState,
+    session: SessionId,
+) -> Result<Result<(), Response>, ApiError> {
+    match super::load_session(st, session, None).await {
+        Ok(_) => Ok(Ok(())),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(Err(super::errors::legacy_session_not_found(session)))
+        }
+        Err(error) => Err(error),
+    }
 }
