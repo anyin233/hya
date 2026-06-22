@@ -1,8 +1,10 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState, parse_session};
 
@@ -10,6 +12,8 @@ use super::{load_session, location};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/permission", get(list_root_requests))
+        .route("/permission/:request/reply", post(reply_root_request))
         .route("/api/permission/request", get(list_requests))
         .route("/api/permission/saved", get(list_saved))
         .route("/api/permission/saved/:id", delete(remove_saved))
@@ -62,6 +66,12 @@ enum WirePermissionReply {
     Reject,
 }
 
+async fn list_root_requests(
+    State(st): State<ServerState>,
+) -> Json<Vec<crate::pending::PermissionRequestView>> {
+    Json(st.permission_requests.list().await)
+}
+
 async fn list_requests(
     State(st): State<ServerState>,
 ) -> Json<location::LocationResponse<Vec<crate::pending::PermissionRequestView>>> {
@@ -112,6 +122,28 @@ async fn reply_legacy_request(
     }
 }
 
+async fn reply_root_request(
+    State(st): State<ServerState>,
+    Path(request): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if !request.starts_with("per") {
+        return ApiError::bad_request("invalid permission request id").into_response();
+    }
+    let Ok((reply, message)) = parse_reply_payload(&payload) else {
+        return ApiError::bad_request("invalid permission reply").into_response();
+    };
+    if st
+        .permission_requests
+        .reply_any(&request, pending_reply(reply), message)
+        .await
+    {
+        Json(true).into_response()
+    } else {
+        permission_not_found(&request).into_response()
+    }
+}
+
 async fn reply_to_pending(
     st: &ServerState,
     session: yaca_proto::SessionId,
@@ -127,6 +159,39 @@ async fn reply_to_pending(
     st.permission_requests
         .reply(session, request, reply, message)
         .await
+}
+
+fn parse_reply_payload(payload: &Value) -> Result<(WirePermissionReply, Option<String>), ()> {
+    let reply = match payload.get("reply").and_then(Value::as_str) {
+        Some("once") => WirePermissionReply::Once,
+        Some("always") => WirePermissionReply::Always,
+        Some("reject") => WirePermissionReply::Reject,
+        Some(_) | None => return Err(()),
+    };
+    let message = match payload.get("message") {
+        Some(value) => Some(value.as_str().ok_or(())?.to_string()),
+        None => None,
+    };
+    Ok((reply, message))
+}
+
+fn pending_reply(reply: WirePermissionReply) -> crate::pending::PermissionReply {
+    match reply {
+        WirePermissionReply::Once => crate::pending::PermissionReply::Once,
+        WirePermissionReply::Always => crate::pending::PermissionReply::Always,
+        WirePermissionReply::Reject => crate::pending::PermissionReply::Reject,
+    }
+}
+
+fn permission_not_found(request: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "_tag": "PermissionNotFoundError",
+            "requestID": request,
+            "message": format!("Permission request not found: {request}")
+        })),
+    )
 }
 
 async fn list_saved() -> Json<SavedPermissionList> {

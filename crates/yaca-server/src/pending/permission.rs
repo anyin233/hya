@@ -110,6 +110,41 @@ impl PermissionRequests {
         }
         ok
     }
+
+    pub(crate) async fn reply_any(
+        &self,
+        id: &str,
+        reply: PermissionReply,
+        message: Option<String>,
+    ) -> bool {
+        let (entry, related) = {
+            let mut pending = self.inner.lock().await;
+            let Some(entry) = pending.get(id) else {
+                return false;
+            };
+            let action = entry.action;
+            let session = entry.session;
+            let entry = pending.remove(id);
+            let related = match (reply, session) {
+                (PermissionReply::Once, _) | (_, None) => Vec::new(),
+                (PermissionReply::Always, Some(session)) => {
+                    take_related(&mut pending, session, Some(action))
+                }
+                (PermissionReply::Reject, Some(session)) => {
+                    take_related(&mut pending, session, None)
+                }
+            };
+            (entry, related)
+        };
+        let Some(entry) = entry else {
+            return false;
+        };
+        let ok = entry.reply.send(decision(reply, message)).is_ok();
+        for item in related {
+            let _sent = item.reply.send(related_decision(reply));
+        }
+        ok
+    }
 }
 
 fn take_related(
