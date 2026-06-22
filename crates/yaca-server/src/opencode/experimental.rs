@@ -21,7 +21,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/experimental/workspace/status", get(empty_array))
         .route("/experimental/workspace/sync-list", post(no_content))
         .route("/experimental/workspace/warp", post(workspace_warp))
-        .route("/experimental/workspace/:id", delete(ok_true))
+        .route("/experimental/workspace/:id", delete(workspace_remove))
         .route(
             "/experimental/control-plane/move-session",
             post(move_session),
@@ -69,6 +69,10 @@ async fn no_content() -> StatusCode {
 
 async fn ok_true() -> Json<bool> {
     Json(true)
+}
+
+async fn workspace_remove() -> Json<Value> {
+    Json(Value::Null)
 }
 
 async fn unavailable() -> Result<Json<Value>, ApiError> {

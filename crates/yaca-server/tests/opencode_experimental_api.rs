@@ -177,7 +177,7 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!(true));
+    assert_eq!(body, Value::Null);
 
     let sync_list = request(
         app.clone(),
