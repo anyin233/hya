@@ -294,7 +294,13 @@ async fn shell(
     Json(req): Json<ShellRequest>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    match load_session(&st, session, None).await {
+        Ok(_) => {}
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            return Ok(super::errors::legacy_session_not_found(session));
+        }
+        Err(error) => return Err(error),
+    }
     let Some(run) = st.runs.start(session) else {
         return Ok(super::errors::session_busy(session));
     };
