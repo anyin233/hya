@@ -1,4 +1,5 @@
 import type { OpenCodeHooks } from "./loader/init"
+import { runChatMessagesTransformHooks } from "./chat_messages_transform_hooks"
 import { runToolDefinitionHooks } from "./tool_definition_hooks"
 
 export type WireCompletionRequest = {
@@ -96,8 +97,9 @@ export async function runChatParamsHooks(
 ): Promise<ChatParamsOutcome> {
   const model = openCodeModel(params.request.model)
   const system = await transformedSystem(hooks, params, model)
+  const messages = await runChatMessagesTransformHooks(hooks, params.session, params.request.messages)
   const tools = await runToolDefinitionHooks(hooks, params.request.tools)
-  const request = { ...params.request, system, tools }
+  const request = { ...params.request, system, messages, tools }
   const output: ChatParamsOutput = {
     temperature: request.temperature ?? 0,
     topP: 1,

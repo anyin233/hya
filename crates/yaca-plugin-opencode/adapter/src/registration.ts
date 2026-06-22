@@ -8,6 +8,7 @@ const HOOK_MAPPINGS = [
   ["event", "event"],
   ["chat.message", "message.user.before"],
   ["chat.params", "chat.params"],
+  ["experimental.chat.messages.transform", "chat.params"],
   ["experimental.chat.system.transform", "chat.params"],
   ["permission.ask", "permission.ask"],
   ["tool.execute.before", "tool.execute.before"],
