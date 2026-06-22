@@ -34,6 +34,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | MCP tools | Partial | yaca has MCP manager/bridge and can expose MCP tools through the tool registry. |
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, and OpenCode-shaped `GET /session`, `GET /session/:sessionID`, and `GET /session/:sessionID/message` reads are present. |
 | OpenCode session read API | Partial | yaca accepts prefixed `ses_...` IDs and returns OpenCode-style session info and `[{ info, parts }]` message lists for the basic no-pagination read paths. |
+| OpenCode file API | Partial | yaca exposes OpenCode-shaped `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, and `/file/status` routes over the server workdir. Symbol and status match OpenCode's current empty handler behavior. |
 | Branching | Partial | Session parent/child support and branch/resume exist, but OpenCode's full session tree HTTP surface is incomplete. |
 | Integration modes | Implemented native | `exec --json` and `yaca rpc` JSONL mode exist. |
 | TUI base | Partial | Ratatui app has opencode-dark theme, session picker, permission/question overlays, slash commands, model switching, and render tests. |
@@ -46,7 +47,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Session lifecycle API | Missing exact OpenCode endpoints for scoped/root/path-filtered listing, children, todo, diff, paginated messages, individual message, update title/metadata/permissions/archive, delete, fork raw payload, init, share/unshare, summarize, prompt_async, revert/unrevert, permission respond, message deletion, part deletion, and part update. |
 | Abort/control | Basic busy status and abort exist. Missing OpenCode's richer runner behavior for background jobs, retry statuses, prompt_async lifecycle, child job cancellation, and event publication for status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
-| File HTTP routes | OpenCode exposes file text search, file search, symbol search, list, content, and status routes. yaca has equivalent tool-level read/grep/glob/find behavior, but not the HTTP API surface. |
+| File HTTP routes | Basic OpenCode legacy file HTTP routes are present. Remaining gaps are gitignore-aware `ignored` flags, exact filesystem service semantics, richer binary MIME detection, and real LSP-backed symbol search when available. |
 | Instance routes | Missing OpenCode-compatible path, VCS info/status/diff/raw diff/apply, command list, agent list, skill list, LSP status, and formatter status endpoints. |
 | Config routes | Missing OpenCode-compatible config get/update/provider metadata routes. yaca reads its own `~/.config/yaca/config.yaml`. |
 | Provider/auth breadth | Missing AI SDK provider breadth, models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
@@ -62,14 +63,14 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 ## Next Implementation Candidates
 
-1. Add OpenCode-compatible file HTTP routes backed by existing `read`, `grep`,
-   `glob`, and `find` implementations.
-2. Add instance metadata routes for path, VCS, skill list, command list, and LSP
+1. Add instance metadata routes for path, VCS, skill list, command list, and LSP
    status using existing yaca subsystems.
-3. Add OpenCode-compatible session pagination, single-message reads, and children
+2. Add OpenCode-compatible session pagination, single-message reads, and children
    listing over the existing store/projection.
-4. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
+3. Add `prompt_async` and richer OpenCode run-state lifecycle, including retry
    statuses and status events.
+4. Add gitignore-aware file listing, binary MIME detection, and LSP-backed
+   `/find/symbol` results for the file HTTP API.
 5. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
 
 Each candidate should be implemented with a red test first, verified with
