@@ -3,6 +3,8 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
+use unicode_width::UnicodeWidthStr;
 use yaca_tui::{AppState, ChangedFileView, draw};
 
 fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
@@ -21,6 +23,25 @@ fn buffer_text(buffer: &Buffer, width: u16, height: u16) -> String {
         out.push('\n');
     }
     out
+}
+
+fn find_rendered_text(
+    buffer: &Buffer,
+    width: u16,
+    height: u16,
+    needle: &str,
+) -> Option<(u16, u16)> {
+    for y in 0..height {
+        let mut row = String::new();
+        for x in 0..width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        if let Some(x) = row.find(needle) {
+            let display_x = UnicodeWidthStr::width(&row[..x]);
+            return Some((u16::try_from(display_x).unwrap(), y));
+        }
+    }
+    None
 }
 
 #[test]
@@ -63,6 +84,49 @@ fn context_rail_shows_modified_files() {
         text.contains("README.md"),
         "context rail should include files without numstat data"
     );
+}
+
+#[test]
+fn context_rail_colors_modified_file_stats_like_opencode() {
+    // Given: OpenCode renders additions and deletions with separate diff colors.
+    let mut state = AppState {
+        changed_files: vec![ChangedFileView {
+            path: "crates/yaca-tui/src/widgets/sidebar.rs".to_string(),
+            additions: Some(12),
+            deletions: Some(3),
+        }],
+        ..AppState::default()
+    };
+
+    // When: the modified file row renders in the context rail.
+    let buffer = render_buffer(&mut state, 124, 28);
+    let added = find_rendered_text(&buffer, 124, 28, "+12").unwrap();
+    let removed = find_rendered_text(&buffer, 124, 28, "-3").unwrap();
+
+    // Then: addition and deletion counts use their semantic diff colors.
+    assert_eq!(buffer[(added.0, added.1)].fg, Color::Rgb(127, 216, 143));
+    assert_eq!(buffer[(removed.0, removed.1)].fg, Color::Rgb(224, 108, 117));
+}
+
+#[test]
+fn context_rail_omits_zero_modified_file_stats_like_opencode() {
+    // Given: OpenCode hides zero-value file diff counters.
+    let mut state = AppState {
+        changed_files: vec![ChangedFileView {
+            path: "src/lib.rs".to_string(),
+            additions: Some(8),
+            deletions: Some(0),
+        }],
+        ..AppState::default()
+    };
+
+    // When: the modified file row renders in the context rail.
+    let buffer = render_buffer(&mut state, 124, 28);
+    let text = buffer_text(&buffer, 124, 28);
+
+    // Then: only non-zero counters are shown.
+    assert!(text.contains("src/lib.rs +8"));
+    assert!(!text.contains("-0"));
 }
 
 #[test]

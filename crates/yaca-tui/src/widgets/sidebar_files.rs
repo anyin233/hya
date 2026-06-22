@@ -1,4 +1,5 @@
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::sidebar_context::{meta, push_section};
@@ -21,7 +22,7 @@ pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme
     };
     push_section(lines, title, theme.info, theme);
     for file in state.changed_files.iter().take(MAX_VISIBLE_FILES) {
-        lines.push(meta(file_label(file), theme.text));
+        lines.push(file_line(file, theme));
     }
     let hidden = state.changed_files.len().saturating_sub(MAX_VISIBLE_FILES);
     if hidden > 0 {
@@ -29,15 +30,48 @@ pub(super) fn push_files(lines: &mut Vec<Line<'static>>, state: &AppState, theme
     }
 }
 
-fn file_label(file: &crate::ChangedFileView) -> String {
-    let stats = match (file.additions, file.deletions) {
-        (Some(additions), Some(deletions)) => format!(" +{additions} -{deletions}"),
-        (Some(additions), None) => format!(" +{additions}"),
-        (None, Some(deletions)) => format!(" -{deletions}"),
-        (None, None) => String::new(),
-    };
-    let path_width = FILE_ROW_WIDTH.saturating_sub(UnicodeWidthStr::width(stats.as_str()));
-    format!("{}{}", ellipsize_tail(&file.path, path_width), stats)
+fn file_line(file: &crate::ChangedFileView, theme: &Theme) -> Line<'static> {
+    let path_width = FILE_ROW_WIDTH.saturating_sub(stats_width(file));
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(
+            ellipsize_tail(&file.path, path_width),
+            Style::default().fg(theme.muted),
+        ),
+    ];
+    if let Some(additions) = additions(file) {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("+{additions}"),
+            Style::default().fg(theme.success),
+        ));
+    }
+    if let Some(deletions) = deletions(file) {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("-{deletions}"),
+            Style::default().fg(theme.error),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn stats_width(file: &crate::ChangedFileView) -> usize {
+    let additions = additions(file)
+        .map(|count| 1 + UnicodeWidthStr::width(format!("+{count}").as_str()))
+        .unwrap_or_default();
+    let deletions = deletions(file)
+        .map(|count| 1 + UnicodeWidthStr::width(format!("-{count}").as_str()))
+        .unwrap_or_default();
+    additions + deletions
+}
+
+fn additions(file: &crate::ChangedFileView) -> Option<u32> {
+    file.additions.filter(|&count| count > 0)
+}
+
+fn deletions(file: &crate::ChangedFileView) -> Option<u32> {
+    file.deletions.filter(|&count| count > 0)
 }
 
 fn ellipsize_tail(text: &str, max_width: usize) -> String {
