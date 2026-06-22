@@ -687,23 +687,21 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+    let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
     );
-    let policy = if yolo {
+    let mut state = AppState::new(engine, Arc::new(agent_with_model(&runtime.model)))
+        .with_question_requests(questions);
+    let _responder = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
-        PermissionPolicy::Yolo
+        Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))
     } else {
-        PermissionPolicy::ReadOnly
-    };
-    let _responder = spawn_auto_responder(asks, policy);
-    let state = AppState {
-        engine,
-        agent: Arc::new(agent_with_model(&runtime.model)),
+        state = state.with_permission_requests(asks);
+        None
     };
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

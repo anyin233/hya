@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures::Stream;
 use futures::StreamExt;
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::BroadcastStream;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::api::{
@@ -19,20 +20,41 @@ use yaca_proto::api::{
     PromptResponse, ShellRequest,
 };
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
+use yaca_tool::{AskRequest, QuestionRequest};
 
 mod opencode;
+mod pending;
 mod runs;
 
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<SessionEngine>,
     pub agent: Arc<AgentSpec>,
+    permission_requests: pending::PermissionRequests,
+    question_requests: pending::QuestionRequests,
 }
 
 impl AppState {
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
-        Self { engine, agent }
+        Self {
+            engine,
+            agent,
+            permission_requests: pending::PermissionRequests::default(),
+            question_requests: pending::QuestionRequests::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
+        self.permission_requests = pending::PermissionRequests::spawn(rx);
+        self
+    }
+
+    #[must_use]
+    pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
+        self.question_requests = pending::QuestionRequests::spawn(rx);
+        self
     }
 }
 
@@ -41,6 +63,8 @@ struct ServerState {
     engine: Arc<SessionEngine>,
     agent: Arc<AgentSpec>,
     runs: runs::RunRegistry,
+    permission_requests: pending::PermissionRequests,
+    question_requests: pending::QuestionRequests,
 }
 
 impl ServerState {
@@ -49,6 +73,8 @@ impl ServerState {
             engine: app.engine,
             agent: app.agent,
             runs: runs::RunRegistry::default(),
+            permission_requests: app.permission_requests,
+            question_requests: app.question_requests,
         }
     }
 }

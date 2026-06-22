@@ -10,8 +10,8 @@ OpenCode baseline: `sst/opencode` `origin/dev`
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
 session, abort, file, instance metadata, VCS, prompt_async, session switching,
-session context, v2 prompt admission, and active provider/model compatibility
-increments.
+session context, v2 prompt admission, active provider/model compatibility, and
+permission/question queue compatibility increments.
 
 ## Status Summary
 
@@ -49,7 +49,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 | OpenCode area | Missing yaca parity |
 | --- | --- |
-| HTTP API compatibility | yaca now has native `/sessions/*`, an OpenCode `/session` read subset, v2 `/api/health`, `/api/session` list/create/get/switch/context/prompt coverage, v2 `/api/location` plus `/api/agent`/`/api/command`/`/api/skill`, `/api/event` SSE, `/api/reference`, read-only `/api/integration`, and active v2 `/api/provider` plus `/api/model` coverage. OpenCode also exposes `/api/permission`, `/api/question`, `/api/mcp`, `/api/pty`, `/api/project-copy`, credential mutation, integration connect/auth flows, legacy file/session routes, TUI/control/sync/experimental/workspace surfaces, and global control routes. |
+| HTTP API compatibility | yaca now has native `/sessions/*`, an OpenCode `/session` read subset, v2 `/api/health`, `/api/session` list/create/get/switch/context/prompt coverage, v2 `/api/location` plus `/api/agent`/`/api/command`/`/api/skill`, `/api/event` SSE, `/api/reference`, read-only `/api/integration`, active v2 `/api/provider` plus `/api/model` coverage, and OpenCode-compatible pending `/api/permission` plus `/api/question` list/reply/reject queues. OpenCode also exposes `/api/mcp`, `/api/pty`, `/api/project-copy`, credential mutation, integration connect/auth flows, legacy file/session routes, TUI/control/sync/experimental/workspace surfaces, and global control routes. |
 | Session lifecycle API | Missing exact OpenCode endpoints for scoped directory/project/workspace listing, todo, diff, update title/permissions/archive, delete, fork raw payload, init, share/unshare, summarize, revert/unrevert, permission respond, message deletion, part deletion, and part update. Compact/wait routes currently match OpenCode's unavailable status but not future execution semantics. Message and v2 session pagination exist but use yaca-owned cursor formats rather than OpenCode's timestamp-anchor cursors; v2 context omits agent/model switch pseudo-messages and full tool provider metadata; switched model variants are not preserved separately from provider/id yet. |
 | Abort/control | Basic busy status, abort, prompt_async, and v2 prompt admission exist. Missing OpenCode's richer runner behavior for background jobs, durable queue promotion, retry statuses, child job cancellation, and event publication for async failures/status changes. |
 | Event stream | `/api/event` sends OpenCode-shaped SSE with `server.connected` and yaca envelope payloads. Missing OpenCode's full native event type taxonomy, durable event replay, and location-aware filtering for every event source. |
@@ -62,7 +62,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | TUI control API | Missing `/tui/*` server control/event queue endpoints for append/open/help/models/themes/submit/clear/execute/toast/select/control. |
 | TUI full feature parity | Missing or incomplete OpenCode command palette, theme picker/bundled theme library, model variant picker, skill picker error UI (`9dadc24`), rich markdown/diff/code rendering, usage/cost display wiring, prompt stash, and full keymap/leader UX. |
 | MCP HTTP/auth routes | yaca has MCP execution substrate but not OpenCode-compatible MCP status/add/auth/connect/disconnect HTTP routes. |
-| Permission/question HTTP queues | yaca has native permission and interaction planes, but no OpenCode-compatible `/permission` and `/question` list/reply/reject APIs. Typed TUI deny feedback is still deferred. |
+| Permission/question HTTP queues | Pending permission/question list/reply/reject APIs are backed by yaca's native ask channels. Remaining gaps are persistent saved-permission listing/removal, OpenCode's full source/tool metadata, and typed TUI deny feedback. |
 | Sync/workspace/control-plane | Missing OpenCode sync replay/steal/history, experimental workspace adapters/list/status/warp, worktree HTTP management, project copy name generation, and control-plane move-session APIs. |
 | ACP | OpenCode ships an ACP service/CLI package. yaca has no ACP-compatible surface. |
 | Account/stats/github/web/upgrade CLI | OpenCode has account, stats, GitHub, web, upgrade/uninstall, import/export, db/debug, attach, models/providers, and ACP CLI commands. yaca only covers its native exec/serve/login/sessions/tail/rpc/TUI commands. |
