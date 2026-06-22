@@ -74,6 +74,19 @@ async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     (status, body_json(resp).await)
 }
 
+async fn post_empty(app: axum::Router, uri: String) -> StatusCode {
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .status()
+}
+
 #[tokio::test]
 async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     let app = router(state().await);
@@ -130,4 +143,27 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     assert_eq!(listed["data"].as_array().expect("data").len(), 1);
     assert!(listed["cursor"]["next"].as_str().is_some());
     assert!(listed["cursor"]["previous"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn opencode_v2_session_compact_and_wait_report_unavailable() {
+    let app = router(state().await);
+    let requested = SessionId::new().to_string();
+    let (status, _) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"id": requested, "location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let compact = post_empty(app.clone(), format!("/api/session/{requested}/compact")).await;
+    assert_eq!(compact, StatusCode::SERVICE_UNAVAILABLE);
+
+    let wait = post_empty(app.clone(), format!("/api/session/{requested}/wait")).await;
+    assert_eq!(wait, StatusCode::SERVICE_UNAVAILABLE);
+
+    let missing = SessionId::new().to_string();
+    let missing_compact = post_empty(app, format!("/api/session/{missing}/compact")).await;
+    assert_eq!(missing_compact, StatusCode::NOT_FOUND);
 }

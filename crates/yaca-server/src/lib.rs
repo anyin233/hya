@@ -99,6 +99,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<yaca_core::CoreError> for ApiError {
