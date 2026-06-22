@@ -49,6 +49,7 @@ mod harness;
 #[cfg(test)]
 mod harness_block_actions;
 mod history;
+mod leader_key;
 mod mcp_view;
 mod message_scroll;
 mod prompt;

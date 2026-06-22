@@ -6,6 +6,7 @@ use yaca_tui::{AppState, DialogItem, DialogView};
 use super::agent_cycle::{next_agent_label, previous_agent_label};
 use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
+use super::leader_key::{LeaderAction, LeaderKey};
 use super::message_scroll::handle_message_scroll_key;
 use super::prompt::{PromptState, mention_trigger_index};
 use super::selection::{MessageSelectionStep, next_selected_message};
@@ -72,6 +73,7 @@ pub struct Controller {
     input_history: Vec<String>,
     history_cursor: Option<usize>,
     prompt: PromptState,
+    leader_key: LeaderKey,
     last_ctrl_c: Option<Instant>,
 }
 
@@ -123,16 +125,25 @@ impl Controller {
             input_history: Vec::new(),
             history_cursor: None,
             prompt: PromptState::default(),
+            leader_key: LeaderKey::default(),
             last_ctrl_c: None,
         }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if self.app.dialog.is_some() {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('c'))
+            {
+                return self.handle_ctrl_c();
+            }
+            return self.handle_dialog_key(key);
+        }
+        if let Some(action) = self.leader_key.handle(&key) {
+            return self.handle_leader_action(action);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             return self.handle_ctrl_c();
-        }
-        if self.app.dialog.is_some() {
-            return self.handle_dialog_key(key);
         }
         let modified_enter = key.code == KeyCode::Enter
             && (key.modifiers == KeyModifiers::SHIFT
@@ -236,6 +247,27 @@ impl Controller {
             self.disarm_exit();
             TuiEffect::SelectAgent(agent)
         })
+    }
+
+    fn handle_leader_action(&mut self, action: LeaderAction) -> TuiEffect {
+        match action {
+            LeaderAction::Arm | LeaderAction::Cancel => TuiEffect::None,
+            LeaderAction::ModelList => {
+                self.open_model_dialog();
+                TuiEffect::None
+            }
+            LeaderAction::AgentList => {
+                self.open_agent_dialog();
+                TuiEffect::None
+            }
+            LeaderAction::SessionList => {
+                self.open_resume_dialog();
+                TuiEffect::None
+            }
+            LeaderAction::SessionNew => TuiEffect::NewSession,
+            LeaderAction::SessionCompact => TuiEffect::CompactTranscript,
+            LeaderAction::SessionExport => TuiEffect::ExportTranscript,
+        }
     }
 
     fn select_previous_message(&mut self) -> TuiEffect {
@@ -889,6 +921,9 @@ fn is_exact_slash_command(input: &str, custom_commands: &[CustomCommand]) -> boo
 
 #[cfg(test)]
 mod scroll_tests;
+
+#[cfg(test)]
+mod leader_key_tests;
 
 #[cfg(test)]
 mod tests {
