@@ -126,17 +126,11 @@ fn push_context(
 }
 
 fn push_mcp(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    lines.push(Line::from(""));
-    push_section(lines, "▾ MCP", theme.text, theme);
     if state.mcp.is_empty() {
-        lines.push(connector_line(
-            "none configured",
-            "Disabled",
-            theme.muted,
-            theme,
-        ));
         return;
     }
+    lines.push(Line::from(""));
+    push_section(lines, "▾ MCP", theme.text, theme);
     for connector in &state.mcp {
         lines.push(connector_line(
             &connector.name,
