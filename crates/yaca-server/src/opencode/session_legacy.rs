@@ -9,7 +9,6 @@ use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
-use serde_json::Value;
 use yaca_proto::api::{CommandRequest, PromptRequest, ShellRequest};
 use yaca_proto::{Event, MessageId, ModelRef, Projection, SessionId};
 
@@ -51,14 +50,6 @@ struct MessageCursor {
 }
 
 #[derive(Deserialize)]
-struct UpdateSessionPayload {
-    title: Option<String>,
-    metadata: Option<Value>,
-    permission: Option<Value>,
-    time: Option<Value>,
-}
-
-#[derive(Deserialize)]
 pub(in crate::opencode) struct InitSessionPayload {
     #[serde(rename = "messageID")]
     message_id: String,
@@ -66,12 +57,6 @@ pub(in crate::opencode) struct InitSessionPayload {
     provider_id: String,
     #[serde(rename = "modelID")]
     model_id: String,
-}
-
-impl UpdateSessionPayload {
-    fn has_unsupported_fields(&self) -> bool {
-        self.metadata.is_some() || self.permission.is_some() || self.time.is_some()
-    }
 }
 
 async fn status(State(st): State<ServerState>) -> Json<BTreeMap<String, runs::RunStatus>> {
@@ -131,11 +116,10 @@ async fn get_session(
 async fn update_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateSessionPayload>,
+    Json(payload): Json<super::session_update::UpdateSessionPayload>,
 ) -> Result<Json<projection::OpenCodeSessionInfo>, ApiError> {
     let session = parse_session(&id)?;
-    let has_unsupported = payload.has_unsupported_fields();
-    let info = apply_session_update(&st, session, payload.title, has_unsupported).await?;
+    let info = super::session_update::apply(&st, session, payload).await?;
     Ok(Json(info))
 }
 
@@ -277,24 +261,6 @@ async fn abort(
     let session = parse_session(&id)?;
     st.runs.cancel(session);
     Ok(Json(true))
-}
-
-pub(in crate::opencode) async fn apply_session_update(
-    st: &ServerState,
-    session: SessionId,
-    title: Option<String>,
-    has_unsupported_fields: bool,
-) -> Result<projection::OpenCodeSessionInfo, ApiError> {
-    load_session(st, session, None).await?;
-    if has_unsupported_fields {
-        return Err(ApiError::bad_request(
-            "only session title updates are supported",
-        ));
-    }
-    if let Some(title) = title {
-        st.engine.set_title(session, title).await?;
-    }
-    Ok(load_session(st, session, None).await?.info)
 }
 
 pub(in crate::opencode) async fn load_message(

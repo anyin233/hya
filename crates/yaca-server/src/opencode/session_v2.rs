@@ -5,7 +5,6 @@ use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use yaca_core::CreateSession;
 use yaca_proto::AgentName;
 
@@ -34,20 +33,6 @@ struct CreateV2Request {
 #[derive(Deserialize)]
 struct LocationRefRequest {
     directory: String,
-}
-
-#[derive(Deserialize)]
-struct UpdateSessionRequest {
-    title: Option<String>,
-    metadata: Option<Value>,
-    permission: Option<Value>,
-    time: Option<Value>,
-}
-
-impl UpdateSessionRequest {
-    fn has_unsupported_fields(&self) -> bool {
-        self.metadata.is_some() || self.permission.is_some() || self.time.is_some()
-    }
 }
 
 #[derive(Serialize)]
@@ -167,13 +152,10 @@ async fn get_one(
 async fn update(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateSessionRequest>,
+    Json(req): Json<super::session_update::UpdateSessionPayload>,
 ) -> Result<Json<DataResponse<OpenCodeSessionInfo>>, ApiError> {
     let session = parse_session(&id)?;
-    let has_unsupported = req.has_unsupported_fields();
-    let data =
-        super::session_legacy::apply_session_update(&st, session, req.title, has_unsupported)
-            .await?;
+    let data = super::session_update::apply(&st, session, req).await?;
     Ok(Json(DataResponse { data }))
 }
 

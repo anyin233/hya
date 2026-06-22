@@ -19,6 +19,9 @@ pub struct SessionProjection {
     pub agent: Option<AgentName>,
     pub model: Option<ModelRef>,
     pub title: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub permission: Option<Vec<serde_json::Value>>,
+    pub archived: Option<serde_json::Number>,
     pub messages: Vec<MessageProjection>,
 }
 
@@ -104,6 +107,15 @@ impl Projection {
             }
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());
+            }
+            Event::SessionMetadataSet { metadata, .. } => {
+                self.session.metadata = Some(metadata.clone());
+            }
+            Event::SessionPermissionSet { permission, .. } => {
+                self.session.permission = Some(permission.clone());
+            }
+            Event::SessionArchived { archived, .. } => {
+                self.session.archived = Some(archived.clone());
             }
             Event::AgentSwitched { agent, .. } => {
                 self.session.agent = Some(agent.clone());

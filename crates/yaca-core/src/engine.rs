@@ -206,4 +206,37 @@ impl SessionEngine {
         self.emit(session, Event::SessionTitled { session, title })
             .await
     }
+
+    pub async fn set_metadata(
+        &self,
+        session: SessionId,
+        metadata: serde_json::Value,
+    ) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionMetadataSet { session, metadata })
+            .await
+    }
+
+    pub async fn set_permission(
+        &self,
+        session: SessionId,
+        permission: Vec<serde_json::Value>,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            session,
+            Event::SessionPermissionSet {
+                session,
+                permission,
+            },
+        )
+        .await
+    }
+
+    pub async fn set_archived(
+        &self,
+        session: SessionId,
+        archived: serde_json::Number,
+    ) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionArchived { session, archived })
+            .await
+    }
 }

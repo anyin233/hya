@@ -25,6 +25,18 @@ pub enum Event {
         session: SessionId,
         title: String,
     },
+    SessionMetadataSet {
+        session: SessionId,
+        metadata: serde_json::Value,
+    },
+    SessionPermissionSet {
+        session: SessionId,
+        permission: Vec<serde_json::Value>,
+    },
+    SessionArchived {
+        session: SessionId,
+        archived: serde_json::Number,
+    },
     AgentSwitched {
         session: SessionId,
         agent: AgentName,
@@ -158,6 +170,9 @@ impl Event {
         match self {
             Event::SessionCreated { session, .. }
             | Event::SessionTitled { session, .. }
+            | Event::SessionMetadataSet { session, .. }
+            | Event::SessionPermissionSet { session, .. }
+            | Event::SessionArchived { session, .. }
             | Event::AgentSwitched { session, .. }
             | Event::ModelSwitched { session, .. }
             | Event::CommandExecuted { session, .. }

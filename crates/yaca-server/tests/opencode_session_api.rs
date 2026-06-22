@@ -269,7 +269,7 @@ async fn opencode_session_routes_list_get_and_messages() {
 }
 
 #[tokio::test]
-async fn opencode_session_update_sets_title() {
+async fn opencode_session_update_sets_title_metadata_permission_and_archive() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
 
@@ -297,13 +297,52 @@ async fn opencode_session_update_sets_title() {
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(body_json(get).await["title"], "Reviewed parity");
 
-    let unsupported = patch_json(
-        app,
+    let (status, metadata_updated) = patch_json(
+        app.clone(),
         format!("/session/{session}"),
-        json!({"metadata": {"owner": "opencode"}}),
+        json!({
+            "metadata": {"owner": "opencode"},
+            "permission": [{"permission": "bash", "pattern": "*", "action": "ask"}],
+            "time": {"archived": 42}
+        }),
     )
     .await;
-    assert_eq!(unsupported.0, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata_updated["metadata"]["owner"], "opencode");
+    assert_eq!(metadata_updated["permission"][0]["permission"], "bash");
+    assert_eq!(metadata_updated["time"]["archived"], 42);
+
+    let (status, permission_merged) = patch_json(
+        app.clone(),
+        format!("/session/{session}"),
+        json!({"permission": [{"permission": "edit", "pattern": "*.rs", "action": "allow"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        permission_merged["permission"]
+            .as_array()
+            .expect("permission rules")
+            .len(),
+        2
+    );
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = body_json(get).await;
+    assert_eq!(body["metadata"]["owner"], "opencode");
+    assert_eq!(body["permission"][1]["permission"], "edit");
+    assert_eq!(body["time"]["archived"], 42);
 }
 
 #[tokio::test]
