@@ -131,6 +131,14 @@ impl PromptState {
         app.input_cursor = Some(line_end(&app.input, cursor));
     }
 
+    pub fn move_cursor_buffer_start(&mut self, app: &mut AppState) {
+        app.input_cursor = Some(0);
+    }
+
+    pub fn move_cursor_buffer_end(&mut self, app: &mut AppState) {
+        app.input_cursor = Some(app.input.len());
+    }
+
     pub fn delete_to_line_start(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let line_start = line_start(&app.input, cursor);

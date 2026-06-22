@@ -194,3 +194,29 @@ fn reference_completion_popup_ignores_trailing_text_after_cursor() {
     assert_eq!(dialog.title, "references");
     assert_eq!(controller.app.input, "read @REA suffix");
 }
+
+#[test]
+fn home_and_end_move_to_input_buffer_edges_when_prompt_is_not_empty() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha\nbravo".to_string(),
+        scroll_back: 12,
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('>'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(key(KeyCode::End)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, ">alpha\nbravo!");
+    assert_eq!(controller.app.scroll_back, 12);
+}

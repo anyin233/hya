@@ -225,9 +225,15 @@ impl Controller {
                 self.app.scroll_down(5);
                 TuiEffect::None
             }
+            KeyCode::Home if !self.app.input.is_empty() => {
+                self.edit_prompt(|prompt, app| prompt.move_cursor_buffer_start(app))
+            }
             KeyCode::Home => {
                 self.app.scroll_back = u16::MAX;
                 TuiEffect::None
+            }
+            KeyCode::End if !self.app.input.is_empty() => {
+                self.edit_prompt(|prompt, app| prompt.move_cursor_buffer_end(app))
             }
             KeyCode::End => {
                 self.app.scroll_back = 0;
@@ -720,6 +726,8 @@ impl Controller {
             KeyCode::Delete => self.edit_prompt(|prompt, app| prompt.delete(app)),
             KeyCode::Left => self.edit_prompt(|prompt, app| prompt.move_cursor_left(app)),
             KeyCode::Right => self.edit_prompt(|prompt, app| prompt.move_cursor_right(app)),
+            KeyCode::Home => self.edit_prompt(|prompt, app| prompt.move_cursor_buffer_start(app)),
+            KeyCode::End => self.edit_prompt(|prompt, app| prompt.move_cursor_buffer_end(app)),
             KeyCode::Char(c)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
