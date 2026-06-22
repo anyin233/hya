@@ -159,6 +159,7 @@ fn request_to_wire(request: &CompletionRequest) -> WireCompletionRequest {
         temperature: request.temperature,
         max_output_tokens: request.max_output_tokens,
         reasoning: request.reasoning.map(|r| r.as_str().to_string()),
+        headers: request.headers.clone(),
     }
 }
 
@@ -175,6 +176,7 @@ fn wire_to_request(wire: WireCompletionRequest, original: &CompletionRequest) ->
             .as_deref()
             .and_then(ReasoningEffort::parse)
             .or(original.reasoning),
+        headers: wire.headers,
     }
 }
 

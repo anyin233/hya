@@ -2,7 +2,7 @@
 //! `Event` stream. One provider per upstream route (OpenAI-compatible or
 //! Anthropic), selected by the model id it serves.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -49,6 +49,13 @@ pub struct HttpProvider {
 fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
     let mut header = HeaderValue::from_str(value)
         .map_err(|_| ProviderError::Http("invalid auth header value".to_string()))?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
+    let mut header = HeaderValue::from_str(value)
+        .map_err(|_| ProviderError::Http("invalid request header value".to_string()))?;
     header.set_sensitive(true);
     Ok(header)
 }
@@ -144,6 +151,19 @@ impl HttpProvider {
         }
         Ok(headers)
     }
+
+    fn request_headers(
+        &self,
+        extra: &BTreeMap<String, String>,
+    ) -> Result<HeaderMap, ProviderError> {
+        let mut headers = self.auth_headers()?;
+        for (name, value) in extra {
+            let header_name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| ProviderError::Http("invalid request header name".to_string()))?;
+            headers.insert(header_name, request_header_value(value)?);
+        }
+        Ok(headers)
+    }
 }
 
 #[async_trait]
@@ -176,7 +196,7 @@ impl Provider for HttpProvider {
         let resp = self
             .client
             .post(&url)
-            .headers(self.auth_headers()?)
+            .headers(self.request_headers(&req.headers)?)
             .json(&body)
             .send()
             .await

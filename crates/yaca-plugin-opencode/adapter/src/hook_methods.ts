@@ -36,6 +36,7 @@ const WireCompletionRequestSchema = z
     temperature: z.number().optional(),
     max_output_tokens: z.number().int().nonnegative().optional(),
     reasoning: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
   })
   .strict()
 

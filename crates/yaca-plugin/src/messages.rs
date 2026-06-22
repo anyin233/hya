@@ -1,5 +1,7 @@
 //! Handshake, tool-call, and event wire payloads + protocol constants.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use yaca_proto::{Envelope, Message, MessageId, ModelRef, SessionId, ToolCallId, ToolSchema};
@@ -177,6 +179,8 @@ pub struct WireCompletionRequest {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

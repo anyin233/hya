@@ -119,6 +119,7 @@ mod tests {
             temperature: None,
             max_output_tokens: None,
             reasoning: None,
+            headers: Default::default(),
         }
     }
 

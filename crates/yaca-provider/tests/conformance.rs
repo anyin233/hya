@@ -56,6 +56,7 @@ async fn fake_provider_round_trips_canonical_events() {
         temperature: None,
         max_output_tokens: None,
         reasoning: None,
+        headers: Default::default(),
     };
     let stream = router
         .stream(req, SessionId::new(), MessageId::new())
@@ -179,6 +180,7 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
         temperature: None,
         max_output_tokens: None,
         reasoning: None,
+        headers: Default::default(),
     }
 }
 
@@ -264,6 +266,7 @@ fn encoders_emit_reasoning_only_when_set() {
         temperature: None,
         max_output_tokens: None,
         reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
     };
     let a = AnthropicMessagesProtocol.encode(&req).unwrap();
     assert_eq!(a["thinking"]["type"], "enabled");
@@ -315,6 +318,7 @@ fn google_encodes_system_user_and_tools() {
         temperature: None,
         max_output_tokens: None,
         reasoning: None,
+        headers: Default::default(),
     };
     let body = GoogleProtocol.encode(&req).unwrap();
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be terse");

@@ -624,5 +624,6 @@ fn request_from_messages(
         temperature: None,
         max_output_tokens: None,
         reasoning: agent.reasoning,
+        headers: Default::default(),
     }
 }
