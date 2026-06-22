@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -30,16 +30,13 @@ pub(super) fn router() -> Router<ServerState> {
 
 #[derive(Serialize)]
 struct SavedPermissionList {
-    data: Vec<SavedPermissionInfo>,
+    data: Vec<crate::pending::SavedPermissionInfo>,
 }
 
-#[derive(Serialize)]
-struct SavedPermissionInfo {
-    id: String,
+#[derive(Deserialize)]
+struct SavedPermissionQuery {
     #[serde(rename = "projectID")]
-    project_id: String,
-    action: String,
-    resource: String,
+    project_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -194,10 +191,19 @@ fn permission_not_found(request: &str) -> (StatusCode, Json<Value>) {
     )
 }
 
-async fn list_saved() -> Json<SavedPermissionList> {
-    Json(SavedPermissionList { data: Vec::new() })
+async fn list_saved(
+    State(st): State<ServerState>,
+    Query(query): Query<SavedPermissionQuery>,
+) -> Json<SavedPermissionList> {
+    Json(SavedPermissionList {
+        data: st
+            .permission_requests
+            .list_saved(query.project_id.as_deref())
+            .await,
+    })
 }
 
-async fn remove_saved(Path(_id): Path<String>) -> StatusCode {
+async fn remove_saved(State(st): State<ServerState>, Path(id): Path<String>) -> StatusCode {
+    st.permission_requests.remove_saved(&id).await;
     StatusCode::NO_CONTENT
 }
