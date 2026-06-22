@@ -8,9 +8,9 @@ use axum::routing::get;
 use futures::stream;
 use futures::{Stream, StreamExt};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::Envelope;
+use yaca_proto::{Envelope, Event, SessionId};
 
 use crate::ServerState;
 
@@ -51,13 +51,52 @@ async fn subscribe(
     Sse::new(initial.chain(live))
 }
 
-fn envelope_payload(envelope: Envelope) -> EventPayload<Envelope> {
-    EventPayload {
+fn envelope_payload(envelope: Envelope) -> Value {
+    if let Event::Error {
+        session,
+        code,
+        message,
+    } = &envelope.event
+    {
+        return session_error_payload(&envelope, *session, code, message);
+    }
+    serde_json::to_value(EventPayload {
         id: format!("evt_yaca_{}", envelope.seq.0),
         kind: "yaca.envelope",
         location: None,
         data: envelope,
+    })
+    .unwrap_or_else(|_| json!({}))
+}
+
+fn session_error_payload(
+    envelope: &Envelope,
+    session: Option<SessionId>,
+    code: &str,
+    message: &str,
+) -> Value {
+    let mut error_data = json!({ "message": message });
+    if !code.is_empty()
+        && let Some(object) = error_data.as_object_mut()
+    {
+        object.insert("ref".to_string(), json!(code));
     }
+    let mut data = json!({
+        "error": {
+            "name": "UnknownError",
+            "data": error_data,
+        },
+    });
+    if let Some(session) = session
+        && let Some(object) = data.as_object_mut()
+    {
+        object.insert("sessionID".to_string(), json!(session.to_string()));
+    }
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "session.error",
+        "properties": data,
+    })
 }
 
 fn json_event<T: Serialize>(payload: &T) -> SseEvent {

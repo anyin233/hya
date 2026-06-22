@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -23,7 +24,11 @@ async fn state() -> AppState {
         FakeStep::Text("async answer".to_string()),
         FakeStep::Finish(FinishReason::Stop),
     ]]);
-    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    state_with_router(ProviderRouter::new().with(Arc::new(provider)), "fake").await
+}
+
+async fn state_with_router(providers: ProviderRouter, model: &str) -> AppState {
+    let router = Arc::new(providers);
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
@@ -32,7 +37,7 @@ async fn state() -> AppState {
         Arc::new(engine),
         Arc::new(AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("fake"),
+            model: ModelRef::new(model),
             system_prompt: "x".to_string(),
             workdir: WORKDIR.into(),
             reasoning: None,
@@ -111,4 +116,67 @@ async fn opencode_prompt_async_returns_no_content_and_records_messages() {
     .expect("async prompt completed");
     assert_eq!(messages[0]["parts"][0]["text"], "hello async");
     assert_eq!(messages[1]["parts"][0]["text"], "async answer");
+}
+
+#[tokio::test]
+async fn opencode_prompt_async_publishes_session_error_event_on_background_failure() {
+    let app = router(state_with_router(ProviderRouter::new(), "missing").await);
+    let session = create_session(app.clone()).await;
+
+    let event_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(event_resp.status(), StatusCode::OK);
+    let mut stream = event_resp.into_body().into_data_stream();
+    let connected = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("connected event")
+        .expect("body chunk")
+        .expect("valid chunk");
+    assert!(
+        String::from_utf8(connected.to_vec())
+            .unwrap()
+            .contains("server.connected")
+    );
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/prompt_async"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "hello async"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let error_frame = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut combined = String::new();
+        loop {
+            let Some(chunk) = stream.next().await else {
+                panic!("event stream ended before session.error");
+            };
+            let bytes = chunk.expect("body chunk");
+            combined.push_str(std::str::from_utf8(&bytes).unwrap());
+            if combined.contains("\"type\":\"session.error\"") {
+                break combined;
+            }
+        }
+    })
+    .await
+    .expect("session.error event");
+    assert!(error_frame.contains(&format!("\"sessionID\":\"{session}\"")));
+    assert!(error_frame.contains("\"name\":\"UnknownError\""));
+    assert!(error_frame.contains("unknown provider for model: missing"));
 }
