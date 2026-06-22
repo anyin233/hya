@@ -96,10 +96,12 @@ async fn doc() -> Json<Value> {
         ("/experimental/console/orgs", &["get"]),
         ("/experimental/console/switch", &["post"]),
         ("/experimental/workspace/adapter", &["get"]),
+        ("/experimental/workspace", &["get", "post"]),
         ("/experimental/workspace/status", &["get"]),
         ("/experimental/workspace/sync-list", &["post"]),
         ("/experimental/workspace/warp", &["post"]),
         ("/experimental/workspace/{workspaceID}", &["delete"]),
+        ("/experimental/control-plane/move-session", &["post"]),
         ("/experimental/worktree", &["get", "post", "delete"]),
         ("/experimental/worktree/reset", &["post"]),
         (
