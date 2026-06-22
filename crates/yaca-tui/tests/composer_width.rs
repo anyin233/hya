@@ -58,3 +58,32 @@ fn composer_metadata_hides_context_and_cost_below_compact_width() {
         "billing should be hidden below compact width, got {metadata_row:?}"
     );
 }
+
+#[test]
+fn composer_metadata_uses_bare_effort_without_manual_mode() {
+    // Given: the active model has an OpenCode-style effort variant.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        reasoning_effort: Some("max".to_string()),
+        ..AppState::default()
+    };
+
+    // When: the composer metadata row renders at the model breakpoint.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = row_text(&buffer, 120, 13);
+
+    // Then: the effort reads like OpenCode's model variant label, not a prose mode.
+    assert!(
+        metadata_row.contains("sisyphus · kimi-k2 · max"),
+        "composer metadata should show bare effort after model, got {metadata_row:?}"
+    );
+    assert!(
+        !metadata_row.contains("think max"),
+        "composer metadata should not prefix effort with 'think', got {metadata_row:?}"
+    );
+    assert!(
+        !metadata_row.contains("manual"),
+        "composer metadata should not show manual mode in the OpenCode statusline, got {metadata_row:?}"
+    );
+}

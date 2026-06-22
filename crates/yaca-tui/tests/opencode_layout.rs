@@ -98,7 +98,7 @@ fn prompt_renders_opencode_metadata_band() {
     // Then: input and metadata sit in the grounded composer, not a border title.
     assert!(text.contains("ship the tui"), "typed prompt still renders");
     assert!(text.contains("kimi-k2"), "metadata shows current model");
-    assert!(text.contains("think max"), "metadata shows thinking effort");
+    assert!(text.contains("max"), "metadata shows thinking effort");
     assert!(
         text.contains("ctrl+p commands"),
         "metadata exposes command affordance"
