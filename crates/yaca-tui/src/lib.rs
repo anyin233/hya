@@ -167,7 +167,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
     let footer_visible = footer_visible(state);
     let footer_height = u16::from(footer_visible);
-    let prompt_height = if state.attachments.is_empty() { 2 } else { 3 };
+    let prompt_height = widgets::prompt_height(state, layout::main_width(area));
     let layout = layout::app_layout(area, prompt_height, footer_height);
     widgets::render_timeline(frame, layout.timeline, state, &theme);
     if let Some(sidebar) = layout.sidebar {
