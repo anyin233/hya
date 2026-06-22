@@ -18,6 +18,7 @@ mod mcp_state;
 mod message_projection;
 mod metadata;
 mod model_ref;
+mod openapi_doc;
 mod permission;
 mod project;
 mod project_copy;
@@ -64,6 +65,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(integration::router())
         .merge(metadata::router())
         .merge(mcp::router())
+        .merge(openapi_doc::router())
         .merge(permission::router())
         .merge(project::router())
         .merge(project_copy::router())
