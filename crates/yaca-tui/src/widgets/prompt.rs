@@ -69,7 +69,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     } else if state.goal.is_some() || state.loop_view.is_some() {
         runtime_footer_text(state)
     } else {
-        "PgUp/PgDn scroll · Tab yolo · / commands · @ references · F2 model".to_string()
+        String::new()
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
