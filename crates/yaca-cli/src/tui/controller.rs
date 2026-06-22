@@ -162,6 +162,17 @@ impl Controller {
         if handle_message_scroll_key(&mut self.app, &key) {
             return TuiEffect::None;
         }
+        if key.modifiers == KeyModifiers::ALT {
+            match key.code {
+                KeyCode::Char('b') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
+                }
+                KeyCode::Char('f') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
+                _ => {}
+            }
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Up => return self.select_previous_message(),
@@ -665,6 +676,17 @@ impl Controller {
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if key.modifiers == KeyModifiers::ALT {
+            match key.code {
+                KeyCode::Char('b') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_backward(app));
+                }
+                KeyCode::Char('f') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_word_forward(app));
+                }
+                _ => {}
+            }
+        }
         if key.modifiers == KeyModifiers::CONTROL {
             match key.code {
                 KeyCode::Char('a') => {

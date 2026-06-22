@@ -116,6 +116,16 @@ impl PromptState {
         app.input_cursor = Some(next_boundary(&app.input, cursor));
     }
 
+    pub fn move_cursor_word_backward(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(previous_word_boundary(&app.input, cursor));
+    }
+
+    pub fn move_cursor_word_forward(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(next_word_boundary(&app.input, cursor));
+    }
+
     pub fn move_cursor_line_start(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         app.input_cursor = Some(line_start(&app.input, cursor));
@@ -283,6 +293,32 @@ fn next_boundary(input: &str, cursor: usize) -> usize {
         .chars()
         .next()
         .map_or(cursor, |ch| cursor + ch.len_utf8())
+}
+
+fn previous_word_boundary(input: &str, cursor: usize) -> usize {
+    let end = trim_end_whitespace(&input[..cursor]);
+    if end == 0 {
+        return 0;
+    }
+    input[..end]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map_or(0, |(idx, ch)| idx + ch.len_utf8())
+}
+
+fn next_word_boundary(input: &str, cursor: usize) -> usize {
+    let mut seen_word = false;
+    for (offset, ch) in input[cursor..].char_indices() {
+        if ch.is_whitespace() {
+            if seen_word {
+                return cursor + offset;
+            }
+        } else {
+            seen_word = true;
+        }
+    }
+    input.len()
 }
 
 fn line_start(input: &str, cursor: usize) -> usize {

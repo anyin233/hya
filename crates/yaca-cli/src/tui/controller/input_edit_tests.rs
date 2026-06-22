@@ -7,6 +7,10 @@ fn ctrl(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
 }
 
+fn alt(code: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(code), KeyModifiers::ALT)
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::empty())
 }
@@ -157,6 +161,31 @@ fn ctrl_a_and_ctrl_e_move_within_current_line() {
 
     // Then
     assert_eq!(controller.app.input, "first\ncseond!");
+}
+
+#[test]
+fn alt_b_and_alt_f_move_by_words() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "alpha beta gamma".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(alt('b')), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+    assert_eq!(controller.handle_key(alt('f')), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('?'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "alpha? beta !gamma");
 }
 
 #[test]
