@@ -37,7 +37,7 @@ pub(super) fn router() -> Router<ServerState> {
             post(session_background),
         )
         .route("/experimental/resource", get(resource))
-        .route("/sync/history", post(empty_array))
+        .route("/sync/history", post(super::experimental_sync::history))
         .route("/sync/replay", post(sync_replay))
         .route("/sync/steal", post(unavailable))
         .route("/sync/start", post(ok_true))

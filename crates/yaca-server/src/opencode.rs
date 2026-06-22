@@ -7,6 +7,7 @@ mod control;
 mod errors;
 mod event;
 mod experimental;
+mod experimental_sync;
 mod experimental_worktree;
 mod file;
 mod global;

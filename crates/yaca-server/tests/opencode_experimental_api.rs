@@ -228,7 +228,8 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
     let (status, history) =
         request_json(app.clone(), "POST", "/sync/history", Some(json!({}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(history, json!([]));
+    let aggregate = format!("ses_{}", session.replace('-', ""));
+    assert_eq!(history[0]["aggregate_id"], aggregate);
 
     let (status, _body) = request_json(
         app.clone(),
