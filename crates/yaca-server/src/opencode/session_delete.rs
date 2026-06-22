@@ -11,17 +11,9 @@ pub(super) async fn delete_message(
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     let message = parse_message(&message)?;
-    let message_id = message.to_string();
-    let snapshot = super::load_session(&st, session, None).await?;
+    super::load_session(&st, session, None).await?;
     if st.runs.is_busy(session) {
         return Ok(super::errors::session_busy(session));
-    }
-    if !snapshot
-        .messages
-        .iter()
-        .any(|item| item.id() == message_id.as_str())
-    {
-        return Err(ApiError::not_found("message not found"));
     }
     st.engine.delete_message(session, message).await?;
     Ok(Json(true).into_response())
@@ -34,19 +26,7 @@ pub(super) async fn delete_part(
     let session = parse_session(&id)?;
     let message = parse_message(&message)?;
     let part = parse_part(&part)?;
-    let message_id = message.to_string();
-    let part_id = part.to_string();
-    let snapshot = super::load_session(&st, session, None).await?;
-    let Some(found) = snapshot
-        .messages
-        .iter()
-        .find(|item| item.id() == message_id.as_str())
-    else {
-        return Err(ApiError::not_found("message not found"));
-    };
-    if !found.has_part(&part_id) {
-        return Err(ApiError::not_found("part not found"));
-    }
+    super::load_session(&st, session, None).await?;
     st.engine.delete_part(session, message, part).await?;
     Ok(Json(true))
 }

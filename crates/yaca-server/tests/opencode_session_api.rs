@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::{CreateSessionResponse, PromptResponse};
-use yaca_proto::{AgentName, FinishReason, MessageId, ModelRef};
+use yaca_proto::{AgentName, FinishReason, MessageId, ModelRef, PartId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -819,6 +819,46 @@ async fn opencode_session_deletes_messages_and_parts() {
     let remaining_body = body_json(remaining).await;
     assert_eq!(remaining_body.as_array().expect("messages").len(), 1);
     assert_eq!(remaining_body[0]["info"]["id"], assistant_message);
+}
+
+#[tokio::test]
+async fn opencode_session_legacy_deletes_missing_message_and_part_as_noops() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let missing_message = MessageId::new();
+    let (status, body) = delete_json(
+        app.clone(),
+        format!("/session/{session}/message/{missing_message}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!(true));
+
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.status(), StatusCode::OK);
+    let all_body = body_json(all).await;
+    let message = all_body[0]["info"]["id"].as_str().expect("message id");
+    let missing_part = PartId::new();
+
+    let (status, body) = delete_json(
+        app.clone(),
+        format!("/session/{session}/message/{message}/part/{missing_part}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!(true));
 }
 
 #[tokio::test]
