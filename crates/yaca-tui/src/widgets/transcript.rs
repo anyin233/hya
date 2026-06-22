@@ -165,6 +165,7 @@ fn system_lines(
             ]));
         }
     }
+    lines.push(Line::from(""));
 }
 
 fn message_header(
