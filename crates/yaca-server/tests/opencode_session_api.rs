@@ -122,6 +122,24 @@ async fn post_prompt(app: axum::Router, session: &str) {
     assert_eq!(prompt.finish, FinishReason::Stop);
 }
 
+async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
 #[tokio::test]
 async fn opencode_session_routes_list_get_and_messages() {
     let app = router(state().await);
@@ -189,6 +207,44 @@ async fn opencode_session_routes_list_get_and_messages() {
     );
     assert_eq!(message_body[1]["info"]["role"], "assistant");
     assert_eq!(message_body[1]["parts"][0]["text"], "assistant answer");
+}
+
+#[tokio::test]
+async fn opencode_session_update_sets_title() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, updated) = patch_json(
+        app.clone(),
+        format!("/session/{session}"),
+        json!({"title": "Reviewed parity"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["id"], session);
+    assert_eq!(updated["title"], "Reviewed parity");
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_json(get).await["title"], "Reviewed parity");
+
+    let unsupported = patch_json(
+        app,
+        format!("/session/{session}"),
+        json!({"metadata": {"owner": "opencode"}}),
+    )
+    .await;
+    assert_eq!(unsupported.0, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

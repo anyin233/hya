@@ -62,6 +62,22 @@ async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Va
     (status, body_json(resp).await)
 }
 
+async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     let resp = app
         .oneshot(
@@ -156,6 +172,34 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     assert_eq!(listed["data"].as_array().expect("data").len(), 1);
     assert!(listed["cursor"]["next"].as_str().is_some());
     assert!(listed["cursor"]["previous"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn opencode_v2_session_update_sets_title_and_searches_it() {
+    let app = router(state().await);
+    let requested = SessionId::new().to_string();
+    let (status, _) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"id": requested, "location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, updated) = patch_json(
+        app.clone(),
+        format!("/api/session/{requested}"),
+        json!({"title": "OpenCode parity"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["data"]["id"], requested);
+    assert_eq!(updated["data"]["title"], "OpenCode parity");
+
+    let (status, listed) = get_json(app, "/api/session?search=OpenCode&limit=10".to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["data"][0]["id"], requested);
+    assert_eq!(listed["data"][0]["title"], "OpenCode parity");
 }
 
 #[tokio::test]
