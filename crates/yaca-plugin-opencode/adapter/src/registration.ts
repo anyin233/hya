@@ -12,6 +12,7 @@ const HOOK_MAPPINGS = [
   ["permission.ask", "permission.ask"],
   ["tool.execute.before", "tool.execute.before"],
   ["tool.execute.after", "tool.execute.after"],
+  ["tool.definition", "chat.params"],
 ] as const
 
 export function hookRegistrationsFrom(
