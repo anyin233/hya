@@ -8,3 +8,11 @@ pub(super) fn is_system_error_text(text: &str) -> bool {
         || lower.contains("http: 5")
         || lower.contains(" forbidden")
 }
+
+pub(super) fn display_system_error_segment(segment: &str) -> &str {
+    segment
+        .trim_start()
+        .strip_prefix("error:")
+        .map(str::trim_start)
+        .unwrap_or(segment)
+}

@@ -4,10 +4,15 @@
 
 use serde::{Deserialize, Serialize};
 
+mod errors;
+mod parts;
+
 use crate::event::{Envelope, Event};
 use crate::ids::{MessageId, PartId, SessionId, ToolCallId};
 use crate::message::{FinishReason, Role, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
+use errors::push_error;
+use parts::{find_part, push_part, tool_input, upsert_tool};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionProjection {
@@ -77,7 +82,11 @@ impl Projection {
         if env.seq.0 <= self.last_seq {
             return;
         }
-        self.apply_event(&env.event);
+        if let Event::Error { code, message, .. } = &env.event {
+            push_error(self, env.seq, code, message);
+        } else {
+            self.apply_event(&env.event);
+        }
         self.last_seq = env.seq.0;
     }
 
@@ -229,56 +238,5 @@ impl Projection {
             | Event::StepFinished { .. }
             | Event::Error { .. } => {}
         }
-    }
-}
-
-fn push_part(p: &mut Projection, msg: MessageId, part: PartProjection) {
-    if let Some(m) = p.message_mut(msg)
-        && !m.parts.iter().any(|x| x.id() == part.id())
-    {
-        m.parts.push(part);
-    }
-}
-
-fn find_part(p: &mut Projection, msg: MessageId, part: PartId) -> Option<&mut PartProjection> {
-    p.message_mut(msg)?
-        .parts
-        .iter_mut()
-        .find(|x| x.id() == part)
-}
-
-fn upsert_tool(
-    p: &mut Projection,
-    msg: MessageId,
-    part: PartId,
-    call: ToolCallId,
-    name: ToolName,
-    state: ToolPartState,
-) {
-    if let Some(PartProjection::Tool {
-        state: existing, ..
-    }) = find_part(p, msg, part)
-    {
-        *existing = state;
-    } else {
-        push_part(
-            p,
-            msg,
-            PartProjection::Tool {
-                id: part,
-                call,
-                name,
-                state,
-            },
-        );
-    }
-}
-
-fn tool_input(state: &ToolPartState) -> serde_json::Value {
-    match state {
-        ToolPartState::Pending { input }
-        | ToolPartState::Running { input }
-        | ToolPartState::Completed { input, .. }
-        | ToolPartState::Error { input, .. } => input.clone(),
     }
 }

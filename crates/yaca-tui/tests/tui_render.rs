@@ -12,8 +12,8 @@ use yaca_tui::{AppState, DialogItem, DialogView, PermissionPrompt};
 mod render_support;
 
 use render_support::{
-    buffer_text, find_rendered_text, render, render_buffer, rich_state, with_text_message,
-    with_tool_error_message, with_tool_message, with_user_message,
+    buffer_text, find_rendered_text, render, render_buffer, rich_state, with_event_error,
+    with_text_message, with_tool_error_message, with_tool_message, with_user_message,
 };
 
 #[test]
@@ -109,6 +109,38 @@ fn system_turn_errors_render_with_error_rail_and_color() {
         buffer[(x, y)].fg,
         Color::Rgb(224, 108, 117),
         "error row label should use the theme error color"
+    );
+}
+
+#[test]
+fn event_errors_render_as_first_class_error_rows() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        ..AppState::default()
+    };
+    // Given: the session receives a real protocol error event, not a synthetic
+    // system text message injected by the controller.
+    with_event_error(&mut state, 10, "provider", "quota exhausted");
+
+    // When: the projected session is rendered.
+    let buffer = render_buffer(&mut state, 120, 24);
+    let text = buffer_text(&buffer, 120, 24);
+
+    // Then: the error is a visible OpenCode-style error row.
+    assert!(
+        text.contains("error provider: quota exhausted"),
+        "protocol errors should become readable timeline rows"
+    );
+    assert!(
+        !text.contains("sys provider: quota exhausted"),
+        "protocol errors should not be muted system chatter"
+    );
+    let (x, y) = find_rendered_text(&buffer, 120, 24, "error provider").unwrap();
+    assert_eq!(
+        buffer[(x, y)].fg,
+        Color::Rgb(224, 108, 117),
+        "protocol error rows should use the theme error color"
     );
 }
 

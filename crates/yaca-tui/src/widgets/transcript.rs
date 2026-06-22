@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use yaca_proto::Role;
 
-use super::error::is_system_error_text;
+use super::error::{display_system_error_segment, is_system_error_text};
 use super::transcript_tools::{push_tool_lines, status_label};
 use crate::AppState;
 use crate::theme::Theme;
@@ -144,13 +144,14 @@ fn system_lines(
     for (idx, segment) in text.split('\n').enumerate() {
         if is_error {
             let label = if idx == 0 { "error " } else { "      " };
+            let display = display_system_error_segment(segment);
             lines.push(Line::from(vec![
                 Span::styled(
                     label.to_string(),
                     block_style(theme.error, selected, theme).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    segment.to_string(),
+                    display.to_string(),
                     block_style(theme.error, selected, theme),
                 ),
             ]));
