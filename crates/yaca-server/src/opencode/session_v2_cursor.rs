@@ -1,6 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::projection::OpenCodeSessionInfo;
 use crate::ApiError;
@@ -17,60 +18,147 @@ pub(super) struct SessionCursors {
     next: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct SessionCursor {
+#[derive(Clone, Copy)]
+pub(super) struct CursorParams<'a> {
+    pub(super) order: Option<&'a str>,
+    pub(super) search: Option<&'a str>,
+    pub(super) directory: Option<&'a str>,
+    pub(super) workspace: Option<&'a str>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SessionCursor {
+    pub(super) order: Option<String>,
+    pub(super) search: Option<String>,
+    pub(super) directory: Option<String>,
+    pub(super) workspace: Option<String>,
+    anchor: CursorAnchor,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CursorAnchor {
     id: String,
+    time: u64,
     direction: CursorDirection,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum CursorDirection {
     Previous,
     Next,
 }
 
-pub(super) fn cursor_start(
-    sessions: &[OpenCodeSessionInfo],
-    cursor: Option<&str>,
-    limit: usize,
-) -> Result<usize, ()> {
-    let Some(cursor) = cursor else {
-        return Ok(0);
-    };
-    let cursor = decode_cursor(cursor)?;
-    let Some(position) = sessions
-        .iter()
-        .position(|session| session.id() == cursor.id.as_str())
-    else {
-        return Ok(sessions.len());
-    };
-    Ok(match cursor.direction {
-        CursorDirection::Previous => position.saturating_sub(limit),
-        CursorDirection::Next => position.saturating_add(1),
+#[derive(Deserialize)]
+struct CursorPayload {
+    order: Option<String>,
+    search: Option<String>,
+    directory: Option<String>,
+    workspace: Option<String>,
+    anchor: CursorAnchor,
+}
+
+#[derive(Deserialize)]
+struct LegacyCursor {
+    id: String,
+    direction: CursorDirection,
+}
+
+#[derive(Serialize)]
+struct CursorPayloadRef<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    directory: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<&'a str>,
+    anchor: CursorAnchorRef<'a>,
+}
+
+#[derive(Serialize)]
+struct CursorAnchorRef<'a> {
+    id: &'a str,
+    time: u64,
+    direction: CursorDirection,
+}
+
+pub(super) fn decode_cursor(cursor: &str) -> Result<SessionCursor, ()> {
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| ())?;
+    if let Ok(payload) = serde_json::from_value::<CursorPayload>(value.clone()) {
+        return Ok(SessionCursor {
+            order: payload.order,
+            search: payload.search,
+            directory: payload.directory,
+            workspace: payload.workspace,
+            anchor: payload.anchor,
+        });
+    }
+    let legacy = serde_json::from_value::<LegacyCursor>(value).map_err(|_| ())?;
+    Ok(SessionCursor {
+        order: None,
+        search: None,
+        directory: None,
+        workspace: None,
+        anchor: CursorAnchor {
+            id: legacy.id,
+            time: 0,
+            direction: legacy.direction,
+        },
     })
 }
 
-pub(super) fn response_cursor(data: &[OpenCodeSessionInfo]) -> Result<SessionCursors, ApiError> {
+pub(super) fn cursor_start(
+    sessions: &[OpenCodeSessionInfo],
+    cursor: &SessionCursor,
+    limit: usize,
+) -> usize {
+    let Some(position) = sessions
+        .iter()
+        .position(|session| session.id() == cursor.anchor.id.as_str())
+    else {
+        return sessions.len();
+    };
+    match cursor.anchor.direction {
+        CursorDirection::Previous => position.saturating_sub(limit),
+        CursorDirection::Next => position.saturating_add(1),
+    }
+}
+
+pub(super) fn response_cursor(
+    data: &[OpenCodeSessionInfo],
+    params: CursorParams<'_>,
+) -> Result<SessionCursors, ApiError> {
     Ok(SessionCursors {
         previous: data
             .first()
-            .map(|session| encode_cursor(session.id(), CursorDirection::Previous))
+            .map(|session| encode_cursor(session, CursorDirection::Previous, params))
             .transpose()?,
         next: data
             .last()
-            .map(|session| encode_cursor(session.id(), CursorDirection::Next))
+            .map(|session| encode_cursor(session, CursorDirection::Next, params))
             .transpose()?,
     })
 }
 
-fn encode_cursor(id: &str, direction: CursorDirection) -> Result<String, ApiError> {
-    let raw = serde_json::json!({ "id": id, "direction": direction });
+fn encode_cursor(
+    session: &OpenCodeSessionInfo,
+    direction: CursorDirection,
+    params: CursorParams<'_>,
+) -> Result<String, ApiError> {
+    let raw = CursorPayloadRef {
+        order: params.order,
+        search: params.search,
+        directory: params.directory,
+        workspace: params.workspace,
+        anchor: CursorAnchorRef {
+            id: session.id(),
+            time: session.created_millis(),
+            direction,
+        },
+    };
     let bytes = serde_json::to_vec(&raw).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn decode_cursor(cursor: &str) -> Result<SessionCursor, ()> {
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| ())?;
-    serde_json::from_slice(&bytes).map_err(|_| ())
 }
