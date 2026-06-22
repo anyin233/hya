@@ -166,7 +166,13 @@ fn push_agents(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) 
         return;
     }
     for (member, status) in &state.team {
-        lines.push(meta(format!("{member} - {status}"), theme.text));
+        let status = status.trim();
+        let label = if status.is_empty() {
+            member.to_string()
+        } else {
+            format!("{member} - {status}")
+        };
+        lines.push(meta(label, theme.text));
     }
 }
 
