@@ -83,14 +83,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "init",
         aliases: &[],
         description: "Create AGENTS.md project instructions",
-        key_hint: "leader i",
+        key_hint: "/init",
         kind: CommandKind::Init,
     },
     CommandSpec {
         name: "agent",
         aliases: &["agents"],
         description: "Select the active agent profile",
-        key_hint: "tab",
+        key_hint: "leader a",
         kind: CommandKind::Agent,
     },
     CommandSpec {
@@ -118,14 +118,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "think",
         aliases: &[],
         description: "Set reasoning effort for future turns",
-        key_hint: "leader r",
+        key_hint: "/think",
         kind: CommandKind::Think,
     },
     CommandSpec {
         name: "export",
         aliases: &[],
         description: "Export the current transcript as Markdown",
-        key_hint: "leader e",
+        key_hint: "leader x",
         kind: CommandKind::Export,
     },
     CommandSpec {
@@ -234,7 +234,7 @@ pub fn load_markdown_commands_from_dirs(dirs: &[PathBuf]) -> std::io::Result<Vec
 fn command_item(spec: &CommandSpec) -> DialogItem {
     DialogItem {
         label: format!("/{}", spec.name),
-        detail: format!("{} · {}", spec.description, spec.key_hint),
+        detail: format!("{} · {}", spec.key_hint, spec.description),
     }
 }
 
@@ -380,8 +380,36 @@ mod tests {
             .find(|item| item.label == "/mcp")
             .map(|item| item.detail.as_str());
 
-        assert!(matches!(tools_detail, Some(detail) if detail.ends_with("leader s")));
-        assert!(matches!(mcp_detail, Some(detail) if detail.ends_with("leader s")));
+        assert!(matches!(tools_detail, Some(detail) if detail.starts_with("leader s")));
+        assert!(matches!(mcp_detail, Some(detail) if detail.starts_with("leader s")));
+    }
+
+    #[test]
+    fn export_command_advertises_opencode_session_export_shortcut() {
+        let items = help_items();
+
+        let export_detail = items
+            .iter()
+            .find(|item| item.label == "/export")
+            .map(|item| item.detail.as_str());
+
+        assert!(matches!(export_detail, Some(detail) if detail.starts_with("leader x")));
+    }
+
+    #[test]
+    fn command_help_avoids_unimplemented_leader_shortcuts() {
+        let items = help_items();
+
+        let detail = |label: &str| {
+            items
+                .iter()
+                .find(|item| item.label == label)
+                .map(|item| item.detail.as_str())
+        };
+
+        assert!(matches!(detail("/agent"), Some(text) if text.starts_with("leader a")));
+        assert!(matches!(detail("/init"), Some(text) if text.starts_with("/init")));
+        assert!(matches!(detail("/think"), Some(text) if text.starts_with("/think")));
     }
 
     #[test]
