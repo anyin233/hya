@@ -1,4 +1,5 @@
 mod error;
+mod footer_text;
 mod identity;
 mod overlays;
 mod permission;

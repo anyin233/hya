@@ -2,7 +2,7 @@
 mod render_support;
 
 use render_support::render;
-use yaca_tui::AppState;
+use yaca_tui::{AppState, ConnectorState, ConnectorView};
 
 #[test]
 fn default_footer_omits_legacy_navigation_hints() {
@@ -62,5 +62,45 @@ fn default_footer_shows_agent_shortcut_until_usage_exists() {
     assert!(
         !bottom_row.contains("cost n/a"),
         "OpenCode default footer should not show placeholder billing before usage exists, got {bottom_row:?}"
+    );
+}
+
+#[test]
+fn footer_renders_project_mcp_and_version() {
+    // Given: an idle OpenCode-style footer with worktree, branch, and MCP state.
+    let mut state = AppState {
+        branch_label: Some("feat/footer".to_string()),
+        mcp: vec![ConnectorView {
+            name: "context7".to_string(),
+            state: ConnectorState::Connected,
+        }],
+        ..AppState::default()
+    };
+    state.projection.session.workdir = Some("/tmp/yaca-footer".to_string());
+
+    // When: the composer footer renders with enough horizontal space.
+    let text = render(&mut state, 118, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: runtime context sits on the left while command hints remain on the right.
+    assert!(
+        bottom_row.contains("/tmp/yaca-footer:feat/footer"),
+        "footer should show workdir and branch, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("1 MCP"),
+        "footer should show connected MCP count, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("/status"),
+        "footer should expose the OpenCode status command, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("0.0.0"),
+        "footer should show the yaca version, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("ctrl+p commands"),
+        "footer should keep command affordance visible, got {bottom_row:?}"
     );
 }

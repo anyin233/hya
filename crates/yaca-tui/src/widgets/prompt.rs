@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::footer_text::footer_left_text;
 use super::prompt_attachments::attachment_badges;
 use super::prompt_metadata::{composer_footer_metadata, composer_identity_metadata};
 use crate::AppState;
@@ -162,46 +163,17 @@ pub fn render_footer(
     theme: &Theme,
     policy_width: u16,
 ) {
-    let text = if state.scroll_back > 0 {
-        format!(
-            "scroll {} · End to return · Ctrl-C clear/interrupt",
-            state.scroll_back
-        )
-    } else if state.exit_armed {
-        "Ctrl-C again to exit · type to cancel".to_string()
-    } else if state.yolo {
-        "YOLO mode · /yolo disables auto-allow · / commands · @ references".to_string()
-    } else if state.goal.is_some() || state.loop_view.is_some() {
-        runtime_footer_text(state)
-    } else {
-        String::new()
-    };
     frame.render_widget(
         Paragraph::new(composer_footer_metadata(
             state,
             theme,
             area.width,
             policy_width,
-            text,
+            footer_left_text(state, policy_width),
         ))
         .style(theme.base()),
         area,
     );
-}
-
-fn runtime_footer_text(state: &AppState) -> String {
-    let mut segments = Vec::new();
-    if let Some(goal) = &state.goal {
-        segments.push(format!("GOAL:{} turns {}", goal.condition, goal.turns));
-    }
-    if let Some(loop_view) = &state.loop_view {
-        segments.push(format!(
-            "LOOP:{} iter {}/{} score {}",
-            loop_view.target, loop_view.iteration, loop_view.budget, loop_view.last_score
-        ));
-    }
-    segments.push("ctrl+p commands".to_string());
-    segments.join(" · ")
 }
 
 #[cfg(test)]
