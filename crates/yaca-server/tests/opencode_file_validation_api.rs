@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use serde_json::Value;
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::{AgentName, ModelRef};
@@ -59,6 +61,28 @@ async fn get_status(app: axum::Router, uri: &str) -> StatusCode {
     .status()
 }
 
+async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
+    get_json_with_headers(app, uri, &[]).await
+}
+
+async fn get_json_with_headers(
+    app: axum::Router,
+    uri: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder().method("GET").uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let resp = app
+        .oneshot(builder.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
 #[tokio::test]
 async fn opencode_find_file_rejects_invalid_query_params() {
     let app = router(state(tempdir()).await);
@@ -70,4 +94,47 @@ async fn opencode_find_file_rejects_invalid_query_params() {
     ] {
         assert_eq!(get_status(app.clone(), uri).await, StatusCode::BAD_REQUEST);
     }
+}
+
+#[tokio::test]
+async fn opencode_legacy_file_routes_honor_directory_query() {
+    let workdir = tempdir();
+    let scoped = workdir.join("scoped");
+    std::fs::create_dir_all(&scoped).unwrap();
+    std::fs::write(scoped.join("target.txt"), "scoped text\n").unwrap();
+    let directory = scoped.to_string_lossy();
+    let app = router(state(workdir).await);
+
+    let (status, content) = get_json(
+        app.clone(),
+        &format!("/file/content?path=target.txt&directory={directory}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content["content"], "scoped text");
+
+    let (status, content) = get_json_with_headers(
+        app.clone(),
+        "/file/content?path=target.txt",
+        &[("x-opencode-directory", directory.as_ref())],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content["content"], "scoped text");
+
+    let (status, matches) = get_json(
+        app.clone(),
+        &format!("/find?pattern=scoped&directory={directory}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(matches[0]["path"]["text"], "target.txt");
+
+    let (status, files) = get_json(
+        app,
+        &format!("/find/file?query=target&type=file&directory={directory}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(files, serde_json::json!(["target.txt"]));
 }
