@@ -155,6 +155,7 @@ impl Controller {
             }
         }
         match key.code {
+            KeyCode::Esc if self.app.running => TuiEffect::Interrupt,
             KeyCode::F(2) => {
                 self.open_model_dialog();
                 TuiEffect::None
@@ -918,6 +919,20 @@ mod tests {
         });
 
         assert_eq!(controller.handle_key(ctrl_c()), TuiEffect::Interrupt);
+        assert!(controller.app.running);
+    }
+
+    #[test]
+    fn escape_interrupts_running_turn_without_exit() {
+        let mut controller = Controller::new(AppState {
+            running: true,
+            ..AppState::default()
+        });
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Esc)),
+            TuiEffect::Interrupt
+        );
         assert!(controller.app.running);
     }
 
