@@ -63,6 +63,20 @@ fn long_completed_tool_stdout_collapses_to_opencode_preview() {
         rendered.contains("▏ …"),
         "collapsed output should advertise overflow with an ellipsis row:\n{rendered}"
     );
+
+    let mut state = AppState::default();
+    let sentinel = "AFTER_OPENCODE_CHAR_BUDGET";
+    let output = format!("{}{sentinel}", "x".repeat(250));
+    with_completed_shell_output(&mut state, &output);
+    let rendered = render(&mut state, 20, 80);
+    assert!(
+        !rendered.contains("AFTER_"),
+        "long single-line output should collapse by OpenCode's width budget:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("…"),
+        "long single-line output should show an inline overflow marker:\n{rendered}"
+    );
 }
 
 #[test]

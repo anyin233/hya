@@ -69,6 +69,7 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> TimelineLines 
                 &item.parts,
                 selected,
                 assistant_status(streaming_assistant_idx, idx, item.duration_ms),
+                width,
                 state,
                 theme,
                 &mut lines,
@@ -153,6 +154,7 @@ fn assistant_lines(
     parts: &[TimelinePart],
     selected: bool,
     status: AssistantBlockStatus,
+    width: u16,
     state: &AppState,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
@@ -190,7 +192,7 @@ fn assistant_lines(
                 if has_visible_part && !previous_was_tool {
                     lines.push(Line::from(""));
                 }
-                push_tool_lines(name, label, input, status, selected, theme, lines);
+                push_tool_lines((name, label, input, status), width, selected, theme, lines);
                 has_visible_part = true;
                 previous_was_tool = true;
             }

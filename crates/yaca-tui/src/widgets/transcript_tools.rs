@@ -9,16 +9,17 @@ use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 48;
 const TOOL_OUTPUT_PREVIEW_LINES: usize = 10;
+const TOOL_OUTPUT_MIN_LINE_CHARS: usize = 20;
+const TOOL_OUTPUT_GUTTER_CHARS: u16 = 6;
 
 pub fn push_tool_lines(
-    name: &str,
-    label: &str,
-    input: &str,
-    status: &ToolStatus,
+    tool: (&str, &str, &str, &ToolStatus),
+    width: u16,
     selected: bool,
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
+    let (name, label, input, status) = tool;
     if let Some(label) = pending_tool_label(name, status) {
         lines.push(Line::from(vec![
             Span::styled("   ", tool_style(theme.muted, selected, theme)),
@@ -76,8 +77,8 @@ pub fn push_tool_lines(
             return;
         }
 
-        let mut output_lines = output.lines();
-        for segment in output_lines.by_ref().take(TOOL_OUTPUT_PREVIEW_LINES) {
+        let preview = collapsed_output(output, width);
+        for segment in preview.lines() {
             push_output_line(
                 segment,
                 output_line_color(segment, theme),
@@ -86,9 +87,32 @@ pub fn push_tool_lines(
                 lines,
             );
         }
-        if output_lines.next().is_some() {
-            push_output_line("…", theme.muted, selected, theme, lines);
-        }
+    }
+}
+
+fn collapsed_output(output: &str, width: u16) -> String {
+    let max_chars = TOOL_OUTPUT_PREVIEW_LINES
+        * usize::from(width.saturating_sub(TOOL_OUTPUT_GUTTER_CHARS))
+            .max(TOOL_OUTPUT_MIN_LINE_CHARS);
+    let lines = output.lines().collect::<Vec<_>>();
+    if lines.len() <= TOOL_OUTPUT_PREVIEW_LINES && output.chars().count() <= max_chars {
+        return output.to_string();
+    }
+
+    let preview = lines
+        .iter()
+        .take(TOOL_OUTPUT_PREVIEW_LINES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if preview.chars().count() > max_chars {
+        let head = preview
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        format!("{head}…")
+    } else {
+        format!("{preview}\n…")
     }
 }
 
@@ -233,14 +257,17 @@ mod tests {
 
         // When: the row is converted into ratatui spans.
         push_tool_lines(
-            "shell",
-            "Shell",
-            r#"{"cmd":"printf line one && printf line two"}"#,
-            &ToolStatus::Completed {
-                time_ms: 9,
-                output: None,
-                exit_code: None,
-            },
+            (
+                "shell",
+                "Shell",
+                r#"{"cmd":"printf line one && printf line two"}"#,
+                &ToolStatus::Completed {
+                    time_ms: 9,
+                    output: None,
+                    exit_code: None,
+                },
+            ),
+            80,
             false,
             &theme,
             &mut lines,

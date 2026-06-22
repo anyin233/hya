@@ -246,15 +246,6 @@ fn clean_multiline_output(text: &str) -> Option<String> {
     if cleaned.trim().is_empty() {
         None
     } else {
-        Some(ellipsize_preserving_lines(&cleaned, 320))
-    }
-}
-
-fn ellipsize_preserving_lines(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(max).collect();
-        format!("{head}…")
+        Some(cleaned)
     }
 }
