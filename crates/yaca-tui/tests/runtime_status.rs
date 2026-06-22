@@ -93,6 +93,49 @@ fn runtime_status_shows_subagent_view_hint_while_running() {
     );
 }
 
+#[test]
+fn runtime_status_shows_selected_block_actions_when_prompt_is_empty() {
+    // Given: a transcript block is selected and the composer is ready for block commands.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        selected_message: Some(0),
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "revert");
+
+    // Then: it exposes the same revert/branch actions handled by the controller.
+    assert!(
+        status_row.contains("r revert · b branch"),
+        "selected block action hint should be visible, got {status_row:?}"
+    );
+}
+
+#[test]
+fn runtime_status_hides_selected_block_actions_while_typing() {
+    // Given: a block is selected but the composer has draft text.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        selected_message: Some(0),
+        input: "draft".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "Sisyphus");
+
+    // Then: it does not advertise block keys that would be treated as text input.
+    assert!(
+        !status_row.contains("revert") && !status_row.contains("branch"),
+        "selected block action hint should be hidden while typing, got {status_row:?}"
+    );
+}
+
 fn with_timed_assistant_message(
     state: &mut AppState,
     started_ms: i64,

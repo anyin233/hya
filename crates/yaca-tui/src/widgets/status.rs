@@ -49,6 +49,15 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
             Span::styled("ctrl+x down ", Style::default().fg(theme.text)),
             Span::styled("view subagents", Style::default().fg(theme.muted)),
         ]);
+    } else if state.selected_message.is_some() && state.input.is_empty() {
+        spans.extend([
+            Span::styled("   ", Style::default().fg(theme.muted)),
+            Span::styled("r ", Style::default().fg(theme.text)),
+            Span::styled("revert", Style::default().fg(theme.muted)),
+            Span::styled(" · ", Style::default().fg(theme.muted)),
+            Span::styled("b ", Style::default().fg(theme.text)),
+            Span::styled("branch", Style::default().fg(theme.muted)),
+        ]);
     }
     Line::from(spans)
 }
