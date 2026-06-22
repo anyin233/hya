@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
@@ -201,14 +201,11 @@ async fn init(
 async fn compact(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     unavailable_operation(&st, &id, "compact").await
 }
 
-async fn wait(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
+async fn wait(State(st): State<ServerState>, Path(id): Path<String>) -> Result<Response, ApiError> {
     unavailable_operation(&st, &id, "wait").await
 }
 
@@ -216,9 +213,11 @@ async fn unavailable_operation(
     st: &ServerState,
     id: &str,
     operation: &str,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(id)?;
-    super::load_session(st, session, None).await?;
+    if st.engine.replay(session).await?.is_empty() {
+        return Ok(super::errors::session_not_found(id));
+    }
     Err(ApiError::service_unavailable(format!(
         "Session {operation} is not available yet"
     )))

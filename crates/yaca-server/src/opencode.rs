@@ -4,6 +4,7 @@ use crate::ServerState;
 
 mod catalog;
 mod control;
+mod errors;
 mod event;
 mod experimental;
 mod experimental_worktree;
