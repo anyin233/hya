@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::theme::Theme;
 use crate::{DialogView, Picker, QuestionPrompt};
@@ -85,6 +85,10 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
         Line::from(Span::styled(
+            "question",
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
             ellipsize(&question.prompt, inner_width),
             Style::default()
                 .fg(theme.primary)
@@ -127,12 +131,6 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.element))
-            .block(
-                Block::default()
-                    .title("question")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_active)),
-            )
             .wrap(Wrap { trim: false }),
         rect,
     );
@@ -153,10 +151,16 @@ pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
     };
     frame.render_widget(Clear, rect);
     let inner_width = usize::from(width).saturating_sub(6);
-    let mut lines = vec![Line::from(Span::styled(
-        "Up/Down select · Enter confirm · Esc cancel",
-        Style::default().fg(theme.muted),
-    ))];
+    let mut lines = vec![
+        Line::from(Span::styled(
+            picker.title.clone(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "Up/Down select · Enter confirm · Esc cancel",
+            Style::default().fg(theme.muted),
+        )),
+    ];
     lines.push(Line::from(""));
     for (idx, label) in picker
         .entries
@@ -183,12 +187,6 @@ pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.element))
-            .block(
-                Block::default()
-                    .title(picker.title.clone())
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.border_active)),
-            )
             .wrap(Wrap { trim: false }),
         rect,
     );

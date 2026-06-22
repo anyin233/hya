@@ -9,7 +9,7 @@ mod render_support;
 
 use ratatui::style::Color;
 use yaca_proto::Role;
-use yaca_tui::{AppState, DialogItem, DialogView, PermissionPrompt};
+use yaca_tui::{AppState, DialogItem, DialogView, PermissionPrompt, Picker, QuestionPrompt};
 
 use render_support::{
     buffer_text, find_rendered_text, render, render_buffer, rich_state, with_event_error,
@@ -221,6 +221,40 @@ fn list_dialog_renders_selected_item_and_hints() {
     );
     assert!(text.contains("Esc"), "dialog hint mentions cancel");
     assert!(text.contains("Enter"), "dialog hint mentions submit");
+}
+
+#[test]
+fn question_and_picker_overlays_are_borderless() {
+    let mut question_state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "continue?".to_string(),
+            options: vec!["yes".to_string(), "no".to_string()],
+            selected: 0,
+            input: String::new(),
+            allow_custom: false,
+        }),
+        ..AppState::default()
+    };
+    let mut picker_state = AppState {
+        picker: Some(Picker {
+            title: "pick session".to_string(),
+            entries: vec!["alpha".to_string(), "beta".to_string()],
+            selected: 1,
+        }),
+        ..AppState::default()
+    };
+
+    let question = render(&mut question_state, 100, 24);
+    let picker = render(&mut picker_state, 100, 24);
+    assert!(question.contains("continue?"), "question prompt renders");
+    assert!(picker.contains("pick session"), "picker title renders");
+    assert!(picker.contains("> beta"), "selected picker row renders");
+    for glyph in ["┌", "┐", "└", "┘"] {
+        assert!(
+            !question.contains(glyph) && !picker.contains(glyph),
+            "OpenCode overlays should not draw box border corner {glyph}"
+        );
+    }
 }
 
 #[test]
