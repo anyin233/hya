@@ -33,8 +33,9 @@ fn tempdir() -> PathBuf {
     .unwrap();
     std::fs::write(dir.join("README.md"), "# yaca\n\nhello docs\n").unwrap();
     std::fs::write(dir.join("hello.txt"), "hello\n").unwrap();
-    std::fs::write(dir.join(".gitignore"), "ignored.log\nbuild/\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "ignored.log\n*.tmp\nbuild/\n").unwrap();
     std::fs::write(dir.join("ignored.log"), "skip\n").unwrap();
+    std::fs::write(dir.join("scratch.tmp"), "skip\n").unwrap();
     std::fs::create_dir_all(dir.join("build")).unwrap();
     std::fs::write(dir.join("build/cache.txt"), "skip\n").unwrap();
     std::fs::write(dir.join("pixel.png"), b"\x89PNG\r\n\x1a\n").unwrap();
@@ -146,6 +147,13 @@ async fn opencode_file_routes_return_legacy_shapes() {
             .unwrap()
             .iter()
             .any(|entry| entry["path"] == "build" && entry["ignored"] == true)
+    );
+    assert!(
+        root_listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "scratch.tmp" && entry["ignored"] == true)
     );
 
     let (status, matches) = get_json(app.clone(), "/find?pattern=hello").await;
