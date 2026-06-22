@@ -693,6 +693,143 @@ async fn opencode_session_deletes_messages_and_parts() {
 }
 
 #[tokio::test]
+async fn opencode_session_updates_text_parts() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.status(), StatusCode::OK);
+    let all_body = body_json(all).await;
+    let message = all_body[0]["info"]["id"]
+        .as_str()
+        .expect("message id")
+        .to_string();
+    let part = all_body[0]["parts"][0]["id"]
+        .as_str()
+        .expect("part id")
+        .to_string();
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/session/{session}/message/{message}/part/{part}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "id": part,
+                        "sessionID": session,
+                        "messageID": message,
+                        "type": "text",
+                        "text": "edited text"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated_body = body_json(updated).await;
+    assert_eq!(updated_body["id"], part);
+    assert_eq!(updated_body["text"], "edited text");
+
+    let message_after = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message/{message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(message_after.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(message_after).await["parts"][0]["text"],
+        "edited text"
+    );
+}
+
+#[tokio::test]
+async fn opencode_session_updates_tool_parts_from_opencode_state() {
+    let app = router(shell_state().await);
+    let session = create_session(app.clone(), None).await;
+    let (status, shell) = post_json(
+        app.clone(),
+        format!("/session/{session}/shell"),
+        json!({
+            "agent": "build",
+            "command": "printf original"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let message = shell["info"]["id"]
+        .as_str()
+        .expect("message id")
+        .to_string();
+    let part = shell["parts"][0]["id"]
+        .as_str()
+        .expect("part id")
+        .to_string();
+    let call = shell["parts"][0]["callID"]
+        .as_str()
+        .expect("call id")
+        .to_string();
+
+    let (status, updated) = patch_json(
+        app.clone(),
+        format!("/session/{session}/message/{message}/part/{part}"),
+        json!({
+            "id": part,
+            "sessionID": session,
+            "messageID": message,
+            "type": "tool",
+            "callID": call,
+            "tool": "shell",
+            "state": {
+                "status": "error",
+                "input": {"command": "printf original"},
+                "error": "shell failed",
+                "time": {"start": 1, "end": 2}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["state"]["phase"], "error");
+    assert_eq!(updated["state"]["message"], "shell failed");
+
+    let message_after = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message/{message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(message_after.status(), StatusCode::OK);
+    let body = body_json(message_after).await;
+    assert_eq!(body["parts"][0]["state"]["phase"], "error");
+    assert_eq!(body["parts"][0]["state"]["message"], "shell failed");
+}
+
+#[tokio::test]
 async fn opencode_session_todo_returns_todowrite_state() {
     let app = router(todo_state().await);
     let session = create_session(app.clone(), None).await;

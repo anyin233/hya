@@ -21,6 +21,7 @@ mod question;
 mod session_context;
 mod session_delete;
 mod session_legacy;
+mod session_part_update;
 mod session_prompt;
 mod session_switch;
 mod session_update;

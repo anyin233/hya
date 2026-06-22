@@ -42,11 +42,13 @@ impl TextPartAccumulator {
             | Event::ReasoningStart { .. }
             | Event::ReasoningDelta { .. }
             | Event::ReasoningEnd { .. }
+            | Event::ReasoningReplace { .. }
             | Event::ToolInputStart { .. }
             | Event::ToolInputDelta { .. }
             | Event::ToolCallRequested { .. }
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
+            | Event::ToolPartUpdated { .. }
             | Event::Error { .. } => None,
         }
     }

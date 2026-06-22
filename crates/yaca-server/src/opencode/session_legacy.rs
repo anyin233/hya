@@ -35,7 +35,8 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route(
             "/session/:id/message/:message/part/:part",
-            delete(super::session_delete::delete_part),
+            delete(super::session_delete::delete_part)
+                .patch(super::session_part_update::update_part),
         )
         .route("/session/:id/prompt_async", post(prompt_async))
         .route("/session/:id/init", post(init_session))
