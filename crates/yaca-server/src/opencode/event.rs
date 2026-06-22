@@ -84,19 +84,36 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
-        } => text_part_updated_payload(&envelope, *session, *message, *part, ""),
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", ""),
         Event::TextDelta {
             session,
             message,
             part,
             delta,
-        } => text_part_delta_payload(&envelope, *session, *message, *part, delta),
+        } => textual_part_delta_payload(&envelope, *session, *message, *part, delta),
         Event::TextReplace {
             session,
             message,
             part,
             text,
-        } => text_part_updated_payload(&envelope, *session, *message, *part, text),
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", text),
+        Event::ReasoningStart {
+            session,
+            message,
+            part,
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", ""),
+        Event::ReasoningDelta {
+            session,
+            message,
+            part,
+            delta,
+        } => textual_part_delta_payload(&envelope, *session, *message, *part, delta),
+        Event::ReasoningReplace {
+            session,
+            message,
+            part,
+            text,
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", text),
         Event::PartDeleted {
             session,
             message,
@@ -191,11 +208,12 @@ fn message_payload(
     }))
 }
 
-fn text_part_updated_payload(
+fn textual_part_updated_payload(
     envelope: &Envelope,
     session: SessionId,
     message: MessageId,
     part: PartId,
+    kind: &'static str,
     text: &str,
 ) -> Value {
     let session_id = session.to_string();
@@ -210,7 +228,7 @@ fn text_part_updated_payload(
                 "id": part_id,
                 "sessionID": session_id,
                 "messageID": message_id,
-                "type": "text",
+                "type": kind,
                 "text": text,
                 "time": { "start": envelope.ts_millis },
             },
@@ -219,7 +237,7 @@ fn text_part_updated_payload(
     })
 }
 
-fn text_part_delta_payload(
+fn textual_part_delta_payload(
     envelope: &Envelope,
     session: SessionId,
     message: MessageId,
