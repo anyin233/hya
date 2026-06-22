@@ -257,7 +257,7 @@ fn context_rail_title_uses_session_label_when_available() {
 
     // When: the shell renders with the right context rail visible.
     let buffer = render_buffer(&mut state, 124, 16);
-    let title_row = rendered_row(&buffer, 124, 0);
+    let title_row = find_row(&buffer, 124, 16, "GUI borderless input parity");
 
     // Then: the rail title keeps the GUI prefix but uses the session label.
     assert!(

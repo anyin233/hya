@@ -70,13 +70,17 @@ fn sidebar_uses_opencode_forty_two_column_width_when_wide() {
 
     // When: the wide shell renders.
     let buffer = render_buffer(&mut state, width, 18);
-    let (x, _y) = find_text(&buffer, width, 18, "GUI sess-1").unwrap();
+    let (x, y) = find_text(&buffer, width, 18, "GUI sess-1").unwrap();
 
     // Then: the sidebar occupies the same fixed 42-column rail as OpenCode.
     assert_eq!(
         x,
         width - 42 + 2,
         "OpenCode reserves a 42-column context rail with a two-column title gutter"
+    );
+    assert_eq!(
+        y, 1,
+        "OpenCode applies one-row top padding before the context rail title"
     );
 }
 

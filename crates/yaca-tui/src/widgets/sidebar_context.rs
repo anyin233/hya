@@ -15,6 +15,7 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
 pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let stats = transcript_stats(state);
     let mut lines = Vec::new();
+    lines.push(Line::from(""));
     push_title(&mut lines, state, theme);
     push_context_pilot(&mut lines, state, theme, &stats);
     push_context(&mut lines, state, theme, &stats);
