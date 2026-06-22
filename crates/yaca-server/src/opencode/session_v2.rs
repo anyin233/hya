@@ -113,6 +113,7 @@ async fn list(
     if let Some(directory) = directory {
         sessions.retain(|session| session.directory() == directory);
     }
+    sessions.retain(|session| !session.archived());
     let start = decoded
         .as_ref()
         .map(|cursor| super::session_v2_cursor::cursor_start(&sessions, cursor, limit))
