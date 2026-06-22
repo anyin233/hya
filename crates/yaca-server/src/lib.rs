@@ -78,6 +78,7 @@ struct ServerState {
     mcp_manager: Arc<McpManager>,
     mcp_http: opencode::McpHttpState,
     project: opencode::ProjectState,
+    pty: opencode::PtyState,
     tui: opencode::TuiState,
 }
 
@@ -93,6 +94,7 @@ impl ServerState {
             mcp_manager: app.mcp_manager,
             mcp_http: opencode::McpHttpState::new(),
             project: opencode::ProjectState::new(),
+            pty: opencode::PtyState::new(),
             tui: opencode::TuiState::new(),
         }
     }
