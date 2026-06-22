@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -27,7 +27,6 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/experimental/tool", get(empty_array))
         .route("/experimental/tool/ids", get(empty_array))
-        .route("/experimental/worktree", get(empty_array))
         .route("/experimental/session", get(session_list))
         .route(
             "/experimental/session/:session/background",
@@ -97,7 +96,7 @@ async fn session_list(
 
 async fn session_background(
     State(st): State<ServerState>,
-    Path(session): Path<String>,
+    AxumPath(session): AxumPath<String>,
 ) -> Result<Json<bool>, ApiError> {
     let session = parse_session(&session)?;
     super::load_session(&st, session, None).await?;
