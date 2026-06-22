@@ -270,6 +270,7 @@ impl Projection {
                 message,
                 part,
                 message_text,
+                value,
                 ..
             } => {
                 if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
@@ -277,6 +278,7 @@ impl Projection {
                     *state = ToolPartState::Error {
                         input,
                         message: message_text.clone(),
+                        value: value.clone(),
                     };
                 }
             }

@@ -153,7 +153,7 @@ fn tool_state(state: &ToolPartState) -> Value {
             "structured": {},
             "result": output,
         }),
-        ToolPartState::Error { input, message } => json!({
+        ToolPartState::Error { input, message, .. } => json!({
             "status": "error",
             "input": input,
             "content": [],

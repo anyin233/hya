@@ -21,6 +21,7 @@ mod shell;
 mod stream_round;
 mod summary;
 mod text_complete;
+mod tool_error;
 mod turn;
 
 pub struct CreateSession {

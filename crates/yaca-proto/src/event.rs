@@ -179,6 +179,8 @@ pub enum Event {
         part: PartId,
         call: ToolCallId,
         message_text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
     },
     ToolPartUpdated {
         session: SessionId,

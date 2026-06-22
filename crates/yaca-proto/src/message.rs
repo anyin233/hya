@@ -54,6 +54,8 @@ pub enum ToolPartState {
     Error {
         input: serde_json::Value,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
     },
 }
 

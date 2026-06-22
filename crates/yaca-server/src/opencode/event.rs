@@ -317,6 +317,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             part,
             call,
             message_text,
+            ..
         } => tool_part_updated_payload(
             &envelope,
             *session,
@@ -607,7 +608,7 @@ fn tool_state_payload(envelope: &Envelope, state: &ToolPartState) -> Value {
                 },
             })
         }
-        ToolPartState::Error { input, message } => json!({
+        ToolPartState::Error { input, message, .. } => json!({
             "status": "error",
             "input": object_or_empty(input),
             "error": message,
