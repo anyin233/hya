@@ -3159,6 +3159,10 @@ name = "yaca-plugin-example"
 version = "0.0.0"
 
 [[package]]
+name = "yaca-plugin-opencode"
+version = "0.0.0"
+
+[[package]]
 name = "yaca-proto"
 version = "0.0.0"
 dependencies = [

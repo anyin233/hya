@@ -373,9 +373,11 @@ plugins:
   disabled-one:
     enabled: false
     command: [nope]
+  opencode:
+    kind: opencode
 ";
         let file = parse_config(yaml).unwrap();
-        assert_eq!(file.plugins.len(), 2);
+        assert_eq!(file.plugins.len(), 3);
         let memory = file.plugins.get("memory").unwrap();
         assert_eq!(
             memory.command,
@@ -385,5 +387,9 @@ plugins:
         assert!(memory.enabled);
         assert_eq!(memory.env.get("TOKEN").map(String::as_str), Some("literal"));
         assert!(!file.plugins.get("disabled-one").unwrap().enabled);
+        assert_eq!(
+            file.plugins.get("opencode").unwrap().kind,
+            yaca_plugin::messages::PluginKindWire::Opencode
+        );
     }
 }
