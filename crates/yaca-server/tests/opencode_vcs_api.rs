@@ -145,3 +145,40 @@ async fn opencode_vcs_diff_caps_oversized_untracked_patch() {
     assert!(patch.contains("--- big.txt"));
     assert!(!patch.contains("xxxxxxxxxxxxxxxx"));
 }
+
+#[tokio::test]
+async fn opencode_vcs_diff_caps_total_patch_bytes() {
+    let workdir = tempdir();
+    init_repo_with_head(&workdir);
+    std::fs::write(workdir.join("a-large.txt"), "a".repeat(5_100_000)).unwrap();
+    std::fs::write(workdir.join("b-large.txt"), "b".repeat(5_100_000)).unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, diff) = get_json(app, "/vcs/diff?mode=git&context=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = diff.as_array().unwrap();
+    let first = items
+        .iter()
+        .find(|item| item["file"] == "a-large.txt")
+        .unwrap()["patch"]
+        .as_str()
+        .unwrap();
+    let second = items
+        .iter()
+        .find(|item| item["file"] == "b-large.txt")
+        .unwrap()["patch"]
+        .as_str()
+        .unwrap();
+    assert!(
+        first.len() > 5_000_000,
+        "first patch was {} bytes",
+        first.len()
+    );
+    assert!(
+        second.len() < 1024,
+        "second patch was {} bytes",
+        second.len()
+    );
+    assert!(second.contains("--- b-large.txt"));
+    assert!(!second.contains("bbbbbbbbbbbbbbbb"));
+}

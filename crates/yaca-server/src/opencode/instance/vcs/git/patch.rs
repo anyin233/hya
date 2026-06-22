@@ -7,12 +7,14 @@ use super::{GitItem, stderr, text};
 
 const PATCH_CONTEXT_LINES: usize = 2_147_483_647;
 const MAX_PATCH_BYTES: usize = 10_000_000;
+const MAX_TOTAL_PATCH_BYTES: usize = 10_000_000;
 
 pub(super) fn for_item(
     workdir: &Path,
     item: &GitItem,
     has_head: bool,
     context: Option<usize>,
+    current_total_bytes: usize,
 ) -> Result<String, ApiError> {
     let patch = if item.code == "??" || !has_head {
         untracked_raw(workdir, &item.file)?
@@ -20,7 +22,7 @@ pub(super) fn for_item(
         let unified = format!("--unified={}", context.unwrap_or(PATCH_CONTEXT_LINES));
         text(workdir, &["diff", &unified, "HEAD", "--", &item.file])?
     };
-    Ok(cap_patch(&item.file, patch))
+    Ok(cap_patch(&item.file, patch, current_total_bytes))
 }
 
 pub(super) fn untracked_raw(workdir: &Path, file: &str) -> Result<String, ApiError> {
@@ -40,8 +42,11 @@ pub(super) fn untracked_raw(workdir: &Path, file: &str) -> Result<String, ApiErr
     Err(ApiError::internal(stderr(&output.stderr)))
 }
 
-fn cap_patch(file: &str, patch: String) -> String {
-    if patch.is_empty() || patch.len() > MAX_PATCH_BYTES {
+fn cap_patch(file: &str, patch: String, current_total_bytes: usize) -> String {
+    if patch.is_empty()
+        || patch.len() > MAX_PATCH_BYTES
+        || current_total_bytes.saturating_add(patch.len()) > MAX_TOTAL_PATCH_BYTES
+    {
         empty_patch(file)
     } else {
         patch
