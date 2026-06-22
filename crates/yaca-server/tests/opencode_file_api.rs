@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -32,6 +32,7 @@ fn tempdir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(dir.join("README.md"), "# yaca\n\nhello docs\n").unwrap();
+    std::fs::write(dir.join("hello.txt"), "hello\n").unwrap();
     std::fs::write(dir.join(".gitignore"), "ignored.log\nbuild/\n").unwrap();
     std::fs::write(dir.join("ignored.log"), "skip\n").unwrap();
     std::fs::create_dir_all(dir.join("build")).unwrap();
@@ -77,6 +78,32 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
         serde_json::from_slice(&bytes).unwrap()
     };
     (status, body)
+}
+
+async fn get_bytes(app: axum::Router, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|value| value.to_str().unwrap().to_string());
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
+    (status, content_type, bytes)
 }
 
 #[tokio::test]
@@ -138,4 +165,44 @@ async fn opencode_file_routes_return_legacy_shapes() {
     let (status, file_status) = get_json(app, "/file/status").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(file_status, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn opencode_v2_fs_routes_return_location_wrapped_entries_and_raw_file() {
+    let app = router(state(tempdir()).await);
+
+    let (status, content_type, body) = get_bytes(app.clone(), "/api/fs/read/hello.txt").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, b"hello\n");
+    assert!(
+        content_type
+            .as_deref()
+            .is_some_and(|value| value.contains("text/plain"))
+    );
+
+    let (status, listing) = get_json(app.clone(), "/api/fs/list?path=src").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        listing["location"]["directory"]
+            .as_str()
+            .unwrap()
+            .contains("yaca-server-file-test")
+    );
+    assert_eq!(
+        listing["data"],
+        serde_json::json!([
+            {"path": "src/main.rs", "type": "file", "mime": "text/plain"}
+        ])
+    );
+
+    let (status, found) = get_json(app, "/api/fs/find?query=hello&type=file&limit=5").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        found["data"][0],
+        serde_json::json!({
+            "path": "hello.txt",
+            "type": "file",
+            "mime": "text/plain"
+        })
+    );
 }
