@@ -77,7 +77,7 @@ function handleRequestWithResponse(
     case METHOD_INITIALIZE:
       return handleInitialize(request, context)
     case METHOD_SHUTDOWN:
-      return { response: okResponse(request.id, {}), shouldExit: true }
+      return handleShutdown(request, context)
     case METHOD_TOOL_CALL:
       return handleToolCall(request, context)
     case METHOD_MESSAGE_USER_BEFORE:
@@ -100,6 +100,38 @@ function handleRequestWithResponse(
         shouldExit: false,
       }
   }
+}
+
+async function handleShutdown(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  await runDisposeHooks(context)
+  return { response: okResponse(request.id, {}), shouldExit: true }
+}
+
+type DisposeHook = () => unknown
+
+async function runDisposeHooks(context: RequestContext): Promise<void> {
+  for (const hook of context.hooks.toReversed()) {
+    const dispose = hook.dispose
+    if (!isDisposeHook(dispose)) {
+      continue
+    }
+    try {
+      await dispose()
+    } catch (error) {
+      await context.stderr.write(`opencode plugin dispose: ${errorMessage(error)}\n`)
+    }
+  }
+}
+
+function isDisposeHook(value: unknown): value is DisposeHook {
+  return typeof value === "function"
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 export async function runAdapter(options: RuntimeOptions): Promise<void> {
