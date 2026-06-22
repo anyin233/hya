@@ -185,7 +185,19 @@ async fn find_file(
     Query(query): Query<FindFileQuery>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let root = workdir(&st);
-    let limit = query.limit.unwrap_or(10).clamp(1, 200);
+    let limit = query.limit.unwrap_or(10);
+    if !(1..=200).contains(&limit) {
+        return Err(ApiError::bad_request("limit must be between 1 and 200"));
+    }
+    if !matches!(query.dirs.as_deref(), None | Some("true") | Some("false")) {
+        return Err(ApiError::bad_request("dirs must be true or false"));
+    }
+    if let Some(kind) = query.kind.as_deref()
+        && kind != "file"
+        && kind != "directory"
+    {
+        return Err(ApiError::bad_request("type must be file or directory"));
+    }
     let kind = query
         .kind
         .as_deref()
