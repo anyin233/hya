@@ -53,6 +53,42 @@ fn edit_diff_output_uses_opencode_diff_coloring() {
     assert_eq!(buffer[(added_x, added_y)].fg, Color::Rgb(127, 216, 143));
 }
 
+#[test]
+fn edit_diff_output_renders_opencode_line_numbers() {
+    // Given: an edit tool completed with a hunk that mixes removed, added, and context lines.
+    let mut state = AppState::default();
+    with_completed_edit_diff(
+        &mut state,
+        "@@ -41,2 +41,3 @@\n-old line\n+new line\n context line",
+    );
+
+    // When: the transcript renders the completed tool block.
+    let output = rendered_text(&render_buffer(&mut state, 100, 24), 100, 24);
+
+    // Then: the diff block includes OpenCode-style source line numbers beside signs.
+    assert!(
+        output.contains("41 -old line"),
+        "removed diff line should include its source line number:\n{output}"
+    );
+    assert!(
+        output.contains("41 +new line"),
+        "added diff line should include its target line number:\n{output}"
+    );
+    assert!(
+        output.contains("42  context line"),
+        "context diff line should include its target line number and blank sign:\n{output}"
+    );
+}
+
+fn rendered_text(buffer: &Buffer, width: u16, height: u16) -> String {
+    let mut output = String::new();
+    for y in 0..height {
+        output.push_str(&rendered_row(buffer, width, y));
+        output.push('\n');
+    }
+    output
+}
+
 fn with_completed_edit_diff(state: &mut AppState, diff: &str) {
     let session = SessionId::new();
     let message = MessageId::new();

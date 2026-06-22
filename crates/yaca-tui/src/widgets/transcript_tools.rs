@@ -1,6 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
 use crate::theme::Theme;
 use crate::view_model::ToolStatus;
 
@@ -44,14 +45,59 @@ pub fn push_tool_lines(
         ..
     } = status
     {
-        for segment in output.lines() {
-            let color = output_line_color(segment, theme);
-            lines.push(Line::from(vec![
-                Span::styled("   ", tool_style(theme.muted, selected, theme)),
-                Span::styled("▏ ", tool_style(color, selected, theme)),
-                Span::styled(segment.to_string(), tool_style(color, selected, theme)),
-            ]));
+        if let Some(diff_lines) = diff_output_lines(name, output) {
+            for segment in diff_lines {
+                push_output_line(
+                    &segment.text,
+                    diff_kind_color(segment.kind, theme),
+                    selected,
+                    theme,
+                    lines,
+                );
+            }
+            return;
         }
+
+        for segment in output.lines() {
+            push_output_line(
+                segment,
+                output_line_color(segment, theme),
+                selected,
+                theme,
+                lines,
+            );
+        }
+    }
+}
+
+fn push_output_line(
+    text: &str,
+    color: Color,
+    selected: bool,
+    theme: &Theme,
+    lines: &mut Vec<Line<'static>>,
+) {
+    lines.push(Line::from(vec![
+        Span::styled("   ", tool_style(theme.muted, selected, theme)),
+        Span::styled("▏ ", tool_style(color, selected, theme)),
+        Span::styled(text.to_string(), tool_style(color, selected, theme)),
+    ]));
+}
+
+fn diff_output_lines(name: &str, output: &str) -> Option<Vec<DiffDisplayLine>> {
+    if matches!(name, "edit" | "write") {
+        format_unified_diff(output)
+    } else {
+        None
+    }
+}
+
+fn diff_kind_color(kind: DiffLineKind, theme: &Theme) -> Color {
+    match kind {
+        DiffLineKind::Hunk => theme.muted,
+        DiffLineKind::Added => theme.success,
+        DiffLineKind::Removed => theme.error,
+        DiffLineKind::Context => theme.text,
     }
 }
 

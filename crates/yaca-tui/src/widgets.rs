@@ -14,6 +14,7 @@ mod sidebar_runtime;
 mod sidebar_stats;
 mod status;
 mod transcript;
+mod transcript_diff;
 mod transcript_metadata;
 mod transcript_reasoning;
 mod transcript_text;
