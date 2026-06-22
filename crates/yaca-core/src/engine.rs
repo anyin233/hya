@@ -184,6 +184,10 @@ impl SessionEngine {
         Ok(id)
     }
 
+    pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        Ok(self.store.delete_session(session).await?)
+    }
+
     pub async fn switch_agent(
         &self,
         session: SessionId,

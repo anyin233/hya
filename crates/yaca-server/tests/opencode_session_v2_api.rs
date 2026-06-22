@@ -67,7 +67,7 @@ async fn body_json(resp: axum::response::Response) -> Value {
     if bytes.is_empty() {
         return Value::Null;
     }
-    serde_json::from_slice(&bytes).unwrap()
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
 async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
@@ -94,6 +94,21 @@ async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode,
                 .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -277,6 +292,36 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
         shell["data"]["parts"][0]["state"]["output"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-v2-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_v2_session_delete_removes_session() {
+    let app = router(state().await);
+    let requested = SessionId::new().to_string();
+    let (status, _) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"id": requested, "location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, deleted) = delete_json(app.clone(), format!("/api/session/{requested}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deleted["data"], true);
+
+    let (status, _) = get_json(app.clone(), format!("/api/session/{requested}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, listed) = get_json(app, "/api/session?limit=10".to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        listed["data"]
+            .as_array()
+            .expect("sessions")
+            .iter()
+            .all(|item| item["id"] != requested)
     );
 }
 
