@@ -162,6 +162,7 @@ async fn doc() -> Json<Value> {
         ("/api/session/{sessionID}/agent", &["post"]),
         ("/api/session/{sessionID}/model", &["post"]),
         ("/api/session/{sessionID}/context", &["get"]),
+        ("/api/session/{sessionID}/message", &["get"]),
         ("/api/session/{sessionID}/permission", &["get"]),
         (
             "/api/session/{sessionID}/permission/{requestID}/reply",

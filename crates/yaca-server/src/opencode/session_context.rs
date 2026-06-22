@@ -38,11 +38,11 @@ async fn context(
     }
     let projection = Projection::from_events(&envs);
     Ok(Json(ContextResponse {
-        data: messages(&envs, &projection),
+        data: v2_messages(&envs, &projection),
     }))
 }
 
-fn messages(envs: &[Envelope], projection: &Projection) -> Vec<Value> {
+pub(in crate::opencode) fn v2_messages(envs: &[Envelope], projection: &Projection) -> Vec<Value> {
     let times = message_times(envs);
     projection
         .session
