@@ -918,6 +918,82 @@ async fn opencode_session_share_sets_and_clears_share_url() {
 }
 
 #[tokio::test]
+async fn opencode_session_fork_copies_metadata_and_messages() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    let (status, _updated) = patch_json(
+        app.clone(),
+        format!("/session/{session}"),
+        json!({
+            "title": "Root session",
+            "metadata": {"source": "fork-test"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    post_prompt(app.clone(), &session).await;
+
+    let fork = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/fork"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fork.status(), StatusCode::OK);
+    let fork_body = body_json(fork).await;
+    let fork_id = fork_body["id"].as_str().expect("fork id").to_string();
+    assert_ne!(fork_id, session);
+    assert_eq!(fork_body["title"], "Root session (fork #1)");
+    assert_eq!(fork_body["metadata"]["source"], "fork-test");
+    assert!(
+        !fork_body
+            .as_object()
+            .expect("session")
+            .contains_key("parentID")
+    );
+
+    let messages = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{fork_id}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(messages.status(), StatusCode::OK);
+    let body = body_json(messages).await;
+    assert_eq!(body.as_array().expect("messages").len(), 2);
+    assert_eq!(body[0]["parts"][0]["text"], "hello");
+    assert_eq!(body[1]["parts"][0]["text"], "assistant answer");
+}
+
+#[tokio::test]
+async fn opencode_session_fork_rejects_invalid_json_body() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let fork = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/fork"))
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fork.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn opencode_session_todo_returns_todowrite_state() {
     let app = router(todo_state().await);
     let session = create_session(app.clone(), None).await;
