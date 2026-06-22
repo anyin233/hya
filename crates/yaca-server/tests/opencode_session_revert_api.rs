@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::{CreateSessionResponse, PromptResponse};
-use yaca_proto::{AgentName, FinishReason, ModelRef};
+use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -58,7 +58,8 @@ async fn request(
 
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 async fn create_session(app: axum::Router) -> String {
@@ -112,4 +113,28 @@ async fn opencode_session_revert_records_and_clears_reverted_message() {
     let unreverted = body_json(unreverted).await;
     assert_eq!(unreverted["id"], session);
     assert!(unreverted.get("revert").is_none());
+}
+
+#[tokio::test]
+async fn opencode_session_revert_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    let reverted = request(
+        app.clone(),
+        "POST",
+        &format!("/session/{missing}/revert"),
+        Some(json!({"messageID": "msg_missing"})),
+    )
+    .await;
+    assert_eq!(reverted.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(reverted).await, expected);
+
+    let unreverted = request(app, "POST", &format!("/session/{missing}/unrevert"), None).await;
+    assert_eq!(unreverted.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(unreverted).await, expected);
 }
