@@ -17,7 +17,9 @@ use crate::ServerState;
 use super::location::LocationInfo;
 
 pub(super) fn router() -> Router<ServerState> {
-    Router::new().route("/api/event", get(subscribe))
+    Router::new()
+        .route("/api/event", get(subscribe))
+        .route("/global/event", get(subscribe))
 }
 
 #[derive(Serialize)]
