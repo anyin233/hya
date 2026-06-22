@@ -119,9 +119,7 @@ async fn reply_legacy_request(
     if reply_to_pending(&st, session, &request, payload.response, None).await {
         Ok(Json(true).into_response())
     } else {
-        Err(ApiError::not_found(format!(
-            "permission request not found: {request}"
-        )))
+        Ok(permission_not_found(&request).into_response())
     }
 }
 
