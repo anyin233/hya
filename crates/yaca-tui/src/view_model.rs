@@ -1,5 +1,6 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::tool_tasks;
 use crate::tool_todos;
 
 pub enum TimelinePart {
@@ -120,6 +121,7 @@ fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
         "glob" => field_text(value, "pattern"),
         "webfetch" => field_text(value, "url"),
         "websearch" => field_text(value, "query"),
+        "task" => tool_tasks::summary(value),
         "todowrite" => tool_todos::summary(value),
         _ => None,
     }
@@ -173,6 +175,9 @@ fn completed_tool_output_text(
 ) -> Option<String> {
     if name == "todowrite" {
         return tool_todos::snapshot_text(input);
+    }
+    if name == "task" {
+        return tool_tasks::snapshot_text(input);
     }
 
     completed_output_text(output)
