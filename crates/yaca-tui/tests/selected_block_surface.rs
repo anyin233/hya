@@ -35,6 +35,41 @@ fn selected_message_surface_extends_to_the_padded_timeline_edge() {
     );
 }
 
+#[test]
+fn user_message_renders_as_an_opencode_panel_block_when_not_selected() {
+    // Given: a normal user message on a narrow OpenCode-style shell.
+    let mut state = AppState::default();
+    with_text_message(&mut state, 1, Role::User, "panel-backed user prompt");
+
+    // When: the transcript is rendered without selecting the message.
+    let width = 80;
+    let height = 18;
+    let buffer = render_buffer(&mut state, width, height);
+
+    // Then: the user prompt is enclosed by panel-backed padding rows.
+    let (_x, y) = find_rendered_text(&buffer, width, height, "panel-backed user prompt").unwrap();
+    assert_eq!(
+        buffer[(2, y - 1)].bg,
+        Color::Rgb(20, 20, 20),
+        "OpenCode user blocks keep a top panel padding row"
+    );
+    assert_eq!(
+        buffer[(width - 3, y)].bg,
+        Color::Rgb(20, 20, 20),
+        "OpenCode user blocks paint through the padded main content width"
+    );
+    assert_eq!(
+        buffer[(2, y + 1)].bg,
+        Color::Rgb(20, 20, 20),
+        "OpenCode user blocks keep a bottom panel padding row"
+    );
+    assert_eq!(
+        buffer[(width - 1, y)].bg,
+        Color::Reset,
+        "right terminal gutter should remain outside the user message block"
+    );
+}
+
 fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();

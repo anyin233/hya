@@ -62,6 +62,8 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
         }
         if selected {
             fill_selected_surface(&mut lines[start..], theme, width);
+        } else if matches!(item.role, Role::User) {
+            fill_panel_surface(&mut lines[start..], theme, width);
         }
     }
 
@@ -81,6 +83,14 @@ fn assistant_status(
 }
 
 fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
+    fill_surface(lines, theme.text, theme.block, width);
+}
+
+fn fill_panel_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16) {
+    fill_surface(lines, theme.text, theme.panel, width);
+}
+
+fn fill_surface(lines: &mut [Line<'static>], fg: Color, bg: Color, width: u16) {
     let width = usize::from(width.max(1));
     for line in lines {
         let line_width = line.width();
@@ -90,7 +100,7 @@ fn fill_selected_surface(lines: &mut [Line<'static>], theme: &Theme, width: u16)
         if fill_width > 0 {
             line.spans.push(Span::styled(
                 " ".repeat(fill_width),
-                block_style(theme.text, true, theme),
+                Style::default().fg(fg).bg(bg),
             ));
         }
     }
@@ -103,13 +113,14 @@ fn user_lines(
     lines: &mut Vec<Line<'static>>,
 ) {
     let text = text_from_parts(parts);
+    lines.push(Line::from(""));
     for segment in text.split('\n') {
         lines.push(Line::from(vec![
-            Span::styled("▏ ", block_style(theme.primary, selected, theme)),
-            Span::styled("  ", block_style(theme.muted, selected, theme)),
+            Span::styled("▏ ", user_block_style(theme.primary, selected, theme)),
+            Span::styled("  ", user_block_style(theme.muted, selected, theme)),
             Span::styled(
                 segment.to_string(),
-                block_style(theme.text, selected, theme),
+                user_block_style(theme.text, selected, theme),
             ),
         ]));
     }
@@ -216,5 +227,10 @@ fn block_style(fg: Color, selected: bool, theme: &Theme) -> Style {
     } else {
         theme.background
     };
+    Style::default().fg(fg).bg(bg)
+}
+
+fn user_block_style(fg: Color, selected: bool, theme: &Theme) -> Style {
+    let bg = if selected { theme.block } else { theme.panel };
     Style::default().fg(fg).bg(bg)
 }
