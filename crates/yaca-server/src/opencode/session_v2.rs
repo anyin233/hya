@@ -1,11 +1,12 @@
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use yaca_core::CreateSession;
-use yaca_proto::AgentName;
+use yaca_proto::{AgentName, SessionId};
 
 use super::model_ref::OpenCodeModelRefRequest;
 use super::projection::OpenCodeSessionInfo;
@@ -171,41 +172,55 @@ async fn create(
 async fn get_one(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<DataResponse<OpenCodeSessionInfo>>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    let data = super::load_session(&st, session, None).await?.info;
-    Ok(Json(DataResponse { data }))
+    let snapshot = match load_existing_session(&st, session, &id).await? {
+        Ok(snapshot) => snapshot,
+        Err(response) => return Ok(response),
+    };
+    Ok(Json(DataResponse {
+        data: snapshot.info,
+    })
+    .into_response())
 }
 
 async fn update(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<super::session_update::UpdateSessionPayload>,
-) -> Result<Json<DataResponse<OpenCodeSessionInfo>>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    if let Err(response) = load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     let data = super::session_update::apply(&st, session, req).await?;
-    Ok(Json(DataResponse { data }))
+    Ok(Json(DataResponse { data }).into_response())
 }
 
 async fn remove(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<DataResponse<bool>>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if let Err(response) = load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     st.runs.cancel(session);
     let data = st.engine.delete_session(session).await?;
-    Ok(Json(DataResponse { data }))
+    Ok(Json(DataResponse { data }).into_response())
 }
 
 async fn init(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<super::session_legacy::InitSessionPayload>,
-) -> Result<Json<DataResponse<bool>>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    if let Err(response) = load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     let data = super::session_legacy::run_session_init(&st, session, req).await?;
-    Ok(Json(DataResponse { data }))
+    Ok(Json(DataResponse { data }).into_response())
 }
 
 async fn compact(
@@ -249,4 +264,18 @@ async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, Api
         );
     }
     Ok(out)
+}
+
+pub(in crate::opencode) async fn load_existing_session(
+    st: &ServerState,
+    session: SessionId,
+    id: &str,
+) -> Result<Result<super::projection::OpenCodeSessionSnapshot, Response>, ApiError> {
+    match super::load_session(st, session, None).await {
+        Ok(snapshot) => Ok(Ok(snapshot)),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(Err(super::errors::session_not_found(id)))
+        }
+        Err(error) => Err(error),
+    }
 }

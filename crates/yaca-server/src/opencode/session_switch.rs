@@ -1,5 +1,6 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -28,24 +29,28 @@ async fn switch_agent(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<AgentSwitchRequest>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     st.engine
         .switch_agent(session, AgentName::new(req.agent))
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn switch_model(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<ModelSwitchRequest>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     st.engine
         .switch_model(session, req.model.into_model_ref())
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
