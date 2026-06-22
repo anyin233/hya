@@ -70,7 +70,11 @@ pub(super) async fn list(
         };
         entries.push(fs_entry(&root, entry.path(), kind));
     }
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries.sort_by(|a, b| match (a.kind, b.kind) {
+        ("directory", "file") => std::cmp::Ordering::Less,
+        ("file", "directory") => std::cmp::Ordering::Greater,
+        _ => a.path.cmp(&b.path),
+    });
     Ok(Json(crate::opencode::location::response_at(
         &st, &location, entries,
     )))
@@ -94,7 +98,7 @@ pub(super) async fn find(
         Some(value) => value
             .parse::<usize>()
             .map_err(|_| ApiError::bad_request("limit must be positive"))?,
-        None => 10,
+        None => 50,
     };
     if limit == 0 {
         return Err(ApiError::bad_request("limit must be positive"));
@@ -123,8 +127,12 @@ pub(super) async fn find(
 }
 
 fn fs_entry(root: &Path, path: PathBuf, kind: &'static str) -> Entry {
+    let mut relative = relative_path(root, &path);
+    if kind == "directory" && !relative.ends_with('/') {
+        relative.push('/');
+    }
     Entry {
-        path: relative_path(root, &path),
+        path: relative,
         kind,
         mime: if kind == "directory" {
             "application/x-directory".to_string()
