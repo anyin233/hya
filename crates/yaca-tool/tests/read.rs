@@ -130,7 +130,7 @@ async fn read_lists_directories_with_sorted_entries_and_open_code_metadata() {
     assert_eq!(out["metadata"]["display"]["type"], "directory");
     assert_eq!(
         out["metadata"]["display"]["entries"],
-        json!(["a.txt", "b.txt"])
+        json!(["sub/", "a.txt"])
     );
     assert_eq!(out["metadata"]["display"]["totalEntries"], 3);
     assert_eq!(out["metadata"]["display"]["truncated"], true);
