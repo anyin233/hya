@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -52,12 +52,14 @@ mod history;
 mod leader_key;
 mod mcp_view;
 mod message_scroll;
+mod permission_input;
 mod prompt;
 mod question_input;
 mod reference;
 mod selection;
 mod session_fork;
 
+use self::permission_input::handle_permission_key;
 use self::question_input::handle_question_key;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
@@ -269,68 +271,6 @@ fn display_path(path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
-}
-
-fn decision_from(prompt: &PermissionPrompt) -> Decision {
-    match prompt.stage {
-        PermissionPromptStage::Permission => match prompt.selected {
-            0 => Decision::AllowOnce,
-            1 => Decision::AllowAlways,
-            _ => Decision::Reject {
-                feedback: (!prompt.reply.trim().is_empty()).then(|| prompt.reply.clone()),
-            },
-        },
-        PermissionPromptStage::Always => Decision::AllowAlways,
-    }
-}
-
-fn handle_permission_key(key: KeyEvent, app: &mut AppState) -> Option<Decision> {
-    let prompt = app.permission.as_mut()?;
-    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-        return Some(Decision::Reject { feedback: None });
-    }
-    match key.code {
-        KeyCode::Esc if prompt.stage == PermissionPromptStage::Always => {
-            prompt.stage = PermissionPromptStage::Permission;
-            prompt.selected = 1;
-            None
-        }
-        KeyCode::Esc => Some(Decision::Reject { feedback: None }),
-        KeyCode::Enter
-            if prompt.stage == PermissionPromptStage::Permission && prompt.selected == 1 =>
-        {
-            prompt.stage = PermissionPromptStage::Always;
-            prompt.selected = 0;
-            None
-        }
-        KeyCode::Enter if prompt.stage == PermissionPromptStage::Always && prompt.selected == 1 => {
-            prompt.stage = PermissionPromptStage::Permission;
-            prompt.selected = 1;
-            None
-        }
-        KeyCode::Enter => Some(decision_from(prompt)),
-        KeyCode::Left => {
-            prompt.selected = prompt.selected.saturating_sub(1);
-            None
-        }
-        KeyCode::Right | KeyCode::Tab => {
-            prompt.selected = (prompt.selected + 1).min(prompt.options().len().saturating_sub(1));
-            None
-        }
-        KeyCode::Backspace if prompt.stage == PermissionPromptStage::Permission => {
-            prompt.reply.pop();
-            None
-        }
-        KeyCode::Char(c) => {
-            if prompt.stage == PermissionPromptStage::Permission
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
-            {
-                prompt.reply.push(c);
-            }
-            None
-        }
-        _ => None,
-    }
 }
 
 fn apply_reasoning(agent: &mut AgentSpec, app: &mut AppState, level: &str) -> String {
@@ -810,51 +750,5 @@ mod tests {
 
         let second = init_project_instructions(&root).unwrap();
         assert!(!second.created);
-    }
-
-    #[test]
-    fn allow_always_waits_for_confirmation() {
-        let mut app = AppState {
-            permission: Some(PermissionPrompt {
-                title: "bash".to_string(),
-                detail: "rm -rf /tmp/x".to_string(),
-                selected: 1,
-                reply: String::new(),
-                stage: PermissionPromptStage::Permission,
-            }),
-            ..AppState::default()
-        };
-
-        let decision =
-            handle_permission_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app);
-        let prompt = app.permission.as_ref().unwrap();
-        assert_eq!(decision, None);
-        assert_eq!(prompt.stage, PermissionPromptStage::Always);
-        assert_eq!(prompt.selected, 0);
-
-        let decision =
-            handle_permission_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &mut app);
-        assert_eq!(decision, Some(Decision::AllowAlways));
-    }
-
-    #[test]
-    fn allow_always_escape_returns_to_permission_stage() {
-        let mut app = AppState {
-            permission: Some(PermissionPrompt {
-                title: "bash".to_string(),
-                detail: "rm -rf /tmp/x".to_string(),
-                selected: 0,
-                reply: String::new(),
-                stage: PermissionPromptStage::Always,
-            }),
-            ..AppState::default()
-        };
-
-        let decision =
-            handle_permission_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut app);
-        let prompt = app.permission.as_ref().unwrap();
-        assert_eq!(decision, None);
-        assert_eq!(prompt.stage, PermissionPromptStage::Permission);
-        assert_eq!(prompt.selected, 1);
     }
 }
