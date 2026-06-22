@@ -139,6 +139,13 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             part,
             text,
         } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", text),
+        Event::TextEnd {
+            session,
+            message,
+            part,
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "text")
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::ReasoningStart {
             session,
             message,
@@ -156,6 +163,13 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             part,
             text,
         } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", text),
+        Event::ReasoningEnd {
+            session,
+            message,
+            part,
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "reasoning")
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::ToolInputStart {
             session,
             message,
@@ -297,6 +311,36 @@ async fn session_payload(
         "type": kind,
         "properties": properties,
     })
+}
+
+async fn part_snapshot_payload(
+    st: &ServerState,
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    kind: &str,
+) -> Option<Value> {
+    let snapshot = super::load_session(st, session, None).await.ok()?;
+    let part_id = part.to_string();
+    let message_id = message.to_string();
+    let part_value = snapshot
+        .messages
+        .iter()
+        .find(|item| item.id() == message_id)
+        .and_then(|item| item.part(&part_id))?;
+    if part_value["type"].as_str() != Some(kind) {
+        return None;
+    }
+    Some(json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.updated",
+        "properties": {
+            "sessionID": session.to_string(),
+            "part": part_value,
+            "time": envelope.ts_millis,
+        },
+    }))
 }
 
 async fn tool_part_snapshot_payload(
