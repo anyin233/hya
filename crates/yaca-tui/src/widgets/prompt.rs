@@ -29,7 +29,7 @@ pub fn render_prompt(
     } else {
         theme.primary
     };
-    let input_lines = visible_input_lines(&state.input, area.width);
+    let input_lines = visible_input_lines(&state.input, state.input_cursor, area.width);
     let mut lines = input_lines
         .into_iter()
         .map(|text| {
@@ -56,7 +56,9 @@ pub fn render_prompt(
 
 #[must_use]
 pub fn prompt_height(state: &AppState, width: u16) -> u16 {
-    let input_rows = u16::try_from(visible_input_lines(&state.input, width).len()).unwrap_or(6);
+    let input_rows =
+        u16::try_from(visible_input_lines(&state.input, state.input_cursor, width).len())
+            .unwrap_or(6);
     let attachment_rows = u16::from(!state.attachments.is_empty());
     input_rows + 1 + attachment_rows
 }
@@ -66,12 +68,15 @@ pub fn prompt_cursor(state: &AppState, area: Rect) -> Option<(u16, u16)> {
     if state.permission.is_some() || state.running {
         return None;
     }
-    let input_lines = visible_input_lines(&state.input, area.width);
-    let last_line = input_lines.last().map_or("", String::as_str);
-    let typed = u16::try_from(UnicodeWidthStr::width(last_line)).unwrap_or(u16::MAX);
+    let input_window = visible_input_window(&state.input, state.input_cursor, area.width);
+    let cursor_prefix = input_cursor_prefix(&state.input, state.input_cursor);
+    let cursor_lines = wrapped_input_lines(cursor_prefix, area.width);
+    let cursor_row = cursor_lines.len().saturating_sub(1);
+    let cursor_line = cursor_lines.last().map_or("", String::as_str);
+    let typed = u16::try_from(UnicodeWidthStr::width(cursor_line)).unwrap_or(u16::MAX);
     let cursor_y = area
         .y
-        .saturating_add(u16::try_from(input_lines.len().saturating_sub(1)).unwrap_or(0));
+        .saturating_add(u16::try_from(cursor_row.saturating_sub(input_window.start)).unwrap_or(0));
     let rightmost = area.x + area.width.saturating_sub(1);
     let cursor_x = (area.x + PROMPT_GUTTER_WIDTH)
         .saturating_add(typed)
@@ -79,11 +84,42 @@ pub fn prompt_cursor(state: &AppState, area: Rect) -> Option<(u16, u16)> {
     Some((cursor_x, cursor_y))
 }
 
-fn visible_input_lines(input: &str, width: u16) -> Vec<String> {
+fn input_cursor_prefix(input: &str, cursor: Option<usize>) -> &str {
+    let mut idx = cursor.unwrap_or(input.len()).min(input.len());
+    while !input.is_char_boundary(idx) {
+        idx = idx.saturating_sub(1);
+    }
+    &input[..idx]
+}
+
+struct VisibleInputWindow {
+    lines: Vec<String>,
+    start: usize,
+}
+
+fn visible_input_lines(input: &str, cursor: Option<usize>, width: u16) -> Vec<String> {
+    visible_input_window(input, cursor, width).lines
+}
+
+fn visible_input_window(input: &str, cursor: Option<usize>, width: u16) -> VisibleInputWindow {
     let mut lines = wrapped_input_lines(input, width);
-    let keep_from = lines.len().saturating_sub(MAX_INPUT_ROWS);
-    lines.drain(..keep_from);
-    lines
+    let cursor_row = input_cursor_row(input, cursor, width);
+    let tail_start = lines.len().saturating_sub(MAX_INPUT_ROWS);
+    let start = if cursor.is_some() && cursor_row < tail_start {
+        cursor_row
+    } else {
+        tail_start
+    };
+    lines.drain(..start);
+    lines.truncate(MAX_INPUT_ROWS);
+    VisibleInputWindow { lines, start }
+}
+
+fn input_cursor_row(input: &str, cursor: Option<usize>, width: u16) -> usize {
+    let cursor_prefix = input_cursor_prefix(input, cursor);
+    wrapped_input_lines(cursor_prefix, width)
+        .len()
+        .saturating_sub(1)
 }
 
 fn wrapped_input_lines(input: &str, width: u16) -> Vec<String> {
@@ -172,7 +208,7 @@ fn runtime_footer_text(state: &AppState) -> String {
 mod tests {
     use ratatui::layout::Rect;
 
-    use super::prompt_cursor;
+    use super::{prompt_cursor, visible_input_lines};
     use crate::AppState;
 
     #[test]
@@ -205,5 +241,41 @@ mod tests {
 
         // Then: the cursor sits after the final row instead of the first row.
         assert_eq!(cursor, Some((18, 21)));
+    }
+
+    #[test]
+    fn prompt_cursor_uses_explicit_input_cursor() {
+        // Given: the composer cursor is in the middle of mixed-width input.
+        let state = AppState {
+            input: "ab你好".to_string(),
+            input_cursor: Some(2),
+            ..AppState::default()
+        };
+        let area = Rect::new(10, 20, 40, 2);
+
+        // When: the prompt asks ratatui where to draw the terminal cursor.
+        let cursor = prompt_cursor(&state, area);
+
+        // Then: the cursor lands after "ab", not at the end of the input.
+        assert_eq!(cursor, Some((14, 20)));
+    }
+
+    #[test]
+    fn prompt_visible_rows_follow_explicit_cursor_above_tail_window() {
+        // Given: the input is taller than the six-row composer viewport.
+        let state = AppState {
+            input: "zero\none\ntwo\nthree\nfour\nfive\nsix\nseven".to_string(),
+            input_cursor: Some(0),
+            ..AppState::default()
+        };
+        let area = Rect::new(10, 20, 40, 6);
+
+        // When: the prompt computes visible rows and the terminal cursor.
+        let rows = visible_input_lines(&state.input, state.input_cursor, area.width);
+        let cursor = prompt_cursor(&state, area);
+
+        // Then: the row containing the logical cursor is visible at the top.
+        assert_eq!(rows.first().map(String::as_str), Some("zero"));
+        assert_eq!(cursor, Some((12, 20)));
     }
 }

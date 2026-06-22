@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use yaca_tui::AppState;
+use yaca_tui::{AppState, DialogItem};
 
 use super::{Controller, TuiEffect};
 
@@ -9,6 +9,15 @@ fn ctrl(code: char) -> KeyEvent {
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::empty())
+}
+
+fn type_text(controller: &mut Controller, text: &str) {
+    for ch in text.chars() {
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Char(ch))),
+            TuiEffect::None
+        );
+    }
 }
 
 #[test]
@@ -65,4 +74,123 @@ fn input_edit_shortcuts_refresh_completion_popup() {
     // Then
     assert_eq!(controller.app.input, "");
     assert!(controller.app.dialog.is_none());
+}
+
+#[test]
+fn left_arrow_moves_cursor_and_typing_inserts_at_cursor() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "ac".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Left)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('b'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "abc");
+}
+
+#[test]
+fn delete_removes_character_at_cursor() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "abc".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Left)), TuiEffect::None);
+    assert_eq!(controller.handle_key(key(KeyCode::Left)), TuiEffect::None);
+    let effect = controller.handle_key(key(KeyCode::Delete));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "ac");
+}
+
+#[test]
+fn ctrl_a_and_ctrl_e_move_within_current_line() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "first\nseond".to_string(),
+        ..AppState::default()
+    });
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('a')), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('c'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(ctrl('e')), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('!'))),
+        TuiEffect::None
+    );
+
+    // Then
+    assert_eq!(controller.app.input, "first\ncseond!");
+}
+
+#[test]
+fn reference_completion_uses_cursor_prefix_and_preserves_suffix() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "read @ suffix".to_string(),
+        input_cursor: Some("read @".len()),
+        ..AppState::default()
+    });
+    controller.set_references(vec![DialogItem {
+        label: "@README.md".to_string(),
+        detail: "file".to_string(),
+    }]);
+
+    // When
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('R'))),
+        TuiEffect::None
+    );
+
+    // Then
+    let Some(dialog) = controller.app.dialog.as_ref() else {
+        panic!("reference popup");
+    };
+    assert_eq!(dialog.title, "references");
+    assert_eq!(dialog.items[0].label, "@README.md");
+
+    // When
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "read @README.md suffix");
+    assert_eq!(controller.app.input_cursor, Some("read @README.md ".len()));
+}
+
+#[test]
+fn reference_completion_popup_ignores_trailing_text_after_cursor() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "read @ suffix".to_string(),
+        input_cursor: Some("read @".len()),
+        ..AppState::default()
+    });
+    controller.set_references(vec![DialogItem {
+        label: "@README.md".to_string(),
+        detail: "file".to_string(),
+    }]);
+
+    // When
+    type_text(&mut controller, "REA");
+
+    // Then
+    let Some(dialog) = controller.app.dialog.as_ref() else {
+        panic!("reference popup");
+    };
+    assert_eq!(dialog.title, "references");
+    assert_eq!(controller.app.input, "read @REA suffix");
 }

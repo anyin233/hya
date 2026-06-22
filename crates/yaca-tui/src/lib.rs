@@ -29,6 +29,7 @@ pub struct AppState {
     pub dialog: Option<DialogView>,
     pub attachments: Vec<PromptAttachment>,
     pub input: String,
+    pub input_cursor: Option<usize>,
     pub yolo: bool,
     pub exit_armed: bool,
     pub running: bool,

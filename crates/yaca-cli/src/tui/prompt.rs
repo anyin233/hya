@@ -39,6 +39,7 @@ impl PromptState {
             });
             app.input.push_str(&placeholder);
             app.input.push(' ');
+            app.input_cursor = None;
             self.paste_entries.push(PasteEntry {
                 placeholder,
                 original: path,
@@ -53,6 +54,7 @@ impl PromptState {
             let placeholder = format!("[Pasted Text #{}]", self.paste_entries.len() + 1);
             app.input.push_str(&placeholder);
             app.input.push(' ');
+            app.input_cursor = None;
             self.paste_entries.push(PasteEntry {
                 placeholder,
                 original: normalized,
@@ -63,6 +65,7 @@ impl PromptState {
             };
         }
         app.input.push_str(&normalized);
+        app.input_cursor = None;
         self.last_paste_pending_reveal = false;
         PasteOutcome {
             refresh_popup: true,
@@ -71,21 +74,77 @@ impl PromptState {
 
     pub fn clear(&mut self, app: &mut AppState) {
         app.input.clear();
+        app.input_cursor = None;
         app.attachments.clear();
         self.paste_entries.clear();
         self.last_paste_pending_reveal = false;
     }
 
+    pub fn insert_char(&mut self, app: &mut AppState, ch: char) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input.insert(cursor, ch);
+        app.input_cursor = Some(cursor + ch.len_utf8());
+        self.last_paste_pending_reveal = false;
+    }
+
+    pub fn backspace(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let previous = previous_boundary(&app.input, cursor);
+        if previous == cursor {
+            app.input_cursor = Some(cursor);
+            return;
+        }
+        app.input.replace_range(previous..cursor, "");
+        app.input_cursor = Some(previous);
+        self.last_paste_pending_reveal = false;
+    }
+
+    pub fn delete(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let next = next_boundary(&app.input, cursor);
+        if next == cursor {
+            app.input_cursor = Some(cursor);
+            return;
+        }
+        app.input.replace_range(cursor..next, "");
+        app.input_cursor = Some(cursor);
+        self.last_paste_pending_reveal = false;
+    }
+
+    pub fn move_cursor_left(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(previous_boundary(&app.input, cursor));
+    }
+
+    pub fn move_cursor_right(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(next_boundary(&app.input, cursor));
+    }
+
+    pub fn move_cursor_line_start(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(line_start(&app.input, cursor));
+    }
+
+    pub fn move_cursor_line_end(&mut self, app: &mut AppState) {
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        app.input_cursor = Some(line_end(&app.input, cursor));
+    }
+
     pub fn delete_to_line_start(&mut self, app: &mut AppState) {
-        let line_start = app.input.rfind('\n').map_or(0, |idx| idx + 1);
-        app.input.truncate(line_start);
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let line_start = line_start(&app.input, cursor);
+        app.input.replace_range(line_start..cursor, "");
+        app.input_cursor = Some(line_start);
         self.last_paste_pending_reveal = false;
     }
 
     pub fn delete_word_backward(&mut self, app: &mut AppState) {
-        let end = trim_end_whitespace(&app.input);
+        let cursor = cursor_index(&app.input, app.input_cursor);
+        let end = trim_end_whitespace(&app.input[..cursor]);
         if end == 0 {
-            app.input.clear();
+            app.input.replace_range(0..cursor, "");
+            app.input_cursor = Some(0);
             self.last_paste_pending_reveal = false;
             return;
         }
@@ -95,7 +154,8 @@ impl PromptState {
             .rev()
             .find(|(_, ch)| ch.is_whitespace())
             .map_or(0, |(idx, ch)| idx + ch.len_utf8());
-        app.input.truncate(word_start);
+        app.input.replace_range(word_start..cursor, "");
+        app.input_cursor = Some(word_start);
         self.last_paste_pending_reveal = false;
     }
 
@@ -136,6 +196,36 @@ fn trim_end_whitespace(value: &str) -> usize {
         .rev()
         .find(|(_, ch)| !ch.is_whitespace())
         .map_or(0, |(idx, ch)| idx + ch.len_utf8())
+}
+
+pub(super) fn cursor_index(input: &str, cursor: Option<usize>) -> usize {
+    let mut idx = cursor.unwrap_or(input.len()).min(input.len());
+    while !input.is_char_boundary(idx) {
+        idx = idx.saturating_sub(1);
+    }
+    idx
+}
+
+fn previous_boundary(input: &str, cursor: usize) -> usize {
+    input[..cursor]
+        .char_indices()
+        .next_back()
+        .map_or(cursor, |(idx, _)| idx)
+}
+
+fn next_boundary(input: &str, cursor: usize) -> usize {
+    input[cursor..]
+        .chars()
+        .next()
+        .map_or(cursor, |ch| cursor + ch.len_utf8())
+}
+
+fn line_start(input: &str, cursor: usize) -> usize {
+    input[..cursor].rfind('\n').map_or(0, |idx| idx + 1)
+}
+
+fn line_end(input: &str, cursor: usize) -> usize {
+    cursor + input[cursor..].find('\n').unwrap_or(input.len() - cursor)
 }
 
 fn markdown_image_path(text: &str) -> Option<String> {
@@ -210,6 +300,11 @@ pub(super) fn mention_trigger_index(input: &str) -> Option<usize> {
     } else {
         None
     }
+}
+
+pub(super) fn mention_trigger_index_at(input: &str, cursor: Option<usize>) -> Option<usize> {
+    let cursor = cursor_index(input, cursor);
+    mention_trigger_index(&input[..cursor])
 }
 
 fn image_mime_for_path(path: &str) -> Option<&'static str> {

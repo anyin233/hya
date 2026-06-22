@@ -8,7 +8,7 @@ use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
 use super::leader_key::{LeaderAction, LeaderKey};
 use super::message_scroll::handle_message_scroll_key;
-use super::prompt::{PromptState, mention_trigger_index};
+use super::prompt::{PromptState, cursor_index, mention_trigger_index_at};
 use super::selection::{MessageSelectionStep, next_selected_message};
 use crate::config::ModelEntry;
 
@@ -152,11 +152,7 @@ impl Controller {
                 || key.modifiers == KeyModifiers::ALT);
         let ctrl_j = key.code == KeyCode::Char('j') && key.modifiers == KeyModifiers::CONTROL;
         if modified_enter || ctrl_j {
-            self.app.input.push('\n');
-            self.history_cursor = None;
-            self.disarm_exit();
-            self.refresh_inline_popup();
-            return TuiEffect::None;
+            return self.edit_prompt(|prompt, app| prompt.insert_char(app, '\n'));
         }
         if let Some(action) =
             selected_block_action(self.app.selected_message, &self.app.input, &key)
@@ -171,6 +167,18 @@ impl Controller {
                 KeyCode::Up => return self.select_previous_message(),
                 KeyCode::Down => return self.select_next_message(),
                 KeyCode::Char('c') => return self.handle_ctrl_c(),
+                KeyCode::Char('a') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_line_start(app));
+                }
+                KeyCode::Char('b') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_left(app));
+                }
+                KeyCode::Char('e') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_line_end(app));
+                }
+                KeyCode::Char('f') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_right(app));
+                }
                 KeyCode::Char('u') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
                 }
@@ -205,13 +213,10 @@ impl Controller {
                 })
             }
             KeyCode::Enter => self.submit_input(),
-            KeyCode::Backspace => {
-                self.app.input.pop();
-                self.history_cursor = None;
-                self.disarm_exit();
-                self.refresh_inline_popup();
-                TuiEffect::None
-            }
+            KeyCode::Backspace => self.edit_prompt(|prompt, app| prompt.backspace(app)),
+            KeyCode::Delete => self.edit_prompt(|prompt, app| prompt.delete(app)),
+            KeyCode::Left => self.edit_prompt(|prompt, app| prompt.move_cursor_left(app)),
+            KeyCode::Right => self.edit_prompt(|prompt, app| prompt.move_cursor_right(app)),
             KeyCode::PageUp => {
                 self.app.scroll_up(5);
                 TuiEffect::None
@@ -239,11 +244,7 @@ impl Controller {
             KeyCode::Char(c)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.app.input.push(c);
-                self.history_cursor = None;
-                self.disarm_exit();
-                self.refresh_inline_popup();
-                TuiEffect::None
+                self.edit_prompt(|prompt, app| prompt.insert_char(app, c))
             }
             _ => TuiEffect::None,
         }
@@ -509,6 +510,7 @@ impl Controller {
         self.history_cursor = Some(idx);
         if let Some(value) = self.input_history.get(idx) {
             self.app.input = value.clone();
+            self.app.input_cursor = None;
             self.refresh_inline_popup();
         }
     }
@@ -525,11 +527,13 @@ impl Controller {
             self.history_cursor = Some(next);
             if let Some(value) = self.input_history.get(next) {
                 self.app.input = value.clone();
+                self.app.input_cursor = None;
                 self.refresh_inline_popup();
             }
         } else {
             self.history_cursor = None;
             self.app.input.clear();
+            self.app.input_cursor = None;
             self.refresh_inline_popup();
         }
     }
@@ -610,6 +614,7 @@ impl Controller {
         let items = commands::completion_items_with_custom(&self.app.input, &self.custom_commands);
         if let Some(item) = items.get(selected) {
             self.app.input = format!("{} ", item.label);
+            self.app.input_cursor = None;
         }
     }
 
@@ -653,6 +658,18 @@ impl Controller {
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
         if key.modifiers == KeyModifiers::CONTROL {
             match key.code {
+                KeyCode::Char('a') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_line_start(app));
+                }
+                KeyCode::Char('b') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_left(app));
+                }
+                KeyCode::Char('e') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_line_end(app));
+                }
+                KeyCode::Char('f') => {
+                    return self.edit_prompt(|prompt, app| prompt.move_cursor_right(app));
+                }
                 KeyCode::Char('u') => {
                     return self.edit_prompt(|prompt, app| prompt.delete_to_line_start(app));
                 }
@@ -699,17 +716,14 @@ impl Controller {
                 }
                 TuiEffect::None
             }
-            KeyCode::Backspace => {
-                self.app.input.pop();
-                self.refresh_inline_popup();
-                TuiEffect::None
-            }
+            KeyCode::Backspace => self.edit_prompt(|prompt, app| prompt.backspace(app)),
+            KeyCode::Delete => self.edit_prompt(|prompt, app| prompt.delete(app)),
+            KeyCode::Left => self.edit_prompt(|prompt, app| prompt.move_cursor_left(app)),
+            KeyCode::Right => self.edit_prompt(|prompt, app| prompt.move_cursor_right(app)),
             KeyCode::Char(c)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                self.app.input.push(c);
-                self.refresh_inline_popup();
-                TuiEffect::None
+                self.edit_prompt(|prompt, app| prompt.insert_char(app, c))
             }
             _ => TuiEffect::None,
         }
@@ -740,12 +754,28 @@ impl Controller {
     }
 
     fn complete_reference(&mut self, label: &str) {
-        let Some(idx) = mention_trigger_index(&self.app.input) else {
+        let cursor = cursor_index(&self.app.input, self.app.input_cursor);
+        let Some(idx) = mention_trigger_index_at(&self.app.input, self.app.input_cursor) else {
             return;
         };
-        self.app.input.truncate(idx);
-        self.app.input.push_str(label);
-        self.app.input.push(' ');
+        let suffix = &self.app.input[cursor..];
+        let suffix_separator_len = suffix
+            .chars()
+            .next()
+            .filter(|ch| ch.is_whitespace())
+            .map_or(0, char::len_utf8);
+        let mut next = String::with_capacity(
+            self.app.input[..idx].len() + label.len() + 1 + self.app.input[cursor..].len(),
+        );
+        next.push_str(&self.app.input[..idx]);
+        next.push_str(label);
+        if suffix_separator_len == 0 {
+            next.push(' ');
+        }
+        let cursor_after_completion = next.len() + suffix_separator_len;
+        next.push_str(suffix);
+        self.app.input = next;
+        self.app.input_cursor = Some(cursor_after_completion);
     }
 
     fn refresh_inline_popup(&mut self) {
@@ -760,8 +790,9 @@ impl Controller {
             }
             return;
         }
-        if let Some(idx) = mention_trigger_index(&self.app.input) {
-            let prefix = &self.app.input[idx + 1..];
+        if let Some(idx) = mention_trigger_index_at(&self.app.input, self.app.input_cursor) {
+            let cursor = cursor_index(&self.app.input, self.app.input_cursor);
+            let prefix = &self.app.input[idx + 1..cursor];
             let items = self
                 .references
                 .iter()
