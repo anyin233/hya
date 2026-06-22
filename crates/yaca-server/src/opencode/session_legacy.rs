@@ -18,7 +18,7 @@ use super::projection;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
-        .route("/session", get(list_sessions))
+        .route("/session", get(super::session_list::list_sessions))
         .route("/session/status", get(status))
         .route(
             "/session/:id",
@@ -75,26 +75,6 @@ pub(in crate::opencode) struct InitSessionPayload {
 
 async fn status(State(st): State<ServerState>) -> Json<BTreeMap<String, runs::RunStatus>> {
     Json(st.runs.statuses())
-}
-
-async fn list_sessions(
-    State(st): State<ServerState>,
-) -> Result<Json<Vec<projection::OpenCodeSessionInfo>>, ApiError> {
-    let sessions = st
-        .engine
-        .store()
-        .list_sessions()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut out = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        out.push(
-            load_session(&st, session.session, Some(session.started_millis))
-                .await?
-                .info,
-        );
-    }
-    Ok(Json(out))
 }
 
 async fn children(
