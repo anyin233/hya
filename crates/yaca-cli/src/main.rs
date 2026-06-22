@@ -8,6 +8,7 @@
 
 mod auth;
 mod auth_cmd;
+mod cli_args;
 mod commands;
 mod config;
 mod permission;
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{
@@ -44,87 +45,7 @@ use yaca_plugin::config::PluginSpec;
 use yaca_plugin::{HostInfo, PermissionBridge, PluginHost};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
-use auth_cmd::AuthCommand;
-
-#[derive(Parser)]
-#[command(
-    name = "yaca",
-    version,
-    about = "yaca — a multi-agent coding agent",
-    long_about = None
-)]
-struct Cli {
-    /// Headless goal mode: iterate the agent until an independent evaluator
-    /// reports the goal met, or the iteration cap trips.
-    #[arg(short = 'p', long = "prompt", value_name = "GOAL")]
-    prompt: Option<String>,
-    /// Iteration cap for `-p` goal mode.
-    #[arg(long, default_value_t = 6)]
-    max_iterations: u32,
-    /// Model id to use (overrides config `default_model` + `YACA_MODEL`).
-    #[arg(long, global = true, value_name = "MODEL")]
-    model: Option<String>,
-    /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
-    #[arg(long, global = true)]
-    yolo: bool,
-    /// SQLite database for the interactive TUI (empty = in-memory).
-    #[arg(long, default_value = "")]
-    db: String,
-    /// Resume an existing session id in the interactive TUI.
-    #[arg(long)]
-    resume: Option<String>,
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Run a single prompt headlessly and print the resulting transcript.
-    Exec {
-        /// The user prompt to send to the agent.
-        prompt: String,
-        /// Emit the event stream as JSONL instead of a rendered transcript.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Start the HTTP + SSE server.
-    Serve {
-        /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: String,
-        /// SQLite database path. Empty string uses an in-memory store.
-        #[arg(long, default_value = "")]
-        db: String,
-    },
-    /// Replay a session's event log from a database as JSON lines.
-    TailSession {
-        /// Session id (UUID).
-        id: String,
-        /// SQLite database path the session was written to.
-        #[arg(long)]
-        db: String,
-    },
-    /// Save an auth token for a provider id (used instead of an inline api_key).
-    Login {
-        /// Provider id as it appears in your yaca config.
-        provider: String,
-        /// The bearer/API token to store.
-        token: String,
-    },
-    /// Inspect or remove saved provider auth tokens.
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-    /// List sessions stored in a database.
-    Sessions {
-        /// SQLite database path.
-        #[arg(long)]
-        db: String,
-    },
-    /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
-    Rpc,
-}
+use cli_args::{Cli, Command};
 
 fn today() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -764,6 +685,7 @@ async fn cmd_sessions(db: String) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    cli.validate().map_err(anyhow::Error::msg)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let db = cli.db.clone();
