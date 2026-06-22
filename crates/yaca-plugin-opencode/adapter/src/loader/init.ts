@@ -5,7 +5,7 @@ import {
   resolveLocalPluginSpec,
   type ServerPlugin,
 } from "./shape"
-import { resolveNpmPluginImportSpec } from "./package"
+import { isDeprecatedPluginSpec, resolveNpmPluginImportSpec } from "./package"
 
 export type OpenCodeHooks = Readonly<Record<string, unknown>>
 
@@ -27,6 +27,9 @@ export async function loadLocalPluginHooks(
   const hooks: OpenCodeHooks[] = []
   const errors: PluginLoadError[] = []
   for (const original of specs) {
+    if (isDeprecatedPluginSpec(pluginSpecifier(original))) {
+      continue
+    }
     const plugin =
       configFilepath === undefined
         ? original

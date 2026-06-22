@@ -11,6 +11,11 @@ const PackageJsonSchema = z
   })
   .passthrough()
 
+const DEPRECATED_PLUGIN_PACKAGES = [
+  "opencode-openai-codex-auth",
+  "opencode-copilot-auth",
+] as const
+
 type PackageJson = Readonly<z.infer<typeof PackageJsonSchema>>
 
 type PluginPackage = {
@@ -166,6 +171,10 @@ export function npmPackageNameFromSpec(spec: string): string | undefined {
   const first = firstPathSegment(trimmed)
   const version = first.indexOf("@")
   return version === -1 ? first : first.slice(0, version)
+}
+
+export function isDeprecatedPluginSpec(spec: string): boolean {
+  return DEPRECATED_PLUGIN_PACKAGES.some((name) => spec.includes(name))
 }
 
 function scopedPackageName(spec: string): string | undefined {
