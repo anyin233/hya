@@ -175,10 +175,10 @@ fn permission_panel_renders_options_and_reply() {
     assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
     assert!(text.contains("Allow once"), "allow-once option renders");
     assert!(
-        text.contains("Allow all bash"),
-        "allow-all option uses the action"
+        text.contains("Allow always"),
+        "persistent allow option matches OpenCode"
     );
-    assert!(text.contains("Deny"), "deny option renders");
+    assert!(text.contains("Reject"), "reject option renders");
     assert!(text.contains("use ls instead"), "reply text renders");
 }
 

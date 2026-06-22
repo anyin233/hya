@@ -138,8 +138,8 @@ impl PermissionPrompt {
     pub fn options(&self) -> [String; 3] {
         [
             "Allow once".to_string(),
-            format!("Allow all {}", self.title),
-            "Deny".to_string(),
+            "Allow always".to_string(),
+            "Reject".to_string(),
         ]
     }
 }

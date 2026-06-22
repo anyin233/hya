@@ -28,6 +28,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
     frame.render_widget(Clear, clear_rect);
 
     let inner_width = usize::from(width).saturating_sub(4);
+    let reply_width = inner_width.saturating_sub("reply: █".len());
     let rail_style = Style::default().fg(theme.warning).bg(theme.element);
     let rail = || Span::styled("▏ ", rail_style);
     let mut option_spans = vec![rail()];
@@ -79,13 +80,16 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
         Line::from(vec![
             rail(),
             Span::styled("reply: ", Style::default().fg(theme.muted)),
-            Span::styled(prompt.reply.clone(), Style::default().fg(theme.text)),
+            Span::styled(
+                ellipsize(&prompt.reply, reply_width),
+                Style::default().fg(theme.text),
+            ),
             Span::styled("█", Style::default().fg(theme.primary)),
         ]),
         Line::from(vec![
             rail(),
             Span::styled(
-                "←/→ select · type a reply · Enter confirm · Esc deny",
+                "←/→ select · type a reply · Enter confirm · Esc reject",
                 Style::default().fg(theme.muted),
             ),
         ]),
