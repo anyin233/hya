@@ -17,6 +17,15 @@ pub fn push_tool_lines(
     theme: &Theme,
     lines: &mut Vec<Line<'static>>,
 ) {
+    if let Some(label) = pending_tool_label(name, status) {
+        lines.push(Line::from(vec![
+            Span::styled("   ", tool_style(theme.muted, selected, theme)),
+            Span::styled("~ ", tool_style(theme.text, selected, theme)),
+            Span::styled(label, tool_style(theme.text, selected, theme)),
+        ]));
+        return;
+    }
+
     let color = status_color(status, theme);
     let mut spans = vec![
         Span::styled("   ", tool_style(theme.muted, selected, theme)),
@@ -74,6 +83,17 @@ pub fn push_tool_lines(
                 lines,
             );
         }
+    }
+}
+
+fn pending_tool_label(name: &str, status: &ToolStatus) -> Option<&'static str> {
+    if !matches!(status, ToolStatus::Pending | ToolStatus::Running) {
+        return None;
+    }
+
+    match name {
+        "websearch" => Some("Searching web..."),
+        _ => None,
     }
 }
 

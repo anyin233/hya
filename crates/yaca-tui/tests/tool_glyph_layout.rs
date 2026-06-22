@@ -109,6 +109,35 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
     );
 }
 
+#[test]
+fn running_websearch_uses_opencode_pending_text() {
+    // Given: a websearch tool call has started but has not completed yet.
+    let mut state = AppState::default();
+    with_running_tool(
+        &mut state,
+        1,
+        "websearch",
+        json!({ "query": "rust tui search" }),
+    );
+
+    // When: the transcript is rendered while the tool is still pending.
+    let output = render(&mut state, 100, 16);
+
+    // Then: yaca matches OpenCode's inline pending fallback for web search.
+    assert!(
+        output.contains("~ Searching web..."),
+        "running websearch should use OpenCode's pending text:\n{output}"
+    );
+    assert!(
+        !output.contains("◈ Web Search \"rust tui search\""),
+        "running websearch should not render the completed title/query row:\n{output}"
+    );
+    assert!(
+        !output.contains("running"),
+        "running websearch should not append yaca's generic running suffix:\n{output}"
+    );
+}
+
 fn with_completed_tool(
     state: &mut AppState,
     base_seq: u64,
@@ -168,6 +197,48 @@ fn with_completed_tool_output(
             call,
             output,
             time_ms: base_seq,
+        },
+    ));
+}
+
+fn with_running_tool(
+    state: &mut AppState,
+    base_seq: u64,
+    tool_name: &str,
+    input: serde_json::Value,
+) {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let name = ToolName::new(tool_name);
+    state.apply(&env(
+        base_seq,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        base_seq + 1,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: name.clone(),
+        },
+    ));
+    state.apply(&env(
+        base_seq + 2,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input,
         },
     ));
 }
