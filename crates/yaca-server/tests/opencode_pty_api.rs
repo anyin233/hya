@@ -146,6 +146,25 @@ async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
     assert_eq!(status, StatusCode::OK);
     assert_ne!(first_token["ticket"], second_token["ticket"]);
 
+    let ticket = first_token["ticket"].as_str().expect("connect ticket");
+    let (status, _) = request(
+        app.clone(),
+        "GET",
+        &format!("/pty/{id}/connect?ticket={ticket}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+
+    let (status, _) = request(
+        app.clone(),
+        "GET",
+        &format!("/pty/{id}/connect?ticket={ticket}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
     let (status, removed) = request(app.clone(), "DELETE", &format!("/pty/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(removed, json!(true));

@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header::HeaderMap;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::{ApiError, ServerState};
 
 use super::location;
-use super::pty_state::PtyInfo;
+use super::pty_state::{PtyInfo, TicketStatus};
 
 const CONNECT_TOKEN_HEADER: &str = "x-opencode-ticket";
 const CONNECT_TOKEN_HEADER_VALUE: &str = "1";
@@ -155,10 +155,10 @@ async fn connect_token_response(
     {
         return forbidden();
     }
-    if st.pty.get(id).await.is_none() {
+    let Some((ticket, expires_in)) = st.pty.issue_ticket(id).await else {
         return pty_not_found(id);
-    }
-    let token = json!({"ticket": uuid::Uuid::new_v4().to_string(), "expires_in": 60});
+    };
+    let token = json!({"ticket": ticket, "expires_in": expires_in});
     if wrap {
         Json(location::response(st, token)).into_response()
     } else {
@@ -166,8 +166,19 @@ async fn connect_token_response(
     }
 }
 
-async fn connect(AxumPath(id): AxumPath<String>) -> Response {
-    pty_not_found(&id)
+async fn connect(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Response {
+    let Some(ticket) = query.get("ticket") else {
+        return forbidden();
+    };
+    match st.pty.consume_ticket(&id, ticket).await {
+        TicketStatus::Accepted => StatusCode::NOT_IMPLEMENTED.into_response(),
+        TicketStatus::Invalid => forbidden(),
+        TicketStatus::NotFound => pty_not_found(&id),
+    }
 }
 
 fn default_cwd(st: &ServerState) -> String {
