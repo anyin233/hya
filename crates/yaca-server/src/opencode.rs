@@ -11,7 +11,9 @@ mod integration;
 mod location;
 mod metadata;
 mod model_ref;
+mod permission;
 mod projection;
+mod question;
 mod session_context;
 mod session_legacy;
 mod session_prompt;
@@ -29,6 +31,8 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(instance::router())
         .merge(integration::router())
         .merge(metadata::router())
+        .merge(permission::router())
+        .merge(question::router())
         .merge(session_context::router())
         .merge(session_prompt::router())
         .merge(session_v2::router())
