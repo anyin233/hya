@@ -41,6 +41,17 @@ pub(in crate::opencode) fn legacy_session_not_found(session: SessionId) -> Respo
         .into_response()
 }
 
+pub(in crate::opencode) fn legacy_bad_request(message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "name": "BadRequest",
+            "data": { "message": message.into() },
+        })),
+    )
+        .into_response()
+}
+
 pub(in crate::opencode) fn invalid_cursor(message: &'static str) -> Response {
     (
         StatusCode::BAD_REQUEST,
