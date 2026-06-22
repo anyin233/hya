@@ -1,5 +1,7 @@
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::HeaderValue;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::{ApiError, ServerState};
@@ -10,13 +12,14 @@ pub(super) struct ListQuery {
     search: Option<String>,
     limit: Option<usize>,
     start: Option<i64>,
+    cursor: Option<i64>,
     archived: Option<bool>,
 }
 
 pub(super) async fn list_sessions(
     State(st): State<ServerState>,
     Query(query): Query<ListQuery>,
-) -> Result<Json<Vec<super::projection::OpenCodeSessionInfo>>, ApiError> {
+) -> Result<Response, ApiError> {
     let sessions = st
         .engine
         .store()
@@ -29,6 +32,12 @@ pub(super) async fn list_sessions(
         if query
             .start
             .is_some_and(|start| session.updated_millis < start)
+        {
+            continue;
+        }
+        if query
+            .cursor
+            .is_some_and(|cursor| session.updated_millis >= cursor)
         {
             continue;
         }
@@ -48,10 +57,24 @@ pub(super) async fn list_sessions(
         {
             continue;
         }
-        if out.len() >= limit {
+        if out.len() > limit {
             break;
         }
         out.push(info);
     }
-    Ok(Json(out))
+    let has_more = out.len() > limit;
+    if has_more {
+        out.truncate(limit);
+    }
+    let next_cursor = has_more.then(|| {
+        out.last()
+            .map(super::projection::OpenCodeSessionInfo::updated_millis)
+    });
+    let mut response = Json(out).into_response();
+    if let Some(Some(cursor)) = next_cursor {
+        let value = HeaderValue::from_str(&cursor.to_string())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        response.headers_mut().insert("x-next-cursor", value);
+    }
+    Ok(response)
 }
