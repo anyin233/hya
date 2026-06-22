@@ -75,6 +75,35 @@ async fn request_status(app: axum::Router, method: Method, uri: &str, body: Valu
     resp.status()
 }
 
+async fn request_json(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        Body::from(body.to_string())
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+    (status, body)
+}
+
 #[tokio::test]
 async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
     let app = router(state().await);
@@ -98,23 +127,27 @@ async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
 async fn opencode_v2_integration_mutation_routes_match_empty_backend() {
     let app = router(state().await);
 
-    let status = request_status(
+    let (status, error) = request_json(
         app.clone(),
         Method::POST,
         "/api/integration/missing/connect/key",
         serde_json::json!({"key": "test"}),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["_tag"], "InvalidRequestError");
+    assert_eq!(error["kind"], "integration_authorization");
 
-    let status = request_status(
+    let (status, error) = request_json(
         app.clone(),
         Method::POST,
         "/api/integration/missing/connect/oauth",
         serde_json::json!({"methodID": "missing", "inputs": {}}),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["_tag"], "InvalidRequestError");
+    assert_eq!(error["kind"], "integration_authorization");
 
     let status = request_status(
         app.clone(),
@@ -125,14 +158,16 @@ async fn opencode_v2_integration_mutation_routes_match_empty_backend() {
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
-    let status = request_status(
+    let (status, error) = request_json(
         app.clone(),
         Method::POST,
         "/api/integration/attempt/con_missing/complete",
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["_tag"], "InvalidRequestError");
+    assert_eq!(error["kind"], "integration_authorization");
 
     let status = request_status(
         app.clone(),
