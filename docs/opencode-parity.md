@@ -35,7 +35,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Persistence/resume | Partial | SQLite event store, session list/resume, event replay, and OpenCode-shaped session info, children, message list, single-message, and basic paginated message reads are present. |
 | OpenCode session read API | Partial | yaca accepts prefixed `ses_...` and `msg_...` IDs and returns OpenCode-style session info, children, `[{ info, parts }]` message lists, single-message reads, and `limit`/`before` pagination headers. |
 | OpenCode prompt async API | Partial | `POST /session/:sessionID/prompt_async` returns OpenCode-style no-content immediately, runs the turn in a background task, and uses the run registry for busy status and abort. |
-| OpenCode file API | Partial | yaca exposes OpenCode-shaped `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, and `/file/status` routes over the server workdir. File listing marks entries ignored by root `.gitignore`/`.ignore`; symbol and status match OpenCode's current empty handler behavior. |
+| OpenCode file API | Partial | yaca exposes OpenCode-shaped `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, and `/file/status` routes over the server workdir. File listing marks entries ignored by root `.gitignore`/`.ignore`; binary content detects common image/PDF MIME types; symbol and status match OpenCode's current empty handler behavior. |
 | OpenCode instance metadata API | Partial | yaca exposes `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/instance/dispose`, `/vcs`, `/vcs/status`, `/vcs/diff`, `/vcs/diff/raw`, and `/vcs/apply`. LSP/formatter are empty status arrays for now. |
 | Branching | Partial | Session parent/child support and branch/resume exist, but OpenCode's full session tree HTTP surface is incomplete. |
 | Integration modes | Implemented native | `exec --json` and `yaca rpc` JSONL mode exist. |
@@ -49,7 +49,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Session lifecycle API | Missing exact OpenCode endpoints for scoped/root/path-filtered listing, todo, diff, update title/metadata/permissions/archive, delete, fork raw payload, init, share/unshare, summarize, revert/unrevert, permission respond, message deletion, part deletion, and part update. Message pagination exists but uses yaca's projection-order cursor rather than OpenCode's persisted message timestamp cursor. |
 | Abort/control | Basic busy status, abort, and prompt_async exist. Missing OpenCode's richer runner behavior for background jobs, retry statuses, child job cancellation, and event publication for async failures/status changes. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, and message diff APIs. yaca has tool outputs and event projection, but no equivalent snapshot/revert service. |
-| File HTTP routes | Basic OpenCode legacy file HTTP routes are present, including root `.gitignore`/`.ignore` ignored flags for listing. Remaining gaps are exact filesystem service semantics, nested ignore file parity, richer binary MIME detection, and real LSP-backed symbol search when available. |
+| File HTTP routes | Basic OpenCode legacy file HTTP routes are present, including root `.gitignore`/`.ignore` ignored flags for listing and common image/PDF MIME sniffing for binary content. Remaining gaps are exact filesystem service semantics, nested ignore file parity, and real LSP-backed symbol search when available. |
 | Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, and apply endpoints are present. Remaining gaps are exact branch-mode diff parity, OpenCode patch byte caps/empty patch behavior, real LSP/formatter status integration, and full command/agent config/plugin merging. |
 | Config routes | Missing OpenCode-compatible config get/update/provider metadata routes. yaca reads its own `~/.config/yaca/config.yaml`. |
 | Provider/auth breadth | Missing AI SDK provider breadth, models.dev metadata/autoload, provider status/cost/limit metadata, OAuth authorize/callback flows, provider auth methods, and Console/org switching. |
@@ -67,8 +67,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 
 1. Add richer OpenCode run-state lifecycle, including retry statuses,
    prompt_async error events, and status events.
-2. Add richer binary MIME detection and LSP-backed `/find/symbol` results for
-   the file HTTP API.
+2. Add LSP-backed `/find/symbol` results for the file HTTP API.
 3. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
 4. Tighten VCS branch-mode diff parity, patch byte caps, and empty patch
    behavior to match OpenCode's `project/vcs.ts` exactly.

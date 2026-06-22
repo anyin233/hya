@@ -36,6 +36,7 @@ fn tempdir() -> PathBuf {
     std::fs::write(dir.join("ignored.log"), "skip\n").unwrap();
     std::fs::create_dir_all(dir.join("build")).unwrap();
     std::fs::write(dir.join("build/cache.txt"), "skip\n").unwrap();
+    std::fs::write(dir.join("pixel.png"), b"\x89PNG\r\n\x1a\n").unwrap();
     dir
 }
 
@@ -96,6 +97,12 @@ async fn opencode_file_routes_return_legacy_shapes() {
     assert_eq!(listing[0]["path"], "src/main.rs");
     assert_eq!(listing[0]["type"], "file");
     assert_eq!(listing[0]["ignored"], false);
+
+    let (status, image) = get_json(app.clone(), "/file/content?path=pixel.png").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(image["type"], "binary");
+    assert_eq!(image["encoding"], "base64");
+    assert_eq!(image["mimeType"], "image/png");
 
     let (status, root_listing) = get_json(app.clone(), "/file?path=.").await;
     assert_eq!(status, StatusCode::OK);
