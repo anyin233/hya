@@ -474,3 +474,62 @@ async fn opencode_v2_session_prompt_admits_without_resume() {
     assert_eq!(context["data"].as_array().expect("messages").len(), 1);
     assert_eq!(context["data"][0]["text"], "queued");
 }
+
+#[tokio::test]
+async fn opencode_v2_session_prompt_preserves_files_and_agents_in_context() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+    let files = json!([
+        {
+            "uri": "file:///tmp/yaca-opencode-session-v2-api/notes.txt",
+            "mime": "text/plain",
+            "name": "notes.txt",
+            "description": "session notes",
+            "source": {"text": "@notes.txt", "start": 0, "end": 10}
+        }
+    ]);
+    let agents = json!([
+        {
+            "name": "build",
+            "source": {"text": "@build", "start": 11, "end": 17}
+        }
+    ]);
+
+    let (status, admitted) = post_json(
+        app.clone(),
+        &format!("/api/session/{session}/prompt"),
+        json!({
+            "prompt": {
+                "text": "queued with context",
+                "files": files,
+                "agents": agents
+            },
+            "delivery": "queue",
+            "resume": false
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(admitted["data"]["prompt"]["files"], files);
+    assert_eq!(admitted["data"]["prompt"]["agents"], agents);
+
+    let (status, context) = get_json(app.clone(), format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["data"][0]["type"], "user");
+    assert_eq!(context["data"][0]["text"], "queued with context");
+    assert_eq!(context["data"][0]["files"], files);
+    assert_eq!(context["data"][0]["agents"], agents);
+
+    let (status, messages) =
+        get_json(app, format!("/api/session/{session}/message?order=asc")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(messages["data"][0]["files"], files);
+    assert_eq!(messages["data"][0]["agents"], agents);
+}

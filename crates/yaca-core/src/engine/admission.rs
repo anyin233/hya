@@ -141,6 +141,28 @@ impl SessionEngine {
         Ok(message)
     }
 
+    pub async fn record_user_prompt_context(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        files: Vec<serde_json::Value>,
+        agents: Vec<serde_json::Value>,
+    ) -> Result<(), CoreError> {
+        if files.is_empty() && agents.is_empty() {
+            return Ok(());
+        }
+        self.emit(
+            session,
+            Event::UserPromptContextRecorded {
+                session,
+                message,
+                files,
+                agents,
+            },
+        )
+        .await
+    }
+
     pub async fn admit_command_prompt(
         &self,
         session: SessionId,

@@ -32,6 +32,10 @@ pub struct MessageProjection {
     pub id: MessageId,
     pub role: Role,
     pub finish: Option<FinishReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<serde_json::Value>,
     pub parts: Vec<PartProjection>,
 }
 
@@ -142,8 +146,21 @@ impl Projection {
                         id: *message,
                         role: *role,
                         finish: None,
+                        files: Vec::new(),
+                        agents: Vec::new(),
                         parts: Vec::new(),
                     });
+                }
+            }
+            Event::UserPromptContextRecorded {
+                message,
+                files,
+                agents,
+                ..
+            } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.files = files.clone();
+                    message.agents = agents.clone();
                 }
             }
             Event::MessageFinished {

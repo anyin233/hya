@@ -36,6 +36,13 @@ impl SessionEngine {
             },
         )
         .await?;
+        self.record_user_prompt_context(
+            session,
+            message,
+            source.files.clone(),
+            source.agents.clone(),
+        )
+        .await?;
         for part in &source.parts {
             self.copy_part(session, message, part).await?;
         }
