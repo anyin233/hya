@@ -410,7 +410,7 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
 }
 
 #[tokio::test]
-async fn opencode_session_shell_busy_returns_typed_error() {
+async fn opencode_session_shell_busy_returns_legacy_error() {
     let app = router(shell_state().await);
     let session = create_session(app.clone(), None).await;
     let shell_app = app.clone();
@@ -435,9 +435,11 @@ async fn opencode_session_shell_busy_returns_typed_error() {
     assert_eq!(
         body,
         json!({
-            "_tag": "SessionBusyError",
-            "sessionID": session,
-            "message": format!("Session is busy: {session}"),
+            "name": "SessionBusyError",
+            "data": {
+                "sessionID": session,
+                "message": format!("Session is busy: {session}"),
+            },
         })
     );
 
@@ -511,7 +513,7 @@ async fn opencode_session_delete_missing_session_returns_not_found() {
 }
 
 #[tokio::test]
-async fn opencode_session_delete_message_busy_returns_typed_error() {
+async fn opencode_session_delete_message_busy_returns_legacy_error() {
     let app = router(shell_state().await);
     let session = create_session(app.clone(), None).await;
     let shell_app = app.clone();
@@ -533,9 +535,11 @@ async fn opencode_session_delete_message_busy_returns_typed_error() {
     assert_eq!(
         body,
         json!({
-            "_tag": "SessionBusyError",
-            "sessionID": session,
-            "message": format!("Session is busy: {session}"),
+            "name": "SessionBusyError",
+            "data": {
+                "sessionID": session,
+                "message": format!("Session is busy: {session}"),
+            },
         })
     );
 

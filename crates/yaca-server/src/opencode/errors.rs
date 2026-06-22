@@ -20,9 +20,11 @@ pub(in crate::opencode) fn session_busy(session: SessionId) -> Response {
     (
         StatusCode::CONFLICT,
         Json(json!({
-            "_tag": "SessionBusyError",
-            "sessionID": session.to_string(),
-            "message": format!("Session is busy: {session}"),
+            "name": "SessionBusyError",
+            "data": {
+                "sessionID": session.to_string(),
+                "message": format!("Session is busy: {session}"),
+            },
         })),
     )
         .into_response()
