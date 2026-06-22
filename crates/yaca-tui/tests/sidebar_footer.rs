@@ -3,6 +3,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use yaca_proto::{Envelope, Event, EventSeq, SessionId};
 use yaca_tui::{AppState, draw};
 
@@ -76,6 +77,30 @@ fn context_rail_footer_stays_anchored_to_bottom() {
         workdir_row, branch_row,
         "OpenCode renders worktree and branch as one path:branch footer line"
     );
+}
+
+#[test]
+fn context_rail_footer_emphasizes_workdir_name_like_opencode() {
+    // Given: a wide context rail with a worktree path and branch.
+    let mut state = AppState {
+        branch_label: Some("feat/footer".to_string()),
+        ..AppState::default()
+    };
+    with_session(&mut state, "/tmp/yaca-footer");
+
+    // When: the OpenCode-style sidebar footer renders.
+    let buffer = render_buffer(&mut state, 124, 36);
+
+    // Then: OpenCode keeps everything before the last slash muted and highlights the leaf.
+    let workdir_row = row_containing(&buffer, 124, 36, "/tmp/yaca-footer").unwrap();
+    let rendered = row_text(&buffer, 124, workdir_row);
+    let parent_x = u16::try_from(rendered.find("yaca-footer:feat/").unwrap()).unwrap();
+    let name_x = u16::try_from(rendered.rfind("footer").unwrap()).unwrap();
+    assert_eq!(
+        buffer[(parent_x, workdir_row)].fg,
+        Color::Rgb(128, 128, 128)
+    );
+    assert_eq!(buffer[(name_x, workdir_row)].fg, Color::Rgb(238, 238, 238));
 }
 
 #[test]

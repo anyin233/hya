@@ -11,7 +11,7 @@ const FOOTER_PADDING_WIDTH: usize = 2;
 pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(""));
-    lines.push(meta(workdir_footer_label(state, width), theme.muted));
+    lines.push(workdir_footer_line(state, theme, width));
     lines.push(Line::from(vec![
         Span::styled("  • ", Style::default().fg(theme.success)),
         Span::styled(
@@ -20,6 +20,17 @@ pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<
         ),
     ]));
     lines
+}
+
+fn workdir_footer_line(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
+    let label = workdir_footer_label(state, width);
+    let split = label.rfind('/').map_or(0, |idx| idx + 1);
+    let (parent, name) = label.split_at(split);
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(parent.to_string(), Style::default().fg(theme.muted)),
+        Span::styled(name.to_string(), Style::default().fg(theme.text)),
+    ])
 }
 
 fn workdir_footer_label(state: &AppState, width: u16) -> String {
@@ -56,11 +67,4 @@ fn ellipsize_tail(label: &str, max_width: usize) -> String {
     }
     tail.reverse();
     format!("…{}", tail.into_iter().collect::<String>())
-}
-
-fn meta(text: impl Into<String>, color: ratatui::style::Color) -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(text.into(), Style::default().fg(color)),
-    ])
 }
