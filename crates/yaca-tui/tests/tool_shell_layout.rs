@@ -25,8 +25,12 @@ fn completed_shell_tool_shows_exit_code_when_command_fails() {
         "shell action row should include the command summary:\n{output}"
     );
     assert!(
-        output.contains("completed (exit 2) ✓ 9ms"),
-        "shell completion status should include the process exit code:\n{output}"
+        output.contains("exit 2 ✗ 9ms"),
+        "shell failure status should include the process exit code:\n{output}"
+    );
+    assert!(
+        !output.contains("completed (exit 2)"),
+        "shell failure row should not describe a non-zero exit as completed:\n{output}"
     );
     assert!(
         output.contains("▏ boom"),

@@ -68,6 +68,10 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
         output.contains("◈ WebSearch \"opencode tui layout\""),
         "websearch should quote the query like OpenCode websearch rows:\n{output}"
     );
+    assert!(
+        !output.contains("completed ✓"),
+        "successful inline tools should not append generic completed/time suffixes:\n{output}"
+    );
 }
 
 fn with_completed_tool(

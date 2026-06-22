@@ -38,7 +38,7 @@ fn completed_tool_stdout_renders_as_a_readable_output_block() {
 }
 
 #[test]
-fn compact_tool_status_keeps_duration_on_the_status_row_at_eighty_columns() {
+fn compact_tool_status_omits_generic_success_suffix_at_eighty_columns() {
     // Given: a completed shell tool whose input is long enough to pressure an 80-column layout.
     let mut state = AppState::default();
     with_completed_shell_output(&mut state, "line one\nline two");
@@ -46,12 +46,18 @@ fn compact_tool_status_keeps_duration_on_the_status_row_at_eighty_columns() {
     // When: the transcript is rendered at the narrow supported width.
     let output = render(&mut state, 80, 24);
 
-    // Then: the duration stays on the compact tool status row instead of wrapping alone.
+    // Then: the completed row matches OpenCode's compact success style without generic status text.
     let rows: Vec<&str> = output.lines().collect();
+    let Some(status_row) = rows.iter().find(|row| row.contains("→ Shell")) else {
+        panic!("completed shell status row missing:\n{output}");
+    };
     assert!(
-        rows.iter()
-            .any(|row| row.contains("→ Shell") && row.contains("completed ✓ 9ms")),
-        "completed duration should stay attached to its status row:\n{output}"
+        !status_row.contains("completed"),
+        "status row should omit completed suffix:\n{output}"
+    );
+    assert!(
+        !status_row.contains("9ms"),
+        "status row should omit generic timing suffix:\n{output}"
     );
     assert!(
         rows.iter().all(|row| row.trim() != "9ms"),

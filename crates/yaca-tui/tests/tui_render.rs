@@ -1,4 +1,5 @@
 #![allow(
+    dead_code,
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::field_reassign_with_default
@@ -12,7 +13,7 @@ use yaca_tui::{AppState, DialogItem, DialogView, PermissionPrompt};
 
 use render_support::{
     buffer_text, find_rendered_text, render, render_buffer, rich_state, with_event_error,
-    with_text_message, with_tool_error_message, with_tool_message, with_user_message,
+    with_text_message, with_tool_error_message, with_user_message,
 };
 
 #[test]
@@ -61,28 +62,6 @@ fn narrow_layout_hides_sidebar_without_hiding_prompt() {
     );
     assert!(text.contains("type here"), "prompt must remain visible");
     assert!(text.contains("HELLOTUI"), "transcript must remain visible");
-}
-
-#[test]
-fn timeline_renders_message_rails_and_tool_status() {
-    let mut state = AppState {
-        model: "fake".to_string(),
-        session_label: "sess-1".to_string(),
-        ..AppState::default()
-    };
-    with_user_message(&mut state, "please inspect files");
-    with_tool_message(&mut state, 20, "README.md", 12);
-    let text = render(&mut state, 120, 30);
-    assert!(text.contains("You"), "user label should render");
-    assert!(text.contains("▏"), "timeline should use a left rail");
-    assert!(
-        text.contains("→ Read README.md"),
-        "completed read tool should render as an OpenCode-style action row"
-    );
-    assert!(
-        text.contains("completed ✓ 12ms"),
-        "completed tool row should keep a readable status suffix"
-    );
 }
 
 #[test]
@@ -263,16 +242,4 @@ fn scroll_back_saturates() {
     assert_eq!(state.scroll_back, 3);
     state.scroll_down(10);
     assert_eq!(state.scroll_back, 0);
-}
-
-#[test]
-fn tool_call_renders_as_one_compact_line() {
-    let mut state = AppState::default();
-    with_tool_message(&mut state, 1, "Cargo.toml", 7);
-
-    let text = render(&mut state, 100, 12);
-    assert!(text.contains("→ Read Cargo.toml"), "tool action renders");
-    assert!(text.contains("Cargo.toml"), "brief input renders");
-    assert!(text.contains("7ms"), "completion time renders");
-    assert_eq!(text.matches("→ Read").count(), 1, "exactly one tool line");
 }

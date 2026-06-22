@@ -17,7 +17,7 @@ pub fn push_tool_lines(
     lines: &mut Vec<Line<'static>>,
 ) {
     let color = status_color(status, theme);
-    lines.push(Line::from(vec![
+    let mut spans = vec![
         Span::styled("   ", tool_style(theme.muted, selected, theme)),
         Span::styled(
             format!("{} ", status_symbol(name, status)),
@@ -28,10 +28,12 @@ pub fn push_tool_lines(
             tool_style(color, selected, theme).add_modifier(Modifier::BOLD),
         ),
         Span::styled(input_label(input), tool_style(theme.muted, selected, theme)),
-        Span::styled("· ", tool_style(theme.muted, selected, theme)),
-        Span::styled(status_label(status), tool_style(color, selected, theme)),
-        Span::styled(status_suffix(status), tool_style(color, selected, theme)),
-    ]));
+    ];
+    if let Some(status) = inline_status_text(status) {
+        spans.push(Span::styled("· ", tool_style(theme.muted, selected, theme)));
+        spans.push(Span::styled(status, tool_style(color, selected, theme)));
+    }
+    lines.push(Line::from(spans));
 
     if let ToolStatus::Error { message } = status {
         lines.push(Line::from(vec![
@@ -146,8 +148,26 @@ pub fn status_label(status: &ToolStatus) -> &'static str {
 fn status_color(status: &ToolStatus, theme: &Theme) -> Color {
     match status {
         ToolStatus::Pending | ToolStatus::Running => theme.warning,
+        ToolStatus::Completed {
+            exit_code: Some(exit_code),
+            ..
+        } if *exit_code != 0 => theme.error,
         ToolStatus::Completed { .. } => theme.muted,
         ToolStatus::Error { .. } => theme.error,
+    }
+}
+
+fn inline_status_text(status: &ToolStatus) -> Option<String> {
+    match status {
+        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Error { .. } => {
+            Some(format!("{}{}", status_label(status), status_suffix(status)))
+        }
+        ToolStatus::Completed {
+            time_ms,
+            exit_code: Some(exit_code),
+            ..
+        } if *exit_code != 0 => Some(format!("exit {exit_code} ✗ {time_ms}ms")),
+        ToolStatus::Completed { .. } => None,
     }
 }
 
