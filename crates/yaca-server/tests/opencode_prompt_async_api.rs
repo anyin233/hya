@@ -128,7 +128,7 @@ async fn opencode_prompt_async_publishes_session_error_event_on_background_failu
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -191,7 +191,7 @@ async fn opencode_prompt_async_publishes_session_status_events() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri("/event")
                 .body(Body::empty())
                 .unwrap(),
         )
