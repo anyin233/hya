@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::{ApiError, ServerState};
 
 mod ignore;
+mod mime;
 mod path;
 
 use path::{
@@ -261,10 +262,11 @@ fn text_content(content: String) -> LegacyContent {
 }
 
 fn binary_content(bytes: Vec<u8>) -> LegacyContent {
+    let mime = mime::sniff(&bytes);
     LegacyContent {
         kind: "binary",
         content: base64::engine::general_purpose::STANDARD.encode(bytes),
         encoding: Some("base64"),
-        mime_type: Some("application/octet-stream"),
+        mime_type: Some(mime),
     }
 }
