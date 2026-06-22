@@ -46,10 +46,10 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
     );
     assert!(
         text.contains("enter confirm")
-            && text.contains("esc reject")
+            && !text.contains("esc reject")
             && !text.contains("Enter")
             && !text.contains("Esc"),
-        "permission hint should use OpenCode's reject wording:\n{text}"
+        "permission hint should mirror OpenCode's visible footer actions:\n{text}"
     );
     assert!(
         !text.contains('┌') && !text.contains('└') && !text.contains('─') && !text.contains('│'),
