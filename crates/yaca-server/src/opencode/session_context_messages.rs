@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 use yaca_proto::model::{AgentName, ModelRef};
 use yaca_proto::{
     Envelope, Event, FinishReason, MessageId, MessageProjection, PartProjection, Projection, Role,
-    ToolPartState,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -145,38 +144,8 @@ fn part_json(part: &PartProjection) -> Value {
             "type": "tool",
             "id": id.to_string(),
             "name": name.as_str(),
-            "state": tool_state(state),
+            "state": super::session_context_tool_state::tool_state(state),
             "time": { "created": 0 },
-        }),
-    }
-}
-
-fn tool_state(state: &ToolPartState) -> Value {
-    match state {
-        ToolPartState::Pending { input } => json!({
-            "status": "pending",
-            "input": input.to_string(),
-        }),
-        ToolPartState::Running { input } => json!({
-            "status": "running",
-            "input": input,
-            "structured": {},
-            "content": [],
-        }),
-        ToolPartState::Completed { input, output, .. } => json!({
-            "status": "completed",
-            "input": input,
-            "content": [],
-            "outputPaths": [],
-            "structured": {},
-            "result": output,
-        }),
-        ToolPartState::Error { input, message, .. } => json!({
-            "status": "error",
-            "input": input,
-            "content": [],
-            "structured": {},
-            "error": { "name": "ToolError", "message": message },
         }),
     }
 }
