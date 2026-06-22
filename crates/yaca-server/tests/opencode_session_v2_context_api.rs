@@ -96,7 +96,7 @@ async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode,
 }
 
 #[tokio::test]
-async fn opencode_v2_context_completed_tool_state_includes_output_paths() {
+async fn opencode_v2_context_completed_tool_content_matches_opencode_shape() {
     let app = router(shell_state().await);
     let (status, created) = post_json(
         app.clone(),
@@ -117,7 +117,7 @@ async fn opencode_v2_context_completed_tool_state_includes_output_paths() {
 
     let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
     assert_eq!(status, StatusCode::OK);
-    let state = context["data"]
+    let content = context["data"]
         .as_array()
         .expect("messages")
         .iter()
@@ -127,15 +127,10 @@ async fn opencode_v2_context_completed_tool_state_includes_output_paths() {
                 .into_iter()
                 .flat_map(|content| content.iter())
         })
-        .find_map(|content| {
-            if content["state"]["status"] == "completed" {
-                Some(&content["state"])
-            } else {
-                None
-            }
-        })
-        .expect("completed tool state");
-    assert_eq!(state["outputPaths"], json!([]));
+        .find(|content| content["state"]["status"] == "completed")
+        .expect("completed tool content");
+    assert_eq!(content["provider"]["executed"], true);
+    assert_eq!(content["state"]["outputPaths"], json!([]));
 }
 
 #[tokio::test]
