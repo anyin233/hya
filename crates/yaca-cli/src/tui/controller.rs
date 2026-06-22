@@ -133,7 +133,7 @@ impl Controller {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> TuiEffect {
         if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('d')) {
-            return TuiEffect::Exit;
+            return self.handle_ctrl_d();
         }
         if self.app.dialog.is_some() {
             if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -409,6 +409,21 @@ impl Controller {
             };
         }
         self.arm_exit()
+    }
+
+    fn handle_ctrl_d(&mut self) -> TuiEffect {
+        if self.app.dialog.is_some()
+            && !matches!(
+                self.dialog_mode,
+                Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+            )
+        {
+            return TuiEffect::Exit;
+        }
+        if !self.app.input.is_empty() {
+            return self.edit_prompt(|prompt, app| prompt.delete(app));
+        }
+        TuiEffect::Exit
     }
 
     fn handle_dialog_key(&mut self, key: KeyEvent) -> TuiEffect {

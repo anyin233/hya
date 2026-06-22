@@ -15,19 +15,16 @@ fn ctrl_alt(code: char) -> KeyEvent {
 }
 
 #[test]
-fn ctrl_d_exits_immediately_without_clearing_input() {
+fn ctrl_d_exits_immediately_when_input_is_empty() {
     // Given
-    let mut controller = Controller::new(AppState {
-        input: "draft prompt".to_string(),
-        ..AppState::default()
-    });
+    let mut controller = Controller::new(AppState::default());
 
     // When
     let effect = controller.handle_key(ctrl('d'));
 
     // Then
     assert_eq!(effect, TuiEffect::Exit);
-    assert_eq!(controller.app.input, "draft prompt");
+    assert_eq!(controller.app.input, "");
     assert!(!controller.app.exit_armed);
 }
 

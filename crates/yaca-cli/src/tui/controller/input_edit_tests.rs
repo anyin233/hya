@@ -240,6 +240,40 @@ fn delete_removes_character_at_cursor() {
 }
 
 #[test]
+fn ctrl_d_deletes_character_at_cursor_when_input_is_not_empty() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "abc".to_string(),
+        input_cursor: Some("a".len()),
+        ..AppState::default()
+    });
+
+    // When
+    let effect = controller.handle_key(ctrl('d'));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "ac");
+    assert_eq!(controller.app.input_cursor, Some("a".len()));
+}
+
+#[test]
+fn ctrl_d_deletes_character_inside_completion_popup() {
+    // Given
+    let mut controller = command_completion_controller();
+    assert_eq!(controller.handle_key(key(KeyCode::Home)), TuiEffect::None);
+
+    // When
+    let effect = controller.handle_key(ctrl('d'));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(controller.app.input, "model");
+    assert_eq!(controller.app.input_cursor, Some(0));
+    assert!(controller.app.dialog.is_none());
+}
+
+#[test]
 fn ctrl_a_and_ctrl_e_move_within_current_line() {
     // Given
     let mut controller = Controller::new(AppState {
