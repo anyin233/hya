@@ -28,6 +28,8 @@ struct ListQuery {
 #[derive(Default, Deserialize)]
 struct CreateV2Request {
     id: Option<String>,
+    #[serde(rename = "parentID")]
+    parent_id: Option<String>,
     agent: Option<String>,
     model: Option<OpenCodeModelRefRequest>,
     location: Option<LocationRefRequest>,
@@ -130,12 +132,13 @@ async fn create(
             .map_err(|_| ApiError::bad_request("invalid session create payload"))?
     };
     let requested = req.id.as_deref().map(parse_session).transpose()?;
+    let parent = req.parent_id.as_deref().map(parse_session).transpose()?;
     let session = st
         .engine
         .create_with_id(
             requested,
             CreateSession {
-                parent: None,
+                parent,
                 agent: req
                     .agent
                     .map(AgentName::new)

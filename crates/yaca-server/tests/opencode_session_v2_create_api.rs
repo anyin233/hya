@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::{AgentName, ModelRef};
@@ -40,6 +40,22 @@ async fn body_json(resp: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+async fn post_session(app: axum::Router, body: Body) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_session_create_accepts_empty_body() {
     let app = router(state().await);
@@ -59,4 +75,18 @@ async fn opencode_v2_session_create_accepts_empty_body() {
     assert_eq!(body["data"]["model"]["providerID"], "yaca");
     assert_eq!(body["data"]["model"]["id"], "fake");
     assert_eq!(body["data"]["directory"], WORKDIR);
+}
+
+#[tokio::test]
+async fn opencode_v2_session_create_accepts_parent_id() {
+    let app = router(state().await);
+    let (status, parent) = post_session(app.clone(), Body::empty()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let parent_id = parent["data"]["id"].as_str().unwrap();
+    let (status, child) =
+        post_session(app, Body::from(json!({"parentID": parent_id}).to_string())).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(child["data"]["parentID"], parent_id);
 }
