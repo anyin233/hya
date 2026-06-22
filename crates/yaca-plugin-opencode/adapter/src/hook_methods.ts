@@ -1,3 +1,4 @@
+import path from "node:path"
 import { z } from "zod"
 
 import { runChatParamsHooks } from "./chat_params_hooks"
@@ -166,7 +167,9 @@ export async function handleToolExecuteBefore(
       shouldExit: false,
     }
   }
-  const outcome = await runToolExecuteBeforeHooks(context.hooks, params.data)
+  const outcome = await runToolExecuteBeforeHooks(context.hooks, params.data, {
+    cwd: toolExecutionCwd(params.data, context),
+  })
   return {
     response: okResponse(request.id, outcome),
     shouldExit: false,
@@ -193,4 +196,20 @@ export async function handleToolExecuteAfter(
     response: okResponse(request.id, outcome),
     shouldExit: false,
   }
+}
+
+function toolExecutionCwd(
+  params: z.infer<typeof ToolExecuteBeforeParamsSchema>,
+  context: RequestContext,
+): string {
+  const base = context.env.YACA_WORKTREE ?? context.env.YACA_DIRECTORY ?? process.cwd()
+  if (!isRecord(params.input) || typeof params.input["workdir"] !== "string") {
+    return base
+  }
+  const workdir = params.input["workdir"]
+  return path.isAbsolute(workdir) ? workdir : path.join(base, workdir)
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

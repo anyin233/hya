@@ -12,6 +12,7 @@ const HOOK_MAPPINGS = [
   ["experimental.chat.messages.transform", "chat.params"],
   ["experimental.chat.system.transform", "chat.params"],
   ["permission.ask", "permission.ask"],
+  ["shell.env", "tool.execute.before"],
   ["tool.execute.before", "tool.execute.before"],
   ["tool.execute.after", "tool.execute.after"],
   ["tool.definition", "chat.params"],

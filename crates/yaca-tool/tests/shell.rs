@@ -90,6 +90,31 @@ async fn shell_runs_in_open_code_workdir_and_returns_description_metadata() {
 }
 
 #[tokio::test]
+async fn shell_merges_input_env_into_child_process() {
+    // Given
+    let dir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = ToolRegistry::builtins().get("shell").unwrap();
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "command": "printf %s \"$YACA_SHELL_ENV\"",
+                "timeout": 1000,
+                "env": { "YACA_SHELL_ENV": "from-plugin" }
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["exit_code"], 0);
+    assert_eq!(out["stdout"], "from-plugin");
+}
+
+#[tokio::test]
 async fn shell_times_out_and_reports_shell_metadata() {
     // Given
     let dir = tempdir();
