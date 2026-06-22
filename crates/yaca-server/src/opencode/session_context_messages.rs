@@ -140,13 +140,19 @@ fn part_json(part: &PartProjection) -> Value {
         }),
         PartProjection::Tool {
             id, name, state, ..
-        } => json!({
-            "type": "tool",
-            "id": id.to_string(),
-            "name": name.as_str(),
-            "state": super::session_context_tool_state::tool_state(state),
-            "time": { "created": 0 },
-        }),
+        } => {
+            let mut value = json!({
+                "type": "tool",
+                "id": id.to_string(),
+                "name": name.as_str(),
+                "state": super::session_context_tool_state::tool_state(state),
+                "time": { "created": 0 },
+            });
+            if let Some(provider) = super::session_context_tool_state::tool_provider(state) {
+                value["provider"] = provider;
+            }
+            value
+        }
     }
 }
 

@@ -35,3 +35,12 @@ pub(in crate::opencode) fn tool_state(state: &ToolPartState) -> Value {
         }),
     }
 }
+
+pub(in crate::opencode) fn tool_provider(state: &ToolPartState) -> Option<Value> {
+    match state {
+        ToolPartState::Pending { .. } => None,
+        ToolPartState::Running { .. }
+        | ToolPartState::Completed { .. }
+        | ToolPartState::Error { .. } => Some(json!({ "executed": true })),
+    }
+}
