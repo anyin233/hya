@@ -12,6 +12,8 @@ pub(super) fn push_error(p: &mut Projection, seq: EventSeq, code: &str, message:
     p.session.messages.push(MessageProjection {
         id: message_id,
         role: Role::System,
+        started_millis: None,
+        completed_millis: None,
         finish: None,
         parts: vec![PartProjection::Text {
             id: synthetic_part_id(seq),

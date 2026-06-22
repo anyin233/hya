@@ -4,6 +4,7 @@
 mod render_support;
 
 use yaca_proto::Role;
+use yaca_proto::{Envelope, Event, EventSeq, FinishReason, MessageId, PartId, SessionId};
 use yaca_tui::AppState;
 
 use render_support::{find_rendered_text, render_buffer, with_text_message};
@@ -76,6 +77,29 @@ fn assistant_metadata_footer_includes_active_agent_role() {
 }
 
 #[test]
+fn assistant_metadata_footer_uses_finished_turn_duration() {
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        ..AppState::default()
+    };
+    with_timed_assistant_message(&mut state, 1_000, 82_000, "metadata with duration");
+
+    let buffer = render_buffer(&mut state, 100, 16);
+    let (_x, text_y) = find_rendered_text(&buffer, 100, 16, "metadata with duration").unwrap();
+    let metadata_row = row_text(&buffer, 100, text_y + 1);
+
+    assert!(
+        metadata_row.contains("▣ sisyphus · kimi-k2 · 1m 21s"),
+        "assistant metadata should use the finished turn duration, got {metadata_row:?}"
+    );
+    assert!(
+        !metadata_row.contains("completed"),
+        "finished assistant metadata should not fall back to status text when duration exists"
+    );
+}
+
+#[test]
 fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
     let mut state = AppState {
         agent: "sisyphus".to_string(),
@@ -104,6 +128,62 @@ fn only_latest_assistant_block_reports_streaming_when_turn_is_running() {
         "latest assistant block should report streaming, got {:?}",
         metadata_rows[1]
     );
+}
+
+fn with_timed_assistant_message(
+    state: &mut AppState,
+    started_ms: i64,
+    finished_ms: i64,
+    text: &str,
+) {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    state.apply(&timed_env(
+        1,
+        started_ms,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&timed_env(
+        2,
+        started_ms,
+        Event::TextStart {
+            session,
+            message,
+            part,
+        },
+    ));
+    state.apply(&timed_env(
+        3,
+        started_ms,
+        Event::TextDelta {
+            session,
+            message,
+            part,
+            delta: text.to_string(),
+        },
+    ));
+    state.apply(&timed_env(
+        4,
+        finished_ms,
+        Event::MessageFinished {
+            session,
+            message,
+            finish: FinishReason::Stop,
+        },
+    ));
+}
+
+fn timed_env(seq: u64, ts_millis: i64, event: Event) -> Envelope {
+    Envelope {
+        seq: EventSeq(seq),
+        ts_millis,
+        event,
+    }
 }
 
 #[test]

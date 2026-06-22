@@ -54,7 +54,7 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
                 &item.parts,
                 idx,
                 selected,
-                assistant_status(streaming_assistant_idx, idx),
+                assistant_status(streaming_assistant_idx, idx, item.duration_ms),
                 state,
                 theme,
                 &mut lines,
@@ -75,11 +75,15 @@ fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'stat
     lines
 }
 
-fn assistant_status(streaming_assistant_idx: Option<usize>, idx: usize) -> AssistantBlockStatus {
+fn assistant_status(
+    streaming_assistant_idx: Option<usize>,
+    idx: usize,
+    duration_ms: Option<u64>,
+) -> AssistantBlockStatus {
     if streaming_assistant_idx == Some(idx) {
         AssistantBlockStatus::Streaming
     } else {
-        AssistantBlockStatus::Completed
+        AssistantBlockStatus::Completed { duration_ms }
     }
 }
 

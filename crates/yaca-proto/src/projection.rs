@@ -29,6 +29,10 @@ pub struct SessionProjection {
 pub struct MessageProjection {
     pub id: MessageId,
     pub role: Role,
+    #[serde(default)]
+    pub started_millis: Option<i64>,
+    #[serde(default)]
+    pub completed_millis: Option<i64>,
     pub finish: Option<FinishReason>,
     pub parts: Vec<PartProjection>,
 }
@@ -86,7 +90,7 @@ impl Projection {
         if let Event::Error { code, message, .. } = &env.event {
             push_error(self, env.seq, code, message);
         } else {
-            self.apply_event(&env.event);
+            self.apply_event(&env.event, env.ts_millis);
         }
         self.last_seq = env.seq.0;
     }
@@ -95,7 +99,7 @@ impl Projection {
         self.session.messages.iter_mut().find(|m| m.id == id)
     }
 
-    fn apply_event(&mut self, e: &Event) {
+    fn apply_event(&mut self, e: &Event, ts_millis: i64) {
         match e {
             Event::SessionCreated {
                 session,
@@ -119,6 +123,8 @@ impl Projection {
                     self.session.messages.push(MessageProjection {
                         id: *message,
                         role: *role,
+                        started_millis: Some(ts_millis),
+                        completed_millis: None,
                         finish: None,
                         parts: Vec::new(),
                     });
@@ -128,6 +134,7 @@ impl Projection {
                 message, finish, ..
             } => {
                 if let Some(m) = self.message_mut(*message) {
+                    m.completed_millis = Some(ts_millis);
                     m.finish = Some(*finish);
                 }
             }

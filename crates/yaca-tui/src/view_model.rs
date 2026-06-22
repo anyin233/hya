@@ -24,6 +24,7 @@ pub enum ToolStatus {
 
 pub struct TimelineItem {
     pub role: Role,
+    pub duration_ms: Option<u64>,
     pub parts: Vec<TimelinePart>,
 }
 
@@ -35,9 +36,15 @@ pub fn timeline_items(projection: &Projection) -> Vec<TimelineItem> {
         .iter()
         .map(|message| TimelineItem {
             role: message.role,
+            duration_ms: message_duration_ms(message.started_millis, message.completed_millis),
             parts: message.parts.iter().map(part_to_timeline).collect(),
         })
         .collect()
+}
+
+fn message_duration_ms(started: Option<i64>, completed: Option<i64>) -> Option<u64> {
+    let elapsed = completed?.checked_sub(started?)?;
+    u64::try_from(elapsed).ok()
 }
 
 fn part_to_timeline(part: &PartProjection) -> TimelinePart {
