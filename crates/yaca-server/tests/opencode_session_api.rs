@@ -430,6 +430,38 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
 }
 
 #[tokio::test]
+async fn opencode_session_command_and_init_missing_session_return_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    let (status, body) = post_json(
+        app.clone(),
+        format!("/session/{missing}/command"),
+        json!({"command": "init", "arguments": "never"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+
+    let (status, body) = post_json(
+        app,
+        format!("/session/{missing}/init"),
+        json!({
+            "messageID": MessageId::new().to_string(),
+            "providerID": "fake",
+            "modelID": "fake",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+}
+
+#[tokio::test]
 async fn opencode_session_shell_busy_returns_legacy_error() {
     let app = router(shell_state().await);
     let session = create_session(app.clone(), None).await;

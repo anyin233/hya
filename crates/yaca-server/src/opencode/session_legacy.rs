@@ -266,18 +266,30 @@ async fn init_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<InitSessionPayload>,
-) -> Result<Json<bool>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    Ok(Json(run_session_init(&st, session, req).await?))
+    match run_session_init(&st, session, req).await {
+        Ok(initialized) => Ok(Json(initialized).into_response()),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(super::errors::legacy_session_not_found(session))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn command(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<CommandRequest>,
-) -> Result<Json<projection::OpenCodeMessage>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    match load_session(&st, session, None).await {
+        Ok(_) => {}
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            return Ok(super::errors::legacy_session_not_found(session));
+        }
+        Err(error) => return Err(error),
+    }
     let run = st
         .runs
         .start(session)
@@ -290,7 +302,7 @@ async fn command(
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
     let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
-    Ok(Json(load_message(&st, session, message).await?))
+    Ok(Json(load_message(&st, session, message).await?).into_response())
 }
 
 async fn shell(
