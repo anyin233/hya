@@ -8,6 +8,9 @@ pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
     if state.permission.is_some() {
         return "awaiting permission".to_string();
     }
+    if state.question.is_some() {
+        return "awaiting answer".to_string();
+    }
     if state.scroll_back > 0 {
         return format!(
             "scroll {} · End to return · Ctrl-C clear/interrupt",

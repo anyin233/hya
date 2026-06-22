@@ -73,16 +73,27 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
 
 pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &Theme) {
     let area = frame.area();
-    let extra = u16::try_from(question.options.len()).unwrap_or(0);
-    let height = (7u16.saturating_add(extra)).min(area.height).max(5);
-    let width = area.width.saturating_sub(8).clamp(24, 76);
+    let footer_height = u16::from(area.height > 1);
+    let extra = u16::try_from(question.options.len()).unwrap_or(u16::MAX);
+    let height = (7u16.saturating_add(extra)).min(area.height.saturating_sub(footer_height));
+    if height == 0 {
+        return;
+    }
+    let width = area.width.saturating_sub(4).max(12);
+    let y = area.y + area.height.saturating_sub(height + footer_height);
+    let clear_rect = Rect {
+        x: area.x,
+        y,
+        width: area.width,
+        height,
+    };
     let rect = Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
+        x: area.x + 2,
+        y,
         width,
         height,
     };
-    frame.render_widget(Clear, rect);
+    frame.render_widget(Clear, clear_rect);
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
         Line::from(Span::styled(
