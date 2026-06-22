@@ -23,6 +23,7 @@ mod session_prompt;
 mod session_switch;
 mod session_v2;
 
+pub(crate) use project::ProjectState;
 pub(in crate::opencode) use session_legacy::load_session;
 
 pub(super) fn router() -> Router<ServerState> {

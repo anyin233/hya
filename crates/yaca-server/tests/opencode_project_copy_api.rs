@@ -277,3 +277,43 @@ async fn opencode_project_git_init_creates_repository_and_returns_project() {
     assert_eq!(body["vcs"], "git");
     assert!(workdir.join(".git").exists());
 }
+
+#[tokio::test]
+async fn opencode_project_update_persists_runtime_metadata() {
+    let workdir = tempdir("project-update");
+    let app = router(state(workdir).await);
+    let payload = json!({
+        "name": "Yaca",
+        "icon": {
+            "url": "data:image/svg+xml;base64,abc",
+            "color": "cyan"
+        },
+        "commands": {
+            "start": "cargo run"
+        }
+    });
+
+    let updated = request(app.clone(), "PATCH", "/project/global", Some(payload)).await;
+    assert_eq!(updated.status(), StatusCode::OK);
+    let body = body_json(updated).await;
+    assert_eq!(body["name"], "Yaca");
+    assert_eq!(body["icon"]["url"], "data:image/svg+xml;base64,abc");
+    assert_eq!(body["icon"]["color"], "cyan");
+    assert_eq!(body["commands"]["start"], "cargo run");
+
+    let current = request(app.clone(), "GET", "/project/current", None).await;
+    assert_eq!(current.status(), StatusCode::OK);
+    let current_body = body_json(current).await;
+    assert_eq!(current_body["name"], "Yaca");
+    assert_eq!(current_body["icon"]["color"], "cyan");
+    assert_eq!(current_body["commands"]["start"], "cargo run");
+
+    let missing = request(
+        app,
+        "PATCH",
+        "/project/not-global",
+        Some(json!({ "name": "Other" })),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
