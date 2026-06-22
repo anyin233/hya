@@ -9,6 +9,7 @@ mod health;
 mod instance;
 mod integration;
 mod location;
+mod mcp;
 mod metadata;
 mod model_ref;
 mod permission;
@@ -32,6 +33,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(instance::router())
         .merge(integration::router())
         .merge(metadata::router())
+        .merge(mcp::router())
         .merge(permission::router())
         .merge(project_copy::router())
         .merge(question::router())

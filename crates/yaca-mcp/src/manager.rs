@@ -21,8 +21,20 @@ pub struct McpServerConfig {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum McpStatus {
+    Connected,
+    Disabled,
+    Failed { error: String },
+    NeedsAuth,
+    NeedsClientRegistration { error: String },
+}
+
+#[derive(Default)]
 pub struct McpManager {
     servers: Vec<McpServer>,
+    status: BTreeMap<String, McpStatus>,
 }
 
 struct McpServer {
@@ -35,21 +47,35 @@ struct McpServer {
 impl McpManager {
     pub async fn connect_all(configs: BTreeMap<String, McpServerConfig>) -> Self {
         let mut set = tokio::task::JoinSet::new();
+        let mut status = BTreeMap::new();
         for (name, config) in configs {
             if config.enabled == Some(false) {
+                status.insert(name, McpStatus::Disabled);
                 continue;
             }
-            set.spawn(async move { connect_server(name, config).await });
+            let status_name = name.clone();
+            set.spawn(async move { (status_name, connect_server(name, config).await) });
         }
         let mut servers = Vec::new();
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok(Ok(server)) => servers.push(server),
-                Ok(Err(error)) => tracing::warn!(%error, "mcp server unavailable"),
+                Ok((name, Ok(server))) => {
+                    status.insert(name, McpStatus::Connected);
+                    servers.push(server);
+                }
+                Ok((name, Err(error))) => {
+                    tracing::warn!(%error, "mcp server unavailable");
+                    status.insert(
+                        name,
+                        McpStatus::Failed {
+                            error: error.to_string(),
+                        },
+                    );
+                }
                 Err(error) => tracing::warn!(%error, "mcp server task failed"),
             }
         }
-        Self { servers }
+        Self { servers, status }
     }
 
     #[must_use]
@@ -58,6 +84,11 @@ impl McpManager {
             .iter()
             .flat_map(|server| server.tools.iter().cloned())
             .collect()
+    }
+
+    #[must_use]
+    pub fn status(&self) -> BTreeMap<String, McpStatus> {
+        self.status.clone()
     }
 }
 
@@ -137,5 +168,47 @@ for line in sys.stdin:
             .map(|tool| tool.name().to_string())
             .collect();
         assert_eq!(names, vec!["mcp__good__ping".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn reports_connected_disabled_and_failed_status() {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "bad".to_string(),
+            McpServerConfig {
+                command: vec!["definitely-not-yaca-mcp".to_string()],
+                ..McpServerConfig::default()
+            },
+        );
+        configs.insert(
+            "disabled".to_string(),
+            McpServerConfig {
+                enabled: Some(false),
+                ..McpServerConfig::default()
+            },
+        );
+        configs.insert(
+            "good".to_string(),
+            McpServerConfig {
+                command: server_command(),
+                timeout_ms: Some(1000),
+                ..McpServerConfig::default()
+            },
+        );
+
+        let manager = McpManager::connect_all(configs).await;
+        let status = serde_json::to_value(manager.status()).unwrap();
+
+        assert_eq!(status["good"], serde_json::json!({"status": "connected"}));
+        assert_eq!(
+            status["disabled"],
+            serde_json::json!({"status": "disabled"})
+        );
+        assert_eq!(status["bad"]["status"], "failed");
+        assert!(
+            status["bad"]["error"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
     }
 }
