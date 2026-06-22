@@ -3,13 +3,14 @@ use ratatui::text::{Line, Span};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
 use crate::theme::Theme;
-use crate::tool_labels::{action_label, status_symbol};
+use crate::tool_labels::status_symbol;
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 48;
 
 pub fn push_tool_lines(
     name: &str,
+    label: &str,
     input: &str,
     status: &ToolStatus,
     selected: bool,
@@ -24,7 +25,7 @@ pub fn push_tool_lines(
             tool_style(color, selected, theme),
         ),
         Span::styled(
-            format!("{} ", action_label(name)),
+            format!("{label} "),
             tool_style(color, selected, theme).add_modifier(Modifier::BOLD),
         ),
         Span::styled(input_label(input), tool_style(theme.muted, selected, theme)),
@@ -218,6 +219,7 @@ mod tests {
         // When: the row is converted into ratatui spans.
         push_tool_lines(
             "shell",
+            "Shell",
             r#"{"cmd":"printf line one && printf line two"}"#,
             &ToolStatus::Completed {
                 time_ms: 9,

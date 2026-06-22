@@ -1,6 +1,7 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
 use crate::tool_inputs;
+use crate::tool_labels::{action_label, websearch_provider_label};
 use crate::tool_questions;
 use crate::tool_tasks;
 use crate::tool_todos;
@@ -10,6 +11,7 @@ pub enum TimelinePart {
     Reasoning(String),
     Tool {
         name: String,
+        label: String,
         input: String,
         status: ToolStatus,
     },
@@ -89,11 +91,32 @@ fn part_to_timeline(part: &PartProjection) -> TimelinePart {
             };
             TimelinePart::Tool {
                 input: tool_input(&name, state),
+                label: tool_label(&name, state),
                 name,
                 status,
             }
         }
     }
+}
+
+fn tool_label(name: &str, state: &ToolPartState) -> String {
+    if name != "websearch" {
+        return action_label(name);
+    }
+
+    let provider = match state {
+        ToolPartState::Pending { input }
+        | ToolPartState::Running { input }
+        | ToolPartState::Error { input, .. } => websearch_provider(input),
+        ToolPartState::Completed { input, output, .. } => {
+            websearch_provider(output).or_else(|| websearch_provider(input))
+        }
+    };
+    websearch_provider_label(provider)
+}
+
+fn websearch_provider(value: &serde_json::Value) -> Option<&str> {
+    value.get("provider").and_then(serde_json::Value::as_str)
 }
 
 fn tool_input(name: &str, state: &ToolPartState) -> String {

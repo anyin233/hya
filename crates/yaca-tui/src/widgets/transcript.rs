@@ -155,13 +155,14 @@ fn assistant_lines(
             }
             TimelinePart::Tool {
                 name,
+                label,
                 input,
                 status,
             } => {
                 if has_visible_part && !previous_was_tool {
                     lines.push(Line::from(""));
                 }
-                push_tool_lines(name, input, status, selected, theme, lines);
+                push_tool_lines(name, label, input, status, selected, theme, lines);
                 has_visible_part = true;
                 previous_was_tool = true;
             }

@@ -36,6 +36,14 @@ pub(crate) fn action_label(name: &str) -> String {
     }
 }
 
+pub(crate) fn websearch_provider_label(provider: Option<&str>) -> String {
+    match provider {
+        Some("parallel") => "Parallel Web Search".to_string(),
+        Some("exa") => "Exa Web Search".to_string(),
+        _ => action_label("websearch"),
+    }
+}
+
 fn title_case_ascii(input: &str) -> String {
     let mut chars = input.chars();
     match chars.next() {
