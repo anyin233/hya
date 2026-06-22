@@ -21,6 +21,17 @@ fn rendered_row(buffer: &Buffer, width: u16, y: u16) -> String {
     row
 }
 
+fn find_row_index(buffer: &Buffer, width: u16, height: u16, needle: &str) -> u16 {
+    (0..height)
+        .find(|&y| rendered_row(buffer, width, y).contains(needle))
+        .unwrap()
+}
+
+fn find_row(buffer: &Buffer, width: u16, height: u16, needle: &str) -> String {
+    let y = find_row_index(buffer, width, height, needle);
+    rendered_row(buffer, width, y)
+}
+
 fn env(seq: u64, event: Event) -> Envelope {
     Envelope {
         seq: EventSeq(seq),
@@ -104,7 +115,7 @@ fn composer_metadata_includes_context_usage_before_cost() {
 
     // When: the composer renders in the OpenCode shell.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = rendered_row(&buffer, 120, 13);
+    let metadata_row = find_row(&buffer, 120, 16, "ctrl+p commands");
 
     // Then: token usage appears before billing and command affordances.
     assert!(
@@ -133,7 +144,7 @@ fn composer_metadata_includes_active_agent_role() {
 
     // When: the composer metadata row renders.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = rendered_row(&buffer, 120, 13);
+    let metadata_row = find_row(&buffer, 120, 16, "ctrl+p commands");
 
     // Then: the same agent-role identity used by OpenCode appears before the model.
     assert!(
@@ -155,7 +166,7 @@ fn composer_metadata_anchors_commands_to_main_column_edge() {
 
     // When: the composer metadata row is rendered in the main output column.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = rendered_row(&buffer, 120, 13);
+    let metadata_row = find_row(&buffer, 120, 16, "ctrl+p commands");
     let main_column: String = metadata_row.chars().take(82).collect();
 
     // Then: the command affordance is anchored to the main column's right edge.
@@ -177,8 +188,9 @@ fn active_runtime_strip_sits_above_the_composer() {
 
     // When: the wide shell renders the grounded composer.
     let buffer = render_buffer(&mut state, 120, 16);
-    let status_row = rendered_row(&buffer, 120, 11);
-    let prompt_row = rendered_row(&buffer, 120, 12);
+    let status_y = find_row_index(&buffer, 120, 16, "streaming");
+    let status_row = rendered_row(&buffer, 120, status_y);
+    let prompt_row = rendered_row(&buffer, 120, status_y + 1);
 
     // Then: the active runtime strip is visible directly above the input row.
     assert!(
@@ -212,7 +224,7 @@ fn active_runtime_strip_includes_current_team_role() {
 
     // When: the wide shell renders the runtime strip above the composer.
     let buffer = render_buffer(&mut state, 120, 16);
-    let status_row = rendered_row(&buffer, 120, 11);
+    let status_row = find_row(&buffer, 120, 16, "streaming");
 
     // Then: the strip uses the active agent plus role before the model.
     assert!(
@@ -258,7 +270,7 @@ fn composer_renders_prompt_attachment_badges() {
 
     // When: the grounded composer renders its reserved attachment row.
     let buffer = render_buffer(&mut state, 120, 16);
-    let attachment_row = rendered_row(&buffer, 120, 14);
+    let attachment_row = find_row(&buffer, 120, 16, "[Image #1]");
 
     // Then: the attachment is visible as a compact prompt badge.
     assert!(

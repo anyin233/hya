@@ -16,6 +16,13 @@ fn row_text(buffer: &Buffer, width: u16, y: u16) -> String {
     row
 }
 
+fn find_row(buffer: &Buffer, width: u16, height: u16, needle: &str) -> String {
+    (0..height)
+        .map(|y| row_text(buffer, width, y))
+        .find(|row| row.contains(needle))
+        .unwrap()
+}
+
 #[test]
 fn runtime_status_uses_latest_finished_assistant_duration_when_idle() {
     // Given: the latest assistant turn has an OpenCode-style elapsed duration.
@@ -28,7 +35,7 @@ fn runtime_status_uses_latest_finished_assistant_duration_when_idle() {
 
     // When: the grounded runtime strip renders above the composer while idle.
     let buffer = render_buffer(&mut state, 120, 16);
-    let status_row = row_text(&buffer, 120, 11);
+    let status_row = find_row(&buffer, 120, 16, "1m 21s");
 
     // Then: it mirrors OpenCode's elapsed-turn metadata instead of plain idle.
     assert!(

@@ -9,7 +9,7 @@ pub struct AppLayout {
 }
 
 #[must_use]
-pub fn app_layout(area: Rect) -> AppLayout {
+pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayout {
     let show_sidebar = area.width >= 110;
     let columns = if show_sidebar {
         Layout::default()
@@ -29,8 +29,8 @@ pub fn app_layout(area: Rect) -> AppLayout {
         .constraints([
             Constraint::Min(1),
             Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(prompt_height),
+            Constraint::Length(footer_height),
         ])
         .split(main);
 

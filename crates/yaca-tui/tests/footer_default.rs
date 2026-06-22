@@ -24,3 +24,19 @@ fn default_footer_omits_legacy_navigation_hints() {
         );
     }
 }
+
+#[test]
+fn idle_composer_metadata_occupies_bottom_row() {
+    // Given: the default OpenCode-style shell is idle with no transient footer state.
+    let mut state = AppState::default();
+
+    // When: it renders in a compact terminal.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: the composer metadata is visually attached to the viewport bottom.
+    assert!(
+        bottom_row.contains("ctrl+p commands"),
+        "bottom row should be composer metadata, got {bottom_row:?} in {text:?}"
+    );
+}

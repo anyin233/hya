@@ -15,6 +15,13 @@ fn row_text(buffer: &Buffer, width: u16, y: u16) -> String {
     row
 }
 
+fn composer_metadata_row(buffer: &Buffer, width: u16, height: u16) -> String {
+    (0..height)
+        .map(|y| row_text(buffer, width, y))
+        .find(|row| row.contains("ctrl+p commands"))
+        .unwrap()
+}
+
 #[test]
 fn composer_metadata_hides_context_and_cost_below_compact_width() {
     // Given: an OpenCode-style composer with context and billing metadata.
@@ -33,7 +40,7 @@ fn composer_metadata_hides_context_and_cost_below_compact_width() {
 
     // When: the footer renders just below OpenCode's compact metadata breakpoint.
     let buffer = render_buffer(&mut state, 79, 16);
-    let metadata_row = row_text(&buffer, 79, 13);
+    let metadata_row = composer_metadata_row(&buffer, 79, 16);
 
     // Then: high-priority agent identity and command affordance remain, while
     // lower-priority model/context/cost hints follow OpenCode's width policy.
@@ -71,7 +78,7 @@ fn composer_metadata_uses_bare_effort_without_manual_mode() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = row_text(&buffer, 120, 13);
+    let metadata_row = composer_metadata_row(&buffer, 120, 16);
 
     // Then: the effort reads like OpenCode's model variant label, not a prose mode.
     assert!(
@@ -99,7 +106,7 @@ fn composer_metadata_hides_absent_effort_instead_of_showing_off() {
 
     // When: the composer metadata row renders at the model breakpoint.
     let buffer = render_buffer(&mut state, 120, 16);
-    let metadata_row = row_text(&buffer, 120, 13);
+    let metadata_row = composer_metadata_row(&buffer, 120, 16);
 
     // Then: the statusline matches OpenCode's absent-variant behavior.
     assert!(
