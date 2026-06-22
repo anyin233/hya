@@ -59,7 +59,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Up/Down or Tab select · Enter confirm · Esc cancel",
+        "↑↓/tab select   enter confirm   esc dismiss",
         Style::default().fg(theme.muted),
     )));
 
@@ -92,7 +92,7 @@ pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            "Up/Down select · Enter confirm · Esc cancel",
+            "↑↓ select   enter confirm   esc dismiss",
             Style::default().fg(theme.muted),
         )),
     ];

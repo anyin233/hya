@@ -220,8 +220,11 @@ fn list_dialog_renders_selected_item_and_hints() {
         text.contains("> model-b"),
         "selected row renders with marker"
     );
-    assert!(text.contains("Esc"), "dialog hint mentions cancel");
-    assert!(text.contains("Enter"), "dialog hint mentions submit");
+    assert!(text.contains("esc dismiss"), "dialog hint mentions dismiss");
+    assert!(
+        text.contains("enter confirm"),
+        "dialog hint mentions confirm"
+    );
 }
 
 #[test]
