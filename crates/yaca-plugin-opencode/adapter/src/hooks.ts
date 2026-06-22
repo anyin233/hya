@@ -8,6 +8,10 @@ export type ToolExecuteBeforeParams = {
   readonly input: unknown
 }
 
+export type ToolExecuteBeforeContext = {
+  readonly cwd: string
+}
+
 export type ToolBeforeOutcome =
   | { readonly outcome: "continue"; readonly input: unknown }
   | { readonly outcome: "veto"; readonly reason: string }
@@ -53,9 +57,19 @@ type ToolAfterHook = (
   },
 ) => unknown | Promise<unknown>
 
+type ShellEnvHook = (
+  input: Readonly<{
+    readonly cwd: string
+    readonly sessionID?: string
+    readonly callID?: string
+  }>,
+  output: { env: Record<string, string> },
+) => unknown | Promise<unknown>
+
 export async function runToolExecuteBeforeHooks(
   hooks: readonly OpenCodeHooks[],
   params: ToolExecuteBeforeParams,
+  context: ToolExecuteBeforeContext,
 ): Promise<ToolBeforeOutcome> {
   let current = params.input
   for (const hook of hooks) {
@@ -78,6 +92,7 @@ export async function runToolExecuteBeforeHooks(
       return { outcome: "veto", reason: errorMessage(error) }
     }
   }
+  current = await inputWithShellEnv(hooks, params, context, current)
   return { outcome: "continue", input: current }
 }
 
@@ -110,6 +125,52 @@ function isToolBeforeHook(value: unknown): value is ToolBeforeHook {
 
 function isToolAfterHook(value: unknown): value is ToolAfterHook {
   return typeof value === "function"
+}
+
+function isShellEnvHook(value: unknown): value is ShellEnvHook {
+  return typeof value === "function"
+}
+
+async function inputWithShellEnv(
+  hooks: readonly OpenCodeHooks[],
+  params: ToolExecuteBeforeParams,
+  context: ToolExecuteBeforeContext,
+  input: unknown,
+): Promise<unknown> {
+  if (params.tool !== "shell") {
+    return input
+  }
+  const output: { env: Record<string, string> } = { env: {} }
+  for (const hook of hooks) {
+    const candidate = hook["shell.env"]
+    if (!isShellEnvHook(candidate)) {
+      continue
+    }
+    try {
+      await candidate(
+        {
+          cwd: context.cwd,
+          sessionID: params.session,
+          callID: params.call,
+        },
+        output,
+      )
+    } catch (caught) {
+      if (caught instanceof Error) {
+        continue
+      }
+      throw caught
+    }
+  }
+  return mergeShellEnv(input, output.env)
+}
+
+function mergeShellEnv(input: unknown, env: Record<string, string>): unknown {
+  if (Object.keys(env).length === 0 || !isRecord(input)) {
+    return input
+  }
+  const existing = isStringRecord(input.env) ? input.env : {}
+  return { ...input, env: { ...existing, ...env } }
 }
 
 function openCodeOutputFromResult(result: WireToolResult): {
@@ -169,4 +230,11 @@ function errorMessage(error: unknown): string {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  if (!isRecord(value)) {
+    return false
+  }
+  return Object.values(value).every((item) => typeof item === "string")
 }

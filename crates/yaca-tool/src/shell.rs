@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -26,6 +27,8 @@ struct ShellInput {
     timeout: Option<u64>,
     #[serde(default)]
     workdir: Option<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 pub(crate) struct ShellTool;
@@ -46,7 +49,11 @@ impl Tool for ShellTool {
                     "command": { "type": "string" },
                     "description": { "type": "string" },
                     "timeout": { "type": "integer", "minimum": 1 },
-                    "workdir": { "type": "string" }
+                    "workdir": { "type": "string" },
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
                 },
                 "required": ["command"]
             }),
@@ -60,21 +67,33 @@ impl Tool for ShellTool {
         }
         let input: ShellInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let ShellInput {
+            command,
+            description,
+            timeout,
+            workdir,
+            env,
+        } = input;
         ctx.permission
-            .assert(Action::Bash, Resource::Command(input.command.clone()))
+            .assert(Action::Bash, Resource::Command(command.clone()))
             .await?;
 
-        let cwd = cwd(ctx, input.workdir.as_deref());
+        let cwd = cwd(ctx, workdir.as_deref());
         assert_external_workdir(ctx, &cwd).await?;
-        let timeout_ms = input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
-        let description = input.description.unwrap_or_else(|| input.command.clone());
-        let mut child = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&input.command)
-            .current_dir(&cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
+        let timeout_ms = timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let description = description.unwrap_or_else(|| command.clone());
+        let mut child = {
+            let mut proc = tokio::process::Command::new("sh");
+            proc.arg("-c")
+                .arg(&command)
+                .current_dir(&cwd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if !env.is_empty() {
+                proc.envs(&env);
+            }
+            proc.spawn()?
+        };
 
         let read_stdout = tokio::spawn(read_pipe(child.stdout.take()));
         let read_stderr = tokio::spawn(read_pipe(child.stderr.take()));
