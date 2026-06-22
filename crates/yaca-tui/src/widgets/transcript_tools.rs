@@ -154,6 +154,11 @@ fn status_color(status: &ToolStatus, theme: &Theme) -> Color {
 fn status_suffix(status: &ToolStatus) -> String {
     match status {
         ToolStatus::Pending | ToolStatus::Running => " …".to_string(),
+        ToolStatus::Completed {
+            time_ms,
+            exit_code: Some(exit_code),
+            ..
+        } => format!(" (exit {exit_code}) ✓ {time_ms}ms"),
         ToolStatus::Completed { time_ms, .. } => format!(" ✓ {time_ms}ms"),
         ToolStatus::Error { .. } => " ✗".to_string(),
     }
@@ -197,6 +202,7 @@ mod tests {
             &ToolStatus::Completed {
                 time_ms: 9,
                 output: None,
+                exit_code: None,
             },
             false,
             &theme,

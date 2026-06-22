@@ -21,6 +21,7 @@ pub enum ToolStatus {
     Completed {
         time_ms: u64,
         output: Option<String>,
+        exit_code: Option<i64>,
     },
     Error {
         message: String,
@@ -80,6 +81,7 @@ fn part_to_timeline(part: &PartProjection) -> TimelinePart {
                 } => ToolStatus::Completed {
                     time_ms: *time_ms,
                     output: completed_tool_output_text(&name, input, output),
+                    exit_code: completed_tool_exit_code(&name, output),
                 },
                 ToolPartState::Error { message, .. } => ToolStatus::Error {
                     message: ellipsize(message, 40),
@@ -137,6 +139,13 @@ fn completed_tool_output_text(
     }
 
     completed_output_text(output)
+}
+
+fn completed_tool_exit_code(name: &str, output: &serde_json::Value) -> Option<i64> {
+    match name {
+        "bash" | "shell" => output.get("exit_code").and_then(serde_json::Value::as_i64),
+        _ => None,
+    }
 }
 
 fn completed_output_text(output: &serde_json::Value) -> Option<String> {
