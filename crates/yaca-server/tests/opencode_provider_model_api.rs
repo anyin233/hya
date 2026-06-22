@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -87,6 +87,21 @@ async fn get_status(app: axum::Router, uri: &str) -> StatusCode {
     .status()
 }
 
+async fn request_status(app: axum::Router, method: Method, uri: &str, body: Value) -> StatusCode {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    resp.status()
+}
+
 #[tokio::test]
 async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
     let app = router(state(WORKDIR).await);
@@ -160,4 +175,37 @@ async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
     assert_eq!(skills["data"][0]["name"], "demo");
     assert_eq!(skills["data"][0]["description"], "Demo skill");
     assert_eq!(skills["data"][0]["content"], "Use this skill.\n");
+}
+
+#[tokio::test]
+async fn opencode_legacy_provider_routes_return_active_catalog_and_reject_bad_oauth() {
+    let app = router(state(WORKDIR).await);
+
+    let (status, providers) = get_json(app.clone(), "/provider").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(providers["all"][0]["id"], "openai");
+    assert_eq!(providers["default"]["openai"], "gpt-5");
+    assert_eq!(providers["connected"], json!(["openai"]));
+
+    let (status, auth) = get_json(app.clone(), "/provider/auth").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(auth, json!({}));
+
+    let status = request_status(
+        app.clone(),
+        Method::POST,
+        "/provider/openai/oauth/authorize",
+        json!({"method": "bad"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let status = request_status(
+        app,
+        Method::POST,
+        "/provider/openai/oauth/callback",
+        json!({"method": "bad"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -13,6 +13,16 @@ use super::model_ref::{OpenCodeModelRefParts, model_ref_parts};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/provider", get(legacy_provider_list))
+        .route("/provider/auth", get(legacy_provider_auth))
+        .route(
+            "/provider/:provider_id/oauth/authorize",
+            post(legacy_provider_oauth_authorize),
+        )
+        .route(
+            "/provider/:provider_id/oauth/callback",
+            post(legacy_provider_oauth_callback),
+        )
         .route("/api/provider", get(provider_list))
         .route("/api/provider/:provider_id", get(provider_get))
         .route("/api/model", get(model_list))
@@ -37,6 +47,13 @@ struct NativeProviderApi {
 struct RequestInfo {
     headers: BTreeMap<String, String>,
     body: Value,
+}
+
+#[derive(Serialize)]
+struct LegacyProviderList {
+    all: Vec<ProviderInfo>,
+    default: BTreeMap<String, String>,
+    connected: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -108,6 +125,33 @@ struct ModelCacheCost {
 struct ModelLimit {
     context: u32,
     output: u32,
+}
+
+async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProviderList> {
+    let active = model_ref_parts(&st.agent.model);
+    Json(LegacyProviderList {
+        all: vec![provider_info(&active)],
+        default: BTreeMap::from([(active.provider_id.clone(), active.model_id.clone())]),
+        connected: vec![active.provider_id],
+    })
+}
+
+async fn legacy_provider_auth() -> Json<Value> {
+    Json(json!({}))
+}
+
+async fn legacy_provider_oauth_authorize(
+    Path(_provider_id): Path<String>,
+    Json(_payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    Err(ApiError::bad_request("unsupported provider oauth method"))
+}
+
+async fn legacy_provider_oauth_callback(
+    Path(_provider_id): Path<String>,
+    Json(_payload): Json<Value>,
+) -> Result<Json<bool>, ApiError> {
+    Err(ApiError::bad_request("unsupported provider oauth method"))
 }
 
 async fn provider_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<ProviderInfo>>> {
