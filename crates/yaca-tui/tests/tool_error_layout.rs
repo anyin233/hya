@@ -16,11 +16,12 @@ fn tool_error_detail_renders_below_failed_tool_row() {
     let buffer = render_buffer(&mut state, 120, 24);
     let text = buffer_text(&buffer, 120, 24);
     assert!(text.contains("× Read README.md"));
-    assert!(text.contains("error ✗"));
     assert!(text.contains("permission denied"));
     assert!(
-        !text.contains("error ✗ permission denied"),
-        "error detail should not be collapsed into the inline status row"
+        text.lines()
+            .find(|line| line.contains("× Read README.md"))
+            .is_some_and(|line| !line.contains("error ✗")),
+        "failed tool action row should not append a generic error suffix:\n{text}"
     );
 
     // Given: a failed tool row rendered in the assistant transcript.

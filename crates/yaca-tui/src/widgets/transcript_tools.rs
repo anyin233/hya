@@ -171,9 +171,10 @@ fn status_color(status: &ToolStatus, theme: &Theme) -> Color {
 
 fn inline_status_text(status: &ToolStatus) -> Option<String> {
     match status {
-        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Error { .. } => {
+        ToolStatus::Pending | ToolStatus::Running => {
             Some(format!("{}{}", status_label(status), status_suffix(status)))
         }
+        ToolStatus::Error { .. } => None,
         ToolStatus::Completed {
             time_ms,
             exit_code: Some(exit_code),
