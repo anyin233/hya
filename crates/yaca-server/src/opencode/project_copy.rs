@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
@@ -22,6 +23,10 @@ pub(super) fn router() -> Router<ServerState> {
             "/experimental/project/:project/copy/refresh",
             post(refresh_copies),
         )
+        .route(
+            "/experimental/project/:project/copy/generate-name",
+            post(generate_name),
+        )
 }
 
 #[derive(Deserialize)]
@@ -34,6 +39,16 @@ struct CreatePayload {
 #[derive(Serialize)]
 struct CopyResponse {
     directory: String,
+}
+
+#[derive(Deserialize)]
+struct GenerateNamePayload {
+    context: Option<String>,
+}
+
+#[derive(Serialize)]
+struct GenerateNameResponse {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -173,12 +188,61 @@ async fn refresh_copies(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn generate_name(
+    AxumPath(_project): AxumPath<String>,
+    Json(payload): Json<GenerateNamePayload>,
+) -> Json<GenerateNameResponse> {
+    Json(GenerateNameResponse {
+        name: generated_copy_name(payload.context.as_deref()),
+    })
+}
+
 fn copy_destination(payload: &CreatePayload) -> PathBuf {
     let directory = PathBuf::from(&payload.directory);
     payload
         .name
         .as_ref()
         .map_or(directory.clone(), |name| directory.join(name))
+}
+
+fn generated_copy_name(context: Option<&str>) -> String {
+    if let Some(text) = context.map(str::trim).filter(|text| !text.is_empty()) {
+        let words = text
+            .split_whitespace()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let slug = slugify(&words);
+        if !slug.is_empty() {
+            return slug;
+        }
+    }
+    fallback_copy_name()
+}
+
+fn slugify(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in input.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    if out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn fallback_copy_name() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    format!("copy-{millis}-{}", std::process::id())
 }
 
 async fn ensure_git_source(source: &Path) -> Result<(), ProjectCopyError> {
