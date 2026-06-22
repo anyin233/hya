@@ -112,7 +112,11 @@ async fn read_directory(
             entries.push(name);
         }
     }
-    entries.sort();
+    entries.sort_by(|a, b| match (a.ends_with('/'), b.ends_with('/')) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.cmp(b),
+    });
 
     let offset = read_offset(input);
     let limit = input.limit.unwrap_or(DEFAULT_READ_LIMIT);
