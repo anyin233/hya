@@ -8,6 +8,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
+use yaca_proto::api::CreateSessionResponse;
 use yaca_proto::{AgentName, ModelRef};
 use yaca_provider::{FakeProvider, ProviderRouter};
 use yaca_server::{AppState, router};
@@ -83,4 +84,104 @@ async fn opencode_tui_publish_queues_control_requests() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(accepted, json!(true));
+}
+
+#[tokio::test]
+async fn opencode_tui_direct_routes_queue_control_requests() {
+    let app = router(state().await);
+    let cases = [
+        (
+            "/tui/append-prompt",
+            Some(json!({ "text": "from IDE" })),
+            json!({ "text": "from IDE" }),
+        ),
+        ("/tui/open-help", None, Value::Null),
+        ("/tui/open-sessions", None, Value::Null),
+        ("/tui/open-themes", None, Value::Null),
+        ("/tui/open-models", None, Value::Null),
+        ("/tui/submit-prompt", None, Value::Null),
+        ("/tui/clear-prompt", None, Value::Null),
+        (
+            "/tui/execute-command",
+            Some(json!({ "command": "session_new" })),
+            json!({ "command": "session_new" }),
+        ),
+        (
+            "/tui/show-toast",
+            Some(json!({
+                "title": "Done",
+                "message": "Task completed",
+                "variant": "success",
+                "duration": 1500
+            })),
+            json!({
+                "title": "Done",
+                "message": "Task completed",
+                "variant": "success",
+                "duration": 1500
+            }),
+        ),
+    ];
+
+    for (path, payload, expected_body) in cases {
+        let (status, accepted) = request(app.clone(), "POST", path, payload).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(accepted, json!(true), "{path}");
+
+        let (status, next) = request(app.clone(), "GET", "/tui/control/next", None).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(next["path"], path, "{path}");
+        assert_eq!(next["body"], expected_body, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn opencode_tui_select_session_validates_and_queues_existing_sessions() {
+    let app = router(state().await);
+
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        "/tui/select-session",
+        Some(json!({ "sessionID": "not-a-session-id" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let missing = yaca_proto::SessionId::new().to_string();
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        "/tui/select-session",
+        Some(json!({ "sessionID": missing })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(json!({ "agent": "build", "model": "fake", "workdir": WORKDIR })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created: CreateSessionResponse = serde_json::from_value(created).unwrap();
+    let session_id = created.session.to_string();
+
+    let payload = json!({ "sessionID": session_id });
+    let (status, accepted) = request(
+        app.clone(),
+        "POST",
+        "/tui/select-session",
+        Some(payload.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(accepted, json!(true));
+
+    let (status, next) = request(app.clone(), "GET", "/tui/control/next", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(next["path"], "/tui/select-session");
+    assert_eq!(next["body"], payload);
 }
