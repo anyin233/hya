@@ -62,6 +62,10 @@ impl OpenCodeSessionInfo {
         self.parent_id.as_deref()
     }
 
+    pub(super) fn updated_millis(&self) -> u64 {
+        self.time.updated
+    }
+
     pub(super) fn title(&self) -> &str {
         &self.title
     }

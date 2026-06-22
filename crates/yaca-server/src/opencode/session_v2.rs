@@ -18,6 +18,8 @@ const DEFAULT_LIMIT: usize = 50;
 struct ListQuery {
     limit: Option<usize>,
     order: Option<String>,
+    roots: Option<bool>,
+    start: Option<u64>,
     search: Option<String>,
     cursor: Option<String>,
 }
@@ -88,6 +90,12 @@ async fn list(
     let mut sessions = load_sessions(&st).await?;
     if query.order.as_deref() == Some("asc") {
         sessions.reverse();
+    }
+    if query.roots == Some(true) {
+        sessions.retain(|session| session.parent_id().is_none());
+    }
+    if let Some(start) = query.start {
+        sessions.retain(|session| session.updated_millis() >= start);
     }
     if let Some(search) = query.search {
         sessions.retain(|session| session.title().contains(&search));
