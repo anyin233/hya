@@ -50,6 +50,7 @@ enum DialogMode {
     Help,
     Tools,
     Think,
+    CommandPalette,
     CommandCompletion,
     ReferenceCompletion,
 }
@@ -171,7 +172,7 @@ impl Controller {
                 KeyCode::Down => return self.select_next_message(),
                 KeyCode::Char('c') => return self.handle_ctrl_c(),
                 KeyCode::Char('p') => {
-                    self.open_help_dialog();
+                    self.open_command_palette_dialog();
                     return TuiEffect::None;
                 }
                 KeyCode::Char('n') => return TuiEffect::NewSession,
@@ -413,6 +414,7 @@ impl Controller {
             }
             KeyCode::Enter => {
                 let selected = dialog.selected;
+                let selected_label = dialog.items.get(selected).map(|item| item.label.clone());
                 self.app.dialog = None;
                 let mode = self.dialog_mode.take();
                 match mode {
@@ -443,6 +445,9 @@ impl Controller {
                         .get(selected)
                         .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
                         .unwrap_or(TuiEffect::None),
+                    Some(DialogMode::CommandPalette) => {
+                        self.dispatch_palette_command(selected_label.as_deref())
+                    }
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
                         TuiEffect::None
@@ -592,6 +597,23 @@ impl Controller {
         if let Some(item) = items.get(selected) {
             self.app.input = format!("{} ", item.label);
         }
+    }
+
+    fn dispatch_palette_command(&mut self, label: Option<&str>) -> TuiEffect {
+        let Some(command) = label.and_then(|label| label.strip_prefix('/')) else {
+            return TuiEffect::None;
+        };
+        self.dispatch_slash(command)
+    }
+
+    fn open_command_palette_dialog(&mut self) {
+        self.app.dialog = Some(DialogView {
+            title: "commands".to_string(),
+            subtitle: "select a command; enter runs".to_string(),
+            items: commands::help_items_with_custom(&self.custom_commands),
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::CommandPalette);
     }
 
     fn open_command_completion_dialog(&mut self, items: Vec<DialogItem>) {
@@ -933,6 +955,9 @@ mod leader_key_tests;
 
 #[cfg(test)]
 mod app_exit_tests;
+
+#[cfg(test)]
+mod command_palette_tests;
 
 #[cfg(test)]
 mod tests {
