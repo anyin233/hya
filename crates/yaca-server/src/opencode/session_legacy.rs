@@ -28,6 +28,7 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/session/:id/children", get(children))
         .route("/session/:id/todo", get(todo))
+        .route("/session/:id/diff", get(super::session_diff::diff))
         .route("/session/:id/message", get(messages))
         .route(
             "/session/:id/message/:message",
