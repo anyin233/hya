@@ -36,12 +36,21 @@ async fn state() -> AppState {
 
 #[tokio::test]
 async fn opencode_v2_event_route_streams_connected_event() {
+    assert_event_stream("/api/event").await;
+}
+
+#[tokio::test]
+async fn opencode_global_event_route_streams_connected_event() {
+    assert_event_stream("/global/event").await;
+}
+
+async fn assert_event_stream(uri: &str) {
     let app = router(state().await);
     let resp = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/event")
+                .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -33,11 +33,20 @@ async fn state() -> AppState {
 
 #[tokio::test]
 async fn opencode_v2_health_route_reports_ready() {
+    assert_health("/api/health").await;
+}
+
+#[tokio::test]
+async fn opencode_global_health_route_reports_ready() {
+    assert_health("/global/health").await;
+}
+
+async fn assert_health(uri: &str) {
     let resp = router(state().await)
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/health")
+                .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
         )
