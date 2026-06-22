@@ -94,6 +94,86 @@ test("chat.params mutates supported yaca request fields", async () => {
   })
 })
 
+test("tool.definition mutates yaca tool definitions during chat params", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "tool-definition.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "tool-definition",',
+      "  server: async () => ({",
+      '    "tool.definition": async (input, output) => {',
+      '      if (input.toolID !== "shell") return',
+      '      output.description = "Run a reviewed shell command"',
+      '      output.parameters = { type: "object", properties: { command: { type: "string", minLength: 1 } }, required: ["command"] }',
+      "    },",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(root, pluginFile, [
+    initializeRequest(11),
+    {
+      jsonrpc: "2.0",
+      id: 12,
+      method: "hook/chat.params",
+      params: {
+        session: "session-2",
+        message: "message-2",
+        request: {
+          model: "openai/gpt-5",
+          messages: [],
+          tools: [
+            {
+              name: "shell",
+              description: "old shell",
+              input_schema: { type: "object" },
+              output_schema: { type: "object", properties: { output: { type: "string" } } },
+            },
+            {
+              name: "read",
+              description: "Read a file",
+              input_schema: { type: "object", properties: { filePath: { type: "string" } } },
+            },
+          ],
+        },
+      },
+    },
+    shutdownRequest(13),
+  ])
+
+  expect(responses[0]?.result).toMatchObject({
+    hooks: [{ name: "chat.params" }],
+  })
+  expect(responses[1]?.result).toEqual({
+    outcome: "continue",
+    request: {
+      model: "openai/gpt-5",
+      messages: [],
+      tools: [
+        {
+          name: "shell",
+          description: "Run a reviewed shell command",
+          input_schema: {
+            type: "object",
+            properties: { command: { type: "string", minLength: 1 } },
+            required: ["command"],
+          },
+          output_schema: { type: "object", properties: { output: { type: "string" } } },
+        },
+        {
+          name: "read",
+          description: "Read a file",
+          input_schema: { type: "object", properties: { filePath: { type: "string" } } },
+        },
+      ],
+      temperature: 0,
+    },
+  })
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,
