@@ -171,7 +171,7 @@ fn permission_panel_renders_options_and_reply() {
         reply: "use ls instead".to_string(),
     });
     let text = render(&mut state, 100, 20);
-    assert!(text.contains("permission required"), "panel title renders");
+    assert!(text.contains("Permission required"), "panel title renders");
     assert!(text.contains("rm -rf /tmp/x"), "command detail renders");
     assert!(text.contains("Allow once"), "allow-once option renders");
     assert!(

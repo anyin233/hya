@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use super::overlays::ellipsize;
 use crate::PermissionPrompt;
@@ -28,51 +28,71 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
     frame.render_widget(Clear, clear_rect);
 
     let inner_width = usize::from(width).saturating_sub(4);
-    let option_spans: Vec<Span> = prompt
-        .options()
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, label)| {
-            let style = if idx == prompt.selected {
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.primary)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.muted)
-            };
-            vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
-        })
-        .collect();
+    let rail_style = Style::default().fg(theme.warning).bg(theme.element);
+    let rail = || Span::styled("▏ ", rail_style);
+    let mut option_spans = vec![rail()];
+    option_spans.extend(
+        prompt
+            .options()
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, label)| {
+                let style = if idx == prompt.selected {
+                    Style::default()
+                        .fg(theme.background)
+                        .bg(theme.primary)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.muted)
+                };
+                vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
+            }),
+    );
     let lines = vec![
-        Line::from(Span::styled(
-            format!("{} wants to run:", prompt.title),
-            Style::default()
-                .fg(theme.warning)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(ellipsize(&prompt.detail, inner_width)),
-        Line::from(""),
+        Line::from(vec![
+            rail(),
+            Span::styled(
+                "△",
+                Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " Permission required",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            rail(),
+            Span::styled("→ ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{} wants to run:", prompt.title),
+                Style::default().fg(theme.text),
+            ),
+        ]),
+        Line::from(vec![
+            rail(),
+            Span::raw(ellipsize(&prompt.detail, inner_width)),
+        ]),
+        Line::from(vec![rail()]),
         Line::from(option_spans),
         Line::from(vec![
+            rail(),
             Span::styled("reply: ", Style::default().fg(theme.muted)),
             Span::styled(prompt.reply.clone(), Style::default().fg(theme.text)),
             Span::styled("█", Style::default().fg(theme.primary)),
         ]),
-        Line::from(Span::styled(
-            "←/→ select · type a reply · Enter confirm · Esc deny",
-            Style::default().fg(theme.muted),
-        )),
+        Line::from(vec![
+            rail(),
+            Span::styled(
+                "←/→ select · type a reply · Enter confirm · Esc deny",
+                Style::default().fg(theme.muted),
+            ),
+        ]),
     ];
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(theme.text).bg(theme.element))
-            .block(
-                Block::default()
-                    .title("permission required")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.warning)),
-            )
             .wrap(Wrap { trim: false }),
         rect,
     );
