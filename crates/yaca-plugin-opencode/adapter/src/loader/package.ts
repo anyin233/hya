@@ -26,7 +26,7 @@ export async function resolveNpmPluginImportSpec(
   spec: string,
   configFilepath?: string,
 ): Promise<string> {
-  const packageName = packageNameFromSpec(spec)
+  const packageName = npmPackageNameFromSpec(spec)
   if (packageName === undefined) {
     return spec
   }
@@ -155,7 +155,7 @@ function extractExportValue(value: unknown): string | undefined {
   return undefined
 }
 
-function packageNameFromSpec(spec: string): string | undefined {
+export function npmPackageNameFromSpec(spec: string): string | undefined {
   const trimmed = spec.trim()
   if (trimmed.length === 0) {
     return undefined

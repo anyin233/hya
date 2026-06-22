@@ -121,6 +121,43 @@ test("discovers OpenCode JSONC config plugin entries", async () => {
   expect(specs).toEqual([pathToFileURL(pluginFile).href])
 })
 
+test("deduplicates OpenCode config npm plugins by package name", async () => {
+  // Given: global and local OpenCode configs declare the same npm plugin.
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const xdgConfigHome = path.join(root, "xdg")
+  const globalConfig = path.join(xdgConfigHome, "opencode", "opencode.json")
+  const localConfig = path.join(directory, ".opencode", "opencode.json")
+  await mkdir(path.dirname(globalConfig), { recursive: true })
+  await mkdir(path.dirname(localConfig), { recursive: true })
+  await writeFile(
+    globalConfig,
+    JSON.stringify({
+      plugin: ["shared-plugin@1.0.0", "global-only@1.0.0"],
+    }),
+  )
+  await writeFile(
+    localConfig,
+    JSON.stringify({
+      plugin: [["shared-plugin@2.0.0", { source: "local" }], "local-only@1.0.0"],
+    }),
+  )
+
+  // When: the adapter discovers merged OpenCode plugin specs.
+  const specs = await discoverPluginSpecs({
+    directory,
+    xdgConfigHome,
+    home: path.join(root, "home"),
+  })
+
+  // Then: the local shared package wins while unrelated plugins remain ordered.
+  expect(specs).toEqual([
+    "global-only@1.0.0",
+    ["shared-plugin@2.0.0", { source: "local" }],
+    "local-only@1.0.0",
+  ])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)
