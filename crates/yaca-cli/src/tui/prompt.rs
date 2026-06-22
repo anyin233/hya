@@ -10,6 +10,8 @@ pub(super) struct PasteOutcome {
 pub(super) struct PromptState {
     paste_entries: Vec<PasteEntry>,
     last_paste_pending_reveal: bool,
+    undo_stack: Vec<PromptSnapshot>,
+    redo_stack: Vec<PromptSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,14 +20,29 @@ struct PasteEntry {
     original: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PromptSnapshot {
+    input: String,
+    input_cursor: Option<usize>,
+    attachments: Vec<PromptAttachment>,
+    paste_entries: Vec<PasteEntry>,
+    last_paste_pending_reveal: bool,
+}
+
 impl PromptState {
     pub fn handle_paste(&mut self, app: &mut AppState, text: &str) -> PasteOutcome {
         app.exit_armed = false;
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let pasted = normalized.trim();
+        if pasted.is_empty() && !self.last_paste_pending_reveal {
+            return PasteOutcome {
+                refresh_popup: false,
+            };
+        }
+        self.record_edit(app);
         if self.last_paste_pending_reveal {
             self.reveal_last_paste(app);
         }
-        let pasted = normalized.trim();
         if pasted.is_empty() {
             return PasteOutcome {
                 refresh_popup: false,
@@ -74,9 +91,12 @@ impl PromptState {
         app.attachments.clear();
         self.paste_entries.clear();
         self.last_paste_pending_reveal = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     pub fn insert_char(&mut self, app: &mut AppState, ch: char) {
+        self.record_edit(app);
         let cursor = cursor_index(&app.input, app.input_cursor);
         app.input.insert(cursor, ch);
         app.input_cursor = Some(cursor + ch.len_utf8());
@@ -90,6 +110,7 @@ impl PromptState {
             app.input_cursor = Some(cursor);
             return;
         }
+        self.record_edit(app);
         app.input.replace_range(previous..cursor, "");
         app.input_cursor = Some(previous);
         self.last_paste_pending_reveal = false;
@@ -102,6 +123,7 @@ impl PromptState {
             app.input_cursor = Some(cursor);
             return;
         }
+        self.record_edit(app);
         app.input.replace_range(cursor..next, "");
         app.input_cursor = Some(cursor);
         self.last_paste_pending_reveal = false;
@@ -189,6 +211,11 @@ impl PromptState {
     pub fn delete_to_line_start(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let line_start = line_start(&app.input, cursor);
+        if line_start == cursor {
+            app.input_cursor = Some(cursor);
+            return;
+        }
+        self.record_edit(app);
         app.input.replace_range(line_start..cursor, "");
         app.input_cursor = Some(line_start);
         self.last_paste_pending_reveal = false;
@@ -197,12 +224,22 @@ impl PromptState {
     pub fn delete_to_line_end(&mut self, app: &mut AppState) {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let line_end = line_end(&app.input, cursor);
+        if line_end == cursor {
+            app.input_cursor = Some(cursor);
+            return;
+        }
+        self.record_edit(app);
         app.input.replace_range(cursor..line_end, "");
         app.input_cursor = Some(cursor);
         self.last_paste_pending_reveal = false;
     }
 
     pub fn delete_current_line(&mut self, app: &mut AppState) {
+        if app.input.is_empty() {
+            app.input_cursor = Some(0);
+            return;
+        }
+        self.record_edit(app);
         let cursor = cursor_index(&app.input, app.input_cursor);
         let start = line_start(&app.input, cursor);
         let end = line_end(&app.input, cursor);
@@ -225,6 +262,7 @@ impl PromptState {
             app.input_cursor = Some(cursor);
             return;
         }
+        self.record_edit(app);
         app.input.replace_range(cursor..next, "");
         app.input_cursor = Some(cursor);
         self.last_paste_pending_reveal = false;
@@ -234,11 +272,17 @@ impl PromptState {
         let cursor = cursor_index(&app.input, app.input_cursor);
         let end = trim_end_whitespace(&app.input[..cursor]);
         if end == 0 {
+            if cursor == 0 {
+                app.input_cursor = Some(0);
+                return;
+            }
+            self.record_edit(app);
             app.input.replace_range(0..cursor, "");
             app.input_cursor = Some(0);
             self.last_paste_pending_reveal = false;
             return;
         }
+        self.record_edit(app);
         let prefix = &app.input[..end];
         let word_start = prefix
             .char_indices()
@@ -256,6 +300,26 @@ impl PromptState {
             .fold(input.to_string(), |text, entry| {
                 text.replace(&entry.placeholder, &entry.original)
             })
+    }
+
+    pub fn undo(&mut self, app: &mut AppState) {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return;
+        };
+        self.redo_stack.push(PromptSnapshot::capture(self, app));
+        snapshot.apply(self, app);
+    }
+
+    pub fn redo(&mut self, app: &mut AppState) {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return;
+        };
+        self.undo_stack.push(PromptSnapshot::capture(self, app));
+        snapshot.apply(self, app);
+    }
+
+    pub fn checkpoint_edit(&mut self, app: &AppState) {
+        self.record_edit(app);
     }
 
     fn insert_text(app: &mut AppState, text: &str) {
@@ -298,6 +362,35 @@ impl PromptState {
             }
         }
         self.last_paste_pending_reveal = false;
+    }
+
+    fn record_edit(&mut self, app: &AppState) {
+        const UNDO_LIMIT: usize = 100;
+        if self.undo_stack.len() == UNDO_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(PromptSnapshot::capture(self, app));
+        self.redo_stack.clear();
+    }
+}
+
+impl PromptSnapshot {
+    fn capture(prompt: &PromptState, app: &AppState) -> Self {
+        Self {
+            input: app.input.clone(),
+            input_cursor: app.input_cursor,
+            attachments: app.attachments.clone(),
+            paste_entries: prompt.paste_entries.clone(),
+            last_paste_pending_reveal: prompt.last_paste_pending_reveal,
+        }
+    }
+
+    fn apply(self, prompt: &mut PromptState, app: &mut AppState) {
+        app.input = self.input;
+        app.input_cursor = self.input_cursor;
+        app.attachments = self.attachments;
+        prompt.paste_entries = self.paste_entries;
+        prompt.last_paste_pending_reveal = self.last_paste_pending_reveal;
     }
 }
 

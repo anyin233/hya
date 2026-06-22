@@ -14,6 +14,17 @@ fn ctrl_shift(code: char) -> KeyEvent {
     )
 }
 
+fn super_key(code: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(code), KeyModifiers::SUPER)
+}
+
+fn super_shift(code: char) -> KeyEvent {
+    KeyEvent::new(
+        KeyCode::Char(code),
+        KeyModifiers::SUPER | KeyModifiers::SHIFT,
+    )
+}
+
 fn alt(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::ALT)
 }
@@ -329,6 +340,156 @@ fn ctrl_d_deletes_character_inside_completion_popup() {
     assert_eq!(controller.app.input, "model");
     assert_eq!(controller.app.input_cursor, Some(0));
     assert!(controller.app.dialog.is_none());
+}
+
+#[test]
+fn ctrl_minus_undoes_prompt_insert_and_ctrl_dot_redoes_it() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "ab".to_string(),
+        ..AppState::default()
+    });
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('c'))),
+        TuiEffect::None
+    );
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "ab");
+    assert_eq!(controller.app.input_cursor, None);
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('.')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "abc");
+    assert_eq!(controller.app.input_cursor, Some("abc".len()));
+}
+
+#[test]
+fn super_z_undoes_prompt_edit_and_super_shift_z_redoes_it() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "draft");
+
+    // When
+    assert_eq!(controller.handle_key(super_key('z')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "draf");
+
+    // When
+    assert_eq!(controller.handle_key(super_shift('z')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "draft");
+}
+
+#[test]
+fn undo_restores_deleted_character_and_redo_reapplies_delete() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "abc".to_string(),
+        input_cursor: Some("a".len()),
+        ..AppState::default()
+    });
+    assert_eq!(controller.handle_key(key(KeyCode::Delete)), TuiEffect::None);
+    assert_eq!(controller.app.input, "ac");
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "abc");
+    assert_eq!(controller.app.input_cursor, Some("a".len()));
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('.')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "ac");
+    assert_eq!(controller.app.input_cursor, Some("a".len()));
+}
+
+#[test]
+fn cursor_movement_is_not_recorded_as_an_undo_step() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "ab".to_string(),
+        ..AppState::default()
+    });
+    assert_eq!(controller.handle_key(key(KeyCode::Left)), TuiEffect::None);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('X'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.app.input, "aXb");
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "ab");
+    assert_eq!(controller.app.input_cursor, Some("a".len()));
+}
+
+#[test]
+fn slash_completion_can_be_undone() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "/m");
+    assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
+    assert_eq!(controller.app.input, "/model ");
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "/m");
+    assert_eq!(controller.app.input_cursor, Some("/m".len()));
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('.')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "/model ");
+}
+
+#[test]
+fn reference_completion_can_be_undone() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        input: "read @R suffix".to_string(),
+        input_cursor: Some("read @R".len()),
+        ..AppState::default()
+    });
+    controller.set_references(vec![DialogItem {
+        label: "@README.md".to_string(),
+        detail: "file".to_string(),
+    }]);
+    assert_eq!(
+        controller.handle_key(key(KeyCode::Char('E'))),
+        TuiEffect::None
+    );
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+    assert_eq!(controller.app.input, "read @README.md suffix");
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('-')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "read @RE suffix");
+    assert_eq!(controller.app.input_cursor, Some("read @RE".len()));
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('.')), TuiEffect::None);
+
+    // Then
+    assert_eq!(controller.app.input, "read @README.md suffix");
 }
 
 #[test]

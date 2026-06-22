@@ -68,6 +68,20 @@ fn is_ctrl_shift_d(key: &KeyEvent) -> bool {
         && matches!(key.code, KeyCode::Char('d' | 'D'))
 }
 
+fn is_input_undo_key(key: &KeyEvent) -> bool {
+    matches!(
+        (key.code, key.modifiers),
+        (KeyCode::Char('-'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('z' | 'Z'), KeyModifiers::SUPER)
+    )
+}
+
+fn is_input_redo_key(key: &KeyEvent) -> bool {
+    (key.code == KeyCode::Char('.') && key.modifiers == KeyModifiers::CONTROL)
+        || (matches!(key.code, KeyCode::Char('z' | 'Z'))
+            && key.modifiers == (KeyModifiers::SUPER | KeyModifiers::SHIFT))
+}
+
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<ModelEntry>,
@@ -166,6 +180,12 @@ impl Controller {
         }
         if handle_message_scroll_key(&mut self.app, &key) {
             return TuiEffect::None;
+        }
+        if is_input_undo_key(&key) {
+            return self.edit_prompt(|prompt, app| prompt.undo(app));
+        }
+        if is_input_redo_key(&key) {
+            return self.edit_prompt(|prompt, app| prompt.redo(app));
         }
         if is_ctrl_shift_d(&key) {
             return self.edit_prompt(|prompt, app| prompt.delete_current_line(app));
@@ -704,6 +724,7 @@ impl Controller {
     fn apply_command_completion(&mut self, selected: usize) {
         let items = commands::completion_items_with_custom(&self.app.input, &self.custom_commands);
         if let Some(item) = items.get(selected) {
+            self.prompt.checkpoint_edit(&self.app);
             self.app.input = format!("{} ", item.label);
             self.app.input_cursor = None;
         }
@@ -747,6 +768,12 @@ impl Controller {
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
+        if is_input_undo_key(&key) {
+            return self.edit_prompt(|prompt, app| prompt.undo(app));
+        }
+        if is_input_redo_key(&key) {
+            return self.edit_prompt(|prompt, app| prompt.redo(app));
+        }
         if is_ctrl_shift_d(&key) {
             return self.edit_prompt(|prompt, app| prompt.delete_current_line(app));
         }
@@ -902,6 +929,7 @@ impl Controller {
         }
         let cursor_after_completion = next.len() + suffix_separator_len;
         next.push_str(suffix);
+        self.prompt.checkpoint_edit(&self.app);
         self.app.input = next;
         self.app.input_cursor = Some(cursor_after_completion);
     }
