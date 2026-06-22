@@ -23,6 +23,11 @@ impl SessionEngine {
             .await
     }
 
+    pub async fn set_workdir(&self, session: SessionId, workdir: String) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionMoved { session, workdir })
+            .await
+    }
+
     pub async fn set_metadata(
         &self,
         session: SessionId,

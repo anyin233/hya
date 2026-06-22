@@ -187,6 +187,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
                 Some((env.seq.0, millis(env.ts_millis)))
             }
             Event::SessionCreated { .. }
+            | Event::SessionMoved { .. }
             | Event::SessionTitled { .. }
             | Event::SessionMetadataSet { .. }
             | Event::SessionPermissionSet { .. }
