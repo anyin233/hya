@@ -6,12 +6,15 @@ use serde_json::{Map, Value, json};
 use crate::ServerState;
 
 pub(super) fn router() -> Router<ServerState> {
-    Router::new().route("/doc", get(doc))
+    Router::new()
+        .route("/doc", get(doc))
+        .route("/openapi.json", get(doc))
 }
 
 async fn doc() -> Json<Value> {
     let paths = paths(&[
         ("/doc", &["get"]),
+        ("/openapi.json", &["get"]),
         ("/auth/{providerID}", &["put", "delete"]),
         ("/log", &["post"]),
         ("/global/health", &["get"]),

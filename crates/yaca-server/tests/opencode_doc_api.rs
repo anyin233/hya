@@ -32,6 +32,23 @@ async fn state() -> AppState {
     )
 }
 
+async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, body)
+}
+
 #[tokio::test]
 async fn opencode_doc_route_returns_openapi_document() {
     let app = router(state().await);
@@ -81,4 +98,14 @@ async fn opencode_doc_route_returns_openapi_document() {
     assert!(body["paths"]["/api/integration/{integrationID}/connect/key"].is_object());
     assert!(body["paths"]["/api/integration/attempt/{attemptID}"].is_object());
     assert!(body["paths"]["/api/credential/{credentialID}"]["delete"].is_object());
+}
+
+#[tokio::test]
+async fn opencode_openapi_json_route_returns_openapi_document() {
+    let app = router(state().await);
+    let (status, body) = get_json(app, "/openapi.json").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["openapi"], "3.1.0");
+    assert!(body["paths"]["/api/session"].is_object());
 }
