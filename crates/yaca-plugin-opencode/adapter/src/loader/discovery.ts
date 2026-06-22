@@ -5,6 +5,7 @@ import { parse as parseJsonc } from "jsonc-parser"
 import type { ParseError as JsoncParseError } from "jsonc-parser"
 import { z } from "zod"
 
+import { npmPackageNameFromSpec } from "./package"
 import { resolveLocalPluginSpec } from "./shape"
 
 export class AdapterOptionsParseError extends Error {
@@ -78,7 +79,7 @@ export async function discoverPluginSpecs(
       specs.push(...(await scanPluginDir(path.join(dir, child))))
     }
   }
-  return specs
+  return deduplicatePluginSpecs(specs)
 }
 
 export function opencodeConfigDirs(
@@ -160,6 +161,29 @@ function parseConfigOptions(raw: string): AdapterOptions {
     }
     throw error
   }
+}
+
+function deduplicatePluginSpecs(specs: readonly PluginSpec[]): readonly PluginSpec[] {
+  const seen = new Set<string>()
+  const keep: PluginSpec[] = []
+  for (const spec of specs.toReversed()) {
+    const identity = pluginIdentity(spec)
+    if (seen.has(identity)) {
+      continue
+    }
+    seen.add(identity)
+    keep.push(spec)
+  }
+  return keep.toReversed()
+}
+
+function pluginIdentity(plugin: PluginSpec): string {
+  const spec = pluginSpecifier(plugin)
+  return spec.startsWith("file://") ? spec : (npmPackageNameFromSpec(spec) ?? spec)
+}
+
+function pluginSpecifier(plugin: PluginSpec): string {
+  return typeof plugin === "string" ? plugin : plugin[0]
 }
 
 function globalConfigDir(context: DiscoveryContext): string | undefined {
