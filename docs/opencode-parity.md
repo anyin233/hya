@@ -3,8 +3,9 @@
 Last refreshed: 2026-06-22.
 
 OpenCode baseline: `sst/opencode` `origin/dev`
-`a0a500316ee009b5f84f593ec6b304e737224ad7`
-(`zen: new inference`;
+`34b3d59a23eb979d1d66a8f2ede1dae6a33c277a`
+(`ignore: update agents.md (#33446)`;
+latest source/API-relevant change remains `a0a5003 zen: new inference`;
 also includes `1787fa4 refactor(core): drop legacy compaction event (#33404)`).
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
