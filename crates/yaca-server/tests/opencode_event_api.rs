@@ -203,6 +203,7 @@ async fn opencode_v2_event_route_streams_session_updated_properties() {
         .to_string();
 
     let updated = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PATCH")
@@ -221,6 +222,30 @@ async fn opencode_v2_event_route_streams_session_updated_properties() {
     assert_eq!(updated_event["properties"]["sessionID"], session);
     assert_eq!(updated_event["properties"]["info"]["id"], session);
     assert_eq!(updated_event["properties"]["info"]["title"], "Renamed");
+
+    let metadata_updated = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/session/{session}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"metadata": {"ticket": "OC-42"}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata_updated.status(), StatusCode::OK);
+
+    let metadata_event = read_sse_json(&mut stream).await;
+    assert_eq!(metadata_event["type"], "session.updated");
+    assert_eq!(metadata_event["properties"]["sessionID"], session);
+    assert_eq!(metadata_event["properties"]["info"]["id"], session);
+    assert_eq!(
+        metadata_event["properties"]["info"]["metadata"]["ticket"],
+        "OC-42"
+    );
 }
 
 #[tokio::test]
