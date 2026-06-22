@@ -18,7 +18,7 @@ use uuid::Uuid;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
-    PromptResponse,
+    PromptResponse, ShellRequest,
 };
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
 
@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions", post(create_session))
         .route("/sessions/:id/prompt", post(prompt))
         .route("/sessions/:id/command", post(command))
+        .route("/sessions/:id/shell", post(shell))
         .route("/sessions/:id/events", get(events))
         .route("/sessions/:id/stream", get(stream))
         .with_state(state)
@@ -119,6 +120,19 @@ async fn command(
     let finish = st
         .engine
         .run_turn(session, &st.agent, CancellationToken::new())
+        .await?;
+    Ok(Json(PromptResponse { message, finish }))
+}
+
+async fn shell(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ShellRequest>,
+) -> Result<Json<PromptResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    let (message, finish) = st
+        .engine
+        .run_shell(session, &st.agent, req.command, CancellationToken::new())
         .await?;
     Ok(Json(PromptResponse { message, finish }))
 }
