@@ -10,8 +10,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 use serde_json::Value;
-use yaca_proto::api::PromptRequest;
-use yaca_proto::{Projection, SessionId};
+use yaca_proto::api::{CommandRequest, PromptRequest, ShellRequest};
+use yaca_proto::{MessageId, Projection, SessionId};
 
 use crate::{ApiError, ServerState, parse_session, runs};
 
@@ -27,6 +27,8 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/session/:id/message", get(messages))
         .route("/session/:id/message/:message", get(message))
         .route("/session/:id/prompt_async", post(prompt_async))
+        .route("/session/:id/command", post(command))
+        .route("/session/:id/shell", post(shell))
         .route("/session/:id/abort", post(abort))
 }
 
@@ -192,6 +194,46 @@ async fn prompt_async(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn command(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<CommandRequest>,
+) -> Result<Json<projection::OpenCodeMessage>, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let text = req
+        .text
+        .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
+    let message = st
+        .engine
+        .admit_command_prompt(session, req.command, req.arguments, text)
+        .await?;
+    let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+    Ok(Json(load_message(&st, session, message).await?))
+}
+
+async fn shell(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<ShellRequest>,
+) -> Result<Json<projection::OpenCodeMessage>, ApiError> {
+    let session = parse_session(&id)?;
+    load_session(&st, session, None).await?;
+    let run = st
+        .runs
+        .start(session)
+        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let (message, _finish) = st
+        .engine
+        .run_shell(session, &st.agent, req.command, run.token())
+        .await?;
+    Ok(Json(load_message(&st, session, message).await?))
+}
+
 async fn abort(
     State(st): State<ServerState>,
     Path(id): Path<String>,
@@ -217,6 +259,20 @@ pub(in crate::opencode) async fn apply_session_update(
         st.engine.set_title(session, title).await?;
     }
     Ok(load_session(st, session, None).await?.info)
+}
+
+pub(in crate::opencode) async fn load_message(
+    st: &ServerState,
+    session: SessionId,
+    message: MessageId,
+) -> Result<projection::OpenCodeMessage, ApiError> {
+    let message_id = message.to_string();
+    load_session(st, session, None)
+        .await?
+        .messages
+        .into_iter()
+        .find(|item| item.id() == message_id)
+        .ok_or_else(|| ApiError::not_found("message not found"))
 }
 
 pub(in crate::opencode) async fn load_session(
@@ -289,4 +345,12 @@ fn decode_cursor(cursor: &str) -> Result<MessageCursor, ApiError> {
         .decode(cursor)
         .map_err(|_| ApiError::bad_request("invalid cursor"))?;
     serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("invalid cursor"))
+}
+
+pub(in crate::opencode) fn command_prompt_text(command: &str, arguments: &str) -> String {
+    if arguments.trim().is_empty() {
+        format!("/{command}")
+    } else {
+        format!("/{command} {arguments}")
+    }
 }
