@@ -1,5 +1,6 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::ansi;
 use crate::tool_inputs;
 use crate::tool_labels::{action_label, websearch_provider_label};
 use crate::tool_questions;
@@ -202,6 +203,10 @@ fn completed_tool_output_text(
     }
     if name == "task" {
         return tool_tasks::snapshot_text(input);
+    }
+    if matches!(name, "bash" | "shell") {
+        return completed_output_text(output)
+            .and_then(|text| clean_multiline_output(&ansi::strip(&text)));
     }
 
     completed_output_text(output)

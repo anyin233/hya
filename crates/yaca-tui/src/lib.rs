@@ -7,6 +7,7 @@
 use ratatui::Frame;
 use yaca_proto::{Envelope, Projection};
 
+mod ansi;
 mod layout;
 mod theme;
 mod tool_inputs;

@@ -42,6 +42,30 @@ fn completed_shell_tool_shows_exit_code_when_command_fails() {
     );
 }
 
+#[test]
+fn completed_shell_tool_strips_ansi_escape_sequences_like_opencode() {
+    // Given: shell stderr includes ANSI color escapes.
+    let mut state = AppState::default();
+    with_completed_shell_ansi_output(&mut state);
+
+    // When: the transcript is rendered.
+    let output = render(&mut state, 100, 24);
+
+    // Then: the readable output remains, but terminal escape sequences do not leak.
+    assert!(
+        output.contains("▏ red text"),
+        "shell output should preserve readable text after ANSI stripping:\n{output}"
+    );
+    assert!(
+        !output.contains("[31m") && !output.contains("[0m"),
+        "shell output should strip ANSI control sequences:\n{output}"
+    );
+    assert!(
+        !output.contains("ignored") && !output.contains("Bred"),
+        "shell output should strip broader ANSI escape families:\n{output}"
+    );
+}
+
 fn with_completed_shell_failure(state: &mut AppState) {
     let session = SessionId::new();
     let message = MessageId::new();
@@ -85,6 +109,57 @@ fn with_completed_shell_failure(state: &mut AppState) {
             part,
             call,
             output: json!({ "stderr": "boom", "exit_code": 2 }),
+            time_ms: 9,
+        },
+    ));
+}
+
+fn with_completed_shell_ansi_output(state: &mut AppState) {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let name = ToolName::new("shell");
+    state.apply(&env(
+        1,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        2,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: name.clone(),
+        },
+    ));
+    state.apply(&env(
+        3,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input: json!({ "command": "printf colors" }),
+        },
+    ));
+    state.apply(&env(
+        4,
+        Event::ToolResult {
+            session,
+            message,
+            part,
+            call,
+            output: json!({
+                "stderr": "\u{1b}[31m\u{1b}(Bred \u{1b}Pignored\u{1b}\\text\u{1b}[0m",
+                "exit_code": 1
+            }),
             time_ms: 9,
         },
     ));
