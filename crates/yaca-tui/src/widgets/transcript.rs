@@ -7,6 +7,7 @@ use yaca_proto::Role;
 
 use super::error::{display_system_error_segment, is_system_error_text};
 use super::transcript_metadata::{AssistantBlockStatus, assistant_metadata_label};
+use super::transcript_reasoning::push_reasoning_lines;
 use super::transcript_text::text_from_parts;
 use super::transcript_tools::push_tool_lines;
 use crate::AppState;
@@ -149,10 +150,7 @@ fn assistant_lines(
             }
             TimelinePart::Reasoning(text) => {
                 if !text.trim().is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("   ", block_style(theme.muted, selected, theme)),
-                        Span::styled("Thinking", block_style(theme.warning, selected, theme)),
-                    ]));
+                    push_reasoning_lines(text, selected, theme, lines);
                     has_visible_part = true;
                     previous_was_tool = false;
                 }

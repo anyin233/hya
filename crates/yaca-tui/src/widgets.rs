@@ -13,6 +13,7 @@ mod sidebar_stats;
 mod status;
 mod transcript;
 mod transcript_metadata;
+mod transcript_reasoning;
 mod transcript_text;
 mod transcript_tools;
 
