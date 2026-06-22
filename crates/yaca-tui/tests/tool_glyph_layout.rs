@@ -13,22 +13,29 @@ use yaca_tui::AppState;
 fn search_and_web_tools_use_opencode_glyphs_and_titles() {
     // Given: completed search and network tool calls in an assistant transcript.
     let mut state = AppState::default();
+    with_completed_tool(&mut state, 1, "ls", json!({ "path": "crates/yaca-tui" }));
     with_completed_tool(
         &mut state,
-        1,
-        "grep",
-        json!({ "pattern": "render_tool", "path": "crates/yaca-tui" }),
+        10,
+        "find",
+        json!({ "pattern": "*.rs", "path": "crates/yaca-tui" }),
     );
-    with_completed_tool(&mut state, 10, "glob", json!({ "pattern": "*.rs" }));
     with_completed_tool(
         &mut state,
         20,
+        "grep",
+        json!({ "pattern": "render_tool", "path": "crates/yaca-tui" }),
+    );
+    with_completed_tool(&mut state, 30, "glob", json!({ "pattern": "*.rs" }));
+    with_completed_tool(
+        &mut state,
+        40,
         "webfetch",
         json!({ "url": "https://opencode.ai" }),
     );
     with_completed_tool(
         &mut state,
-        30,
+        50,
         "websearch",
         json!({ "query": "opencode tui layout" }),
     );
@@ -37,6 +44,14 @@ fn search_and_web_tools_use_opencode_glyphs_and_titles() {
     let output = render(&mut state, 120, 28);
 
     // Then: yaca uses OpenCode's tool-specific glyphs, titles, and compact summaries.
+    assert!(
+        output.contains("→ List crates/yaca-tui"),
+        "ls should render like OpenCode's List tool instead of raw JSON:\n{output}"
+    );
+    assert!(
+        output.contains("✱ Find *.rs in crates/yaca-tui"),
+        "find should render as a search-style tool with a compact summary:\n{output}"
+    );
     assert!(
         output.contains("✱ Grep render_tool in crates/yaca-tui"),
         "grep should render with the OpenCode search glyph and compact summary:\n{output}"

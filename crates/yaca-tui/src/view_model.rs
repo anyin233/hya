@@ -112,8 +112,13 @@ fn tool_input(name: &str, state: &ToolPartState) -> String {
 fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
     match name {
         "read" => field_text(value, "path").map(|path| read_summary(value, path)),
+        "ls" => field_text(value, "path"),
         "edit" | "write" => field_text(value, "path"),
         "shell" | "bash" => field_text(value, "cmd").or_else(|| field_text(value, "command")),
+        "find" => field_text(value, "pattern").map(|pattern| match field_text(value, "path") {
+            Some(path) => format!("{pattern} in {path}"),
+            None => pattern,
+        }),
         "grep" => field_text(value, "pattern").map(|pattern| match field_text(value, "path") {
             Some(path) => format!("{pattern} in {path}"),
             None => pattern,
