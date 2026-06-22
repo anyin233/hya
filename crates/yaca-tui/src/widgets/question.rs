@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
@@ -93,22 +93,18 @@ fn option_line(
     inner_width: usize,
     theme: &Theme,
 ) -> Line<'static> {
-    let active_style = Style::default()
-        .fg(theme.background)
-        .bg(theme.primary)
-        .add_modifier(Modifier::BOLD);
     let number_style = if selected {
-        active_style
+        Style::default().fg(theme.muted).bg(theme.element)
     } else {
         Style::default().fg(theme.muted)
     };
     let option_style = if selected {
-        active_style
+        Style::default().fg(theme.info).bg(theme.element)
     } else {
         Style::default().fg(theme.text)
     };
     let gap_style = if selected {
-        active_style
+        Style::default().bg(theme.element)
     } else {
         Style::default()
     };

@@ -155,6 +155,42 @@ fn question_panel_renders_prompt_as_body_text() {
 }
 
 #[test]
+fn question_panel_highlights_selected_option_like_opencode() {
+    // Given: a single-choice question with the first option selected.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 0,
+            input: String::new(),
+            allow_custom: false,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the question footer renders into a terminal buffer.
+    let width = 100;
+    let height = 20;
+    let buffer = render_buffer(&mut state, width, height);
+    let (x, y) =
+        render_support::find_rendered_text(&buffer, width, height, "fast").unwrap_or_else(|| {
+            panic!(
+                "missing selected option in:\n{}",
+                render_support::buffer_text(&buffer, width, height)
+            )
+        });
+    let cell = &buffer[(x, y)];
+
+    // Then: selection uses a tonal row, not the old reverse-primary chip.
+    assert_eq!(cell.bg, Color::Rgb(30, 30, 30));
+    assert_ne!(cell.fg, Color::Rgb(10, 10, 10));
+    assert!(
+        !cell.modifier.contains(Modifier::BOLD),
+        "question option selection should not use a reverse bold chip"
+    );
+}
+
+#[test]
 fn question_panel_renders_custom_answer_like_opencode() {
     // Given: an allow-custom question with an in-progress custom answer.
     let mut state = AppState {
