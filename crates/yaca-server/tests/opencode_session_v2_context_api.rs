@@ -79,6 +79,22 @@ async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, 
     (status, body_json(resp).await)
 }
 
+async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_context_completed_tool_state_includes_output_paths() {
     let app = router(shell_state().await);
@@ -120,4 +136,73 @@ async fn opencode_v2_context_completed_tool_state_includes_output_paths() {
         })
         .expect("completed tool state");
     assert_eq!(state["outputPaths"], json!([]));
+}
+
+#[tokio::test]
+async fn opencode_v2_context_error_tool_state_includes_result() {
+    let app = router(shell_state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session".to_string(),
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, shell) = post_json(
+        app.clone(),
+        format!("/api/session/{session}/shell"),
+        json!({"agent": "build", "command": "printf original"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let message = shell["data"]["info"]["id"].as_str().expect("message id");
+    let part = shell["data"]["parts"][0]["id"].as_str().expect("part id");
+    let call = shell["data"]["parts"][0]["callID"]
+        .as_str()
+        .expect("call id");
+
+    let (status, _) = patch_json(
+        app.clone(),
+        format!("/session/{session}/message/{message}/part/{part}"),
+        json!({
+            "id": part,
+            "sessionID": session,
+            "messageID": message,
+            "type": "tool",
+            "callID": call,
+            "tool": "shell",
+            "state": {
+                "status": "error",
+                "input": {"command": "printf original"},
+                "error": "shell failed",
+                "time": {"start": 1, "end": 2}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    let state = context["data"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .flat_map(|message| {
+            message["content"]
+                .as_array()
+                .into_iter()
+                .flat_map(|content| content.iter())
+        })
+        .find_map(|content| {
+            if content["state"]["status"] == "error" {
+                Some(&content["state"])
+            } else {
+                None
+            }
+        })
+        .expect("error tool state");
+    assert_eq!(state["result"], "shell failed");
 }

@@ -31,6 +31,7 @@ mod pty_state;
 mod question;
 mod session_context;
 mod session_context_messages;
+mod session_context_tool_state;
 mod session_delete;
 mod session_diff;
 mod session_fork;
