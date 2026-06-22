@@ -3,17 +3,17 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::Json;
-use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use futures::Stream;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::BroadcastStream;
+use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
 use yaca_mcp::McpManager;
 use yaca_proto::api::{
@@ -42,9 +42,9 @@ impl AppState {
         Self {
             engine,
             agent,
-            permission_requests: pending::PermissionRequests::default(),
-            question_requests: pending::QuestionRequests::default(),
-            mcp_manager: Arc::new(McpManager::default()),
+            permission_requests: Default::default(),
+            question_requests: Default::default(),
+            mcp_manager: Default::default(),
         }
     }
 
@@ -111,6 +111,14 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/:id/events", get(events))
         .route("/sessions/:id/stream", get(stream))
         .with_state(state)
+        .layer(cors())
+}
+
+fn cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::mirror_request())
+        .allow_headers(AllowHeaders::mirror_request())
+        .allow_methods(Any)
 }
 
 pub struct ApiError {
@@ -119,48 +127,37 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
+    fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
-            status: StatusCode::BAD_REQUEST,
+            status,
             message: message.into(),
         }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self::with_status(StatusCode::BAD_REQUEST, message)
     }
 
     fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: message.into(),
-        }
+        Self::with_status(StatusCode::NOT_FOUND, message)
     }
 
     fn internal(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: message.into(),
-        }
+        Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 
     fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: message.into(),
-        }
+        Self::with_status(StatusCode::CONFLICT, message)
     }
 
     fn service_unavailable(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: message.into(),
-        }
+        Self::with_status(StatusCode::SERVICE_UNAVAILABLE, message)
     }
 }
 
 impl From<yaca_core::CoreError> for ApiError {
     fn from(e: yaca_core::CoreError) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: e.to_string(),
-        }
+        Self::internal(e.to_string())
     }
 }
 
