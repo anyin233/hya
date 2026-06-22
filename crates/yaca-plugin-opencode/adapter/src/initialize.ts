@@ -95,8 +95,10 @@ async function loadConfiguredHooks(
   const discovered = await discoverPluginSpecs({
     directory,
     worktree,
+    customConfigFile: nonemptyEnv(context.env.OPENCODE_CONFIG),
     customConfigDir: nonemptyEnv(context.env.OPENCODE_CONFIG_DIR),
     disableProjectConfig: envFlag(context.env.OPENCODE_DISABLE_PROJECT_CONFIG),
+    inlineConfig: nonemptyEnv(context.env.OPENCODE_CONFIG_CONTENT),
     xdgConfigHome: context.env.XDG_CONFIG_HOME,
     home: context.env.HOME,
   })
