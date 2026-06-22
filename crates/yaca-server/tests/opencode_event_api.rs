@@ -6,6 +6,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use futures::StreamExt;
+use serde_json::json;
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::{AgentName, ModelRef};
@@ -49,6 +50,47 @@ async fn opencode_global_event_route_streams_connected_event() {
     assert_event_stream("/global/event").await;
 }
 
+#[tokio::test]
+async fn opencode_v2_event_route_streams_session_created_location() {
+    let app = router(state().await);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    let connected = read_sse_json(&mut stream).await;
+    assert_eq!(connected["type"], "server.connected");
+
+    let directory = "/tmp/yaca-opencode-event-api-scoped";
+    let created = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"location": {"directory": directory}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["type"], "session.created");
+    assert_eq!(event["location"]["directory"], directory);
+    assert!(event["data"]["sessionID"].as_str().is_some());
+}
+
 async fn assert_event_stream(uri: &str) {
     let app = router(state().await);
     let resp = app
@@ -70,9 +112,15 @@ async fn assert_event_stream(uri: &str) {
     );
 
     let mut stream = resp.into_body().into_data_stream();
+    let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["type"], "server.connected");
+    assert!(event.get("location").is_none());
+}
+
+async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {
     let chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
         .await
-        .expect("first event")
+        .expect("event")
         .expect("body chunk")
         .expect("valid chunk");
     let frame = String::from_utf8(chunk.to_vec()).unwrap();
@@ -81,7 +129,5 @@ async fn assert_event_stream(uri: &str) {
         .lines()
         .find_map(|line| line.strip_prefix("data: "))
         .expect("data line");
-    let event: serde_json::Value = serde_json::from_str(data).unwrap();
-    assert_eq!(event["type"], "server.connected");
-    assert!(event.get("location").is_none());
+    serde_json::from_str(data).unwrap()
 }
