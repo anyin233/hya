@@ -76,13 +76,13 @@ fn ellipsize_input(input: &str) -> String {
 fn status_symbol(name: &str, status: &ToolStatus) -> &'static str {
     match status {
         ToolStatus::Error { .. } => "×",
-        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => {
-            if matches!(name, "edit" | "write") {
-                "←"
-            } else {
-                "→"
-            }
-        }
+        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => match name {
+            "edit" | "write" => "←",
+            "grep" | "glob" => "✱",
+            "webfetch" => "%",
+            "websearch" => "◈",
+            _ => "→",
+        },
     }
 }
 
@@ -94,6 +94,8 @@ fn action_label(name: &str) -> String {
         "write" => "Write".to_string(),
         "grep" => "Grep".to_string(),
         "glob" => "Glob".to_string(),
+        "webfetch" => "WebFetch".to_string(),
+        "websearch" => "WebSearch".to_string(),
         other => title_case_ascii(other),
     }
 }

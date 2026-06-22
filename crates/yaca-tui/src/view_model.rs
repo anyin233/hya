@@ -112,6 +112,8 @@ fn known_tool_input(name: &str, value: &serde_json::Value) -> Option<String> {
             None => pattern,
         }),
         "glob" => field_text(value, "pattern"),
+        "webfetch" => field_text(value, "url"),
+        "websearch" => field_text(value, "query"),
         _ => None,
     }
 }
