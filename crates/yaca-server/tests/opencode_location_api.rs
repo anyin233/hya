@@ -101,3 +101,25 @@ async fn opencode_location_query_and_headers_override_default_workdir() {
     assert_eq!(agents["location"]["workspaceID"], "wrk_header");
     assert_eq!(agents["data"][0]["id"], "build");
 }
+
+#[tokio::test]
+async fn opencode_location_accepts_workspace_routing_query_names() {
+    let workdir = tempdir();
+    let scoped = workdir.join("workspace routed");
+    std::fs::create_dir_all(&scoped).unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let scoped_text = scoped.to_string_lossy();
+    let encoded_scoped = scoped_text.replace(' ', "%20");
+    let app = router(state(workdir).await);
+
+    let (status, location) = get_json(
+        app,
+        format!("/api/location?directory={encoded_scoped}&workspace=wrk_direct"),
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(location["directory"], scoped_text.as_ref());
+    assert_eq!(location["workspaceID"], "wrk_direct");
+}
