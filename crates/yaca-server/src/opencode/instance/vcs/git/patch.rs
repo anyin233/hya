@@ -55,6 +55,6 @@ fn cap_patch(file: &str, patch: String, current_total_bytes: usize) -> String {
 
 fn empty_patch(file: &str) -> String {
     format!(
-        "Index: {file}\n===================================================================\n--- {file}\n+++ {file}\n"
+        "Index: {file}\n===================================================================\n--- {file}\t\n+++ {file}\t\n"
     )
 }
