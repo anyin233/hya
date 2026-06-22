@@ -25,9 +25,20 @@ pub(super) fn composer_identity_metadata(
         state.model.as_str()
     };
     let effort = state.reasoning_effort.as_deref();
+    let provider = state
+        .model_provider_label
+        .as_deref()
+        .filter(|label| !label.is_empty());
     let mode = state.yolo.then_some("YOLO");
     let model_width = if policy.show_model {
         UnicodeWidthStr::width(" · ") + UnicodeWidthStr::width(model)
+    } else {
+        0
+    };
+    let provider_width = if policy.show_model {
+        provider.map_or(0, |label| {
+            UnicodeWidthStr::width(" ") + UnicodeWidthStr::width(label)
+        })
     } else {
         0
     };
@@ -40,6 +51,7 @@ pub(super) fn composer_identity_metadata(
     let left_width = UnicodeWidthStr::width("  ")
         + UnicodeWidthStr::width(agent.as_str())
         + model_width
+        + provider_width
         + effort_width
         + mode_width;
     let status_gap_width = usize::from(render_width).saturating_sub(left_width);
@@ -55,6 +67,15 @@ pub(super) fn composer_identity_metadata(
                 Style::default().fg(theme.text).bg(theme.element),
             ),
         ]);
+        if let Some(provider) = provider {
+            spans.extend([
+                Span::styled(" ", Style::default().bg(theme.element)),
+                Span::styled(
+                    provider.to_string(),
+                    Style::default().fg(theme.muted).bg(theme.element),
+                ),
+            ]);
+        }
     }
     if let Some(effort) = effort {
         spans.extend([

@@ -35,6 +35,7 @@ pub struct AppState {
     pub scroll_back: u16,
     pub agent: String,
     pub model: String,
+    pub model_provider_label: Option<String>,
     pub session_label: String,
     pub reasoning_effort: Option<String>,
     pub cost_label: Option<String>,
@@ -164,6 +165,11 @@ impl AppState {
 
     pub fn scroll_down(&mut self, lines: u16) {
         self.scroll_back = self.scroll_back.saturating_sub(lines);
+    }
+
+    pub fn set_model_identity(&mut self, model: String, provider_label: Option<String>) {
+        self.model = model;
+        self.model_provider_label = provider_label.filter(|label| !label.trim().is_empty());
     }
 }
 

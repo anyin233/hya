@@ -52,6 +52,14 @@ enum DialogMode {
     ReferenceCompletion,
 }
 
+fn provider_label_for_model(models: &[ModelEntry], model: &str) -> Option<String> {
+    models
+        .iter()
+        .find(|entry| entry.id == model)
+        .map(|entry| entry.provider.clone())
+        .filter(|label| !label.trim().is_empty())
+}
+
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<ModelEntry>,
@@ -94,12 +102,15 @@ impl Controller {
 
     #[must_use]
     pub fn with_models_and_sessions(
-        app: AppState,
+        mut app: AppState,
         mut available_models: Vec<ModelEntry>,
         sessions: Vec<SessionSummary>,
     ) -> Self {
         available_models.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.provider.cmp(&b.provider)));
         available_models.dedup();
+        if app.model_provider_label.is_none() {
+            app.model_provider_label = provider_label_for_model(&available_models, &app.model);
+        }
         Self {
             app,
             available_models,
@@ -344,8 +355,10 @@ impl Controller {
                         .available_models
                         .get(selected)
                         .map(|entry| {
-                            self.app.model = entry.id.clone();
-                            TuiEffect::SelectModel(entry.id.clone())
+                            let model = entry.id.clone();
+                            self.app
+                                .set_model_identity(model.clone(), Some(entry.provider.clone()));
+                            TuiEffect::SelectModel(model)
                         })
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::Resume) => self
@@ -443,8 +456,10 @@ impl Controller {
         let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
             Some(CommandKind::Model) if !arguments.is_empty() => {
-                self.app.model = arguments.to_string();
-                TuiEffect::SelectModel(arguments.to_string())
+                let model = arguments.to_string();
+                let provider = provider_label_for_model(&self.available_models, &model);
+                self.app.set_model_identity(model.clone(), provider);
+                TuiEffect::SelectModel(model)
             }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
@@ -1141,6 +1156,7 @@ mod tests {
             TuiEffect::SelectModel("gamma".to_string())
         );
         assert_eq!(controller.app.model, "gamma");
+        assert_eq!(controller.app.model_provider_label.as_deref(), Some("test"));
         assert!(controller.app.dialog.is_none());
     }
 

@@ -72,7 +72,7 @@ All terminal spacing derives from cell counts.
 
 - Wide terminal: transcript plus fixed right sidebar.
 - Narrow terminal: transcript uses full width and sidebar is hidden.
-- Composer: input panel holds draft text plus agent/model/effort identity;
+- Composer: input panel holds draft text plus agent/model/provider/effort identity;
   usage, billing, and command hints live on the footer row below the panel.
 
 ### Rules
@@ -99,7 +99,7 @@ All terminal spacing derives from cell counts.
 - **Spacing**: three-cell prompt gutter, one-row identity band, and one footer
   row for usage, billing, and commands.
 - **States**: active input, running disabled cursor, scrollback footer.
-- **Accessibility**: agent, model, thinking effort, cost, commands, and mode are
+- **Accessibility**: agent, model, provider, thinking effort, cost, commands, and mode are
   visible as text without mixing identity and usage into the same row.
 
 ### Context Sidebar
