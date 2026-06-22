@@ -27,7 +27,7 @@ pub fn render_prompt(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
                 Style::default().fg(theme.text).bg(theme.element),
             ),
         ]),
-        composer_metadata(state, theme),
+        composer_metadata(state, theme, area.width),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().fg(theme.text).bg(theme.element)),
@@ -71,7 +71,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     );
 }
 
-fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
+fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
     let agent = if state.agent.is_empty() {
         "build"
     } else {
@@ -85,8 +85,17 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
     let effort = state.reasoning_effort.as_deref().unwrap_or("off");
     let cost = state.cost_label.as_deref().unwrap_or("cost n/a");
     let mode = if state.yolo { "YOLO" } else { "manual" };
-    let context = composer_context_label(state);
-    let context_separator = if context.is_some() { " · " } else { "" };
+    let context = composer_context_label(state).unwrap_or_default();
+    let context_separator = if context.is_empty() { "" } else { " · " };
+    let left_width = ["  ", agent, " · ", model, " · think ", effort, " · ", mode]
+        .into_iter()
+        .map(UnicodeWidthStr::width)
+        .sum::<usize>();
+    let right_width = UnicodeWidthStr::width(context.as_str())
+        + UnicodeWidthStr::width(context_separator)
+        + UnicodeWidthStr::width(cost)
+        + UnicodeWidthStr::width("   ctrl+p commands");
+    let status_gap_width = usize::from(width).saturating_sub(left_width + right_width);
     Line::from(vec![
         Span::styled("  ", Style::default().bg(theme.element)),
         Span::styled(
@@ -111,11 +120,11 @@ fn composer_metadata(state: &AppState, theme: &Theme) -> Line<'static> {
             mode.to_string(),
             Style::default().fg(theme.warning).bg(theme.element),
         ),
-        Span::styled("   ", Style::default().bg(theme.element)),
         Span::styled(
-            context.unwrap_or_default(),
-            Style::default().fg(theme.muted).bg(theme.element),
+            " ".repeat(status_gap_width),
+            Style::default().bg(theme.element),
         ),
+        Span::styled(context, Style::default().fg(theme.muted).bg(theme.element)),
         Span::styled(
             context_separator,
             Style::default().fg(theme.muted).bg(theme.element),

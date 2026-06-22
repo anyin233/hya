@@ -120,3 +120,26 @@ fn composer_metadata_includes_context_usage_before_cost() {
         "composer metadata should keep command affordance visible"
     );
 }
+
+#[test]
+fn composer_metadata_anchors_commands_to_main_column_edge() {
+    // Given: a wide OpenCode-style shell with the right context rail visible.
+    let mut state = AppState {
+        agent: "build".to_string(),
+        model: "mini".to_string(),
+        reasoning_effort: Some("off".to_string()),
+        cost_label: Some("$0".to_string()),
+        ..AppState::default()
+    };
+
+    // When: the composer metadata row is rendered in the main output column.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = rendered_row(&buffer, 120, 13);
+    let main_column: String = metadata_row.chars().take(82).collect();
+
+    // Then: the command affordance is anchored to the main column's right edge.
+    assert!(
+        main_column.ends_with("ctrl+p commands"),
+        "composer commands should end at the main column edge, got {main_column:?}"
+    );
+}
