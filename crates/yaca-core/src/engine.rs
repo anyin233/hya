@@ -154,7 +154,18 @@ impl SessionEngine {
     }
 
     pub async fn create(&self, spec: CreateSession) -> Result<SessionId, CoreError> {
-        let id = SessionId::new();
+        self.create_with_id(None, spec).await
+    }
+
+    pub async fn create_with_id(
+        &self,
+        id: Option<SessionId>,
+        spec: CreateSession,
+    ) -> Result<SessionId, CoreError> {
+        let id = id.unwrap_or_default();
+        if !self.replay(id).await?.is_empty() {
+            return Ok(id);
+        }
         self.emit(
             id,
             Event::SessionCreated {

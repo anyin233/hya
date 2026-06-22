@@ -47,8 +47,16 @@ impl OpenCodeMessage {
 }
 
 impl OpenCodeSessionInfo {
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
     pub(super) fn parent_id(&self) -> Option<&str> {
         self.parent_id.as_deref()
+    }
+
+    pub(super) fn title(&self) -> &str {
+        &self.title
     }
 }
 
