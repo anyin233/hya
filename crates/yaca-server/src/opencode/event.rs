@@ -18,7 +18,7 @@ pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/event", get(subscribe))
         .route("/api/event", get(subscribe))
-        .route("/global/event", get(subscribe))
+        .route("/global/event", get(subscribe_global))
 }
 
 #[derive(Serialize)]
@@ -44,6 +44,33 @@ async fn subscribe(
         async move {
             match result {
                 Ok(envelope) => Some(Ok(json_event(&envelope_payload(&st, envelope).await))),
+                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+            }
+        }
+    });
+    Sse::new(initial.chain(live))
+}
+
+async fn subscribe_global(
+    State(st): State<ServerState>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let connected = json_event(&json!({
+        "payload": EventPayload {
+            id: event_id(),
+            kind: "server.connected",
+            properties: json!({}),
+        },
+    }));
+    let initial = stream::once(async move { Ok(connected) });
+    let live_st = st.clone();
+    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+        let st = live_st.clone();
+        async move {
+            match result {
+                Ok(envelope) => {
+                    let payload = envelope_payload(&st, envelope).await;
+                    Some(Ok(json_event(&json!({ "payload": payload }))))
+                }
                 Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
             }
         }

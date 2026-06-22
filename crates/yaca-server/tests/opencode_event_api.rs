@@ -93,7 +93,30 @@ async fn opencode_legacy_event_route_streams_connected_event() {
 
 #[tokio::test]
 async fn opencode_global_event_route_streams_connected_event() {
-    assert_event_stream("/global/event").await;
+    let app = router(state().await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/global/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let mut stream = resp.into_body().into_data_stream();
+    let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["payload"]["type"], "server.connected");
+    assert!(event["payload"].get("location").is_none());
+    assert_eq!(event["payload"]["properties"], json!({}));
 }
 
 #[tokio::test]
