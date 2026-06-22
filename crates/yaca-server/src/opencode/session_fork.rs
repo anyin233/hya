@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use yaca_core::CreateSession;
 use yaca_proto::{MessageId, Projection};
@@ -17,12 +18,12 @@ pub(super) async fn fork(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     body: Bytes,
-) -> Result<Json<super::projection::OpenCodeSessionInfo>, ApiError> {
+) -> Result<Response, ApiError> {
     let before = parse_body(&body)?;
     let source = parse_session(&id)?;
     let envs = st.engine.replay(source).await?;
     if envs.is_empty() {
-        return Err(ApiError::not_found("session not found"));
+        return Ok(super::errors::legacy_session_not_found(source));
     }
     let projection = Projection::from_events(&envs);
     let source_info = super::load_session(&st, source, None).await?.info;
@@ -52,7 +53,7 @@ pub(super) async fn fork(
     st.engine
         .copy_messages_to_session(target, &projection, before)
         .await?;
-    Ok(Json(super::load_session(&st, target, None).await?.info))
+    Ok(Json(super::load_session(&st, target, None).await?.info).into_response())
 }
 
 fn parse_body(body: &[u8]) -> Result<Option<MessageId>, ApiError> {
