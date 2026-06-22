@@ -97,14 +97,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "tools",
         aliases: &[],
         description: "Show builtin tools and MCP status",
-        key_hint: "leader t",
+        key_hint: "leader s",
         kind: CommandKind::Tools,
     },
     CommandSpec {
         name: "mcp",
         aliases: &[],
         description: "Show MCP and builtin tool status",
-        key_hint: "leader t",
+        key_hint: "leader s",
         kind: CommandKind::Tools,
     },
     CommandSpec {
@@ -365,6 +365,23 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "/export"));
         assert!(items.iter().any(|item| item.label == "/quit"));
         assert!(items.iter().any(|item| item.label == "/help"));
+    }
+
+    #[test]
+    fn status_commands_advertise_opencode_leader_shortcut() {
+        let items = help_items();
+
+        let tools_detail = items
+            .iter()
+            .find(|item| item.label == "/tools")
+            .map(|item| item.detail.as_str());
+        let mcp_detail = items
+            .iter()
+            .find(|item| item.label == "/mcp")
+            .map(|item| item.detail.as_str());
+
+        assert!(matches!(tools_detail, Some(detail) if detail.ends_with("leader s")));
+        assert!(matches!(mcp_detail, Some(detail) if detail.ends_with("leader s")));
     }
 
     #[test]

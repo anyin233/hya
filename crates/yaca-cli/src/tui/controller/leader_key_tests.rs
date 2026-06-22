@@ -107,6 +107,23 @@ fn ctrl_x_then_c_requests_compact_transcript() {
 }
 
 #[test]
+fn ctrl_x_then_s_opens_status_dialog() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+
+    // When
+    arm_leader(&mut controller);
+    let effect = controller.handle_key(key(KeyCode::Char('s')));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("status dialog").title,
+        "tools"
+    );
+}
+
+#[test]
 fn ctrl_x_then_x_requests_export_transcript() {
     // Given
     let mut controller = Controller::new(AppState::default());

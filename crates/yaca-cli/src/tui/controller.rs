@@ -267,6 +267,10 @@ impl Controller {
             }
             LeaderAction::SessionNew => TuiEffect::NewSession,
             LeaderAction::SessionCompact => TuiEffect::CompactTranscript,
+            LeaderAction::StatusView => {
+                self.open_tools_dialog();
+                TuiEffect::None
+            }
             LeaderAction::SessionExport => TuiEffect::ExportTranscript,
             LeaderAction::Exit => TuiEffect::Exit,
         }
