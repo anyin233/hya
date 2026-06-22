@@ -67,6 +67,7 @@ async fn chat_params_open_timeout_keeps_original_request() {
         temperature: Some(0.5),
         max_output_tokens: None,
         reasoning: None,
+        headers: Default::default(),
     };
     let ChatParamsOutcome::Continue { request } = host
         .chat_params(ChatParamsInput {

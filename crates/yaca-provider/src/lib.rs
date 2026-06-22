@@ -1,6 +1,8 @@
 //! `yaca-provider` — Provider/Protocol/Route abstraction normalizing every LLM
 //! into the canonical `yaca_proto::Event` stream (design.md §4, the keystone).
 
+use std::collections::BTreeMap;
+
 pub mod anthropic;
 pub mod dev;
 pub mod fake;
@@ -116,6 +118,7 @@ pub struct CompletionRequest {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub reasoning: Option<ReasoningEffort>,
+    pub headers: BTreeMap<String, String>,
 }
 
 #[async_trait]

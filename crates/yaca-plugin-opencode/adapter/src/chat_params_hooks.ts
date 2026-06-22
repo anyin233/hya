@@ -10,6 +10,7 @@ export type WireCompletionRequest = {
   readonly temperature?: number
   readonly max_output_tokens?: number
   readonly reasoning?: string
+  readonly headers?: Record<string, string>
 }
 
 export type ChatParamsParams = {
@@ -31,6 +32,11 @@ type ChatParamsHook = (
 type SystemTransformHook = (
   input: { readonly sessionID?: string; readonly model: OpenCodeModel },
   output: { system: string[] },
+) => unknown | Promise<unknown>
+
+type ChatHeadersHook = (
+  input: ChatParamsInput,
+  output: { headers: Record<string, string> },
 ) => unknown | Promise<unknown>
 
 type ChatParamsInput = {
@@ -99,7 +105,9 @@ export async function runChatParamsHooks(
   const system = await transformedSystem(hooks, params, model)
   const messages = await runChatMessagesTransformHooks(hooks, params.session, params.request.messages)
   const tools = await runToolDefinitionHooks(hooks, params.request.tools)
-  const request = { ...params.request, system, messages, tools }
+  const input = chatParamsInput(params, model)
+  const headers = await transformedHeaders(hooks, input, params.request.headers)
+  const request = { ...params.request, system, messages, tools, headers }
   const output: ChatParamsOutput = {
     temperature: request.temperature ?? 0,
     topP: 1,
@@ -107,7 +115,6 @@ export async function runChatParamsHooks(
     maxOutputTokens: request.max_output_tokens,
     options: {},
   }
-  const input = chatParamsInput(params, model)
   for (const hook of hooks) {
     const candidate = hook["chat.params"]
     if (!isChatParamsHook(candidate)) {
@@ -147,6 +154,29 @@ async function transformedSystem(
     }
   }
   return output.system.length === 0 ? undefined : output.system.join("\n\n")
+}
+
+async function transformedHeaders(
+  hooks: readonly OpenCodeHooks[],
+  input: ChatParamsInput,
+  initial: Record<string, string> | undefined,
+): Promise<Record<string, string> | undefined> {
+  const output = { headers: initial === undefined ? {} : { ...initial } }
+  for (const hook of hooks) {
+    const candidate = hook["chat.headers"]
+    if (!isChatHeadersHook(candidate)) {
+      continue
+    }
+    try {
+      await candidate(input, output)
+    } catch (caught) {
+      if (caught instanceof Error) {
+        continue
+      }
+      throw caught
+    }
+  }
+  return Object.keys(output.headers).length === 0 ? undefined : output.headers
 }
 
 function chatParamsInput(params: ChatParamsParams, model: OpenCodeModel): ChatParamsInput {
@@ -211,5 +241,9 @@ function isChatParamsHook(value: unknown): value is ChatParamsHook {
 }
 
 function isSystemTransformHook(value: unknown): value is SystemTransformHook {
+  return typeof value === "function"
+}
+
+function isChatHeadersHook(value: unknown): value is ChatHeadersHook {
   return typeof value === "function"
 }
