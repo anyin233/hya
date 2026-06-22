@@ -195,6 +195,8 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
+            | Event::MessageDeleted { .. }
+            | Event::PartDeleted { .. }
             | Event::TextStart { .. }
             | Event::TextDelta { .. }
             | Event::TextReplace { .. }

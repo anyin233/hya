@@ -140,6 +140,14 @@ impl Projection {
                     m.finish = Some(*finish);
                 }
             }
+            Event::MessageDeleted { message, .. } => {
+                self.session.messages.retain(|item| item.id != *message);
+            }
+            Event::PartDeleted { message, part, .. } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.parts.retain(|item| item.id() != *part);
+                }
+            }
             Event::TextStart { message, part, .. } => push_part(
                 self,
                 *message,

@@ -582,6 +582,117 @@ async fn opencode_session_routes_page_message_and_children() {
 }
 
 #[tokio::test]
+async fn opencode_session_deletes_messages_and_parts() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let all = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(all.status(), StatusCode::OK);
+    let all_body = body_json(all).await;
+    let user_message = all_body[0]["info"]["id"]
+        .as_str()
+        .expect("user message id")
+        .to_string();
+    let assistant_message = all_body[1]["info"]["id"]
+        .as_str()
+        .expect("assistant message id")
+        .to_string();
+    let assistant_part = all_body[1]["parts"][0]["id"]
+        .as_str()
+        .expect("assistant part id")
+        .to_string();
+
+    let delete_part = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/session/{session}/message/{assistant_message}/part/{assistant_part}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_part.status(), StatusCode::OK);
+    assert_eq!(body_json(delete_part).await, json!(true));
+
+    let assistant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message/{assistant_message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(assistant.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(assistant).await["parts"]
+            .as_array()
+            .expect("parts")
+            .len(),
+        0
+    );
+
+    let delete_message = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/session/{session}/message/{user_message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_message.status(), StatusCode::OK);
+    assert_eq!(body_json(delete_message).await, json!(true));
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message/{user_message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NOT_FOUND);
+
+    let remaining = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}/message"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remaining.status(), StatusCode::OK);
+    let remaining_body = body_json(remaining).await;
+    assert_eq!(remaining_body.as_array().expect("messages").len(), 1);
+    assert_eq!(remaining_body[0]["info"]["id"], assistant_message);
+}
+
+#[tokio::test]
 async fn opencode_session_todo_returns_todowrite_state() {
     let app = router(todo_state().await);
     let session = create_session(app.clone(), None).await;

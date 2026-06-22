@@ -34,6 +34,8 @@ impl TextPartAccumulator {
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
             | Event::MessageFinished { .. }
+            | Event::MessageDeleted { .. }
+            | Event::PartDeleted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::TextReplace { .. }

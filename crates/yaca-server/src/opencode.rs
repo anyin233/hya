@@ -19,6 +19,7 @@ mod projection;
 mod pty;
 mod question;
 mod session_context;
+mod session_delete;
 mod session_legacy;
 mod session_prompt;
 mod session_switch;

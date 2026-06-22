@@ -64,6 +64,15 @@ pub enum Event {
         role: Role,
         finish: FinishReason,
     },
+    MessageDeleted {
+        session: SessionId,
+        message: MessageId,
+    },
+    PartDeleted {
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+    },
 
     // -------- assistant streaming --------
     StepStarted {
@@ -178,6 +187,8 @@ impl Event {
             | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::MessageFinished { session, .. }
+            | Event::MessageDeleted { session, .. }
+            | Event::PartDeleted { session, .. }
             | Event::StepStarted { session, .. }
             | Event::StepFinished { session, .. }
             | Event::TextStart { session, .. }

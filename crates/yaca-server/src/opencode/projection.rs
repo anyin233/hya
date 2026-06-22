@@ -50,6 +50,12 @@ impl OpenCodeMessage {
     pub(super) fn id(&self) -> &str {
         &self.info.id
     }
+
+    pub(super) fn has_part(&self, part: &str) -> bool {
+        self.parts
+            .iter()
+            .any(|item| item["id"].as_str() == Some(part))
+    }
 }
 
 impl OpenCodeSessionInfo {
