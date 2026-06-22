@@ -71,6 +71,10 @@ impl RunRegistry {
         }
     }
 
+    pub(crate) fn is_busy(&self, session: SessionId) -> bool {
+        self.lock_runs().contains_key(&session)
+    }
+
     pub(crate) fn statuses(&self) -> BTreeMap<String, RunStatus> {
         self.lock_runs()
             .keys()
