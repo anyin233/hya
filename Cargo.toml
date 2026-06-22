@@ -46,7 +46,7 @@ time = { version = "0.3", features = ["serde", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 ratatui = "0.30.2"
-crossterm = "0.28"
+crossterm = "0.29.0"
 unicode-width = "0.2.2"
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
