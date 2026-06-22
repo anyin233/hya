@@ -1,3 +1,4 @@
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -24,7 +25,7 @@ struct ListQuery {
     cursor: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct CreateV2Request {
     id: Option<String>,
     agent: Option<String>,
@@ -120,8 +121,14 @@ async fn list(
 
 async fn create(
     State(st): State<ServerState>,
-    Json(req): Json<CreateV2Request>,
+    body: Bytes,
 ) -> Result<Json<DataResponse<OpenCodeSessionInfo>>, ApiError> {
+    let req = if body.is_empty() {
+        CreateV2Request::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::bad_request("invalid session create payload"))?
+    };
     let requested = req.id.as_deref().map(parse_session).transpose()?;
     let session = st
         .engine
