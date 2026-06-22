@@ -90,6 +90,9 @@ async function loadConfiguredHooks(
     }
     throw error
   }
+  if (envFlag(context.env.OPENCODE_PURE)) {
+    return { hooks: [] }
+  }
   const directory = context.env.YACA_DIRECTORY ?? process.cwd()
   const worktree = context.env.YACA_WORKTREE ?? directory
   const discovered = await discoverPluginSpecs({
