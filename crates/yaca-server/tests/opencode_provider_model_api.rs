@@ -74,19 +74,6 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, body)
 }
 
-async fn get_status(app: axum::Router, uri: &str) -> StatusCode {
-    app.oneshot(
-        Request::builder()
-            .method("GET")
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await
-    .unwrap()
-    .status()
-}
-
 async fn request_status(app: axum::Router, method: Method, uri: &str, body: Value) -> StatusCode {
     let resp = app
         .oneshot(
@@ -148,8 +135,10 @@ async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(provider["data"]["id"], "openai");
 
-    let status = get_status(app.clone(), "/api/provider/anthropic").await;
+    let (status, missing) = get_json(app.clone(), "/api/provider/anthropic").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["_tag"], "ProviderNotFoundError");
+    assert_eq!(missing["providerID"], "anthropic");
 
     let (status, models) = get_json(app, "/api/model").await;
     assert_eq!(status, StatusCode::OK);

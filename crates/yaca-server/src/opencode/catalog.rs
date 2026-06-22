@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
@@ -121,19 +122,27 @@ async fn provider_get(
     Query(query): LocationQuery,
     Path(provider_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<LocationResponse<ProviderInfo>>, ApiError> {
+) -> Result<Response, ApiError> {
     let active = model_ref_parts(&st.agent.model);
     if provider_id != active.provider_id {
-        return Err(ApiError::not_found(format!(
-            "Provider not found: {provider_id}"
-        )));
+        let message = format!("Provider not found: {provider_id}");
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "_tag": "ProviderNotFoundError",
+                "providerID": provider_id,
+                "message": message,
+            })),
+        )
+            .into_response());
     }
     Ok(Json(location_response(
         &st,
         &query,
         &headers,
         provider_info(&active),
-    )))
+    ))
+    .into_response())
 }
 
 async fn model_list(
