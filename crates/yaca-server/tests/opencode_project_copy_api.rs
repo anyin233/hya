@@ -196,3 +196,39 @@ async fn opencode_project_copy_rejects_unknown_strategy() {
             .contains("strategy unavailable")
     );
 }
+
+#[tokio::test]
+async fn opencode_project_copy_generates_short_names() {
+    if !git_available() {
+        eprintln!("skipping: git is not available");
+        return;
+    }
+    let repo = init_repo();
+    let app = router(state(repo).await);
+
+    let contextual = request(
+        app.clone(),
+        "POST",
+        "/experimental/project/global/copy/generate-name",
+        Some(json!({
+            "context": "Fix MCP OAuth callback flow"
+        })),
+    )
+    .await;
+    assert_eq!(contextual.status(), StatusCode::OK);
+    assert_eq!(body_json(contextual).await["name"], "fix-mcp-oauth");
+
+    let fallback = request(
+        app,
+        "POST",
+        "/experimental/project/global/copy/generate-name",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(fallback.status(), StatusCode::OK);
+    assert!(
+        body_json(fallback).await["name"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty())
+    );
+}
