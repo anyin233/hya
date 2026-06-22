@@ -193,6 +193,8 @@ async fn opencode_instance_routes_return_metadata() {
 async fn opencode_vcs_routes_return_status_diff_and_apply_patch() {
     let workdir = tempdir();
     init_git_repo(&workdir);
+    std::fs::create_dir_all(workdir.join("nested")).unwrap();
+    std::fs::write(workdir.join("nested/new.txt"), "deep\n").unwrap();
     let app = router(state(workdir.clone()).await);
 
     let (status, status_body) = get_json(app.clone(), "/vcs/status").await;
@@ -203,6 +205,13 @@ async fn opencode_vcs_routes_return_status_diff_and_apply_patch() {
             .unwrap()
             .iter()
             .any(|item| item["file"] == "tracked.txt" && item["status"] == "modified")
+    );
+    assert!(
+        status_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == "nested/new.txt" && item["status"] == "added")
     );
 
     let (status, diff) = get_json(app.clone(), "/vcs/diff?mode=git&context=1").await;
@@ -215,6 +224,12 @@ async fn opencode_vcs_routes_return_status_diff_and_apply_patch() {
             .unwrap()
             .iter()
             .any(|item| item["file"] == "untracked.txt" && item["status"] == "added")
+    );
+    assert!(
+        diff.as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == "nested/new.txt" && item["status"] == "added")
     );
 
     let (status, raw) = get_text(app.clone(), "/vcs/diff/raw").await;
