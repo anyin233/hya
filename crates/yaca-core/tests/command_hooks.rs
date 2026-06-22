@@ -8,7 +8,7 @@ use yaca_core::{
     SessionEngine, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome,
 };
-use yaca_proto::{AgentName, Envelope, ModelRef, PartProjection, Role};
+use yaca_proto::{AgentName, Envelope, Event, ModelRef, PartProjection, Role};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_store::SessionStore;
 use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
@@ -102,6 +102,21 @@ async fn command_execute_before_mutates_text_before_user_message_is_admitted() {
         matches!(
             part,
             PartProjection::Text { text, .. } if text == "Review the diff with hook context"
+        )
+    }));
+    let envelopes = engine.replay(session).await.unwrap();
+    assert!(envelopes.iter().any(|envelope| {
+        matches!(
+            &envelope.event,
+            Event::CommandExecuted {
+                session: event_session,
+                command,
+                arguments,
+                message
+            } if *event_session == session
+                && command == "review"
+                && arguments == "commit"
+                && *message == user.id
         )
     }));
 }

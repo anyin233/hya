@@ -25,6 +25,12 @@ pub enum Event {
         session: SessionId,
         title: String,
     },
+    CommandExecuted {
+        session: SessionId,
+        command: String,
+        arguments: String,
+        message: MessageId,
+    },
 
     // -------- message lifecycle --------
     MessageStarted {
@@ -136,6 +142,7 @@ impl Event {
         match self {
             Event::SessionCreated { session, .. }
             | Event::SessionTitled { session, .. }
+            | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::MessageFinished { session, .. }
             | Event::StepStarted { session, .. }
