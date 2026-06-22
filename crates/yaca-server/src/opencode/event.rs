@@ -155,6 +155,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session_payload(st, &envelope, *session, "session.created").await
         }
         Event::SessionTitled { session, .. }
+        | Event::SessionMoved { session, .. }
         | Event::SessionMetadataSet { session, .. }
         | Event::SessionPermissionSet { session, .. }
         | Event::SessionArchived { session, .. }

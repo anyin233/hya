@@ -21,6 +21,10 @@ pub enum Event {
         model: ModelRef,
         workdir: String,
     },
+    SessionMoved {
+        session: SessionId,
+        workdir: String,
+    },
     SessionTitled {
         session: SessionId,
         title: String,
@@ -203,6 +207,7 @@ impl Event {
     pub fn session(&self) -> Option<SessionId> {
         match self {
             Event::SessionCreated { session, .. }
+            | Event::SessionMoved { session, .. }
             | Event::SessionTitled { session, .. }
             | Event::SessionMetadataSet { session, .. }
             | Event::SessionPermissionSet { session, .. }

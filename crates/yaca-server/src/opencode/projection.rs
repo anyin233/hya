@@ -165,7 +165,11 @@ fn session_info(
         id: id.clone(),
         slug: id,
         project_id: "local".to_string(),
-        directory: meta.workdir.clone(),
+        directory: projection
+            .session
+            .workdir
+            .clone()
+            .unwrap_or_else(|| meta.workdir.clone()),
         parent_id: meta.parent.map(|parent| parent.to_string()),
         title: projection
             .session

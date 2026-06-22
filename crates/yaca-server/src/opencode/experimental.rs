@@ -196,6 +196,12 @@ async fn move_session(
             "Session not found: {session_id}"
         )));
     }
+    if projection.session.workdir.as_deref() != Some(directory) {
+        st.engine
+            .set_workdir(session, directory.to_string())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

@@ -188,6 +188,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
                 out.entry(message).or_default().completed = Some(millis(env.ts_millis));
             }
             Event::SessionCreated { .. }
+            | Event::SessionMoved { .. }
             | Event::SessionTitled { .. }
             | Event::SessionMetadataSet { .. }
             | Event::SessionPermissionSet { .. }
