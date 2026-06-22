@@ -144,7 +144,14 @@ fn branch_items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
         return Ok(Vec::new());
     };
     let out = text(workdir, &["diff", "--name-status", &base])?;
-    Ok(out.lines().filter_map(item_from_name_status).collect())
+    let mut items: Vec<_> = out.lines().filter_map(item_from_name_status).collect();
+    items.extend(
+        status::items(workdir)?
+            .into_iter()
+            .filter(|item| item.code == "??"),
+    );
+    items.sort_by(|a, b| a.file.cmp(&b.file));
+    Ok(items)
 }
 
 fn item_from_name_status(line: &str) -> Option<GitItem> {
