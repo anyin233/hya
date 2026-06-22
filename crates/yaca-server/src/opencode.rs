@@ -15,6 +15,7 @@ mod integration;
 mod location;
 mod mcp;
 mod mcp_state;
+mod message_projection;
 mod metadata;
 mod model_ref;
 mod permission;
