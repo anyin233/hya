@@ -190,6 +190,8 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::SessionMetadataSet { .. }
             | Event::SessionPermissionSet { .. }
             | Event::SessionArchived { .. }
+            | Event::SessionShareSet { .. }
+            | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
             | Event::CommandExecuted { .. }

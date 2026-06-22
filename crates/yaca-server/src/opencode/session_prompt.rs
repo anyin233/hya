@@ -187,6 +187,8 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::SessionMetadataSet { .. }
             | Event::SessionPermissionSet { .. }
             | Event::SessionArchived { .. }
+            | Event::SessionShareSet { .. }
+            | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
             | Event::CommandExecuted { .. }

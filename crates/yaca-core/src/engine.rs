@@ -243,6 +243,16 @@ impl SessionEngine {
             .await
     }
 
+    pub async fn set_share(&self, session: SessionId, url: String) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionShareSet { session, url })
+            .await
+    }
+
+    pub async fn clear_share(&self, session: SessionId) -> Result<(), CoreError> {
+        self.emit(session, Event::SessionShareCleared { session })
+            .await
+    }
+
     pub async fn delete_message(
         &self,
         session: SessionId,
