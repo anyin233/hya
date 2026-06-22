@@ -1,22 +1,29 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::routing::get;
+use axum::routing::{get, post};
+use std::collections::BTreeMap;
 use yaca_proto::{Projection, SessionId};
 
-use crate::{ApiError, AppState, parse_session};
+use crate::{ApiError, ServerState, parse_session, runs};
 
 mod projection;
 
-pub(crate) fn router() -> Router<AppState> {
+pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/session", get(list_sessions))
+        .route("/session/status", get(status))
         .route("/session/:id", get(get_session))
         .route("/session/:id/message", get(messages))
+        .route("/session/:id/abort", post(abort))
+}
+
+async fn status(State(st): State<ServerState>) -> Json<BTreeMap<String, runs::RunStatus>> {
+    Json(st.runs.statuses())
 }
 
 async fn list_sessions(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
 ) -> Result<Json<Vec<projection::OpenCodeSessionInfo>>, ApiError> {
     let sessions = st
         .engine
@@ -36,7 +43,7 @@ async fn list_sessions(
 }
 
 async fn get_session(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<projection::OpenCodeSessionInfo>, ApiError> {
     let session = parse_session(&id)?;
@@ -44,15 +51,24 @@ async fn get_session(
 }
 
 async fn messages(
-    State(st): State<AppState>,
+    State(st): State<ServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<projection::OpenCodeMessage>>, ApiError> {
     let session = parse_session(&id)?;
     Ok(Json(load_session(&st, session, None).await?.messages))
 }
 
+async fn abort(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<Json<bool>, ApiError> {
+    let session = parse_session(&id)?;
+    st.runs.cancel(session);
+    Ok(Json(true))
+}
+
 async fn load_session(
-    st: &AppState,
+    st: &ServerState,
     session: SessionId,
     started_hint: Option<i64>,
 ) -> Result<projection::OpenCodeSessionSnapshot, ApiError> {
