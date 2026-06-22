@@ -3,8 +3,9 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
-use yaca_proto::{AgentName, ModelRef};
+use yaca_proto::AgentName;
 
+use super::model_ref::OpenCodeModelRefRequest;
 use crate::{ApiError, ServerState, parse_session};
 
 #[derive(Deserialize)]
@@ -14,16 +15,7 @@ struct AgentSwitchRequest {
 
 #[derive(Deserialize)]
 struct ModelSwitchRequest {
-    model: ModelRefRequest,
-}
-
-#[derive(Deserialize)]
-struct ModelRefRequest {
-    id: String,
-    #[serde(rename = "providerID")]
-    provider_id: String,
-    #[serde(rename = "variant")]
-    _variant: Option<String>,
+    model: OpenCodeModelRefRequest,
 }
 
 pub(super) fn router() -> Router<ServerState> {
@@ -56,10 +48,4 @@ async fn switch_model(
         .switch_model(session, req.model.into_model_ref())
         .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-impl ModelRefRequest {
-    fn into_model_ref(self) -> ModelRef {
-        ModelRef::new(format!("{}/{}", self.provider_id, self.id))
-    }
 }
