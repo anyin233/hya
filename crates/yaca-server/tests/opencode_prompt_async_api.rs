@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::CreateSessionResponse;
-use yaca_proto::{AgentName, FinishReason, ModelRef};
+use yaca_proto::{AgentName, FinishReason, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -116,6 +116,34 @@ async fn opencode_prompt_async_returns_no_content_and_records_messages() {
     .expect("async prompt completed");
     assert_eq!(messages[0]["parts"][0]["text"], "hello async");
     assert_eq!(messages[1]["parts"][0]["text"], "async answer");
+}
+
+#[tokio::test]
+async fn opencode_prompt_async_missing_session_returns_not_found() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{missing}/prompt_async"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "never"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
 }
 
 #[tokio::test]
