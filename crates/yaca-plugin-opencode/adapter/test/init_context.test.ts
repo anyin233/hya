@@ -75,9 +75,47 @@ test("initialize passes an OpenCode app log client to local plugins", async () =
   expect(result.hooks).toEqual([{ name: "event" }])
 })
 
+test("initialize passes OpenCode project and path clients to local plugins", async () => {
+  const root = await makeTempDir()
+  const configRoot = path.join(root, "config-home")
+  const stateRoot = path.join(root, "state-home")
+  const pluginFile = path.join(root, "project-path-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "project-path",',
+      "  server: async (input) => {",
+      "    const project = await input.client.project.current()",
+      '    if (project.response.status !== 200) throw new Error("project status mismatch")',
+      '    if (project.data.id !== "project-42") throw new Error("project id mismatch")',
+      "    if (project.data.worktree !== input.worktree) throw new Error(\"project worktree mismatch\")",
+      "    const paths = await input.client.path.get()",
+      '    if (paths.response.status !== 200) throw new Error("path status mismatch")',
+      "    if (paths.data.directory !== input.directory) throw new Error(\"directory mismatch\")",
+      "    if (paths.data.worktree !== input.worktree) throw new Error(\"worktree mismatch\")",
+      `    if (paths.data.config !== ${JSON.stringify(path.join(configRoot, "opencode"))}) throw new Error("config mismatch")`,
+      `    if (paths.data.state !== ${JSON.stringify(path.join(stateRoot, "opencode"))}) throw new Error("state mismatch")`,
+      "    return { event: async () => {} }",
+      "  },",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(root, pluginFile, {
+    YACA_PROJECT_ID: "project-42",
+    XDG_CONFIG_HOME: configRoot,
+    XDG_STATE_HOME: stateRoot,
+  })
+
+  const result = InitializeResultSchema.parse(responses[0]?.result)
+  expect(result.hooks).toEqual([{ name: "event" }])
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,
+  env?: Readonly<Record<string, string>>,
 ): Promise<readonly z.infer<typeof AdapterResponseSchema>[]> {
   const proc = Bun.spawn([process.execPath, "run", "src/main.ts"], {
     cwd: import.meta.dir.replace(/\/test$/, ""),
@@ -88,6 +126,7 @@ async function runAdapter(
       }),
       YACA_DIRECTORY: root,
       YACA_WORKTREE: root,
+      ...env,
     },
     stdin: "pipe",
     stdout: "pipe",
