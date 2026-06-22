@@ -115,4 +115,31 @@ test("converts yaca lifecycle events to OpenCode events", () => {
       },
     },
   })
+
+  expect(
+    openCodeEventFromEnvelope({
+      seq: 25,
+      ts_millis: 34,
+      event: {
+        type: "text_replace",
+        session: "session-1",
+        message: "message-2",
+        part: "part-3",
+        text: "final text",
+      },
+    }),
+  ).toEqual({
+    id: "25",
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "part-3",
+        sessionID: "session-1",
+        messageID: "message-2",
+        type: "text",
+        text: "final text",
+        time: { start: 34 },
+      },
+    },
+  })
 })
