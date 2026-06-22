@@ -16,7 +16,7 @@ impl Protocol for AnthropicMessagesProtocol {
         for m in &req.messages {
             match m {
                 Message::User { parts, .. } => {
-                    messages.push(json!({"role": "user", "content": parts_text(parts)}));
+                    messages.push(json!({"role": "user", "content": parts_text(parts)?}));
                 }
                 Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts),
                 Message::System { .. } => {}
@@ -61,14 +61,20 @@ impl Protocol for AnthropicMessagesProtocol {
     }
 }
 
-fn parts_text(parts: &[Part]) -> String {
+fn parts_text(parts: &[Part]) -> Result<String, ProviderError> {
     let mut s = String::new();
     for p in parts {
-        if let Part::Text { text, .. } = p {
-            s.push_str(text);
+        match p {
+            Part::Text { text, .. } => s.push_str(text),
+            Part::Media { media_type, .. } => {
+                return Err(ProviderError::Incompatible(format!(
+                    "Anthropic messages does not support media type {media_type}"
+                )));
+            }
+            Part::Reasoning { .. } | Part::Tool { .. } => {}
         }
     }
-    s
+    Ok(s)
 }
 
 // Anthropic puts tool_use blocks in the assistant message and the matching
@@ -89,6 +95,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
             }
             Part::Tool { .. } => tools.push(part),
             Part::Reasoning { .. } => {}
+            Part::Media { .. } => {}
         }
     }
     if tools.is_empty() {

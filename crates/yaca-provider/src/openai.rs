@@ -22,7 +22,7 @@ impl Protocol for OpenAiChatProtocol {
                     messages.push(json!({"role": "system", "content": content}));
                 }
                 Message::User { parts, .. } => {
-                    messages.push(json!({"role": "user", "content": parts_text(parts)}));
+                    messages.push(json!({"role": "user", "content": parts_text(parts)?}));
                 }
                 Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts),
             }
@@ -66,14 +66,20 @@ impl Protocol for OpenAiChatProtocol {
     }
 }
 
-fn parts_text(parts: &[Part]) -> String {
+fn parts_text(parts: &[Part]) -> Result<String, ProviderError> {
     let mut s = String::new();
     for p in parts {
-        if let Part::Text { text, .. } = p {
-            s.push_str(text);
+        match p {
+            Part::Text { text, .. } => s.push_str(text),
+            Part::Media { media_type, .. } => {
+                return Err(ProviderError::Incompatible(format!(
+                    "OpenAI chat does not support media type {media_type}"
+                )));
+            }
+            Part::Reasoning { .. } | Part::Tool { .. } => {}
         }
     }
-    s
+    Ok(s)
 }
 
 // Split an assistant message into wire messages: each `[text?, tool_call+]` cluster
@@ -95,6 +101,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
             }
             Part::Tool { .. } => tools.push(part),
             Part::Reasoning { .. } => {}
+            Part::Media { .. } => {}
         }
     }
     if tools.is_empty() {
