@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use futures::stream;
 use yaca_proto::{
-    Event, FinishReason, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolName,
+    Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, ToolCallId, ToolName,
 };
 
 use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
@@ -117,6 +117,7 @@ impl FakeProvider {
                 FakeStep::Finish(reason) => out.push(Event::MessageFinished {
                     session,
                     message,
+                    role: Role::Assistant,
                     finish: *reason,
                 }),
             }

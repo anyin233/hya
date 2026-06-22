@@ -41,6 +41,7 @@ pub enum Event {
     MessageFinished {
         session: SessionId,
         message: MessageId,
+        role: Role,
         finish: FinishReason,
     },
 

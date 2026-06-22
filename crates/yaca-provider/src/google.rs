@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 use yaca_proto::{
-    Event, FinishReason, Message, MessageId, Part, PartId, SessionId, ToolCallId, ToolName,
+    Event, FinishReason, Message, MessageId, Part, PartId, Role, SessionId, ToolCallId, ToolName,
 };
 
 use crate::wire::{tool_input, tool_result};
@@ -160,6 +160,7 @@ impl GoogleDecoder {
         out.push(Event::MessageFinished {
             session,
             message,
+            role: Role::Assistant,
             finish,
         });
         out

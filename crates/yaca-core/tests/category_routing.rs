@@ -10,7 +10,7 @@ use yaca_core::{
     AgentSpec, CategoryRegistry, CreateSession, EventBus, MemberSpec, MemberStatus, SessionEngine,
     build_member_agent, inject_skills, run_team,
 };
-use yaca_proto::{AgentName, Event, FinishReason, MemberId, ModelRef};
+use yaca_proto::{AgentName, Event, FinishReason, MemberId, ModelRef, Role};
 use yaca_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
 };
@@ -81,6 +81,7 @@ impl Provider for RecordingProvider {
         let event = Event::MessageFinished {
             session,
             message,
+            role: Role::Assistant,
             finish: FinishReason::Stop,
         };
         Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
