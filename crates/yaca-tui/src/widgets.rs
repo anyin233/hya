@@ -16,6 +16,7 @@ mod status;
 mod transcript;
 mod transcript_diff;
 mod transcript_metadata;
+mod transcript_pending;
 mod transcript_reasoning;
 mod transcript_text;
 mod transcript_tools;

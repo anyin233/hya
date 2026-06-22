@@ -2,6 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
+use super::transcript_pending::pending_tool_label;
 use crate::theme::Theme;
 use crate::tool_labels::status_symbol;
 use crate::view_model::ToolStatus;
@@ -83,17 +84,6 @@ pub fn push_tool_lines(
                 lines,
             );
         }
-    }
-}
-
-fn pending_tool_label(name: &str, status: &ToolStatus) -> Option<&'static str> {
-    if !matches!(status, ToolStatus::Pending | ToolStatus::Running) {
-        return None;
-    }
-
-    match name {
-        "websearch" => Some("Searching web..."),
-        _ => None,
     }
 }
 
