@@ -50,10 +50,14 @@ pub enum Event {
     },
     AgentSwitched {
         session: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<MessageId>,
         agent: AgentName,
     },
     ModelSwitched {
         session: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<MessageId>,
         model: ModelRef,
     },
     SessionStatus {

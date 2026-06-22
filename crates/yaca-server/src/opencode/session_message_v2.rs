@@ -88,7 +88,7 @@ async fn messages(
         return Ok(super::errors::session_not_found(&id));
     }
     let projection = Projection::from_events(&envs);
-    let mut items = super::session_context::v2_messages(&envs, &projection);
+    let mut items = super::session_context_messages::v2_messages(&envs, &projection);
     if matches!(order, MessageOrder::Desc) {
         items.reverse();
     }
