@@ -142,7 +142,10 @@ async fn opencode_vcs_diff_caps_oversized_untracked_patch() {
         .unwrap();
     let patch = item["patch"].as_str().unwrap();
     assert!(patch.len() < 1024, "patch was {} bytes", patch.len());
-    assert!(patch.contains("--- big.txt"));
+    assert_eq!(
+        patch,
+        "Index: big.txt\n===================================================================\n--- big.txt\t\n+++ big.txt\t\n"
+    );
     assert!(!patch.contains("xxxxxxxxxxxxxxxx"));
 }
 
