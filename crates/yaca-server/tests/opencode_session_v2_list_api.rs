@@ -18,6 +18,7 @@ use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
 const WORKDIR: &str = "/tmp/yaca-opencode-session-v2-list-api";
+const OTHER_WORKDIR: &str = "/tmp/yaca-opencode-session-v2-list-api-other";
 
 async fn state() -> AppState {
     let router =
@@ -44,7 +45,11 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
-    let mut body = json!({"agent": "build", "model": "fake", "workdir": WORKDIR});
+    create_session_in(app, parent, WORKDIR).await
+}
+
+async fn create_session_in(app: axum::Router, parent: Option<&str>, workdir: &str) -> String {
+    let mut body = json!({"agent": "build", "model": "fake", "workdir": workdir});
     if let Some(parent) = parent {
         body["parent"] = json!(parent.trim_start_matches("ses_"));
     }
@@ -77,6 +82,24 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
         .unwrap();
     let status = resp.status();
     (status, body_json(resp).await)
+}
+
+#[tokio::test]
+async fn opencode_v2_session_list_filters_directory() {
+    let app = router(state().await);
+    let included = create_session_in(app.clone(), None, WORKDIR).await;
+    let excluded = create_session_in(app.clone(), None, OTHER_WORKDIR).await;
+
+    let (status, body) = get_json(app, &format!("/api/session?directory={WORKDIR}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&included.as_str()));
+    assert!(!ids.contains(&excluded.as_str()));
 }
 
 #[tokio::test]
