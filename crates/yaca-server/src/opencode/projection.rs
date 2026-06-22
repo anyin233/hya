@@ -56,6 +56,13 @@ impl OpenCodeMessage {
             .iter()
             .any(|item| item["id"].as_str() == Some(part))
     }
+
+    pub(super) fn part(&self, part: &str) -> Option<Value> {
+        self.parts
+            .iter()
+            .find(|item| item["id"].as_str() == Some(part))
+            .cloned()
+    }
 }
 
 impl OpenCodeSessionInfo {

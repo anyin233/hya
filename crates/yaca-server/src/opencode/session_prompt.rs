@@ -203,11 +203,13 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ReasoningStart { .. }
             | Event::ReasoningDelta { .. }
             | Event::ReasoningEnd { .. }
+            | Event::ReasoningReplace { .. }
             | Event::ToolInputStart { .. }
             | Event::ToolInputDelta { .. }
             | Event::ToolCallRequested { .. }
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
+            | Event::ToolPartUpdated { .. }
             | Event::Error { .. } => None,
         })
         .ok_or_else(|| ApiError::internal("admitted prompt event missing"))

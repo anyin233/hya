@@ -196,6 +196,18 @@ impl Projection {
                     text.push_str(delta);
                 }
             }
+            Event::ReasoningReplace {
+                message,
+                part,
+                text: replacement,
+                ..
+            } => {
+                if let Some(PartProjection::Reasoning { text, .. }) =
+                    find_part(self, *message, *part)
+                {
+                    *text = replacement.clone();
+                }
+            }
             Event::ToolInputStart {
                 message,
                 part,
@@ -259,6 +271,16 @@ impl Projection {
                         input,
                         message: message_text.clone(),
                     };
+                }
+            }
+            Event::ToolPartUpdated {
+                message,
+                part,
+                state: next,
+                ..
+            } => {
+                if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
+                    *state = next.clone();
                 }
             }
             Event::TextEnd { .. }

@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{EventSeq, MessageId, PartId, SessionId, ToolCallId};
-use crate::message::{FinishReason, Role};
+use crate::message::{FinishReason, Role, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -123,6 +123,12 @@ pub enum Event {
         message: MessageId,
         part: PartId,
     },
+    ReasoningReplace {
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    },
 
     // -------- tool lifecycle --------
     ToolInputStart {
@@ -163,6 +169,12 @@ pub enum Event {
         call: ToolCallId,
         message_text: String,
     },
+    ToolPartUpdated {
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        state: ToolPartState,
+    },
 
     // -------- errors --------
     Error {
@@ -198,11 +210,13 @@ impl Event {
             | Event::ReasoningStart { session, .. }
             | Event::ReasoningDelta { session, .. }
             | Event::ReasoningEnd { session, .. }
+            | Event::ReasoningReplace { session, .. }
             | Event::ToolInputStart { session, .. }
             | Event::ToolInputDelta { session, .. }
             | Event::ToolCallRequested { session, .. }
             | Event::ToolResult { session, .. }
             | Event::ToolError { session, .. } => Some(*session),
+            Event::ToolPartUpdated { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
         }
     }

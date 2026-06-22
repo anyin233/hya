@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use yaca_proto::{
-    AgentName, Envelope, Event, MessageId, ModelRef, PartId, Projection, SessionId, now_millis,
+    AgentName, Envelope, Event, MessageId, ModelRef, PartId, Projection, SessionId, ToolPartState,
+    now_millis,
 };
 use yaca_provider::{ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
@@ -263,6 +264,63 @@ impl SessionEngine {
                 session,
                 message,
                 part,
+            },
+        )
+        .await
+    }
+
+    pub async fn replace_text_part(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            session,
+            Event::TextReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await
+    }
+
+    pub async fn replace_reasoning_part(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            session,
+            Event::ReasoningReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await
+    }
+
+    pub async fn update_tool_part(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        state: ToolPartState,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            session,
+            Event::ToolPartUpdated {
+                session,
+                message,
+                part,
+                state,
             },
         )
         .await
