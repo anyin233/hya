@@ -95,6 +95,8 @@ async function loadConfiguredHooks(
   const discovered = await discoverPluginSpecs({
     directory,
     worktree,
+    customConfigDir: nonemptyEnv(context.env.OPENCODE_CONFIG_DIR),
+    disableProjectConfig: envFlag(context.env.OPENCODE_DISABLE_PROJECT_CONFIG),
     xdgConfigHome: context.env.XDG_CONFIG_HOME,
     home: context.env.HOME,
   })
@@ -106,6 +108,14 @@ async function loadConfiguredHooks(
     await context.stderr.write(`opencode plugin ${error.spec}: ${error.message}\n`)
   }
   return { hooks: loaded.hooks }
+}
+
+function nonemptyEnv(value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value
+}
+
+function envFlag(value: string | undefined): boolean {
+  return value === "true" || value === "1"
 }
 
 function pluginInput(

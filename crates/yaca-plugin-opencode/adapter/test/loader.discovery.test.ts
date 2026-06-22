@@ -200,6 +200,59 @@ test("discovers child OpenCode config directories before parent directories", as
   ])
 })
 
+test("discovers home and custom OpenCode config directories after project directories", async () => {
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const home = path.join(root, "home")
+  const customConfigDir = path.join(root, "custom-config")
+  const projectConfig = path.join(directory, ".opencode", "opencode.json")
+  const homeConfig = path.join(home, ".opencode", "opencode.json")
+  const customConfig = path.join(customConfigDir, "opencode.json")
+  await mkdir(path.dirname(projectConfig), { recursive: true })
+  await mkdir(path.dirname(homeConfig), { recursive: true })
+  await mkdir(path.dirname(customConfig), { recursive: true })
+  await writeFile(projectConfig, JSON.stringify({ plugin: ["project-plugin"] }))
+  await writeFile(homeConfig, JSON.stringify({ plugin: ["home-plugin"] }))
+  await writeFile(customConfig, JSON.stringify({ plugin: ["custom-plugin"] }))
+
+  const specs = await discoverPluginSpecs({
+    directory,
+    worktree: directory,
+    xdgConfigHome: path.join(root, "xdg"),
+    home,
+    customConfigDir,
+  })
+
+  expect(specs).toEqual(["project-plugin", "home-plugin", "custom-plugin"])
+})
+
+test("skips project OpenCode config directories when project config is disabled", async () => {
+  const root = await makeTempDir()
+  const directory = path.join(root, "project")
+  const home = path.join(root, "home")
+  const customConfigDir = path.join(root, "custom-config")
+  const projectConfig = path.join(directory, ".opencode", "opencode.json")
+  const homeConfig = path.join(home, ".opencode", "opencode.json")
+  const customConfig = path.join(customConfigDir, "opencode.json")
+  await mkdir(path.dirname(projectConfig), { recursive: true })
+  await mkdir(path.dirname(homeConfig), { recursive: true })
+  await mkdir(path.dirname(customConfig), { recursive: true })
+  await writeFile(projectConfig, JSON.stringify({ plugin: ["project-plugin"] }))
+  await writeFile(homeConfig, JSON.stringify({ plugin: ["home-plugin"] }))
+  await writeFile(customConfig, JSON.stringify({ plugin: ["custom-plugin"] }))
+
+  const specs = await discoverPluginSpecs({
+    directory,
+    worktree: directory,
+    xdgConfigHome: path.join(root, "xdg"),
+    home,
+    customConfigDir,
+    disableProjectConfig: true,
+  })
+
+  expect(specs).toEqual(["home-plugin", "custom-plugin"])
+})
+
 async function makeTempDir(): Promise<string> {
   const created = await mkdtemp(path.join(tmpdir(), "yaca-opencode-"))
   tempDirs.push(created)
