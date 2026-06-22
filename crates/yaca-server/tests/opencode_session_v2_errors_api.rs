@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
-use yaca_proto::{AgentName, ModelRef, SessionId};
+use yaca_proto::{AgentName, MessageId, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -69,6 +69,37 @@ async fn post_json(app: axum::Router, uri: String, body: Option<Value>) -> (Stat
     (status, body_json(resp).await)
 }
 
+async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_session_missing_routes_return_typed_not_found_errors() {
     let app = router(state().await);
@@ -80,6 +111,7 @@ async fn opencode_v2_session_missing_routes_return_typed_not_found_errors() {
     });
 
     for uri in [
+        format!("/api/session/{missing}"),
         format!("/api/session/{missing}/message"),
         format!("/api/session/{missing}/context"),
     ] {
@@ -97,12 +129,48 @@ async fn opencode_v2_session_missing_routes_return_typed_not_found_errors() {
         assert_eq!(body, expected);
     }
 
+    let (status, body) = patch_json(
+        app.clone(),
+        format!("/api/session/{missing}"),
+        json!({"title": "never"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+
+    let (status, body) = delete_json(app.clone(), format!("/api/session/{missing}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+
     let (status, body) = post_json(
-        app,
+        app.clone(),
         format!("/api/session/{missing}/prompt"),
         Some(json!({"prompt": {"text": "hello"}})),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, expected);
+
+    for (uri, body) in [
+        (
+            format!("/api/session/{missing}/init"),
+            json!({
+                "messageID": MessageId::new().to_string(),
+                "providerID": "fake",
+                "modelID": "fake",
+            }),
+        ),
+        (
+            format!("/api/session/{missing}/agent"),
+            json!({"agent": "build"}),
+        ),
+        (
+            format!("/api/session/{missing}/model"),
+            json!({"model": {"providerID": "fake", "id": "fake"}}),
+        ),
+    ] {
+        let (status, body) = post_json(app.clone(), uri, Some(body)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, expected);
+    }
 }
