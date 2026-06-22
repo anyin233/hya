@@ -40,6 +40,18 @@ pub(super) struct OpenCodeMessage {
     parts: Vec<Value>,
 }
 
+impl OpenCodeMessage {
+    pub(super) fn id(&self) -> &str {
+        &self.info.id
+    }
+}
+
+impl OpenCodeSessionInfo {
+    pub(super) fn parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct OpenCodeMessageInfo {
     id: String,
