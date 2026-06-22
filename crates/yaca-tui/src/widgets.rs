@@ -7,6 +7,7 @@ mod prompt;
 mod prompt_attachments;
 mod prompt_metadata;
 mod sidebar;
+mod sidebar_agents;
 mod sidebar_context;
 mod sidebar_files;
 mod sidebar_footer;

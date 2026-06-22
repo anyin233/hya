@@ -1,6 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::sidebar_agents::push_agents;
 use super::sidebar_files::push_files;
 use super::sidebar_format::{
     connector_color, format_basis_points, format_number, saved_tokens, used_percent,
@@ -159,24 +160,6 @@ fn push_lsp(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
     ));
 }
 
-fn push_agents(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    lines.push(Line::from(""));
-    push_section(lines, "Agents", theme.info, theme);
-    if state.team.is_empty() {
-        lines.push(meta(format!("{} - active", agent_label(state)), theme.text));
-        return;
-    }
-    for (member, status) in &state.team {
-        let status = status.trim();
-        let label = if status.is_empty() {
-            member.to_string()
-        } else {
-            format!("{member} - {status}")
-        };
-        lines.push(meta(label, theme.text));
-    }
-}
-
 pub(super) fn push_section(
     lines: &mut Vec<Line<'static>>,
     title: &str,
@@ -209,12 +192,4 @@ fn connector_line(name: &str, status: &str, marker: Color, theme: &Theme) -> Lin
         Span::raw(" "),
         Span::styled(status.to_string(), Style::default().fg(theme.muted)),
     ])
-}
-
-fn agent_label(state: &AppState) -> String {
-    if state.agent.is_empty() {
-        "build".to_string()
-    } else {
-        state.agent.clone()
-    }
 }
