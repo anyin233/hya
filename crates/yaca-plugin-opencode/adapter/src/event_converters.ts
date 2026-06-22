@@ -9,6 +9,7 @@ import {
   textPartEvent,
   toolCallRequestedEvent,
   toolErrorEvent,
+  toolInputDeltaEvent,
   toolInputStartEvent,
   toolResultEvent,
 } from "./event_converters/parts"
@@ -46,6 +47,8 @@ export function openCodeEventFromEnvelope(
       return reasoningPartEvent(envelope, "", undefined, true)
     case "tool_input_start":
       return toolInputStartEvent(envelope)
+    case "tool_input_delta":
+      return toolInputDeltaEvent(envelope)
     case "tool_call_requested":
       return toolCallRequestedEvent(envelope)
     case "error":

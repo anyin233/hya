@@ -151,6 +151,41 @@ test("converts yaca lifecycle events to OpenCode events", () => {
 
   expect(
     openCodeEventFromEnvelope({
+      seq: 27,
+      ts_millis: 36,
+      event: {
+        type: "tool_input_delta",
+        session: "session-1",
+        message: "message-2",
+        part: "part-4",
+        call: "call-2",
+        name: "write",
+        delta: '{"path"',
+      },
+    }),
+  ).toEqual({
+    id: "27",
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "part-4",
+        sessionID: "session-1",
+        messageID: "message-2",
+        type: "tool",
+        callID: "call-2",
+        tool: "write",
+        state: {
+          status: "pending",
+          input: {},
+          raw: '{"path"',
+        },
+      },
+      delta: '{"path"',
+    },
+  })
+
+  expect(
+    openCodeEventFromEnvelope({
       seq: 25,
       ts_millis: 34,
       event: {

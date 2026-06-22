@@ -102,6 +102,7 @@ impl FakeProvider {
                         message,
                         part,
                         call,
+                        name: tool.clone(),
                         delta: input.to_string(),
                     });
                     out.push(Event::ToolCallRequested {
