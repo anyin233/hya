@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::api::{CreateSessionResponse, PromptResponse};
-use yaca_proto::{AgentName, FinishReason, MessageId, ModelRef, PartId};
+use yaca_proto::{AgentName, FinishReason, MessageId, ModelRef, PartId, SessionId};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -463,6 +463,51 @@ async fn opencode_session_shell_busy_returns_typed_error() {
     assert_eq!(shell_status, StatusCode::OK);
     let response: PromptResponse = serde_json::from_value(shell_body).unwrap();
     assert_eq!(response.finish, FinishReason::Cancelled);
+}
+
+#[tokio::test]
+async fn opencode_session_shell_missing_session_returns_not_found() {
+    let app = router(shell_state().await);
+    let missing = SessionId::new().to_string();
+    let (status, body) = post_json(
+        app,
+        format!("/session/{missing}/shell"),
+        json!({"command": "printf never"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {missing}") },
+        })
+    );
+}
+
+#[tokio::test]
+async fn opencode_session_delete_missing_session_returns_not_found() {
+    let app = router(shell_state().await);
+    let missing = SessionId::new().to_string();
+    let message = MessageId::new().to_string();
+    let part = PartId::new().to_string();
+    let expected = json!({
+        "name": "NotFoundError",
+        "data": { "message": format!("Session not found: {missing}") },
+    });
+
+    let (status, body) =
+        delete_json(app.clone(), format!("/session/{missing}/message/{message}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
+
+    let (status, body) = delete_json(
+        app,
+        format!("/session/{missing}/message/{message}/part/{part}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, expected);
 }
 
 #[tokio::test]

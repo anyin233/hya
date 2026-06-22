@@ -28,6 +28,17 @@ pub(in crate::opencode) fn session_busy(session: SessionId) -> Response {
         .into_response()
 }
 
+pub(in crate::opencode) fn legacy_session_not_found(session: SessionId) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "name": "NotFoundError",
+            "data": { "message": format!("Session not found: {session}") },
+        })),
+    )
+        .into_response()
+}
+
 pub(in crate::opencode) fn invalid_cursor(message: &'static str) -> Response {
     (
         StatusCode::BAD_REQUEST,
