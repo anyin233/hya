@@ -97,6 +97,14 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             part,
             text,
         } => text_part_updated_payload(&envelope, *session, *message, *part, text),
+        Event::PartDeleted {
+            session,
+            message,
+            part,
+        } => part_removed_payload(&envelope, *session, *message, *part),
+        Event::MessageDeleted { session, message } => {
+            message_removed_payload(&envelope, *session, *message)
+        }
         _ => fallback_payload(&envelope),
     }
 }
@@ -227,6 +235,34 @@ fn text_part_delta_payload(
             "partID": part.to_string(),
             "field": "text",
             "delta": delta,
+        },
+    })
+}
+
+fn part_removed_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.removed",
+        "properties": {
+            "sessionID": session.to_string(),
+            "messageID": message.to_string(),
+            "partID": part.to_string(),
+        },
+    })
+}
+
+fn message_removed_payload(envelope: &Envelope, session: SessionId, message: MessageId) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.removed",
+        "properties": {
+            "sessionID": session.to_string(),
+            "messageID": message.to_string(),
         },
     })
 }

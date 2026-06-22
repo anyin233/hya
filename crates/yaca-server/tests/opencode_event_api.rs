@@ -189,6 +189,7 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
     let session = created_event["properties"]["sessionID"].as_str().unwrap();
 
     let command = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -244,6 +245,40 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
         "assistant"
     );
     assert_eq!(assistant_finished["properties"]["info"]["finish"], "stop");
+
+    let delete_part = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/session/{session}/message/{message}/part/{part}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_part.status(), StatusCode::OK);
+    let part_removed = read_sse_json(&mut stream).await;
+    assert_eq!(part_removed["type"], "message.part.removed");
+    assert_eq!(part_removed["properties"]["sessionID"], session);
+    assert_eq!(part_removed["properties"]["messageID"], message);
+    assert_eq!(part_removed["properties"]["partID"], part);
+
+    let delete_message = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/session/{session}/message/{message}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_message.status(), StatusCode::OK);
+    let message_removed = read_sse_json(&mut stream).await;
+    assert_eq!(message_removed["type"], "message.removed");
+    assert_eq!(message_removed["properties"]["sessionID"], session);
+    assert_eq!(message_removed["properties"]["messageID"], message);
 }
 
 async fn assert_event_stream(uri: &str) {
