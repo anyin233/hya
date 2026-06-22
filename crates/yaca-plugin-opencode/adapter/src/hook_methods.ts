@@ -1,8 +1,16 @@
 import { z } from "zod"
 
 import { runToolExecuteAfterHooks, runToolExecuteBeforeHooks } from "./hooks"
+import { runChatMessageHooks } from "./message_hooks"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import type { HandledRequest, RequestContext } from "./runtime_types"
+
+const MessageUserBeforeParamsSchema = z
+  .object({
+    session: z.string(),
+    text: z.string(),
+  })
+  .strict()
 
 const ToolExecuteBeforeParamsSchema = z
   .object({
@@ -40,6 +48,28 @@ const ToolExecuteAfterParamsSchema = z
     result: WireToolResultSchema,
   })
   .strict()
+
+export async function handleMessageUserBefore(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = MessageUserBeforeParamsSchema.safeParse(request.params)
+  if (!params.success) {
+    return {
+      response: errorResponse(
+        request.id,
+        ERROR_CODES.INVALID_PARAMS,
+        params.error.message,
+      ),
+      shouldExit: false,
+    }
+  }
+  const outcome = await runChatMessageHooks(context.hooks, params.data)
+  return {
+    response: okResponse(request.id, outcome),
+    shouldExit: false,
+  }
+}
 
 export async function handleToolExecuteBefore(
   request: JsonRpcRequest,
