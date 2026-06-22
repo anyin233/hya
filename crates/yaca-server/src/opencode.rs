@@ -34,6 +34,7 @@ mod session_update;
 mod session_v2;
 mod tui;
 
+pub(crate) use mcp::McpHttpState;
 pub(crate) use project::ProjectState;
 pub(in crate::opencode) use session_legacy::load_session;
 pub(crate) use tui::TuiState;
