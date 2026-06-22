@@ -16,11 +16,13 @@ use crate::{ApiError, ServerState, parse_session, runs};
 mod file;
 mod instance;
 mod projection;
+mod session_switch;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .merge(file::router())
         .merge(instance::router())
+        .merge(session_switch::router())
         .route("/session", get(list_sessions))
         .route("/session/status", get(status))
         .route("/session/:id", get(get_session))

@@ -138,8 +138,13 @@ fn session_info(
             .title
             .clone()
             .unwrap_or_else(|| "Untitled".to_string()),
-        agent: meta.agent.to_string(),
-        model: model_info(&meta.model),
+        agent: projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&meta.agent)
+            .to_string(),
+        model: model_info(projection.session.model.as_ref().unwrap_or(&meta.model)),
         version: env!("CARGO_PKG_VERSION").to_string(),
         time: OpenCodeSessionTime {
             created: millis(created),

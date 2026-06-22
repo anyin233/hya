@@ -105,6 +105,12 @@ impl Projection {
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());
             }
+            Event::AgentSwitched { agent, .. } => {
+                self.session.agent = Some(agent.clone());
+            }
+            Event::ModelSwitched { model, .. } => {
+                self.session.model = Some(model.clone());
+            }
             Event::MessageStarted { message, role, .. } => {
                 if self.message_mut(*message).is_none() {
                     self.session.messages.push(MessageProjection {
