@@ -1,5 +1,7 @@
 use crate::AppState;
 
+use super::identity::active_agent_label;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AssistantBlockStatus {
     Completed,
@@ -7,11 +9,6 @@ pub(super) enum AssistantBlockStatus {
 }
 
 pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockStatus) -> String {
-    let agent = if state.agent.is_empty() {
-        "build"
-    } else {
-        state.agent.as_str()
-    };
     let model = if state.model.is_empty() {
         "offline"
     } else {
@@ -21,5 +18,5 @@ pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockS
         AssistantBlockStatus::Completed => "completed",
         AssistantBlockStatus::Streaming => "streaming",
     };
-    format!("{agent} · {model} · {status}")
+    format!("▣ {} · {model} · {status}", active_agent_label(state))
 }

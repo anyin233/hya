@@ -1,4 +1,5 @@
 mod error;
+mod identity;
 mod overlays;
 mod permission;
 mod prompt;

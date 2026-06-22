@@ -49,6 +49,30 @@ fn assistant_block_renders_message_metadata_footer() {
         metadata_row.contains("sisyphus · kimi-k2 · completed"),
         "assistant metadata footer should sit under the message text, got {metadata_row:?}"
     );
+    assert!(
+        metadata_row.contains("▣ sisyphus"),
+        "assistant metadata footer should use the OpenCode turn marker, got {metadata_row:?}"
+    );
+}
+
+#[test]
+fn assistant_metadata_footer_includes_active_agent_role() {
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        team: vec![("sisyphus".to_string(), "ultraworker retry".to_string())],
+        ..AppState::default()
+    };
+    with_text_message(&mut state, 1, Role::Assistant, "metadata with role");
+
+    let buffer = render_buffer(&mut state, 100, 16);
+    let (_x, text_y) = find_rendered_text(&buffer, 100, 16, "metadata with role").unwrap();
+    let metadata_row = row_text(&buffer, 100, text_y + 1);
+
+    assert!(
+        metadata_row.contains("sisyphus - ultraworker retry · kimi-k2 · completed"),
+        "assistant metadata should include the active agent role, got {metadata_row:?}"
+    );
 }
 
 #[test]

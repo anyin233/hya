@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use super::identity::active_agent_label;
 use super::prompt_attachments::attachment_badges;
 use super::sidebar_format::used_percent;
 use crate::AppState;
@@ -76,11 +77,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
 }
 
 fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
-    let agent = if state.agent.is_empty() {
-        "build"
-    } else {
-        state.agent.as_str()
-    };
+    let agent = active_agent_label(state);
     let model = if state.model.is_empty() {
         "offline"
     } else {
@@ -91,10 +88,19 @@ fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'stati
     let mode = if state.yolo { "YOLO" } else { "manual" };
     let context = composer_context_label(state).unwrap_or_default();
     let context_separator = if context.is_empty() { "" } else { " · " };
-    let left_width = ["  ", agent, " · ", model, " · think ", effort, " · ", mode]
-        .into_iter()
-        .map(UnicodeWidthStr::width)
-        .sum::<usize>();
+    let left_width = [
+        "  ",
+        agent.as_str(),
+        " · ",
+        model,
+        " · think ",
+        effort,
+        " · ",
+        mode,
+    ]
+    .into_iter()
+    .map(UnicodeWidthStr::width)
+    .sum::<usize>();
     let right_width = UnicodeWidthStr::width(context.as_str())
         + UnicodeWidthStr::width(context_separator)
         + UnicodeWidthStr::width(cost)
@@ -102,10 +108,7 @@ fn composer_metadata(state: &AppState, theme: &Theme, width: u16) -> Line<'stati
     let status_gap_width = usize::from(width).saturating_sub(left_width + right_width);
     Line::from(vec![
         Span::styled("  ", Style::default().bg(theme.element)),
-        Span::styled(
-            agent.to_string(),
-            Style::default().fg(theme.info).bg(theme.element),
-        ),
+        Span::styled(agent, Style::default().fg(theme.info).bg(theme.element)),
         Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
         Span::styled(
             model.to_string(),

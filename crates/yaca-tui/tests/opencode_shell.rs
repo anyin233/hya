@@ -122,6 +122,27 @@ fn composer_metadata_includes_context_usage_before_cost() {
 }
 
 #[test]
+fn composer_metadata_includes_active_agent_role() {
+    // Given: the active agent has an OpenCode-style role label.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        team: vec![("sisyphus".to_string(), "ultraworker retry".to_string())],
+        ..AppState::default()
+    };
+
+    // When: the composer metadata row renders.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let metadata_row = rendered_row(&buffer, 120, 13);
+
+    // Then: the same agent-role identity used by OpenCode appears before the model.
+    assert!(
+        metadata_row.contains("sisyphus - ultraworker retry · kimi-k2"),
+        "composer metadata should show the active agent role, got {metadata_row:?}"
+    );
+}
+
+#[test]
 fn composer_metadata_anchors_commands_to_main_column_edge() {
     // Given: a wide OpenCode-style shell with the right context rail visible.
     let mut state = AppState {
