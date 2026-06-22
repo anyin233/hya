@@ -1,15 +1,22 @@
 use std::collections::BTreeMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState};
 
-use super::location::LocationResponse;
-use super::model_ref::{OpenCodeModelRefParts, model_ref_parts};
+use super::location::{LocationRef, LocationResponse};
+use super::model_ref::model_ref_parts;
+
+mod types;
+
+use types::{
+    LegacyConfigProviders, LegacyProviderList, ModelInfo, ProviderAuthMethod, ProviderInfo,
+    model_info, provider_info,
+};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
@@ -33,117 +40,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/api/model", get(model_list))
 }
 
-#[derive(Clone, Serialize)]
-struct ProviderInfo {
-    id: String,
-    name: String,
-    api: NativeProviderApi,
-    request: RequestInfo,
-}
-
-#[derive(Clone, Serialize)]
-struct NativeProviderApi {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    settings: Value,
-}
-
-#[derive(Clone, Serialize)]
-struct RequestInfo {
-    headers: BTreeMap<String, String>,
-    body: Value,
-}
-
-#[derive(Serialize)]
-struct LegacyProviderList {
-    all: Vec<ProviderInfo>,
-    default: BTreeMap<String, String>,
-    connected: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct LegacyConfigProviders {
-    providers: Vec<ProviderInfo>,
-    default: BTreeMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct ProviderAuthMethod {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    label: &'static str,
-}
-
-#[derive(Serialize)]
-struct ModelInfo {
-    id: String,
-    #[serde(rename = "providerID")]
-    provider_id: String,
-    name: String,
-    api: ModelApi,
-    capabilities: ModelCapabilities,
-    request: ModelRequest,
-    variants: Vec<ModelVariant>,
-    time: ModelTime,
-    cost: Vec<ModelCost>,
-    status: &'static str,
-    enabled: bool,
-    limit: ModelLimit,
-}
-
-#[derive(Serialize)]
-struct ModelApi {
-    id: String,
-    #[serde(rename = "type")]
-    kind: &'static str,
-    settings: Value,
-}
-
-#[derive(Serialize)]
-struct ModelCapabilities {
-    tools: bool,
-    input: Vec<String>,
-    output: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct ModelRequest {
-    headers: BTreeMap<String, String>,
-    body: Value,
-    generation: Value,
-    options: Value,
-}
-
-#[derive(Serialize)]
-struct ModelVariant {
-    id: String,
-    headers: BTreeMap<String, String>,
-    body: Value,
-}
-
-#[derive(Serialize)]
-struct ModelTime {
-    released: u64,
-}
-
-#[derive(Serialize)]
-struct ModelCost {
-    input: f64,
-    output: f64,
-    cache: ModelCacheCost,
-}
-
-#[derive(Serialize)]
-struct ModelCacheCost {
-    read: f64,
-    write: f64,
-}
-
-#[derive(Serialize)]
-struct ModelLimit {
-    context: u32,
-    output: u32,
-}
+type LocationQuery = Query<BTreeMap<String, String>>;
 
 async fn legacy_config_get() -> Json<Value> {
     Json(json!({}))
@@ -205,14 +102,25 @@ async fn legacy_provider_oauth_callback(
     Err(ApiError::bad_request("unsupported provider oauth method"))
 }
 
-async fn provider_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<ProviderInfo>>> {
+async fn provider_list(
+    State(st): State<ServerState>,
+    Query(query): LocationQuery,
+    headers: HeaderMap,
+) -> Json<LocationResponse<Vec<ProviderInfo>>> {
     let active = model_ref_parts(&st.agent.model);
-    Json(super::location::response(&st, vec![provider_info(&active)]))
+    Json(location_response(
+        &st,
+        &query,
+        &headers,
+        vec![provider_info(&active)],
+    ))
 }
 
 async fn provider_get(
     State(st): State<ServerState>,
+    Query(query): LocationQuery,
     Path(provider_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<LocationResponse<ProviderInfo>>, ApiError> {
     let active = model_ref_parts(&st.agent.model);
     if provider_id != active.provider_id {
@@ -220,58 +128,34 @@ async fn provider_get(
             "Provider not found: {provider_id}"
         )));
     }
-    Ok(Json(super::location::response(&st, provider_info(&active))))
+    Ok(Json(location_response(
+        &st,
+        &query,
+        &headers,
+        provider_info(&active),
+    )))
 }
 
-async fn model_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<ModelInfo>>> {
+async fn model_list(
+    State(st): State<ServerState>,
+    Query(query): LocationQuery,
+    headers: HeaderMap,
+) -> Json<LocationResponse<Vec<ModelInfo>>> {
     let active = model_ref_parts(&st.agent.model);
-    Json(super::location::response(&st, vec![model_info(&active)]))
+    Json(location_response(
+        &st,
+        &query,
+        &headers,
+        vec![model_info(&active)],
+    ))
 }
 
-fn provider_info(active: &OpenCodeModelRefParts) -> ProviderInfo {
-    ProviderInfo {
-        id: active.provider_id.clone(),
-        name: active.provider_id.clone(),
-        api: NativeProviderApi {
-            kind: "native",
-            settings: json!({}),
-        },
-        request: RequestInfo {
-            headers: BTreeMap::new(),
-            body: json!({}),
-        },
-    }
-}
-
-fn model_info(active: &OpenCodeModelRefParts) -> ModelInfo {
-    ModelInfo {
-        id: active.model_id.clone(),
-        provider_id: active.provider_id.clone(),
-        name: active.model_id.clone(),
-        api: ModelApi {
-            id: active.model_id.clone(),
-            kind: "native",
-            settings: json!({}),
-        },
-        capabilities: ModelCapabilities {
-            tools: false,
-            input: Vec::new(),
-            output: Vec::new(),
-        },
-        request: ModelRequest {
-            headers: BTreeMap::new(),
-            body: json!({}),
-            generation: json!({}),
-            options: json!({}),
-        },
-        variants: Vec::new(),
-        time: ModelTime { released: 0 },
-        cost: Vec::new(),
-        status: "active",
-        enabled: true,
-        limit: ModelLimit {
-            context: 0,
-            output: 0,
-        },
-    }
+fn location_response<T>(
+    st: &ServerState,
+    query: &BTreeMap<String, String>,
+    headers: &HeaderMap,
+    data: T,
+) -> LocationResponse<T> {
+    let location = LocationRef::from_request(query, headers);
+    super::location::response_at(st, &location, data)
 }
