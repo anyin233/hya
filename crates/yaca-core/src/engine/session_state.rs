@@ -9,13 +9,27 @@ impl SessionEngine {
         session: SessionId,
         agent: AgentName,
     ) -> Result<(), CoreError> {
-        self.emit(session, Event::AgentSwitched { session, agent })
-            .await
+        self.emit(
+            session,
+            Event::AgentSwitched {
+                session,
+                message: Some(MessageId::new()),
+                agent,
+            },
+        )
+        .await
     }
 
     pub async fn switch_model(&self, session: SessionId, model: ModelRef) -> Result<(), CoreError> {
-        self.emit(session, Event::ModelSwitched { session, model })
-            .await
+        self.emit(
+            session,
+            Event::ModelSwitched {
+                session,
+                message: Some(MessageId::new()),
+                model,
+            },
+        )
+        .await
     }
 
     pub async fn set_title(&self, session: SessionId, title: String) -> Result<(), CoreError> {

@@ -74,6 +74,21 @@ async fn post_json(app: axum::Router, uri: String, body: Value) -> StatusCode {
     .status()
 }
 
+async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_session_switch_routes_update_selected_agent_and_model() {
     let app = router(state().await);
@@ -121,4 +136,55 @@ async fn opencode_v2_session_switch_routes_update_selected_agent_and_model() {
     )
     .await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn opencode_v2_session_context_records_agent_and_model_switch_messages() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let agent_status = post_json(
+        app.clone(),
+        format!("/api/session/{session}/agent"),
+        json!({"agent": "plan"}),
+    )
+    .await;
+    assert_eq!(agent_status, StatusCode::NO_CONTENT);
+
+    let model_status = post_json(
+        app.clone(),
+        format!("/api/session/{session}/model"),
+        json!({"model": {"providerID": "anthropic", "id": "claude-sonnet", "variant": "fast"}}),
+    )
+    .await;
+    assert_eq!(model_status, StatusCode::NO_CONTENT);
+
+    let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["data"][0]["type"], "agent-switched");
+    assert_eq!(context["data"][0]["agent"], "plan");
+    assert!(
+        context["data"][0]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert!(
+        context["data"][0]["time"]["created"]
+            .as_u64()
+            .is_some_and(|time| time > 0)
+    );
+    assert_eq!(context["data"][1]["type"], "model-switched");
+    assert_eq!(context["data"][1]["model"]["providerID"], "anthropic");
+    assert_eq!(context["data"][1]["model"]["id"], "claude-sonnet");
+    assert_eq!(context["data"][1]["model"]["variant"], "fast");
+    assert!(
+        context["data"][1]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert!(
+        context["data"][1]["time"]["created"]
+            .as_u64()
+            .is_some_and(|time| time > 0)
+    );
 }
