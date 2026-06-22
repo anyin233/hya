@@ -56,6 +56,28 @@ async fn request(
     (status, value)
 }
 
+async fn request_with_connect_header(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("x-opencode-ticket", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
 #[tokio::test]
 async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
     let app = router(state().await);
@@ -112,6 +134,17 @@ async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["title"], "renamed");
+
+    let (status, first_token) =
+        request_with_connect_header(app.clone(), "POST", &format!("/pty/{id}/connect-token")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_token["expires_in"], 60);
+    assert_ne!(first_token["ticket"], format!("ticket-{id}"));
+
+    let (status, second_token) =
+        request_with_connect_header(app.clone(), "POST", &format!("/pty/{id}/connect-token")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(first_token["ticket"], second_token["ticket"]);
 
     let (status, removed) = request(app.clone(), "DELETE", &format!("/pty/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);

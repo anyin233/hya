@@ -158,7 +158,7 @@ async fn connect_token_response(
     if st.pty.get(id).await.is_none() {
         return pty_not_found(id);
     }
-    let token = json!({"ticket": format!("ticket-{id}"), "expires_in": 60});
+    let token = json!({"ticket": uuid::Uuid::new_v4().to_string(), "expires_in": 60});
     if wrap {
         Json(location::response(st, token)).into_response()
     } else {

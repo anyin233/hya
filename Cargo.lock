@@ -3204,6 +3204,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "uuid",
  "yaca-core",
  "yaca-mcp",
  "yaca-proto",
