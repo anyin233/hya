@@ -39,7 +39,7 @@ pub fn render_timeline(frame: &mut Frame, area: Rect, state: &mut AppState, them
 }
 
 fn timeline_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+    let mut lines = vec![Line::from("")];
     let items = timeline_items(&state.projection);
     let streaming_assistant_idx = items
         .last()

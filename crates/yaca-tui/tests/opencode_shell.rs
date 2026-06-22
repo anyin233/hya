@@ -72,7 +72,7 @@ fn with_text_message(state: &mut AppState, role: Role, text: &str) {
 }
 
 #[test]
-fn main_stream_starts_at_top_without_status_banner() {
+fn main_stream_keeps_opencode_scrollbox_top_spacer() {
     // Given: a narrow OpenCode-style shell with one assistant block.
     let mut state = AppState {
         agent: "build".to_string(),
@@ -85,15 +85,21 @@ fn main_stream_starts_at_top_without_status_banner() {
     // When: the shell renders without the wide context rail.
     let buffer = render_buffer(&mut state, 80, 16);
     let first_row = rendered_row(&buffer, 80, 0);
+    let second_row = rendered_row(&buffer, 80, 1);
 
-    // Then: the stream owns the first row instead of an extra status banner or role label.
-    assert!(
-        first_row.contains("top stream"),
-        "first row should start with transcript content, got {first_row:?}"
+    // Then: the scrollback keeps OpenCode's top spacer without a legacy status banner.
+    assert_eq!(
+        first_row.trim(),
+        "",
+        "OpenCode scrollbox keeps a one-row top spacer, got {first_row:?}"
     );
     assert!(
-        !first_row.contains("yaca #1"),
-        "OpenCode assistant blocks should not render numbered role labels, got {first_row:?}"
+        second_row.contains("top stream"),
+        "transcript content should start after the top spacer, got {second_row:?}"
+    );
+    assert!(
+        !second_row.contains("yaca #1"),
+        "OpenCode assistant blocks should not render numbered role labels, got {second_row:?}"
     );
     assert!(
         !first_row.contains(" · build · fake · sess-1"),
