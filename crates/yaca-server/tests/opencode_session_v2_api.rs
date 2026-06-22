@@ -206,3 +206,35 @@ async fn opencode_v2_session_context_returns_v2_messages() {
     assert_eq!(context["data"][1]["content"][0]["text"], "assistant answer");
     assert_eq!(context["data"][1]["finish"], "stop");
 }
+
+#[tokio::test]
+async fn opencode_v2_session_prompt_admits_without_resume() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, admitted) = post_json(
+        app.clone(),
+        &format!("/api/session/{session}/prompt"),
+        json!({"prompt": {"text": "queued"}, "delivery": "queue", "resume": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(admitted["data"]["sessionID"], session);
+    assert_eq!(admitted["data"]["prompt"]["text"], "queued");
+    assert_eq!(admitted["data"]["delivery"], "queue");
+    assert!(admitted["data"]["admittedSeq"].as_u64().is_some());
+    assert!(admitted["data"]["timeCreated"].as_u64().is_some());
+    assert!(admitted["data"]["promotedSeq"].is_null());
+
+    let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(context["data"].as_array().expect("messages").len(), 1);
+    assert_eq!(context["data"][0]["text"], "queued");
+}

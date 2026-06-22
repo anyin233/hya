@@ -70,6 +70,16 @@ impl SessionEngine {
         session: SessionId,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        self.admit_user_prompt_with_id(session, MessageId::new(), text)
+            .await
+    }
+
+    pub async fn admit_user_prompt_with_id(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        text: String,
+    ) -> Result<MessageId, CoreError> {
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .message_user_before(MessageUserBeforeInput { session, text })
@@ -80,7 +90,6 @@ impl SessionEngine {
         } else {
             text
         };
-        let message = MessageId::new();
         let part = PartId::new();
         self.emit(
             session,

@@ -1,0 +1,167 @@
+use axum::extract::{Path, State};
+use axum::routing::post;
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use yaca_proto::{Envelope, Event, MessageId, SessionId};
+
+use crate::{ApiError, ServerState, parse_session};
+
+#[derive(Deserialize)]
+struct PromptV2Request {
+    id: Option<String>,
+    prompt: PromptPayload,
+    delivery: Option<PromptDelivery>,
+    resume: Option<bool>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct PromptPayload {
+    text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agents: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PromptDelivery {
+    #[default]
+    Steer,
+    Queue,
+}
+
+#[derive(Serialize)]
+struct PromptAdmittedResponse {
+    data: PromptAdmitted,
+}
+
+#[derive(Serialize)]
+struct PromptAdmitted {
+    #[serde(rename = "admittedSeq")]
+    admitted_seq: u64,
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    prompt: PromptPayload,
+    delivery: PromptDelivery,
+    #[serde(rename = "timeCreated")]
+    time_created: u64,
+    #[serde(rename = "promotedSeq", skip_serializing_if = "Option::is_none")]
+    promoted_seq: Option<u64>,
+}
+
+pub(super) fn router() -> Router<ServerState> {
+    Router::new().route("/api/session/:id/prompt", post(prompt))
+}
+
+async fn prompt(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+    Json(req): Json<PromptV2Request>,
+) -> Result<Json<PromptAdmittedResponse>, ApiError> {
+    let session = parse_session(&id)?;
+    super::load_session(&st, session, None).await?;
+    let message = match req.id.as_deref() {
+        Some(id) => parse_message(id)?,
+        None => MessageId::new(),
+    };
+    if message_exists(&st, session, message).await? {
+        return Err(ApiError::conflict("prompt message id already exists"));
+    }
+    let run = if req.resume == Some(false) {
+        None
+    } else {
+        Some(
+            st.runs
+                .start(session)
+                .ok_or_else(|| ApiError::conflict("session busy"))?,
+        )
+    };
+    let prompt = req.prompt;
+    let delivery = req.delivery.unwrap_or_default();
+    let admitted = st
+        .engine
+        .admit_user_prompt_with_id(session, message, prompt.text.clone())
+        .await?;
+    let envelopes = st.engine.replay(session).await?;
+    let (admitted_seq, time_created) = admission_info(&envelopes, admitted)?;
+    if let Some(run) = run {
+        let engine = st.engine.clone();
+        let agent = st.agent.clone();
+        let cancel = run.token();
+        std::mem::drop(tokio::spawn(async move {
+            let _guard = run;
+            let _ = engine.run_turn(session, &agent, cancel).await;
+        }));
+    }
+    Ok(Json(PromptAdmittedResponse {
+        data: PromptAdmitted {
+            admitted_seq,
+            id: admitted.to_string(),
+            session_id: session.to_string(),
+            prompt,
+            delivery,
+            time_created,
+            promoted_seq: None,
+        },
+    }))
+}
+
+async fn message_exists(
+    st: &ServerState,
+    session: SessionId,
+    message: MessageId,
+) -> Result<bool, ApiError> {
+    Ok(st.engine.replay(session).await?.into_iter().any(|env| {
+        matches!(
+            env.event,
+            Event::MessageStarted {
+                message: existing,
+                ..
+            } if existing == message
+        )
+    }))
+}
+
+fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), ApiError> {
+    envs.iter()
+        .find_map(|env| match env.event {
+            Event::MessageStarted { message: id, .. } if id == message => {
+                Some((env.seq.0, millis(env.ts_millis)))
+            }
+            Event::SessionCreated { .. }
+            | Event::SessionTitled { .. }
+            | Event::AgentSwitched { .. }
+            | Event::ModelSwitched { .. }
+            | Event::CommandExecuted { .. }
+            | Event::MessageStarted { .. }
+            | Event::MessageFinished { .. }
+            | Event::StepStarted { .. }
+            | Event::StepFinished { .. }
+            | Event::TextStart { .. }
+            | Event::TextDelta { .. }
+            | Event::TextReplace { .. }
+            | Event::TextEnd { .. }
+            | Event::ReasoningStart { .. }
+            | Event::ReasoningDelta { .. }
+            | Event::ReasoningEnd { .. }
+            | Event::ToolInputStart { .. }
+            | Event::ToolInputDelta { .. }
+            | Event::ToolCallRequested { .. }
+            | Event::ToolResult { .. }
+            | Event::ToolError { .. }
+            | Event::Error { .. } => None,
+        })
+        .ok_or_else(|| ApiError::internal("admitted prompt event missing"))
+}
+
+fn parse_message(id: &str) -> Result<MessageId, ApiError> {
+    id.parse()
+        .map_err(|_| ApiError::bad_request("invalid message id"))
+}
+
+fn millis(ts: i64) -> u64 {
+    u64::try_from(ts).unwrap_or(0)
+}
