@@ -78,13 +78,17 @@ fn git(workdir: &PathBuf, args: &[&str]) {
     );
 }
 
-fn init_branch_repo(workdir: &PathBuf) {
+fn init_repo_with_head(workdir: &PathBuf) {
     git(workdir, &["init"]);
     git(workdir, &["config", "user.email", "test@example.com"]);
     git(workdir, &["config", "user.name", "Test User"]);
     std::fs::write(workdir.join("tracked.txt"), "old\n").unwrap();
     git(workdir, &["add", "tracked.txt"]);
     git(workdir, &["commit", "-m", "initial"]);
+}
+
+fn init_branch_repo(workdir: &PathBuf) {
+    init_repo_with_head(workdir);
     git(workdir, &["branch", "-M", "main"]);
     git(workdir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(
@@ -119,4 +123,25 @@ async fn opencode_vcs_branch_diff_includes_untracked_files() {
             .iter()
             .any(|item| item["file"] == "branch-only.txt" && item["status"] == "added")
     );
+}
+
+#[tokio::test]
+async fn opencode_vcs_diff_caps_oversized_untracked_patch() {
+    let workdir = tempdir();
+    init_repo_with_head(&workdir);
+    std::fs::write(workdir.join("big.txt"), "x".repeat(10_000_001)).unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, diff) = get_json(app, "/vcs/diff?mode=git&context=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let item = diff
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["file"] == "big.txt")
+        .unwrap();
+    let patch = item["patch"].as_str().unwrap();
+    assert!(patch.len() < 1024, "patch was {} bytes", patch.len());
+    assert!(patch.contains("--- big.txt"));
+    assert!(!patch.contains("xxxxxxxxxxxxxxxx"));
 }
