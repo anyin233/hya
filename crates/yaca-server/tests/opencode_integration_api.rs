@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -55,6 +55,26 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, body)
 }
 
+async fn request_status(app: axum::Router, method: Method, uri: &str, body: Value) -> StatusCode {
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        Body::from(body.to_string())
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    resp.status()
+}
+
 #[tokio::test]
 async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
     let app = router(state().await);
@@ -72,4 +92,72 @@ async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
     let (status, integration) = get_json(app, "/api/integration/github").await;
     assert_eq!(status, StatusCode::OK);
     assert!(integration["data"].is_null());
+}
+
+#[tokio::test]
+async fn opencode_v2_integration_mutation_routes_match_empty_backend() {
+    let app = router(state().await);
+
+    let status = request_status(
+        app.clone(),
+        Method::POST,
+        "/api/integration/missing/connect/key",
+        serde_json::json!({"key": "test"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let status = request_status(
+        app.clone(),
+        Method::POST,
+        "/api/integration/missing/connect/oauth",
+        serde_json::json!({"methodID": "missing", "inputs": {}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let status = request_status(
+        app.clone(),
+        Method::GET,
+        "/api/integration/attempt/con_missing",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let status = request_status(
+        app.clone(),
+        Method::POST,
+        "/api/integration/attempt/con_missing/complete",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let status = request_status(
+        app.clone(),
+        Method::DELETE,
+        "/api/integration/attempt/con_missing",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let status = request_status(
+        app.clone(),
+        Method::DELETE,
+        "/api/credential/cred_missing",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let status = request_status(
+        app,
+        Method::PATCH,
+        "/api/credential/cred_missing",
+        serde_json::json!({"label": "Work"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
