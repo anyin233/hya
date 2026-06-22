@@ -59,18 +59,20 @@ pub struct ContextView {
     pub spent_label: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectorState {
     Connected,
+    Failed(String),
     NeedsAuth,
     Disabled,
 }
 
 impl ConnectorState {
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             Self::Connected => "Connected",
+            Self::Failed(error) => error,
             Self::NeedsAuth => "Needs auth",
             Self::Disabled => "Disabled",
         }

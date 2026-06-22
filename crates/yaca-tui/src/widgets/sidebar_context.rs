@@ -140,7 +140,7 @@ fn push_mcp(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
         lines.push(connector_line(
             &connector.name,
             connector.state.label(),
-            connector_color(connector.state, theme),
+            connector_color(&connector.state, theme),
             theme,
         ));
     }

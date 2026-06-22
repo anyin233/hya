@@ -40,9 +40,10 @@ pub fn workdir_label(workdir: Option<&str>) -> String {
     raw.to_string()
 }
 
-pub fn connector_color(state: ConnectorState, theme: &Theme) -> Color {
+pub fn connector_color(state: &ConnectorState, theme: &Theme) -> Color {
     match state {
         ConnectorState::Connected => theme.success,
+        ConnectorState::Failed(_) => theme.error,
         ConnectorState::NeedsAuth => theme.warning,
         ConnectorState::Disabled => theme.muted,
     }

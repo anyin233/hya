@@ -3,7 +3,8 @@
 #[allow(dead_code)]
 mod render_support;
 
-use render_support::render;
+use ratatui::style::Color;
+use render_support::{buffer_text, find_rendered_text, render, render_buffer};
 use yaca_tui::{AppState, ConnectorState, ConnectorView};
 
 #[test]
@@ -89,4 +90,25 @@ fn context_rail_shows_mcp_expand_arrow_for_long_lists_like_opencode() {
 
     // Then: the title advertises the expandable section.
     assert!(text.contains("▾ MCP"));
+}
+
+#[test]
+fn context_rail_renders_opencode_mcp_error_states() {
+    // Given: OpenCode distinguishes failed connectors from disabled connectors.
+    let mut state = AppState {
+        mcp: vec![ConnectorView {
+            name: "broken".to_string(),
+            state: ConnectorState::Failed("spawn failed".to_string()),
+        }],
+        ..AppState::default()
+    };
+
+    // When: MCP connector states render in the context rail.
+    let buffer = render_buffer(&mut state, 124, 28);
+    let text = buffer_text(&buffer, 124, 28);
+    let broken = find_rendered_text(&buffer, 124, 28, "• broken spawn failed").unwrap();
+
+    // Then: yaca uses OpenCode's visible labels and error markers for the states.
+    assert!(text.contains("broken spawn failed"));
+    assert_eq!(buffer[(broken.0, broken.1)].fg, Color::Rgb(224, 108, 117));
 }

@@ -44,6 +44,7 @@ pub enum McpConnectionState {
 pub struct McpConnectionStatus {
     pub name: String,
     pub state: McpConnectionState,
+    pub error: Option<String>,
 }
 
 enum ConnectOutcome {
@@ -81,11 +82,17 @@ impl McpManager {
                     statuses.push(McpConnectionStatus {
                         name: server.name.clone(),
                         state: McpConnectionState::Connected,
+                        error: None,
                     });
                     servers.push(server);
                 }
                 Ok(ConnectOutcome::Failed { name, state, error }) => {
-                    statuses.push(McpConnectionStatus { name, state });
+                    statuses.push(McpConnectionStatus {
+                        name,
+                        state,
+                        error: (state == McpConnectionState::Unavailable)
+                            .then(|| connection_error_label(&error)),
+                    });
                     tracing::warn!(%error, "mcp server unavailable");
                 }
                 Err(error) => tracing::warn!(%error, "mcp server task failed"),
@@ -145,6 +152,14 @@ const fn connection_state_for_error(error: &McpError) -> McpConnectionState {
         | McpError::Timeout { .. }
         | McpError::Closed
         | McpError::OversizedLine => McpConnectionState::Unavailable,
+    }
+}
+
+fn connection_error_label(error: &McpError) -> String {
+    let label = error.to_string();
+    match label.split_once(" (os error") {
+        Some((head, _)) => head.to_string(),
+        None => label,
     }
 }
 
@@ -246,21 +261,24 @@ for line in sys.stdin:
         let statuses = manager.statuses();
 
         assert_eq!(
-            statuses,
-            &[
-                McpConnectionStatus {
-                    name: "auth".to_string(),
-                    state: McpConnectionState::NeedsAuth,
-                },
-                McpConnectionStatus {
-                    name: "missing".to_string(),
-                    state: McpConnectionState::Unavailable,
-                },
-                McpConnectionStatus {
-                    name: "ok".to_string(),
-                    state: McpConnectionState::Connected,
-                },
-            ]
+            statuses[0],
+            McpConnectionStatus {
+                name: "auth".to_string(),
+                state: McpConnectionState::NeedsAuth,
+                error: None,
+            }
+        );
+        assert_eq!(statuses[1].name, "missing");
+        assert_eq!(statuses[1].state, McpConnectionState::Unavailable);
+        let missing_error = statuses[1].error.as_deref().unwrap();
+        assert!(missing_error.contains("io:") && !missing_error.contains("(os error"));
+        assert_eq!(
+            statuses[2],
+            McpConnectionStatus {
+                name: "ok".to_string(),
+                state: McpConnectionState::Connected,
+                error: None,
+            }
         );
     }
 }

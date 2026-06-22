@@ -10,7 +10,9 @@ pub fn connector_views(statuses: &[McpConnectionStatus]) -> Vec<ConnectorView> {
             state: match status.state {
                 McpConnectionState::Connected => ConnectorState::Connected,
                 McpConnectionState::NeedsAuth => ConnectorState::NeedsAuth,
-                McpConnectionState::Unavailable => ConnectorState::Disabled,
+                McpConnectionState::Unavailable => ConnectorState::Failed(
+                    status.error.clone().unwrap_or_else(|| "Failed".to_string()),
+                ),
             },
         })
         .collect()
@@ -29,14 +31,17 @@ mod tests {
             McpConnectionStatus {
                 name: "codegraph".to_string(),
                 state: McpConnectionState::Connected,
+                error: None,
             },
             McpConnectionStatus {
                 name: "linear-server".to_string(),
                 state: McpConnectionState::NeedsAuth,
+                error: None,
             },
             McpConnectionStatus {
                 name: "broken".to_string(),
                 state: McpConnectionState::Unavailable,
+                error: Some("spawn failed".to_string()),
             },
         ];
 
@@ -53,7 +58,7 @@ mod tests {
                 },
                 ConnectorView {
                     name: "broken".to_string(),
-                    state: ConnectorState::Disabled,
+                    state: ConnectorState::Failed("spawn failed".to_string()),
                 },
             ]
         );
