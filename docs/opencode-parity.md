@@ -3,8 +3,8 @@
 Last refreshed: 2026-06-22.
 
 OpenCode baseline: `sst/opencode` `origin/dev`
-`cf31029350820c6bfc0fbd0e052a79a067ee6116`
-(`fix(core): batch plugin shutdown`).
+`0d32d1f2935cc18bb9567763fb16128647012b21`
+(`cli: add --mini (#33353)`).
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
 session, abort, file, instance metadata, VCS, prompt_async, session switching,
@@ -17,7 +17,8 @@ health/event/config/dispose/upgrade routes, legacy event route, OpenAPI `/doc`
 implemented-path skeleton discovery, legacy config and provider
 catalog/auth-method routes, legacy session todo compatibility, and queued TUI
 HTTP route increments, basic provider auth list/logout CLI support, plus
-empty-backend v2 credential/integration mutation route compatibility.
+empty-backend v2 credential/integration mutation route compatibility, and
+top-level OpenCode `--mini` CLI aliasing to yaca's default TUI.
 
 ## Status Summary
 
@@ -49,7 +50,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | OpenCode instance metadata API | Partial | yaca exposes legacy `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/instance/dispose`, `/vcs`, `/vcs/status`, `/vcs/diff`, `/vcs/diff/raw`, `/vcs/apply`, legacy `/provider`, OpenCode `/log` plus `/auth/:providerID` token mutation, v2 `/api/health`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill`, `/api/event`, `/api/reference`, read-only `/api/integration` discovery, empty-backend credential/integration mutation routes, OpenAPI `/doc` path/method skeleton discovery for implemented routes, and OpenCode TUI publish/direct/control queue routes. V2 location metadata honors `location[directory]`, `location[workspace]`, `x-opencode-directory`, and `x-opencode-workspace` for metadata endpoints. VCS status/diff includes nested untracked files and NUL-parsed special paths. LSP/formatter are empty status arrays for now. |
 | Branching | Partial | Session parent/child support and branch/resume exist, but OpenCode's full session tree HTTP surface is incomplete. |
 | Integration modes | Implemented native | `exec --json` and `yaca rpc` JSONL mode exist. |
-| TUI base | Partial | Ratatui app has opencode-dark theme, session picker, permission/question overlays, slash commands, model switching, and render tests. |
+| TUI base | Partial | Ratatui app has opencode-dark theme, session picker, permission/question overlays, slash commands, model switching, render tests, and top-level `--mini` as an OpenCode-compatible explicit alias for the default TUI. |
 
 ## Confirmed Missing Or Incomplete
 
@@ -72,7 +73,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Permission/question HTTP queues | Root `/permission` and `/question` list/reply/reject routes plus v2 pending permission/question list/reply/reject APIs are backed by yaca's native ask channels and return OpenCode-shaped typed missing errors on root routes. `always` permission replies feed an in-memory OpenCode-shaped saved-permission list/removal API. Remaining gaps are durable saved-permission storage, OpenCode's full source/tool metadata, and typed TUI deny feedback. |
 | Sync/workspace/control-plane | Basic project list/current/directories routes expose the server workdir, `/project/git/init` initializes the active workdir with git, `PATCH /project/:projectID` persists name/icon/commands for the server lifetime, project copy create/remove/refresh works for `git_worktree`, generate-name returns OpenCode-shaped slug responses, experimental worktree list/create/remove/reset is backed by `git worktree`, experimental console/workspace/tool/resource/session capability routes return safe empty/default values, `/sync/history` returns an empty list, and `/sync/start` returns true for the no-workspace case. Missing real sync replay/steal/history semantics, real workspace adapters/list/status/warp, OpenCode's worktree start-command/default-branch/submodule/durable sandbox behavior, durable project directory registry/copy listing, model-backed name generation, durable project metadata database, and control-plane move-session execution. |
 | ACP | OpenCode ships an ACP service/CLI package. yaca has no ACP-compatible surface. |
-| Account/stats/github/web/upgrade CLI | OpenCode has account, stats, GitHub, web, upgrade/uninstall, import/export, db/debug, attach, models/providers, and ACP CLI commands. yaca covers native exec/serve/login/auth-list/auth-logout/sessions/tail/rpc/TUI commands. |
+| Account/stats/github/web/upgrade CLI | OpenCode has account, stats, GitHub, web, upgrade/uninstall, import/export, db/debug, attach, models/providers, `--mini`/attach-mini, and ACP CLI commands. yaca covers native exec/serve/login/auth-list/auth-logout/sessions/tail/rpc/TUI commands plus top-level `--mini` as an alias for the default TUI. Missing attach-mini, remote TUI attach, and the broader OpenCode CLI command set. |
 | OpenCode SDK client completeness for plugins | The adapter provides app log, path, project, and VCS client shims, but not the full OpenCode SDK HTTP client surface expected by every possible plugin, especially TUI/plugin UI APIs. |
 
 ## Next Implementation Candidates
