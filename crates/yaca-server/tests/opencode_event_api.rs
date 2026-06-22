@@ -332,6 +332,10 @@ async fn opencode_v2_event_route_streams_message_updated_properties() {
     assert_eq!(delta["properties"]["field"], "text");
     assert_eq!(delta["properties"]["delta"], "/init audit");
 
+    let final_text = read_next_part_updated(&mut stream, "text").await;
+    assert_eq!(final_text["properties"]["part"]["id"], part);
+    assert_eq!(final_text["properties"]["part"]["text"], "/init audit");
+
     let command_event = read_next_command_executed(&mut stream).await;
     assert_eq!(command_event["properties"]["sessionID"], session);
     assert_eq!(command_event["properties"]["messageID"], message);
@@ -440,6 +444,10 @@ async fn opencode_v2_event_route_streams_reasoning_part_events() {
     assert_eq!(delta["properties"]["messageID"], message);
     assert_eq!(delta["properties"]["field"], "text");
     assert_eq!(delta["properties"]["delta"], "thinking");
+
+    let final_reasoning = read_next_part_updated(&mut stream, "reasoning").await;
+    assert_eq!(final_reasoning["properties"]["part"]["id"], part);
+    assert_eq!(final_reasoning["properties"]["part"]["text"], "thinking");
 }
 
 #[tokio::test]
