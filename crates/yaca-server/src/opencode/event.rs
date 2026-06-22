@@ -7,8 +7,8 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::routing::get;
+use futures::StreamExt;
 use futures::stream;
-use futures::{Stream, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
@@ -33,15 +33,13 @@ struct EventPayload<T> {
     properties: T,
 }
 
-async fn subscribe(
-    State(st): State<ServerState>,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
     let connected = json_event(&EventPayload {
         id: event_id(),
         kind: "server.connected",
         properties: json!({}),
     });
-    let initial = stream::once(async move { Ok(connected) });
+    let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
         let st = live_st.clone();
@@ -52,14 +50,14 @@ async fn subscribe(
             }
         }
     });
-    Sse::new(initial.chain(live))
+    super::sse::opencode(Sse::new(initial.chain(live)))
 }
 
 async fn subscribe_api(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+) -> axum::response::Response {
     let location = super::location::LocationRef::from_request(&query, &headers);
     let location_info = super::location::info_at(&st, &location);
     let requested_directory = super::location::workdir_at(&st, &location)
@@ -71,7 +69,7 @@ async fn subscribe_api(
         "location": location_info.clone(),
         "data": {},
     }));
-    let initial = stream::once(async move { Ok(connected) });
+    let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
         let st = live_st.clone();
@@ -93,12 +91,10 @@ async fn subscribe_api(
             }
         }
     });
-    Sse::new(initial.chain(live))
+    super::sse::opencode(Sse::new(initial.chain(live)))
 }
 
-async fn subscribe_global(
-    State(st): State<ServerState>,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Response {
     let connected = json_event(&json!({
         "payload": EventPayload {
             id: event_id(),
@@ -106,7 +102,7 @@ async fn subscribe_global(
             properties: json!({}),
         },
     }));
-    let initial = stream::once(async move { Ok(connected) });
+    let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
         let st = live_st.clone();
@@ -120,7 +116,7 @@ async fn subscribe_global(
             }
         }
     });
-    Sse::new(initial.chain(live))
+    super::sse::opencode(Sse::new(initial.chain(live)))
 }
 
 async fn envelope_matches_location(

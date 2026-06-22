@@ -42,6 +42,7 @@ mod session_summarize;
 mod session_switch;
 mod session_update;
 mod session_v2;
+mod sse;
 mod tui;
 mod worktree_git;
 
