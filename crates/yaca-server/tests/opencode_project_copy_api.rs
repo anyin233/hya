@@ -258,3 +258,22 @@ async fn opencode_project_routes_return_current_directory() {
         json!([{ "directory": repo_text }])
     );
 }
+
+#[tokio::test]
+async fn opencode_project_git_init_creates_repository_and_returns_project() {
+    if !git_available() {
+        eprintln!("skipping: git is not available");
+        return;
+    }
+    let workdir = tempdir("project-git-init");
+    let app = router(state(workdir.clone()).await);
+    let workdir_text = workdir.to_string_lossy().into_owned();
+
+    let initialized = request(app, "POST", "/project/git/init", None).await;
+    assert_eq!(initialized.status(), StatusCode::OK);
+    let body = body_json(initialized).await;
+    assert_eq!(body["id"], "global");
+    assert_eq!(body["worktree"], workdir_text.as_str());
+    assert_eq!(body["vcs"], "git");
+    assert!(workdir.join(".git").exists());
+}
