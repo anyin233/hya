@@ -1,10 +1,11 @@
-use yaca_proto::{Message, Part, PartProjection, Projection, Role};
+use yaca_proto::{Message, ModelRef, Part, PartProjection, Projection, Role};
 use yaca_provider::CompletionRequest;
 use yaca_tool::ToolRegistry;
 
 use crate::engine::AgentSpec;
 
 pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection) -> Vec<Message> {
+    let model = active_model(agent, projection);
     projection
         .session
         .messages
@@ -18,7 +19,7 @@ pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection)
             Role::Assistant => Message::Assistant {
                 id: m.id,
                 agent: agent.name.clone(),
-                model: agent.model.clone(),
+                model: model.clone(),
                 parts: map_parts(&m.parts),
                 finish: m.finish,
                 tokens: None,
@@ -33,11 +34,12 @@ pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection)
 
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
+    projection: &Projection,
     messages: Vec<Message>,
     tools: &ToolRegistry,
 ) -> CompletionRequest {
     CompletionRequest {
-        model: agent.model.clone(),
+        model: active_model(agent, projection),
         system: Some(agent.system_prompt.clone()),
         messages,
         tools: tools.schemas(),
@@ -46,6 +48,14 @@ pub(super) fn request_from_messages(
         reasoning: agent.reasoning,
         headers: Default::default(),
     }
+}
+
+fn active_model(agent: &AgentSpec, projection: &Projection) -> ModelRef {
+    projection
+        .session
+        .model
+        .clone()
+        .unwrap_or_else(|| agent.model.clone())
 }
 
 fn collect_text(parts: &[PartProjection]) -> String {

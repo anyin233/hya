@@ -178,7 +178,7 @@ async fn opencode_prompt_async_publishes_session_error_event_on_background_failu
     .expect("session.error event");
     assert!(error_frame.contains(&format!("\"sessionID\":\"{session}\"")));
     assert!(error_frame.contains("\"name\":\"UnknownError\""));
-    assert!(error_frame.contains("unknown provider for model: missing"));
+    assert!(error_frame.contains("unknown provider for model: fake"));
 }
 
 #[tokio::test]
