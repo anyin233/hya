@@ -89,6 +89,10 @@ impl OpenCodeSessionInfo {
     pub(super) fn revert(&self) -> bool {
         self.revert.is_some()
     }
+
+    pub(super) fn archived(&self) -> bool {
+        self.time.archived.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]

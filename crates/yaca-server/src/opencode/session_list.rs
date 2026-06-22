@@ -10,6 +10,7 @@ pub(super) struct ListQuery {
     search: Option<String>,
     limit: Option<usize>,
     start: Option<i64>,
+    archived: Option<bool>,
 }
 
 pub(super) async fn list_sessions(
@@ -35,6 +36,9 @@ pub(super) async fn list_sessions(
             .await?
             .info;
         if query.roots == Some(true) && info.parent_id().is_some() {
+            continue;
+        }
+        if query.archived != Some(true) && info.archived() {
             continue;
         }
         if query
