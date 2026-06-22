@@ -176,9 +176,11 @@ async fn opencode_session_revert_rejects_busy_sessions() {
     wait_until_busy(app.clone(), &session).await;
 
     let expected = json!({
-        "_tag": "SessionBusyError",
-        "sessionID": session,
-        "message": format!("Session is busy: {session}"),
+        "name": "SessionBusyError",
+        "data": {
+            "sessionID": session,
+            "message": format!("Session is busy: {session}"),
+        },
     });
     let reverted = request(
         app.clone(),
