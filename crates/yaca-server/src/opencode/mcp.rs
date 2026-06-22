@@ -8,31 +8,41 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
-use yaca_mcp::McpStatus;
+use yaca_mcp::{McpManager, McpServerConfig, McpStatus};
 
 use crate::{ApiError, ServerState};
 
 #[derive(Clone)]
 pub(crate) struct McpHttpState {
-    added: Arc<RwLock<BTreeMap<String, McpStatus>>>,
+    configs: Arc<RwLock<BTreeMap<String, McpServerConfig>>>,
+    managers: Arc<RwLock<BTreeMap<String, Arc<McpManager>>>>,
+    status: Arc<RwLock<BTreeMap<String, McpStatus>>>,
 }
 
 impl McpHttpState {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            added: Arc::new(RwLock::new(BTreeMap::new())),
+            configs: Arc::new(RwLock::new(BTreeMap::new())),
+            managers: Arc::new(RwLock::new(BTreeMap::new())),
+            status: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
 
-    async fn status(&self, manager: &yaca_mcp::McpManager) -> BTreeMap<String, McpStatus> {
+    async fn status(&self, manager: &McpManager) -> BTreeMap<String, McpStatus> {
         let mut status = manager.status();
-        status.extend(self.added.read().await.clone());
+        status.extend(self.status.read().await.clone());
         status
     }
 
-    async fn insert_disabled(&self, name: String) {
-        self.added.write().await.insert(name, McpStatus::Disabled);
+    async fn add_config(&self, name: String, config: McpServerConfig) -> McpStatus {
+        self.configs
+            .write()
+            .await
+            .insert(name.clone(), config.clone());
+        let status = connect_status(name.clone(), config, &self.managers).await;
+        self.status.write().await.insert(name, status.clone());
+        status
     }
 }
 
@@ -58,12 +68,12 @@ async fn add(
     let config = payload
         .get("config")
         .ok_or_else(|| ApiError::bad_request("missing MCP config"))?;
-    validate_disabled_config(config)?;
+    let config = parse_config(config)?;
 
-    st.mcp_http.insert_disabled(name.clone()).await;
+    let status = st.mcp_http.add_config(name.clone(), config).await;
 
     let mut out = BTreeMap::new();
-    out.insert(name, McpStatus::Disabled);
+    out.insert(name, status);
     Ok(Json(out))
 }
 
@@ -134,47 +144,113 @@ fn required_string(payload: &Value, field: &str) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::bad_request(format!("missing MCP {field}")))
 }
 
-fn validate_disabled_config(config: &Value) -> Result<(), ApiError> {
+fn parse_config(config: &Value) -> Result<McpServerConfig, ApiError> {
     let kind = config
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::bad_request("missing MCP config type"))?;
 
     match kind {
-        "local" => validate_local_config(config)?,
-        "remote" => validate_remote_config(config)?,
-        _ => return Err(ApiError::bad_request("invalid MCP config type")),
-    }
-
-    if config.get("enabled") == Some(&Value::Bool(false))
-        || config.get("disabled") == Some(&Value::Bool(true))
-    {
-        Ok(())
-    } else {
-        Err(ApiError::service_unavailable(
-            "dynamic MCP add is only available for disabled servers",
-        ))
+        "local" => parse_local_config(config),
+        "remote" => parse_remote_config(config),
+        _ => Err(ApiError::bad_request("invalid MCP config type")),
     }
 }
 
-fn validate_local_config(config: &Value) -> Result<(), ApiError> {
+fn parse_local_config(config: &Value) -> Result<McpServerConfig, ApiError> {
     let command = config
         .get("command")
         .and_then(Value::as_array)
         .ok_or_else(|| ApiError::bad_request("missing MCP local command"))?;
-    if command.iter().all(Value::is_string) {
-        Ok(())
+    let command = command
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| ApiError::bad_request("invalid MCP local command"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(McpServerConfig {
+        command,
+        env: string_map(config, "environment")?,
+        enabled: enabled(config),
+        timeout_ms: optional_u64(config, "timeout")?,
+    })
+}
+
+fn parse_remote_config(config: &Value) -> Result<McpServerConfig, ApiError> {
+    let _url = config
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_request("missing MCP remote url"))?;
+    Ok(McpServerConfig {
+        enabled: enabled(config),
+        timeout_ms: optional_u64(config, "timeout")?,
+        ..McpServerConfig::default()
+    })
+}
+
+fn enabled(config: &Value) -> Option<bool> {
+    if config.get("disabled") == Some(&Value::Bool(true)) {
+        Some(false)
     } else {
-        Err(ApiError::bad_request("invalid MCP local command"))
+        config.get("enabled").and_then(Value::as_bool)
     }
 }
 
-fn validate_remote_config(config: &Value) -> Result<(), ApiError> {
-    if config.get("url").and_then(Value::as_str).is_some() {
-        Ok(())
-    } else {
-        Err(ApiError::bad_request("missing MCP remote url"))
+fn optional_u64(config: &Value, field: &str) -> Result<Option<u64>, ApiError> {
+    config
+        .get(field)
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| ApiError::bad_request(format!("invalid MCP {field}")))
+        })
+        .transpose()
+}
+
+fn string_map(config: &Value, field: &str) -> Result<Option<BTreeMap<String, String>>, ApiError> {
+    config
+        .get(field)
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| ApiError::bad_request(format!("invalid MCP {field}")))?;
+            object
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (key.clone(), value.to_string()))
+                        .ok_or_else(|| ApiError::bad_request(format!("invalid MCP {field}")))
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()
+        })
+        .transpose()
+}
+
+async fn connect_status(
+    name: String,
+    config: McpServerConfig,
+    managers: &RwLock<BTreeMap<String, Arc<McpManager>>>,
+) -> McpStatus {
+    if config.enabled == Some(false) {
+        managers.write().await.remove(&name);
+        return McpStatus::Disabled;
     }
+    let mut configs = BTreeMap::new();
+    configs.insert(name.clone(), config);
+    let manager = Arc::new(McpManager::connect_all(configs).await);
+    let status = manager
+        .status()
+        .get(&name)
+        .cloned()
+        .unwrap_or_else(|| McpStatus::Failed {
+            error: "MCP server did not report status".to_string(),
+        });
+    managers.write().await.insert(name, manager);
+    status
 }
 
 fn unsupported_oauth(name: &str) -> (StatusCode, Json<Value>) {
