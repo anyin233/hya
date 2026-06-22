@@ -98,6 +98,92 @@ test("tool.execute.before throw becomes yaca veto", async () => {
   })
 })
 
+test("tool.execute.after mutates yaca tool results", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "after.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "after",',
+      "  server: async () => ({",
+      '    "tool.execute.after": async (_input, output) => {',
+      '      output.title = "After"',
+      '      output.output = `${output.output}!`',
+      "      output.metadata.extra = true",
+      "    },",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(root, pluginFile, [
+    initializeRequest(21),
+    {
+      jsonrpc: "2.0",
+      id: 22,
+      method: "hook/tool.execute.after",
+      params: {
+        session: "session-1",
+        message: "message-1",
+        call: "call-1",
+        tool: "read",
+        input: { filePath: "README.md" },
+        result: {
+          status: "ok",
+          output: {
+            title: "Before",
+            output: "hello",
+            metadata: { base: true },
+          },
+          time_ms: 7,
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 23,
+      method: "hook/tool.execute.after",
+      params: {
+        session: "session-1",
+        message: "message-1",
+        call: "call-2",
+        tool: "read",
+        input: { filePath: "README.md" },
+        result: {
+          status: "ok",
+          output: "plain",
+        },
+      },
+    },
+    shutdownRequest(24),
+  ])
+
+  expect(responses[1]?.result).toEqual({
+    outcome: "continue",
+    result: {
+      status: "ok",
+      output: {
+        title: "After",
+        output: "hello!",
+        metadata: { base: true, extra: true },
+      },
+      time_ms: 7,
+    },
+  })
+  expect(responses[2]?.result).toEqual({
+    outcome: "continue",
+    result: {
+      status: "ok",
+      output: {
+        title: "After",
+        output: "plain!",
+        metadata: { extra: true },
+      },
+    },
+  })
+})
+
 async function runAdapter(
   root: string,
   pluginFile: string,
