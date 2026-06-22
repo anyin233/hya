@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::ServerState;
 
-use super::location::{LocationInfo, LocationResponse};
+use super::location::{LocationInfo, LocationRef, LocationResponse};
 use super::model_ref::model_ref_parts;
 
 pub(super) fn router() -> Router<ServerState> {
@@ -59,14 +60,25 @@ struct SkillInfo {
     content: String,
 }
 
-async fn location(State(st): State<ServerState>) -> Json<LocationInfo> {
-    Json(super::location::info(&st))
+async fn location(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<LocationInfo> {
+    let location = LocationRef::from_request(&query, &headers);
+    Json(super::location::info_at(&st, &location))
 }
 
-async fn agent(State(st): State<ServerState>) -> Json<LocationResponse<Vec<AgentInfo>>> {
+async fn agent(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<LocationResponse<Vec<AgentInfo>>> {
     let model = model_ref_parts(&st.agent.model);
-    Json(super::location::response(
+    let location = LocationRef::from_request(&query, &headers);
+    Json(super::location::response_at(
         &st,
+        &location,
         vec![AgentInfo {
             id: st.agent.name.to_string(),
             model: AgentModelRef {
@@ -85,9 +97,15 @@ async fn agent(State(st): State<ServerState>) -> Json<LocationResponse<Vec<Agent
     ))
 }
 
-async fn command(State(st): State<ServerState>) -> Json<LocationResponse<Vec<CommandInfo>>> {
-    Json(super::location::response(
+async fn command(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<LocationResponse<Vec<CommandInfo>>> {
+    let location = LocationRef::from_request(&query, &headers);
+    Json(super::location::response_at(
         &st,
+        &location,
         vec![
             command_info("help", "show this help", "/help"),
             command_info("model", "switch the active model", "/model $ARGUMENTS"),
@@ -99,10 +117,16 @@ async fn command(State(st): State<ServerState>) -> Json<LocationResponse<Vec<Com
     ))
 }
 
-async fn skill(State(st): State<ServerState>) -> Json<LocationResponse<Vec<SkillInfo>>> {
-    Json(super::location::response(
+async fn skill(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<LocationResponse<Vec<SkillInfo>>> {
+    let location = LocationRef::from_request(&query, &headers);
+    Json(super::location::response_at(
         &st,
-        discover_skills(&super::location::workdir(&st)),
+        &location,
+        discover_skills(&super::location::workdir_at(&st, &location)),
     ))
 }
 
