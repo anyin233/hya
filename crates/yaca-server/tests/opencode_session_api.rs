@@ -564,6 +564,67 @@ async fn opencode_session_shell_busy_returns_legacy_error() {
 }
 
 #[tokio::test]
+async fn opencode_session_command_and_init_busy_return_bad_request() {
+    let app = router(shell_state().await);
+    let session = create_session(app.clone(), None).await;
+    let shell_app = app.clone();
+    let shell_session = session.clone();
+    let mut shell_task = tokio::spawn(async move {
+        post_json(
+            shell_app,
+            format!("/sessions/{shell_session}/shell"),
+            json!({"command": "sleep 20 && printf should-not-finish"}),
+        )
+        .await
+    });
+    wait_until_busy(app.clone(), &session).await;
+
+    for (uri, body) in [
+        (
+            format!("/session/{session}/command"),
+            json!({"command": "init", "arguments": "blocked"}),
+        ),
+        (
+            format!("/session/{session}/init"),
+            json!({
+                "messageID": MessageId::new().to_string(),
+                "providerID": "fake",
+                "modelID": "fake",
+            }),
+        ),
+    ] {
+        let (status, body) = post_json(app.clone(), uri, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["name"], "BadRequest");
+        assert!(
+            body["data"]["message"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+    }
+
+    let abort = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/abort"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(abort.status(), StatusCode::OK);
+    let (shell_status, _shell_body) = tokio::select! {
+        joined = &mut shell_task => joined.unwrap(),
+        () = tokio::time::sleep(Duration::from_secs(3)) => {
+            shell_task.abort();
+            panic!("shell request did not finish after abort");
+        }
+    };
+    assert_eq!(shell_status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn opencode_session_shell_missing_session_returns_not_found() {
     let app = router(shell_state().await);
     let missing = SessionId::new().to_string();

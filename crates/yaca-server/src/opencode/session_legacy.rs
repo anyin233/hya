@@ -288,6 +288,9 @@ async fn init_session(
     Json(req): Json<InitSessionPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    if st.runs.is_busy(session) {
+        return Ok(super::errors::legacy_bad_request("Bad request"));
+    }
     match run_session_init(&st, session, req).await {
         Ok(initialized) => Ok(Json(initialized).into_response()),
         Err(error) if error.status == StatusCode::NOT_FOUND => {
@@ -310,10 +313,9 @@ async fn command(
         }
         Err(error) => return Err(error),
     }
-    let run = st
-        .runs
-        .start(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let Some(run) = st.runs.start(session) else {
+        return Ok(super::errors::legacy_bad_request("Bad request"));
+    };
     let text = req
         .text
         .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
@@ -387,7 +389,7 @@ pub(in crate::opencode) async fn run_session_init(
     let run = st
         .runs
         .start(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
+        .ok_or_else(|| ApiError::bad_request("Bad request"))?;
     let mut agent = (*st.agent).clone();
     agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
     st.engine
