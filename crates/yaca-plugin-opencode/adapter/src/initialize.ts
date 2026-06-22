@@ -94,6 +94,7 @@ async function loadConfiguredHooks(
   const worktree = context.env.YACA_WORKTREE ?? directory
   const discovered = await discoverPluginSpecs({
     directory,
+    worktree,
     xdgConfigHome: context.env.XDG_CONFIG_HOME,
     home: context.env.HOME,
   })
