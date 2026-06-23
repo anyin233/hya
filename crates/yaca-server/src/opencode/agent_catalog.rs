@@ -9,6 +9,7 @@ pub(super) struct AgentEntry {
     pub(super) hidden: bool,
     pub(super) native: bool,
     pub(super) model: Option<String>,
+    pub(super) variant: Option<String>,
     pub(super) prompt: Option<String>,
 }
 
@@ -89,6 +90,7 @@ fn native_entries() -> Vec<AgentEntry> {
             hidden: agent.hidden,
             native: true,
             model: None,
+            variant: None,
             prompt: None,
         })
         .collect()
@@ -112,6 +114,9 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
         if let Some(model) = change.model {
             existing.model = Some(model);
         }
+        if let Some(variant) = change.variant {
+            existing.variant = Some(variant);
+        }
         if let Some(prompt) = change.prompt {
             existing.prompt = Some(prompt);
         }
@@ -123,6 +128,7 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
             hidden: change.hidden.unwrap_or(false),
             native: false,
             model: change.model,
+            variant: change.variant,
             prompt: change.prompt,
         });
     }
