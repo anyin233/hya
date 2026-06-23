@@ -29,6 +29,13 @@ pub(super) async fn list(State(st): State<ServerState>) -> Result<Json<Vec<Info>
     workspace_list(&st).await.map(Json)
 }
 
+pub(super) async fn find(st: &ServerState, id: &str) -> Result<Option<Info>, ApiError> {
+    Ok(workspace_list(st)
+        .await?
+        .into_iter()
+        .find(|workspace| workspace.id == id))
+}
+
 pub(super) async fn status() -> Json<Vec<Value>> {
     Json(Vec::new())
 }
@@ -94,6 +101,12 @@ pub(super) struct Info {
     project_id: String,
     #[serde(rename = "timeUsed")]
     time_used: u64,
+}
+
+impl Info {
+    pub(super) fn directory(&self) -> &str {
+        &self.directory
+    }
 }
 
 async fn workspace_list(st: &ServerState) -> Result<Vec<Info>, ApiError> {

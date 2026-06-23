@@ -137,13 +137,16 @@ async fn workspace_warp(
             )));
         }
     };
-    match payload.get("id") {
-        Some(Value::Null) => {}
+    let target_directory = match payload.get("id") {
+        Some(Value::Null) => None,
         Some(Value::String(id)) => {
-            return Ok(not_found_error(format!("Workspace not found: {id}")));
+            let Some(workspace) = super::experimental_workspace::find(&st, id).await? else {
+                return Ok(not_found_error(format!("Workspace not found: {id}")));
+            };
+            Some(workspace.directory().to_string())
         }
         _ => return Ok(workspace_warp_error("Workspace warp is unavailable")),
-    }
+    };
     let projection = st
         .engine
         .store()
@@ -154,6 +157,14 @@ async fn workspace_warp(
         return Ok(workspace_warp_error(format!(
             "Session not found: {session_id}"
         )));
+    }
+    if let Some(directory) = target_directory
+        && projection.session.workdir.as_deref() != Some(directory.as_str())
+    {
+        st.engine
+            .set_workdir(session, directory)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
