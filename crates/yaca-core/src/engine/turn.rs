@@ -78,7 +78,8 @@ impl SessionEngine {
             } else {
                 messages
             };
-            let request = request_from_messages(agent, &projection, messages, &self.tools);
+            let request =
+                request_from_messages(agent, &projection, messages, &self.tools, &self.providers);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {
