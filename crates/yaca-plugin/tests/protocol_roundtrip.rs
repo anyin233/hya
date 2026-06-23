@@ -3,7 +3,7 @@
 use serde_json::json;
 use yaca_plugin::messages::{
     EventNotificationParams, HookName, HookPosture, HookRegistration, InitializeResult, PluginInfo,
-    PluginKindWire, ToolCallParams, ToolCallReply, ToolInfo,
+    PluginKindWire, ToolCallParams, ToolCallReply, ToolInfo, WorkspaceAdapterInfo,
 };
 use yaca_plugin::protocol::{Frame, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use yaca_proto::{Envelope, Event, EventSeq, MessageId, Role, SessionId, ToolCallId};
@@ -109,6 +109,11 @@ fn initialize_result_roundtrip() {
             name: "t".into(),
             description: String::new(),
             input_schema: json!({"type": "object"}),
+        }],
+        workspace_adapters: vec![WorkspaceAdapterInfo {
+            r#type: "folder".into(),
+            name: "Folder".into(),
+            description: "Local folder workspace".into(),
         }],
     };
     assert_eq!(init, reparse(&init));
