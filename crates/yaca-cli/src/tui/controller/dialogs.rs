@@ -9,6 +9,7 @@ pub(super) enum DialogMode {
     Resume,
     Help,
     Tools,
+    Subagents,
     Think,
     Skills,
     CommandPalette,
@@ -152,7 +153,10 @@ impl Controller {
                         TuiEffect::None
                     }
                     Some(
-                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
+                        DialogMode::Help
+                        | DialogMode::Tools
+                        | DialogMode::Subagents
+                        | DialogMode::ReferenceCompletion,
                     )
                     | None => TuiEffect::None,
                 }

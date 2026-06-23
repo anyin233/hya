@@ -68,6 +68,34 @@ fn ctrl_x_opens_non_modal_keybindings_preview() {
 }
 
 #[test]
+fn ctrl_x_preview_labels_down_as_view_subagents_when_active_subagents_exist() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        running: true,
+        team: vec![("explore".to_string(), "running".to_string())],
+        ..AppState::default()
+    });
+
+    // When
+    let arm_effect = controller.handle_key(ctrl('x'));
+
+    // Then
+    assert_eq!(arm_effect, TuiEffect::None);
+    let preview = controller
+        .app
+        .keybindings
+        .as_ref()
+        .expect("which-key preview");
+    assert!(
+        preview
+            .groups
+            .iter()
+            .flat_map(|group| group.items.iter())
+            .any(|item| item.key == "↓" && item.label == "View subagents")
+    );
+}
+
+#[test]
 fn leader_preview_expires_without_consuming_next_text_key() {
     // Given
     let mut controller = Controller::new(AppState::default());

@@ -1,4 +1,4 @@
-use yaca_tui::{KeyBindingGroup, KeyBindingItem, KeyBindingsView};
+use yaca_tui::{AppState, KeyBindingGroup, KeyBindingItem, KeyBindingsView};
 
 use super::{Controller, TuiEffect};
 use crate::tui::leader_key::LeaderAction;
@@ -7,7 +7,7 @@ impl Controller {
     pub(super) fn handle_leader_action(&mut self, action: LeaderAction) -> TuiEffect {
         match action {
             LeaderAction::Arm => {
-                self.app.keybindings = Some(leader_keybindings_view());
+                self.app.keybindings = Some(leader_keybindings_view(&self.app));
                 TuiEffect::None
             }
             LeaderAction::Cancel => {
@@ -42,6 +42,15 @@ impl Controller {
                 self.open_tools_dialog();
                 TuiEffect::None
             }
+            LeaderAction::SubagentsView => {
+                self.clear_keybindings();
+                if self.app.has_active_team_members() {
+                    self.open_subagents_dialog();
+                } else {
+                    self.open_tools_dialog();
+                }
+                TuiEffect::None
+            }
             LeaderAction::SessionExport => {
                 self.clear_keybindings();
                 TuiEffect::ExportTranscript
@@ -58,11 +67,19 @@ impl Controller {
     }
 }
 
-fn leader_keybindings_view() -> KeyBindingsView {
+fn leader_keybindings_view(app: &AppState) -> KeyBindingsView {
+    let down_label = if app.has_active_team_members() {
+        "View subagents"
+    } else {
+        "Status"
+    };
     KeyBindingsView {
         title: "Key Bindings".to_string(),
         groups: vec![
-            group("System", [("s", "Status"), ("↓", "Status"), ("q", "Exit")]),
+            group(
+                "System",
+                [("s", "Status"), ("↓", down_label), ("q", "Exit")],
+            ),
             group(
                 "Session",
                 [

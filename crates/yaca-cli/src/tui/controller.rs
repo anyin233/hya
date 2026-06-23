@@ -21,6 +21,7 @@ mod leader_actions;
 mod leader_timeout;
 mod message_actions;
 mod slash;
+mod subagents;
 
 use self::dialogs::DialogMode;
 pub use self::effects::TuiEffect;

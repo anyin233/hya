@@ -60,7 +60,7 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
             ]);
         }
     }
-    if state.running && has_active_subagents(state) {
+    if state.running && state.has_active_team_members() {
         spans.extend([
             Span::styled("   ", Style::default().fg(theme.muted)),
             Span::styled("ctrl+x down ", Style::default().fg(theme.text)),
@@ -118,21 +118,6 @@ fn show_home_hint(state: &AppState) -> bool {
         && state.input.is_empty()
         && state.selected_message.is_none()
         && state.projection.session.messages.is_empty()
-}
-
-fn has_active_subagents(state: &AppState) -> bool {
-    state
-        .team
-        .iter()
-        .any(|(_member, status)| !is_finished_subagent_status(status))
-}
-
-fn is_finished_subagent_status(status: &str) -> bool {
-    let label = status.trim().to_ascii_lowercase();
-    matches!(
-        label.as_str(),
-        "complete" | "completed" | "done" | "failed" | "error" | "cancelled" | "canceled"
-    )
 }
 
 fn runtime_state_label(state: &AppState) -> Option<String> {

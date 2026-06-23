@@ -175,6 +175,79 @@ fn ctrl_x_then_s_opens_status_dialog() {
 }
 
 #[test]
+fn ctrl_x_then_s_opens_status_dialog_when_active_subagents_exist() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        running: true,
+        team: vec![("explore".to_string(), "running".to_string())],
+        ..AppState::default()
+    });
+
+    // When
+    arm_leader(&mut controller);
+    let effect = controller.handle_key(key(KeyCode::Char('s')));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("status dialog").title,
+        "tools"
+    );
+}
+
+#[test]
+fn ctrl_x_down_opens_subagent_view_when_active_subagents_exist() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        running: true,
+        team: vec![
+            ("explore".to_string(), "running".to_string()),
+            ("review".to_string(), "done".to_string()),
+        ],
+        ..AppState::default()
+    });
+
+    // When
+    arm_leader(&mut controller);
+    let effect = controller.handle_key(key(KeyCode::Down));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    let dialog = controller.app.dialog.as_ref().expect("subagents dialog");
+    assert_eq!(dialog.title, "subagents");
+    assert_eq!(dialog.items.len(), 1);
+    assert_eq!(dialog.items[0].label, "explore");
+    assert_eq!(dialog.items[0].detail, "running");
+}
+
+#[test]
+fn ctrl_x_down_opens_status_dialog_when_no_active_subagents_exist() {
+    for team in [
+        Vec::new(),
+        vec![("explore".to_string(), "done".to_string())],
+        vec![("review".to_string(), "failed".to_string())],
+    ] {
+        // Given
+        let mut controller = Controller::new(AppState {
+            running: true,
+            team,
+            ..AppState::default()
+        });
+
+        // When
+        arm_leader(&mut controller);
+        let effect = controller.handle_key(key(KeyCode::Down));
+
+        // Then
+        assert_eq!(effect, TuiEffect::None);
+        assert_eq!(
+            controller.app.dialog.as_ref().expect("status dialog").title,
+            "tools"
+        );
+    }
+}
+
+#[test]
 fn slash_status_opens_status_dialog() {
     // Given
     let mut controller = Controller::new(AppState::default());

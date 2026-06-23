@@ -171,6 +171,24 @@ impl Controller {
         self.dialog_mode = Some(DialogMode::Tools);
     }
 
+    pub(super) fn open_subagents_dialog(&mut self) {
+        let items = super::subagents::active_items(&self.app);
+        self.app.dialog = Some(DialogView {
+            title: "subagents".to_string(),
+            subtitle: "active subagent workers".to_string(),
+            items: if items.is_empty() {
+                vec![DialogItem {
+                    label: "no active subagents".to_string(),
+                    detail: "start a task tool call to spawn workers".to_string(),
+                }]
+            } else {
+                items
+            },
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Subagents);
+    }
+
     pub(super) fn open_think_dialog(&mut self) {
         let current = self.app.reasoning_effort.as_deref().unwrap_or("off");
         let items = ["off", "low", "medium", "high", "max"]

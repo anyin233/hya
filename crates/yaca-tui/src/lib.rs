@@ -57,6 +57,24 @@ pub struct AppState {
     pub selected_message_scroll_anchor: Option<usize>,
 }
 
+impl AppState {
+    #[must_use]
+    pub fn has_active_team_members(&self) -> bool {
+        self.team
+            .iter()
+            .any(|(_member, status)| !Self::is_finished_team_status(status))
+    }
+
+    #[must_use]
+    pub fn is_finished_team_status(status: &str) -> bool {
+        let label = status.trim().to_ascii_lowercase();
+        matches!(
+            label.as_str(),
+            "complete" | "completed" | "done" | "failed" | "error" | "cancelled" | "canceled"
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContextView {
     pub session_saved_tokens: Option<u64>,
