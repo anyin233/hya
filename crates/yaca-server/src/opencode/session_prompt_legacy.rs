@@ -49,7 +49,11 @@ async fn prompt(
             return Ok(super::errors::session_busy(session));
         };
         let agent = super::reference::agent_with_guidance(&st).await;
-        let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
+        let external_dirs = super::reference::external_directories(&st).await;
+        let _finish = st
+            .engine
+            .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+            .await?;
     }
     Ok(Json(super::session_legacy::load_message(&st, session, message).await?).into_response())
 }

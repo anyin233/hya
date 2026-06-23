@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use tokio_util::sync::CancellationToken;
 use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId};
-use yaca_tool::{ToolCtx, ToolError};
+use yaca_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{AgentSpec, SessionEngine};
@@ -20,6 +22,17 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         cancel: CancellationToken,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs(session, agent, cancel, &[])
+            .await
+    }
+
+    pub async fn run_turn_with_external_dirs(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
         let message = MessageId::new();
         self.emit(
@@ -134,7 +147,11 @@ impl SessionEngine {
                 let result = match self.tools.get(&tc.name) {
                     Some(tool) => {
                         let ctx = ToolCtx {
-                            permission: self.permission.for_session(session),
+                            permission: permission_for_session(
+                                &self.permission,
+                                session,
+                                external_dirs,
+                            ),
                             interaction: self.interaction.for_session(session),
                             spawner: self.spawner.for_session(session),
                             session: Some(session),
@@ -249,4 +266,23 @@ impl SessionEngine {
             }
         }
     }
+}
+
+fn permission_for_session(
+    permission: &PermissionPlane,
+    session: SessionId,
+    external_dirs: &[PathBuf],
+) -> PermissionPlane {
+    let permission = permission.for_session(session);
+    let rules = external_dirs
+        .iter()
+        .map(|dir| {
+            Rule::new(
+                Action::ExternalDirectory,
+                dir.join("*").to_string_lossy().replace('\\', "/"),
+                Mode::Allow,
+            )
+        })
+        .collect();
+    permission.with_snapshot_rules(rules)
 }

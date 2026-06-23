@@ -13,11 +13,12 @@ use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
 use yaca_proto::{AgentName, Event, FinishReason, ModelRef, Role};
 use yaca_provider::{
-    Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
+    Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
+    ProviderRouter,
 };
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 struct RecordingProvider {
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
@@ -72,6 +73,41 @@ async fn state(workdir: &str, requests: Arc<Mutex<Vec<CompletionRequest>>>) -> A
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider { requests })));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "base system".to_string(),
+            workdir: workdir.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn read_reference_state(workdir: &str, reference_dir: &str) -> AppState {
+    std::fs::create_dir_all(workdir).unwrap();
+    std::fs::create_dir_all(reference_dir).unwrap();
+    std::fs::write(format!("{reference_dir}/guide.txt"), "reference body\n").unwrap();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: json!({ "filePath": format!("{reference_dir}/guide.txt") }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "*",
+        Mode::Allow,
+    )]));
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
     AppState::new(
@@ -164,4 +200,56 @@ async fn opencode_prompt_system_includes_configured_reference_guidance() {
     assert!(system.contains("<name>docs</name>"));
     assert!(system.contains("<description>Project docs</description>"));
     assert!(!system.contains("<name>hidden</name>"));
+}
+
+#[tokio::test]
+async fn opencode_reference_directories_allow_external_tool_reads() {
+    let reference_dir = workdir();
+    let workdir = workdir();
+    let app = router(read_reference_state(&workdir, &reference_dir).await);
+
+    let (status, _config) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        json!({
+            "references": {
+                "docs": { "path": reference_dir }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let session = create_session(app.clone(), &workdir).await;
+    let (status, _message) = request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session}/message"),
+        json!({"text": "read the reference"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, messages) = request_json(
+        app,
+        Method::GET,
+        &format!("/session/{session}/message"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tool = messages[1]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["type"] == "tool" && part["tool"] == "read")
+        .unwrap();
+    assert_eq!(tool["state"]["status"], "completed");
+    assert!(
+        tool["state"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("reference body")
+    );
 }
