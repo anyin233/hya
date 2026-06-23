@@ -49,7 +49,7 @@ fn explicit_extension(path: &Path) -> Option<&'static str> {
         Some("jpg" | "jpeg") => Some("image/jpeg"),
         Some("gif") => Some("image/gif"),
         Some("webp") => Some("image/webp"),
-        Some("ico") => Some("image/x-icon"),
+        Some("ico") => Some("image/vnd.microsoft.icon"),
         Some("pdf") => Some("application/pdf"),
         Some("wasm") => Some("application/wasm"),
         Some("mp3") => Some("audio/mpeg"),
