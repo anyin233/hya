@@ -154,7 +154,7 @@ async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, _) = request(
         app.clone(),

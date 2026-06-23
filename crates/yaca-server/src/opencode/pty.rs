@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, State};
 use axum::http::header::HeaderMap;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::{ApiError, ServerState};
 
 use super::location;
-use super::pty_state::{PtyInfo, TicketStatus};
+use super::pty_state::PtyInfo;
 
 const CONNECT_TOKEN_HEADER: &str = "x-opencode-ticket";
 const CONNECT_TOKEN_HEADER_VALUE: &str = "1";
@@ -27,7 +27,7 @@ pub(super) fn router() -> Router<ServerState> {
             get(get_legacy).put(update_legacy).delete(remove_legacy),
         )
         .route("/pty/:id/connect-token", post(connect_token))
-        .route("/pty/:id/connect", get(connect))
+        .route("/pty/:id/connect", get(super::pty_connect::connect))
         .route("/api/pty/shells", get(shells))
         .route("/api/pty", get(list_api).post(create_api))
         .route(
@@ -35,7 +35,7 @@ pub(super) fn router() -> Router<ServerState> {
             get(get_api).put(update_api).delete(remove_api),
         )
         .route("/api/pty/:id/connect-token", post(connect_token_api))
-        .route("/api/pty/:id/connect", get(connect))
+        .route("/api/pty/:id/connect", get(super::pty_connect::connect))
 }
 
 #[derive(Serialize)]
@@ -62,7 +62,9 @@ async fn create_legacy(
     Json(payload): Json<Value>,
 ) -> Result<Json<PtyInfo>, ApiError> {
     let payload = super::pty_payload::create(payload, default_cwd(&st))?;
-    Ok(Json(st.pty.create(payload).await))
+    Ok(Json(
+        st.pty.create(payload).await.map_err(ApiError::internal)?,
+    ))
 }
 
 async fn create_api(
@@ -70,7 +72,7 @@ async fn create_api(
     Json(payload): Json<Value>,
 ) -> Result<Json<location::LocationResponse<PtyInfo>>, ApiError> {
     let payload = super::pty_payload::create(payload, default_cwd(&st))?;
-    let info = st.pty.create(payload).await;
+    let info = st.pty.create(payload).await.map_err(ApiError::internal)?;
     Ok(Json(location::response(&st, info)))
 }
 
@@ -166,24 +168,6 @@ async fn connect_token_response(
     }
 }
 
-async fn connect(
-    State(st): State<ServerState>,
-    AxumPath(id): AxumPath<String>,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Response {
-    let Some(ticket) = query.get("ticket") else {
-        if st.pty.get(&id).await.is_none() {
-            return pty_not_found(&id);
-        }
-        return forbidden();
-    };
-    match st.pty.consume_ticket(&id, ticket).await {
-        TicketStatus::Accepted => StatusCode::NOT_IMPLEMENTED.into_response(),
-        TicketStatus::Invalid => forbidden(),
-        TicketStatus::NotFound => pty_not_found(&id),
-    }
-}
-
 fn default_cwd(st: &ServerState) -> String {
     location::workdir(st).to_string_lossy().into_owned()
 }
@@ -238,7 +222,7 @@ fn is_executable(path: &str) -> bool {
     }
 }
 
-fn pty_not_found(id: &str) -> Response {
+pub(super) fn pty_not_found(id: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(json!({
@@ -250,7 +234,7 @@ fn pty_not_found(id: &str) -> Response {
         .into_response()
 }
 
-fn forbidden() -> Response {
+pub(super) fn forbidden() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({
