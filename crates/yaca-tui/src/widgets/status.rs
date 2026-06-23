@@ -72,6 +72,8 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
             Span::styled("enter ", Style::default().fg(theme.text)),
             Span::styled("actions", Style::default().fg(theme.muted)),
             Span::styled(" · ", Style::default().fg(theme.muted)),
+            Span::styled("copy", Style::default().fg(theme.muted)),
+            Span::styled(" · ", Style::default().fg(theme.muted)),
             Span::styled("r ", Style::default().fg(theme.text)),
             Span::styled("revert", Style::default().fg(theme.muted)),
             Span::styled(" · ", Style::default().fg(theme.muted)),
