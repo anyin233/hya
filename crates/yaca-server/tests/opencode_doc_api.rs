@@ -85,6 +85,8 @@ async fn opencode_doc_route_returns_openapi_document() {
     assert!(body["paths"]["/permission"].is_object());
     assert!(body["paths"]["/api/provider"].is_object());
     assert!(body["paths"]["/api/model"].is_object());
+    assert!(body["paths"]["/api/fs/read/*"].is_object());
+    assert!(body["paths"]["/api/fs/read/{path}"].is_null());
     assert!(body["paths"]["/api/fs/list"].is_object());
     assert!(body["paths"]["/api/fs/find"].is_object());
     assert!(body["paths"]["/api/permission/request"].is_object());
