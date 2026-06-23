@@ -158,6 +158,41 @@ fn dialog_clears_underlying_prompt_rail_at_eighty_columns() {
 }
 
 #[test]
+fn skills_dialog_shows_empty_state_copy_when_no_skills() {
+    // Given: the skills chooser has no rows to render.
+    let mut state = AppState {
+        dialog: Some(DialogView {
+            title: "Skills".to_string(),
+            subtitle: "Search skills...".to_string(),
+            items: Vec::new(),
+            selected: 0,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the dialog renders.
+    let text = render(&mut state, 100, 24);
+
+    // Then: it shows an intentional empty state instead of a selectable fake row.
+    assert!(
+        text.contains("No skills found"),
+        "missing empty title:\n{text}"
+    );
+    assert!(
+        text.contains("Add SKILL.md under .yaca/skills or ~/.config/yaca/skills"),
+        "missing setup hint:\n{text}"
+    );
+    assert!(
+        !text.contains("no skills"),
+        "dialog should not expose a fake selectable row:\n{text}"
+    );
+    assert!(
+        text.contains("↑↓/tab select   enter confirm   esc dismiss"),
+        "empty dialog should keep the command hint visible:\n{text}"
+    );
+}
+
+#[test]
 fn dialog_window_follows_selected_item_past_first_ten_rows() {
     // Given: a skill dialog with more rows than the visible OpenCode popup window.
     let items = (0..12)

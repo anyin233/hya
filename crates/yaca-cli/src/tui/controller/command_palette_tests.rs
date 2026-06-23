@@ -94,6 +94,24 @@ fn slash_connect_opens_provider_setup_entry_when_no_models_exist() {
 }
 
 #[test]
+fn slash_skills_opens_empty_dialog_without_fake_row() {
+    // Given: no discovered skills.
+    let mut controller = Controller::new(AppState::default());
+
+    // When: the user opens the skills chooser.
+    type_text(&mut controller, "/skills");
+
+    // Then: the dialog owns an empty item list so rendering can show a real empty state.
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+    let dialog = controller.app.dialog.as_ref().expect("skills dialog");
+    assert!(
+        dialog.items.is_empty(),
+        "skills dialog should not synthesize a selectable fake row: {:?}",
+        dialog.items
+    );
+}
+
+#[test]
 fn model_dialog_ctrl_a_opens_provider_list() {
     // Given: OpenCode model dialogs expose a ctrl+a action for provider setup.
     let mut controller = Controller::with_models_and_sessions(

@@ -192,14 +192,7 @@ impl Controller {
         self.app.dialog = Some(DialogView {
             title: "Skills".to_string(),
             subtitle: "Search skills...".to_string(),
-            items: if items.is_empty() {
-                vec![DialogItem {
-                    label: "no skills".to_string(),
-                    detail: "add SKILL.md under .yaca/skills or ~/.config/yaca/skills".to_string(),
-                }]
-            } else {
-                items
-            },
+            items,
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::Skills);
