@@ -167,3 +167,59 @@ async fn opencode_command_route_discovers_project_markdown_commands() {
     assert!(docs.get("description").is_none());
     assert_eq!(docs["template"], "Write docs");
 }
+
+#[tokio::test]
+async fn opencode_command_route_discovers_inline_config_commands() {
+    // Given: a workspace with inline OpenCode command config files.
+    let workdir = tempdir();
+    std::fs::write(
+        workdir.join("opencode.json"),
+        r#"{
+  "command": {
+    "deploy": {
+      "description": "Deploy from config",
+      "agent": "build",
+      "model": "openai/gpt-5",
+      "subtask": true,
+      "template": "Deploy $ARGUMENTS to $1"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(workdir.join(".opencode")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/opencode.jsonc"),
+        r#"{
+  // Newer OpenCode config also accepts "commands".
+  "commands": {
+    "review": {
+      "description": "Review from config",
+      "template": "Review $2 and $1",
+    },
+  },
+}"#,
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: the OpenCode /command route is listed for that workspace.
+    let (status, commands) =
+        get_json(app, &format!("/command?directory={}", workdir.display())).await;
+
+    // Then: inline config commands are exposed and can override built-ins.
+    assert_eq!(status, StatusCode::OK);
+    let deploy = find_command(&commands, "deploy");
+    assert_eq!(deploy["description"], "Deploy from config");
+    assert_eq!(deploy["source"], "command");
+    assert_eq!(deploy["agent"], "build");
+    assert_eq!(deploy["model"], "openai/gpt-5");
+    assert_eq!(deploy["subtask"], true);
+    assert_eq!(deploy["hints"], json!(["$1", "$ARGUMENTS"]));
+    assert_eq!(deploy["template"], "Deploy $ARGUMENTS to $1");
+
+    let review = find_command(&commands, "review");
+    assert_eq!(review["description"], "Review from config");
+    assert_eq!(review["hints"], json!(["$1", "$2"]));
+    assert_eq!(review["template"], "Review $2 and $1");
+}
