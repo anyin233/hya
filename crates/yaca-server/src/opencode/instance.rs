@@ -19,7 +19,6 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/agent", get(agent))
         .route("/skill", get(skill))
         .route("/lsp", get(lsp))
-        .route("/formatter", get(empty_array))
 }
 
 #[derive(Serialize)]
@@ -132,10 +131,6 @@ async fn skill(
     axum::extract::State(st): axum::extract::State<ServerState>,
 ) -> Json<Vec<SkillInfo>> {
     Json(discover_skills(&workdir(&st)))
-}
-
-async fn empty_array() -> Json<Vec<Value>> {
-    Json(Vec::new())
 }
 
 async fn lsp(axum::extract::State(st): axum::extract::State<ServerState>) -> Json<Vec<Value>> {
