@@ -38,6 +38,7 @@ struct PathInfo {
 #[derive(Serialize)]
 struct AgentInfo {
     name: String,
+    description: &'static str,
     mode: &'static str,
     native: bool,
     permission: Vec<PermissionRule>,
@@ -97,6 +98,7 @@ async fn agent(
 ) -> Json<Vec<AgentInfo>> {
     Json(vec![AgentInfo {
         name: st.agent.name.to_string(),
+        description: "The default agent. Executes tools based on configured permissions.",
         mode: "primary",
         native: true,
         permission: super::agent_permission::from_engine(&st.engine),
