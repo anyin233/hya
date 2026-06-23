@@ -28,6 +28,7 @@ tower-http = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 serde_json = { workspace = true }
