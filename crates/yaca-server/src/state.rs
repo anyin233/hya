@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::sync::mpsc;
 use yaca_core::{AgentSpec, SessionEngine};
 use yaca_mcp::McpManager;
@@ -16,6 +17,25 @@ pub struct AppState {
     question_requests: pending::QuestionRequests,
     mcp_manager: Arc<McpManager>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
+    formatter_status: Vec<FormatterStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FormatterStatus {
+    name: String,
+    extensions: Vec<String>,
+    enabled: bool,
+}
+
+impl FormatterStatus {
+    #[must_use]
+    pub fn new(name: impl Into<String>, extensions: Vec<String>, enabled: bool) -> Self {
+        Self {
+            name: name.into(),
+            extensions,
+            enabled,
+        }
+    }
 }
 
 impl AppState {
@@ -29,6 +49,7 @@ impl AppState {
             question_requests: Default::default(),
             mcp_manager: Default::default(),
             workspace_adapters: Vec::new(),
+            formatter_status: Vec::new(),
         }
     }
 
@@ -56,6 +77,12 @@ impl AppState {
         self.workspace_adapters = adapters;
         self
     }
+
+    #[must_use]
+    pub fn with_formatter_status(mut self, status: Vec<FormatterStatus>) -> Self {
+        self.formatter_status = status;
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -72,6 +99,7 @@ pub(crate) struct ServerState {
     pub(crate) pty: opencode::PtyState,
     pub(crate) tui: opencode::TuiState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
+    pub(crate) formatter_status: Vec<FormatterStatus>,
 }
 
 impl ServerState {
@@ -89,6 +117,7 @@ impl ServerState {
             pty: opencode::PtyState::new(),
             tui: opencode::TuiState::new(),
             workspace_adapters: app.workspace_adapters,
+            formatter_status: app.formatter_status,
         }
     }
 }

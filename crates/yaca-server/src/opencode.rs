@@ -10,6 +10,7 @@ mod experimental;
 mod experimental_sync;
 mod experimental_worktree;
 mod file;
+mod formatter;
 mod global;
 mod health;
 mod instance;
@@ -80,6 +81,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(experimental::router())
         .merge(experimental_worktree::router())
         .merge(file::router())
+        .merge(formatter::router())
         .merge(global::router())
         .merge(health::router())
         .merge(instance::router())
