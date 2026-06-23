@@ -87,7 +87,7 @@ impl Tool for ApplyPatchTool {
         }
         let diagnostics = lsp_post_edit::touch_many_and_diagnostics(&ctx.lsp, &lsp_paths).await?;
 
-        let output = format!(
+        let mut output = format!(
             "Success. Updated the following files:\n{}",
             summaries
                 .iter()
@@ -95,6 +95,15 @@ impl Tool for ApplyPatchTool {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+        for path in &lsp_paths {
+            let relative = path.strip_prefix(&ctx.workdir).unwrap_or(path);
+            lsp_post_edit::append_patch_diagnostics(
+                &mut output,
+                path,
+                &display_path(relative),
+                &diagnostics,
+            );
+        }
         let files: Vec<Value> = summaries
             .into_iter()
             .map(|summary| {

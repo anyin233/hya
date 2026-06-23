@@ -78,12 +78,14 @@ impl Tool for WriteTool {
             utf8_bom::sync_file(&path, desired_bom).await?;
         }
         let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
+        let mut output = "Wrote file successfully.".to_string();
+        lsp_post_edit::append_write_diagnostics(&mut output, &path, &diagnostics);
 
         Ok(json!({
             "ok": true,
             "bytes": input.content.len(),
             "title": relative_title(&path, &workdir),
-            "output": "Wrote file successfully.",
+            "output": output,
             "metadata": {
                 "diagnostics": diagnostics,
                 "filepath": display_path(&path),
