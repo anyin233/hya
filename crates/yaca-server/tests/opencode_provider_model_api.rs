@@ -188,9 +188,9 @@ async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
 
     let (status, skills) = get_json(app, "/api/skill").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills["data"][0]["name"], "demo");
-    assert_eq!(skills["data"][0]["description"], "Demo skill");
-    assert_eq!(skills["data"][0]["content"], "Use this skill.\n");
+    assert_eq!(skills["data"][1]["name"], "demo");
+    assert_eq!(skills["data"][1]["description"], "Demo skill");
+    assert_eq!(skills["data"][1]["content"], "Use this skill.\n");
 }
 
 #[tokio::test]

@@ -55,14 +55,6 @@ struct AgentModel {
     provider_id: String,
 }
 
-#[derive(Serialize)]
-struct SkillInfo {
-    name: String,
-    description: String,
-    location: String,
-    content: String,
-}
-
 async fn dispose() -> Json<bool> {
     Json(true)
 }
@@ -113,11 +105,10 @@ async fn skill(
     axum::extract::State(st): axum::extract::State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<Vec<SkillInfo>> {
+) -> Json<Vec<super::skill_catalog::SkillInfo>> {
     let location = super::location::LocationRef::from_request(&query, &headers);
-    Json(discover_skills(&super::location::workdir_at(
-        &st, &location,
-    )))
+    let workdir = super::location::workdir_at(&st, &location);
+    Json(super::skill_catalog::list(&workdir))
 }
 
 async fn lsp(
@@ -141,53 +132,6 @@ fn model_info(model: &str) -> AgentModel {
         model_id: model.to_string(),
         provider_id: "yaca".to_string(),
     }
-}
-
-fn discover_skills(workdir: &Path) -> Vec<SkillInfo> {
-    let mut skills = Vec::new();
-    for dir in skill_dirs(workdir) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path().join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Some((name, description)) = parse_skill(&content) {
-                skills.push(SkillInfo {
-                    name,
-                    description,
-                    location: path.to_string_lossy().into_owned(),
-                    content,
-                });
-            }
-        }
-    }
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills
-}
-
-fn parse_skill(content: &str) -> Option<(String, String)> {
-    let frontmatter = content.strip_prefix("---")?.split_once("\n---")?.0;
-    let mut name = None;
-    let mut description = None;
-    for line in frontmatter.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            name = Some(value.trim().to_string());
-        } else if let Some(value) = line.strip_prefix("description:") {
-            description = Some(value.trim().to_string());
-        }
-    }
-    Some((name?, description?))
-}
-
-fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".yaca/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".config/yaca/skills"));
-    }
-    dirs
 }
 
 fn home_dir() -> PathBuf {

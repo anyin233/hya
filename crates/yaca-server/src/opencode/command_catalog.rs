@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -98,63 +98,17 @@ fn command_info(
 }
 
 fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: &Path) {
-    for (name, description, template) in discover_skill_commands(workdir) {
-        if commands.iter().any(|command| command.name == name) {
+    for skill in super::skill_catalog::list(workdir) {
+        if commands.iter().any(|command| command.name == skill.name) {
             continue;
         }
         commands.push(CommandInfo {
-            name,
-            description,
+            name: skill.name,
+            description: skill.description,
             source: "skill",
-            template,
+            template: skill.content,
             hints: Vec::new(),
             subtask: None,
         });
     }
-}
-
-fn discover_skill_commands(workdir: &Path) -> Vec<(String, String, String)> {
-    let mut skills = Vec::new();
-    for dir in skill_dirs(workdir) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path().join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            if let Some(skill) = parse_skill(&content) {
-                skills.push(skill);
-            }
-        }
-    }
-    skills.sort_by(|a, b| a.0.cmp(&b.0));
-    skills
-}
-
-fn parse_skill(content: &str) -> Option<(String, String, String)> {
-    let (frontmatter, body) = content.strip_prefix("---")?.split_once("\n---")?;
-    let mut name = None;
-    let mut description = None;
-    for line in frontmatter.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            name = Some(value.trim().to_string());
-        } else if let Some(value) = line.strip_prefix("description:") {
-            description = Some(value.trim().to_string());
-        }
-    }
-    Some((
-        name?,
-        description?,
-        body.strip_prefix('\n').unwrap_or(body).to_string(),
-    ))
-}
-
-fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".yaca/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".config/yaca/skills"));
-    }
-    dirs
 }

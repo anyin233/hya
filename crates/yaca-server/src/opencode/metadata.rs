@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -44,14 +43,6 @@ struct AgentModelRef {
 struct RequestInfo {
     headers: BTreeMap<String, String>,
     body: Value,
-}
-
-#[derive(Serialize)]
-struct SkillInfo {
-    name: String,
-    description: String,
-    location: String,
-    content: String,
 }
 
 async fn location(
@@ -109,62 +100,12 @@ async fn skill(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<LocationResponse<Vec<SkillInfo>>> {
+) -> Json<LocationResponse<Vec<super::skill_catalog::SkillInfo>>> {
     let location = LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
     Json(super::location::response_at(
         &st,
         &location,
-        discover_skills(&super::location::workdir_at(&st, &location)),
+        super::skill_catalog::list(&workdir),
     ))
-}
-
-fn discover_skills(workdir: &Path) -> Vec<SkillInfo> {
-    let mut skills = Vec::new();
-    for dir in skill_dirs(workdir) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path().join("SKILL.md");
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Some((name, description, body)) = parse_skill(&content) {
-                skills.push(SkillInfo {
-                    name,
-                    description,
-                    location: path.to_string_lossy().into_owned(),
-                    content: body,
-                });
-            }
-        }
-    }
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills
-}
-
-fn parse_skill(content: &str) -> Option<(String, String, String)> {
-    let (frontmatter, body) = content.strip_prefix("---")?.split_once("\n---")?;
-    let mut name = None;
-    let mut description = None;
-    for line in frontmatter.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            name = Some(value.trim().to_string());
-        } else if let Some(value) = line.strip_prefix("description:") {
-            description = Some(value.trim().to_string());
-        }
-    }
-    Some((
-        name?,
-        description?,
-        body.strip_prefix('\n').unwrap_or(body).to_string(),
-    ))
-}
-
-fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".yaca/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".config/yaca/skills"));
-    }
-    dirs
 }

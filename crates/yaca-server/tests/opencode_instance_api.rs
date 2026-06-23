@@ -171,10 +171,10 @@ async fn opencode_instance_routes_return_metadata() {
 
     let (status, skills) = get_json(app.clone(), "/skill").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills[0]["name"], "demo");
-    assert_eq!(skills[0]["description"], "Demo skill");
+    assert_eq!(skills[1]["name"], "demo");
+    assert_eq!(skills[1]["description"], "Demo skill");
     assert!(
-        skills[0]["content"]
+        skills[1]["content"]
             .as_str()
             .unwrap()
             .contains("Use this skill.")
@@ -244,8 +244,8 @@ async fn opencode_instance_metadata_routes_use_workspace_routing() {
 
     let (status, skills) = get_json(app, &format!("/skill?directory={encoded_scoped}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills[0]["name"], "scoped");
-    assert_eq!(skills[0]["description"], "Scoped skill");
+    assert_eq!(skills[1]["name"], "scoped");
+    assert_eq!(skills[1]["description"], "Scoped skill");
 }
 
 #[tokio::test]
