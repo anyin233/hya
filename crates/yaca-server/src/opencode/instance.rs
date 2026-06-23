@@ -48,6 +48,10 @@ struct AgentInfo {
     permission: Vec<PermissionRule>,
     model: AgentModel,
     #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(rename = "topP", skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     steps: Option<NonZeroU64>,
@@ -104,6 +108,8 @@ async fn agent(
                 hidden: agent.hidden,
                 permission: agent_permissions(&agent.name, &build_permissions, agent.permissions),
                 model: model_info(agent.model.as_deref().unwrap_or(st.agent.model.as_str())),
+                temperature: agent.temperature,
+                top_p: agent.top_p,
                 color: agent.color,
                 steps: agent.steps,
                 prompt: if agent.name == "build" && agent.prompt.is_none() {
@@ -111,7 +117,7 @@ async fn agent(
                 } else {
                     agent.prompt
                 },
-                options: json!({}),
+                options: json!(agent.options),
             })
             .collect(),
     )

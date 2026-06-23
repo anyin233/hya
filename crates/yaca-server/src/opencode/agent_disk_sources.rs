@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::agent_options::{AgentOptions, from_config as agent_options};
 use super::agent_permission_config::{
     ConfigPermissionRule, LegacyPermissions, rules as permission_rules,
 };
@@ -20,15 +21,20 @@ struct AgentFrontmatter {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
     color: Option<String>,
     steps: Option<NonZeroU64>,
     #[serde(rename = "maxSteps")]
     max_steps: Option<NonZeroU64>,
+    options: Option<AgentOptions>,
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
     disable: Option<bool>,
     disabled: Option<bool>,
+    #[serde(flatten)]
+    extra: AgentOptions,
 }
 
 #[derive(Default, Deserialize)]
@@ -98,8 +104,11 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         hidden: frontmatter.hidden,
         model: frontmatter.model,
         variant: frontmatter.variant,
+        temperature: frontmatter.temperature,
+        top_p: frontmatter.top_p,
         color: frontmatter.color,
         steps,
+        options: agent_options(frontmatter.options, frontmatter.extra),
         request_headers,
         request_body,
         permissions: permission_rules(frontmatter.permissions, frontmatter.permission),

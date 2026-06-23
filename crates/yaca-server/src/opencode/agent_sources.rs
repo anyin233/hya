@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::agent_options::{AgentOptions, from_config as agent_options};
 use super::agent_permission::PermissionRule;
 use super::agent_permission_config::{
     ConfigPermissionRule, LegacyPermissions, rules as permission_rules,
@@ -20,8 +21,11 @@ pub(super) struct AgentChange {
     pub(super) hidden: Option<bool>,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) temperature: Option<f64>,
+    pub(super) top_p: Option<f64>,
     pub(super) color: Option<String>,
     pub(super) steps: Option<NonZeroU64>,
+    pub(super) options: Option<AgentOptions>,
     pub(super) request_headers: Option<RequestHeaders>,
     pub(super) request_body: Option<RequestBody>,
     pub(super) permissions: Option<Vec<PermissionRule>>,
@@ -44,10 +48,13 @@ struct InlineAgent {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
     color: Option<String>,
     steps: Option<NonZeroU64>,
     #[serde(rename = "maxSteps")]
     max_steps: Option<NonZeroU64>,
+    options: Option<AgentOptions>,
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
@@ -55,6 +62,8 @@ struct InlineAgent {
     system: Option<String>,
     disable: Option<bool>,
     disabled: Option<bool>,
+    #[serde(flatten)]
+    extra: AgentOptions,
 }
 
 #[derive(Default, Deserialize)]
@@ -113,8 +122,11 @@ fn append_inline_agents(
             hidden: agent.hidden,
             model: agent.model,
             variant: agent.variant,
+            temperature: agent.temperature,
+            top_p: agent.top_p,
             color: agent.color,
             steps,
+            options: agent_options(agent.options, agent.extra),
             request_headers,
             request_body,
             permissions: permission_rules(agent.permissions, agent.permission),
