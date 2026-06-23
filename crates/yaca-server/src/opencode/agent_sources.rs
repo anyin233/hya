@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -22,6 +23,43 @@ struct AgentFrontmatter {
     disabled: Option<bool>,
 }
 
+#[derive(Default, Deserialize)]
+struct AgentConfig {
+    agent: Option<BTreeMap<String, InlineAgent>>,
+    agents: Option<BTreeMap<String, InlineAgent>>,
+    mode: Option<BTreeMap<String, InlineAgent>>,
+    modes: Option<BTreeMap<String, InlineAgent>>,
+}
+
+#[derive(Default, Deserialize)]
+struct InlineAgent {
+    description: Option<String>,
+    mode: Option<String>,
+    hidden: Option<bool>,
+    model: Option<String>,
+    prompt: Option<String>,
+    system: Option<String>,
+    disable: Option<bool>,
+    disabled: Option<bool>,
+}
+
+pub(super) fn config_agents(workdir: &Path) -> Vec<AgentChange> {
+    let mut agents = Vec::new();
+    for path in config_paths(workdir) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some(config) = parse_config(&content) else {
+            continue;
+        };
+        append_inline_agents(config.agent, false, &mut agents);
+        append_inline_agents(config.agents, false, &mut agents);
+        append_inline_agents(config.mode, true, &mut agents);
+        append_inline_agents(config.modes, true, &mut agents);
+    }
+    agents
+}
+
 pub(super) fn disk_agents(workdir: &Path) -> Vec<AgentChange> {
     let mut files = Vec::new();
     for root in [
@@ -38,6 +76,42 @@ pub(super) fn disk_agents(workdir: &Path) -> Vec<AgentChange> {
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     files.into_iter().filter_map(disk_agent).collect()
+}
+
+fn config_paths(workdir: &Path) -> [PathBuf; 4] {
+    [
+        workdir.join("opencode.json"),
+        workdir.join("opencode.jsonc"),
+        workdir.join(".opencode/opencode.json"),
+        workdir.join(".opencode/opencode.jsonc"),
+    ]
+}
+
+fn parse_config(content: &str) -> Option<AgentConfig> {
+    super::jsonc::from_str(content).ok()
+}
+
+fn append_inline_agents(
+    map: Option<BTreeMap<String, InlineAgent>>,
+    primary: bool,
+    agents: &mut Vec<AgentChange>,
+) {
+    for (name, agent) in map.unwrap_or_default() {
+        let mode = if primary {
+            Some("primary".to_string())
+        } else {
+            agent.mode
+        };
+        agents.push(AgentChange {
+            name,
+            description: agent.description,
+            mode,
+            hidden: agent.hidden,
+            model: agent.model,
+            prompt: agent.system.or(agent.prompt),
+            remove: agent.disable.unwrap_or(false) || agent.disabled.unwrap_or(false),
+        });
+    }
 }
 
 struct AgentFile {

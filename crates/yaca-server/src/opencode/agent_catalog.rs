@@ -70,6 +70,9 @@ const NATIVE_AGENTS: &[NativeAgent] = &[
 
 pub(super) fn list(workdir: &Path) -> Vec<AgentEntry> {
     let mut agents = native_entries();
+    for change in super::agent_sources::config_agents(workdir) {
+        apply_change(&mut agents, change);
+    }
     for change in super::agent_sources::disk_agents(workdir) {
         apply_change(&mut agents, change);
     }
