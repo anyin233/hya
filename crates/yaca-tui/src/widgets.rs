@@ -13,6 +13,7 @@ mod sidebar_context;
 mod sidebar_files;
 mod sidebar_footer;
 mod sidebar_format;
+mod sidebar_header;
 mod sidebar_runtime;
 mod sidebar_stats;
 mod status;

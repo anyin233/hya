@@ -7,6 +7,7 @@ use super::sidebar_files::push_files;
 use super::sidebar_format::{
     connector_color, format_basis_points, format_number, saved_tokens, used_percent,
 };
+use super::sidebar_header::push_header;
 use super::sidebar_runtime::push_runtime;
 use super::sidebar_stats::{TranscriptStats, transcript_stats};
 use crate::AppState;
@@ -20,7 +21,8 @@ pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let stats = transcript_stats(state);
     let mut lines = Vec::new();
     lines.push(Line::from(""));
-    push_title(&mut lines, state, theme);
+    push_header(&mut lines, state, theme);
+    lines.push(Line::from(""));
     push_context_pilot(&mut lines, state, theme, &stats);
     push_context(&mut lines, state, theme, &stats);
     push_files(&mut lines, state, theme);
@@ -29,29 +31,6 @@ pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     push_agents(&mut lines, state, theme);
     push_runtime(&mut lines, state, theme);
     lines
-}
-
-fn push_title(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    let title = if state.session_label.trim().is_empty() {
-        "context".to_string()
-    } else {
-        state.session_label.trim().to_string()
-    };
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "GUI",
-            Style::default()
-                .fg(theme.text)
-                .bg(theme.panel)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {title}"),
-            Style::default().fg(theme.muted).bg(theme.panel),
-        ),
-    ]));
-    lines.push(Line::from(""));
 }
 
 fn push_context_pilot(
