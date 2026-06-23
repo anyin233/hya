@@ -246,6 +246,14 @@ async fn opencode_legacy_config_routes_return_active_provider_data() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["username"], "httpapi-local");
 
+    let (status, config) = get_json(app.clone(), "/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(config["username"], "httpapi-local");
+
+    let (status, global_config) = get_json(app.clone(), "/global/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(global_config["username"], "httpapi-local");
+
     let status = request_status(
         app.clone(),
         Method::PATCH,

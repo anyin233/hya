@@ -28,7 +28,7 @@ impl GlobalState {
         self.config.read().await.clone()
     }
 
-    async fn update_config(&self, config: Value) {
+    pub(in crate::opencode) async fn update_config(&self, config: Value) {
         *self.config.write().await = config;
     }
 }
