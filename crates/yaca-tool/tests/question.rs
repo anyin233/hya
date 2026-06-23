@@ -66,34 +66,29 @@ async fn question_asks_multiple_prompts_and_returns_open_code_answer_metadata() 
         .await
     });
 
-    let first = rx.recv().await.unwrap();
-    assert_eq!(first.session, Some(session));
-    assert_eq!(first.prompt, "Pick a color");
-    assert_eq!(first.info.question, "Pick a color");
-    assert_eq!(first.info.header, "Color");
-    assert!(!first.info.multiple);
-    assert_eq!(first.info.options[0].description, "Warm");
+    let request = rx.recv().await.unwrap();
+    assert_eq!(request.session, Some(session));
+    assert_eq!(request.prompt, "Pick a color");
+    assert_eq!(request.info.question, "Pick a color");
+    assert_eq!(request.info.header, "Color");
+    assert!(!request.info.multiple);
+    assert_eq!(request.info.options[0].description, "Warm");
+    assert_eq!(request.questions.len(), 2);
+    assert_eq!(request.questions[1].info.header, "Branch");
     assert_eq!(
-        first.kind,
+        request.kind,
         QuestionKind::Select {
             options: vec!["red".to_string(), "green".to_string()],
             allow_custom: true,
         }
     );
-    first.reply.send(QuestionAnswer::Selected(1)).unwrap();
-
-    let second = rx.recv().await.unwrap();
-    assert_eq!(second.prompt, "What should the branch be called?");
-    assert_eq!(second.info.header, "Branch");
-    assert_eq!(
-        second.kind,
-        QuestionKind::FreeText {
-            default: Some(String::new()),
-        }
-    );
-    second
+    assert!(rx.try_recv().is_err());
+    request
         .reply
-        .send(QuestionAnswer::FreeText("codex/todo".to_string()))
+        .send_many(vec![
+            QuestionAnswer::Selected(1),
+            QuestionAnswer::FreeText("codex/todo".to_string()),
+        ])
         .unwrap();
 
     // Then

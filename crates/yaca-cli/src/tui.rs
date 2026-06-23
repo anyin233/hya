@@ -290,7 +290,7 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
-    let mut pending_question: Option<oneshot::Sender<QuestionAnswer>> = None;
+    let mut pending_question: Option<yaca_tool::QuestionReply> = None;
     let mut picker_kind: Option<PickerKind> = None;
     let template_dirs: Vec<std::path::PathBuf> = {
         let mut v = vec![std::path::PathBuf::from(".yaca/prompts")];

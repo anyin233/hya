@@ -3,7 +3,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use yaca_proto::{ToolName, ToolSchema};
 
-use crate::interaction::{QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption};
+use crate::interaction::{
+    QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption, QuestionPrompt,
+};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
 pub(crate) struct QuestionTool;
@@ -78,10 +80,26 @@ impl Tool for QuestionTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: QuestionToolInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let mut answers = Vec::with_capacity(input.questions.len());
-        for question in &input.questions {
-            answers.push(ask_question(ctx, question).await);
-        }
+        let prompts = input
+            .questions
+            .iter()
+            .map(question_prompt)
+            .collect::<Vec<_>>();
+        let mut raw_answers = ctx
+            .interaction
+            .ask_many(prompts)
+            .await
+            .unwrap_or_else(|_| Vec::new())
+            .into_iter();
+        let answers = input
+            .questions
+            .iter()
+            .map(|question| {
+                raw_answers
+                    .next()
+                    .map_or_else(Vec::new, |answer| answer_labels(question, answer))
+            })
+            .collect::<Vec<_>>();
 
         let formatted = input
             .questions
@@ -112,12 +130,8 @@ impl Tool for QuestionTool {
     }
 }
 
-async fn ask_question(ctx: &ToolCtx, question: &QuestionInput) -> Vec<String> {
-    let labels = question
-        .options
-        .iter()
-        .map(|option| option.label.clone())
-        .collect::<Vec<_>>();
+fn question_prompt(question: &QuestionInput) -> QuestionPrompt {
+    let labels = labels(question);
     let kind = if labels.is_empty() {
         QuestionKind::FreeText {
             default: Some(String::new()),
@@ -142,18 +156,30 @@ async fn ask_question(ctx: &ToolCtx, question: &QuestionInput) -> Vec<String> {
         multiple: question.multiple,
         custom: question.custom,
     };
+    QuestionPrompt::new(info, kind)
+}
 
-    match ctx.interaction.ask_with_info(info, kind).await {
-        Ok(QuestionAnswer::Selected(index)) => labels
+fn answer_labels(question: &QuestionInput, answer: QuestionAnswer) -> Vec<String> {
+    let labels = labels(question);
+    match answer {
+        QuestionAnswer::Selected(index) => labels
             .get(index)
             .cloned()
             .map_or_else(Vec::new, |label| vec![label]),
-        Ok(QuestionAnswer::SelectedMany(indices)) => indices
+        QuestionAnswer::SelectedMany(indices) => indices
             .into_iter()
             .filter_map(|index| labels.get(index).cloned())
             .collect(),
-        Ok(QuestionAnswer::FreeText(text)) if text.is_empty() => Vec::new(),
-        Ok(QuestionAnswer::FreeText(text)) => vec![text],
-        Ok(QuestionAnswer::Cancelled) | Err(_) => Vec::new(),
+        QuestionAnswer::FreeText(text) if text.is_empty() => Vec::new(),
+        QuestionAnswer::FreeText(text) => vec![text],
+        QuestionAnswer::Cancelled => Vec::new(),
     }
+}
+
+fn labels(question: &QuestionInput) -> Vec<String> {
+    question
+        .options
+        .iter()
+        .map(|option| option.label.clone())
+        .collect()
 }
