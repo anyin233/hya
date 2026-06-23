@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::ApiError;
 
+mod default_branch;
 mod patch;
 mod status;
 
@@ -38,14 +39,7 @@ pub(super) fn branch(workdir: &Path) -> Option<String> {
 }
 
 pub(super) fn default_branch(workdir: &Path) -> Option<String> {
-    output(
-        workdir,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .map(|branch| match branch.strip_prefix("origin/") {
-        Some(name) => name.to_string(),
-        None => branch,
-    })
+    default_branch::get(workdir)
 }
 
 pub(super) fn is_repo(workdir: &Path) -> bool {

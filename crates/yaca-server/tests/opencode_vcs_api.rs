@@ -105,6 +105,33 @@ fn init_branch_repo(workdir: &PathBuf) {
 }
 
 #[tokio::test]
+async fn opencode_vcs_info_falls_back_to_local_default_branch() {
+    let workdir = tempdir();
+    init_repo_with_head(&workdir);
+    git(&workdir, &["branch", "-M", "main"]);
+    let app = router(state(workdir).await);
+
+    let (status, vcs) = get_json(app, "/vcs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vcs["branch"], "main");
+    assert_eq!(vcs["default_branch"], "main");
+}
+
+#[tokio::test]
+async fn opencode_vcs_info_uses_configured_default_branch() {
+    let workdir = tempdir();
+    init_repo_with_head(&workdir);
+    git(&workdir, &["branch", "-M", "trunk"]);
+    git(&workdir, &["config", "init.defaultBranch", "trunk"]);
+    let app = router(state(workdir).await);
+
+    let (status, vcs) = get_json(app, "/vcs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vcs["branch"], "trunk");
+    assert_eq!(vcs["default_branch"], "trunk");
+}
+
+#[tokio::test]
 async fn opencode_vcs_branch_diff_includes_untracked_files() {
     let workdir = tempdir();
     init_branch_repo(&workdir);
