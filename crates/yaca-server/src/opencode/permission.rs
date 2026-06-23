@@ -91,15 +91,13 @@ async fn reply_request(
     State(st): State<ServerState>,
     Path((id, request)): Path<(String, String)>,
     Json(payload): Json<ReplyPayload>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     load_session(&st, session, None).await?;
     if reply_to_pending(&st, session, &request, payload.reply, payload.message).await {
-        Ok(StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT.into_response())
     } else {
-        Err(ApiError::not_found(format!(
-            "permission request not found: {request}"
-        )))
+        Ok(permission_not_found(&request).into_response())
     }
 }
 
