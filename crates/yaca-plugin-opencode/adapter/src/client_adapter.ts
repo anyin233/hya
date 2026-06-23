@@ -87,6 +87,12 @@ export type OpenCodeClientAdapter = {
     readonly current: () => Promise<OpenCodeClientResponse<OpenCodeProject>>
     readonly list: () => Promise<OpenCodeClientResponse<readonly OpenCodeProject[]>>
   }
+  readonly formatter: {
+    readonly status: () => Promise<OpenCodeClientResponse<readonly unknown[]>>
+  }
+  readonly lsp: {
+    readonly status: () => Promise<OpenCodeClientResponse<readonly unknown[]>>
+  }
   readonly vcs: {
     readonly get: () => Promise<OpenCodeClientResponse<OpenCodeVcsInfo>>
   }
@@ -119,6 +125,12 @@ export function createOpenCodeClientAdapter(
     project: {
       current: async () => ok(context.project),
       list: async () => ok([context.project]),
+    },
+    formatter: {
+      status: async () => ok([]),
+    },
+    lsp: {
+      status: async () => ok([]),
     },
     vcs: {
       get: async () => ok(await vcsInfo(context)),
