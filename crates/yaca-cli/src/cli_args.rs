@@ -77,6 +77,15 @@ pub(crate) enum Command {
         /// Port to listen on. OpenCode-compatible alias for the port part of `--bind`.
         #[arg(long)]
         port: Option<u16>,
+        /// Enable OpenCode mDNS-compatible wildcard binding when hostname is not set.
+        #[arg(long)]
+        mdns: bool,
+        /// Accepted for OpenCode CLI compatibility; yaca does not advertise mDNS yet.
+        #[arg(long = "mdns-domain", default_value = "opencode.local")]
+        mdns_domain: String,
+        /// Accepted for OpenCode CLI compatibility; yaca mirrors CORS origins globally.
+        #[arg(long)]
+        cors: Vec<String>,
         /// SQLite database path. Empty string uses an in-memory store.
         #[arg(long, default_value = "")]
         db: String,
@@ -111,12 +120,23 @@ pub(crate) enum Command {
     Rpc,
 }
 
-pub(crate) fn serve_bind(bind: String, hostname: Option<String>, port: Option<u16>) -> String {
-    if hostname.is_none() && port.is_none() {
+pub(crate) fn serve_bind(
+    bind: String,
+    hostname: Option<String>,
+    port: Option<u16>,
+    mdns: bool,
+) -> String {
+    if hostname.is_none() && port.is_none() && !mdns {
         return bind;
     }
     let (default_host, default_port) = bind.rsplit_once(':').unwrap_or((&bind, "8080"));
-    let host = hostname.unwrap_or_else(|| default_host.to_string());
+    let host = hostname.unwrap_or_else(|| {
+        if mdns {
+            "0.0.0.0".to_string()
+        } else {
+            default_host.to_string()
+        }
+    });
     let port = port.map_or_else(|| default_port.to_string(), |port| port.to_string());
     format!("{host}:{port}")
 }
@@ -188,7 +208,43 @@ mod tests {
                 assert_eq!(bind, "127.0.0.1:8080");
                 assert_eq!(hostname.as_deref(), Some("0.0.0.0"));
                 assert_eq!(port, Some(4096));
-                assert_eq!(super::serve_bind(bind, hostname, port), "0.0.0.0:4096");
+                assert_eq!(
+                    super::serve_bind(bind, hostname, port, false),
+                    "0.0.0.0:4096"
+                );
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn parses_opencode_serve_cors_and_mdns_flags() {
+        let cli = parse([
+            "yaca",
+            "serve",
+            "--mdns",
+            "--mdns-domain",
+            "yaca.local",
+            "--cors",
+            "https://app.test",
+        ]);
+        match cli.command {
+            Some(super::Command::Serve {
+                bind,
+                hostname,
+                port,
+                mdns,
+                mdns_domain,
+                cors,
+                ..
+            }) => {
+                assert!(mdns);
+                assert_eq!(mdns_domain, "yaca.local");
+                assert_eq!(cors, ["https://app.test"]);
+                assert_eq!(
+                    super::serve_bind(bind, hostname, port, mdns),
+                    "0.0.0.0:8080"
+                );
             }
             _ => panic!("expected serve command"),
         }
