@@ -250,8 +250,12 @@ fn transient_footer_shortcuts_use_opencode_key_style() {
         "scroll footer should use OpenCode shortcut casing:\n{scroll_text}"
     );
     assert!(
-        exit_text.contains("ctrl+c again to exit · type to cancel"),
-        "exit footer should use OpenCode shortcut casing:\n{exit_text}"
+        exit_text.contains("EXIT · Press ctrl+c again to exit"),
+        "exit footer should use OpenCode's exit status copy:\n{exit_text}"
+    );
+    assert!(
+        !exit_text.contains("type to cancel"),
+        "exit footer should not append yaca-specific cancellation copy:\n{exit_text}"
     );
     for legacy in ["End to return", "Ctrl-C"] {
         assert!(

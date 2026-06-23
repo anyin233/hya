@@ -22,7 +22,7 @@ pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
         );
     }
     if state.exit_armed {
-        return with_mode(mode, "ctrl+c again to exit · type to cancel");
+        return with_mode(mode, "Press ctrl+c again to exit");
     }
     if state.yolo {
         return with_mode(
