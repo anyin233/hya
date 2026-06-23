@@ -50,11 +50,14 @@ struct CatalogModel {
     context: u32,
 }
 
-async fn legacy_config_get() -> Json<Value> {
-    Json(json!({}))
+async fn legacy_config_get(State(st): State<ServerState>) -> Json<Value> {
+    Json(st.global.config().await)
 }
 
-async fn legacy_config_update(Json(payload): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn legacy_config_update(
+    State(st): State<ServerState>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     let Some(map) = payload.as_object() else {
         return Err(ApiError::bad_request("config payload must be an object"));
     };
@@ -63,6 +66,7 @@ async fn legacy_config_update(Json(payload): Json<Value>) -> Result<Json<Value>,
     {
         return Err(ApiError::bad_request("username must be a string"));
     }
+    st.global.update_config(payload.clone()).await;
     Ok(Json(payload))
 }
 

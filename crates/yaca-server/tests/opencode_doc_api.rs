@@ -75,6 +75,8 @@ async fn opencode_doc_route_returns_openapi_document() {
     assert!(body["openapi"].is_string());
     assert!(body["info"].is_object());
     assert!(body["paths"]["/global/health"].is_object());
+    assert!(body["paths"]["/config"]["get"].is_object());
+    assert!(body["paths"]["/config/providers"]["get"].is_object());
     assert!(body["paths"]["/session"].is_object());
     assert!(body["paths"]["/provider"].is_object());
     assert!(body["paths"]["/provider/auth"].is_object());
