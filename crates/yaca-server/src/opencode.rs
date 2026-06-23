@@ -19,6 +19,7 @@ mod event;
 mod event_heartbeat;
 mod experimental;
 mod experimental_sync;
+mod experimental_workspace;
 mod experimental_worktree;
 mod file;
 mod formatter;
@@ -78,6 +79,7 @@ mod sse;
 mod sync_projector;
 mod tui;
 mod worktree_git;
+mod worktree_git_info;
 
 pub(crate) use global::GlobalState;
 pub(crate) use mcp_state::McpHttpState;

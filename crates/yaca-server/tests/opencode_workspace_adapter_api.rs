@@ -56,12 +56,15 @@ async fn workspace_adapter_route_returns_registered_metadata() {
     let (status, body) = get_json(app, "/experimental/workspace/adapter").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body,
-        json!([{
-            "type": "remote",
-            "name": "Remote",
-            "description": "Remote workspace",
-        }])
-    );
+    assert_eq!(body.as_array().unwrap().len(), 2);
+    assert!(body.as_array().unwrap().contains(&json!({
+        "type": "worktree",
+        "name": "Worktree",
+        "description": "Create a git worktree",
+    })));
+    assert!(body.as_array().unwrap().contains(&json!({
+        "type": "remote",
+        "name": "Remote",
+        "description": "Remote workspace",
+    })));
 }

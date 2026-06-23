@@ -16,15 +16,27 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/experimental/console", get(console))
         .route("/experimental/console/orgs", get(console_orgs))
         .route("/experimental/console/switch", post(unavailable))
-        .route("/experimental/workspace/adapter", get(workspace_adapters))
+        .route(
+            "/experimental/workspace/adapter",
+            get(super::experimental_workspace::adapters),
+        )
         .route(
             "/experimental/workspace",
-            get(empty_array).post(unavailable),
+            get(super::experimental_workspace::list).post(super::experimental_workspace::create),
         )
-        .route("/experimental/workspace/status", get(empty_array))
-        .route("/experimental/workspace/sync-list", post(no_content))
+        .route(
+            "/experimental/workspace/status",
+            get(super::experimental_workspace::status),
+        )
+        .route(
+            "/experimental/workspace/sync-list",
+            post(super::experimental_workspace::sync_list),
+        )
         .route("/experimental/workspace/warp", post(workspace_warp))
-        .route("/experimental/workspace/:id", delete(workspace_remove))
+        .route(
+            "/experimental/workspace/:id",
+            delete(super::experimental_workspace::remove),
+        )
         .route(
             "/experimental/control-plane/move-session",
             post(move_session),
@@ -59,16 +71,6 @@ async fn console() -> Json<Value> {
 
 async fn console_orgs() -> Json<Value> {
     Json(json!({"orgs": []}))
-}
-
-async fn empty_array() -> Json<Vec<Value>> {
-    Json(Vec::new())
-}
-
-async fn workspace_adapters(
-    State(st): State<ServerState>,
-) -> Json<Vec<crate::WorkspaceAdapterInfo>> {
-    Json(st.workspace_adapters)
 }
 
 async fn resource(State(st): State<ServerState>) -> Json<Value> {
@@ -112,16 +114,8 @@ async fn tool_ids(State(st): State<ServerState>) -> Json<Vec<String>> {
     Json(ids)
 }
 
-async fn no_content() -> StatusCode {
-    StatusCode::NO_CONTENT
-}
-
 async fn ok_true() -> Json<bool> {
     Json(true)
-}
-
-async fn workspace_remove() -> Json<Value> {
-    Json(Value::Null)
 }
 
 async fn unavailable() -> Result<Json<Value>, ApiError> {
