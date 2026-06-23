@@ -72,6 +72,39 @@ fn ctx_with(rules: Vec<Rule>, lsp: LspPlane, workdir: PathBuf) -> ToolCtx {
     }
 }
 
+#[test]
+fn lsp_schema_includes_open_code_descriptions() {
+    // Given
+    let tool = ToolRegistry::builtins().get("lsp").unwrap();
+
+    // When
+    let schema = tool.schema();
+    let properties = &schema.input_schema["properties"];
+
+    // Then
+    assert!(schema.description.contains("Supported operations"));
+    assert_eq!(
+        properties["operation"]["description"],
+        "The LSP operation to perform"
+    );
+    assert_eq!(
+        properties["filePath"]["description"],
+        "The absolute or relative path to the file"
+    );
+    assert_eq!(
+        properties["line"]["description"],
+        "The line number (1-based, as shown in editors)"
+    );
+    assert_eq!(
+        properties["character"]["description"],
+        "The character offset (1-based, as shown in editors)"
+    );
+    assert_eq!(
+        properties["query"]["description"],
+        "Search query for workspaceSymbol. Empty string requests all symbols."
+    );
+}
+
 #[tokio::test]
 async fn lsp_calls_provider_and_returns_open_code_result_shape() {
     // Given

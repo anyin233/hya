@@ -114,28 +114,19 @@ impl Tool for LspTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("lsp"),
-            description: "Run a Language Server Protocol operation.".to_string(),
+            description: include_str!("lsp.txt").to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "enum": [
-                            "goToDefinition",
-                            "findReferences",
-                            "hover",
-                            "documentSymbol",
-                            "workspaceSymbol",
-                            "goToImplementation",
-                            "prepareCallHierarchy",
-                            "incomingCalls",
-                            "outgoingCalls"
-                        ]
+                        "enum": ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"],
+                        "description": "The LSP operation to perform"
                     },
-                    "filePath": { "type": "string" },
-                    "line": { "type": "integer", "minimum": 1 },
-                    "character": { "type": "integer", "minimum": 1 },
-                    "query": { "type": "string" }
+                    "filePath": { "type": "string", "description": "The absolute or relative path to the file" },
+                    "line": { "type": "integer", "minimum": 1, "description": "The line number (1-based, as shown in editors)" },
+                    "character": { "type": "integer", "minimum": 1, "description": "The character offset (1-based, as shown in editors)" },
+                    "query": { "type": "string", "description": "Search query for workspaceSymbol. Empty string requests all symbols." }
                 },
                 "required": ["operation", "filePath", "line", "character"]
             }),
