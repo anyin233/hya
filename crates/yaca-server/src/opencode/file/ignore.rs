@@ -209,23 +209,41 @@ fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(boo
 }
 
 fn parse_rule(line: &str) -> Option<Rule> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
+    let pattern = trim_unescaped_trailing_whitespace(line);
+    if pattern.is_empty() || pattern.starts_with('#') {
         return None;
     }
-    let (negated, trimmed) = trimmed
+    let (negated, pattern) = pattern
         .strip_prefix('!')
-        .map_or((false, trimmed), |pattern| (true, pattern.trim()));
-    if trimmed.is_empty() {
+        .map_or((false, pattern), |pattern| (true, pattern));
+    if pattern.is_empty() {
         return None;
     }
-    let anchored = trimmed.starts_with('/');
-    let directory = trimmed.ends_with('/');
-    let pattern = trimmed.trim_start_matches('/').to_string();
+    let anchored = pattern.starts_with('/');
+    let directory = pattern.ends_with('/');
+    let pattern = pattern.trim_start_matches('/').to_string();
     Some(Rule {
         pattern,
         directory,
         negated,
         anchored,
     })
+}
+
+fn trim_unescaped_trailing_whitespace(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && matches!(bytes[end - 1], b' ' | b'\t') {
+        let mut backslashes = 0;
+        let mut index = end - 1;
+        while index > 0 && bytes[index - 1] == b'\\' {
+            backslashes += 1;
+            index -= 1;
+        }
+        if backslashes % 2 == 1 {
+            break;
+        }
+        end -= 1;
+    }
+    &line[..end]
 }

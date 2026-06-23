@@ -129,3 +129,38 @@ async fn opencode_file_list_honors_escaped_ignore_literals() {
     assert!(has_ignored(&listing, "!important.log", true));
     assert!(has_ignored(&listing, "space name.log", true));
 }
+
+#[tokio::test]
+async fn opencode_file_list_preserves_significant_ignore_rule_spaces() {
+    let workdir = tempdir();
+    std::fs::write(
+        workdir.join(".gitignore"),
+        " leading.log\nescaped-trailing\\ \n*.keep\n! keep.keep\nescaped-keep*\n!escaped-keep\\ \n",
+    )
+    .unwrap();
+    for path in [
+        " leading.log",
+        "leading.log",
+        "escaped-trailing ",
+        "escaped-trailing",
+        "keep.keep",
+        " keep.keep",
+        "escaped-keep ",
+        "escaped-keep",
+    ] {
+        std::fs::write(workdir.join(path), "x\n").unwrap();
+    }
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/file?path=.").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(has_ignored(&listing, " leading.log", true));
+    assert!(has_ignored(&listing, "leading.log", false));
+    assert!(has_ignored(&listing, "escaped-trailing ", true));
+    assert!(has_ignored(&listing, "escaped-trailing", false));
+    assert!(has_ignored(&listing, "keep.keep", true));
+    assert!(has_ignored(&listing, " keep.keep", false));
+    assert!(has_ignored(&listing, "escaped-keep ", false));
+    assert!(has_ignored(&listing, "escaped-keep", true));
+}
