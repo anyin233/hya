@@ -132,6 +132,34 @@ async fn opencode_vcs_info_uses_configured_default_branch() {
 }
 
 #[tokio::test]
+async fn opencode_vcs_routes_use_workspace_routing() {
+    let default = tempdir();
+    let scoped = tempdir().join("scoped repo");
+    std::fs::create_dir_all(&scoped).unwrap();
+    init_repo_with_head(&scoped);
+    git(&scoped, &["branch", "-M", "main"]);
+    std::fs::write(scoped.join("tracked.txt"), "new\n").unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let encoded_scoped = scoped.to_string_lossy().replace(' ', "%20");
+    let app = router(state(default).await);
+
+    let (status, vcs) = get_json(app.clone(), &format!("/vcs?directory={encoded_scoped}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(vcs["branch"], "main");
+
+    let (status, status_body) =
+        get_json(app, &format!("/vcs/status?directory={encoded_scoped}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        status_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == "tracked.txt" && item["status"] == "modified")
+    );
+}
+
+#[tokio::test]
 async fn opencode_vcs_branch_diff_includes_untracked_files() {
     let workdir = tempdir();
     init_branch_repo(&workdir);

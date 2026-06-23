@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::http::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -31,6 +34,8 @@ struct VcsInfo {
 struct DiffQuery {
     mode: String,
     context: Option<usize>,
+    #[serde(flatten)]
+    routing: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -43,16 +48,24 @@ struct ApplyResult {
     applied: bool,
 }
 
-async fn info(State(st): State<ServerState>) -> Json<VcsInfo> {
-    let workdir = super::workdir(&st);
+async fn info(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<VcsInfo> {
+    let workdir = routed_workdir(&st, &query, &headers);
     Json(VcsInfo {
         branch: git::branch(&workdir),
         default_branch: git::default_branch(&workdir),
     })
 }
 
-async fn status(State(st): State<ServerState>) -> Result<Json<Vec<git::FileStatus>>, ApiError> {
-    let workdir = super::workdir(&st);
+async fn status(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<git::FileStatus>>, ApiError> {
+    let workdir = routed_workdir(&st, &query, &headers);
     if !git::is_repo(&workdir) {
         return Ok(Json(Vec::new()));
     }
@@ -62,32 +75,39 @@ async fn status(State(st): State<ServerState>) -> Result<Json<Vec<git::FileStatu
 async fn diff(
     State(st): State<ServerState>,
     Query(query): Query<DiffQuery>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<git::FileDiff>>, ApiError> {
-    let workdir = super::workdir(&st);
+    let workdir = routed_workdir(&st, &query.routing, &headers);
     if !git::is_repo(&workdir) {
         return Ok(Json(Vec::new()));
     }
     Ok(Json(git::diff(&workdir, &query.mode, query.context)?))
 }
 
-async fn diff_raw(State(st): State<ServerState>) -> Result<(HeaderMap, String), ApiError> {
-    let workdir = super::workdir(&st);
-    let mut headers = HeaderMap::new();
-    headers.insert(
+async fn diff_raw(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, String), ApiError> {
+    let workdir = routed_workdir(&st, &query, &headers);
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
         CONTENT_TYPE,
         HeaderValue::from_static("text/x-diff; charset=utf-8"),
     );
     if !git::is_repo(&workdir) {
-        return Ok((headers, String::new()));
+        return Ok((response_headers, String::new()));
     }
-    Ok((headers, git::raw_diff(&workdir)?))
+    Ok((response_headers, git::raw_diff(&workdir)?))
 }
 
 async fn apply(
     State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
     Json(input): Json<ApplyInput>,
 ) -> Result<Json<ApplyResult>, (StatusCode, Json<serde_json::Value>)> {
-    let workdir = super::workdir(&st);
+    let workdir = routed_workdir(&st, &query, &headers);
     if !git::is_repo(&workdir) {
         return Err(apply_error(
             "Patch can't be applied because the project is not git-based",
@@ -104,4 +124,13 @@ fn apply_error(message: &str, reason: &str) -> (StatusCode, Json<serde_json::Val
         StatusCode::BAD_REQUEST,
         Json(json!({ "name": "VcsApplyError", "data": { "message": message, "reason": reason } })),
     )
+}
+
+fn routed_workdir(
+    st: &ServerState,
+    query: &BTreeMap<String, String>,
+    headers: &HeaderMap,
+) -> PathBuf {
+    let location = super::super::location::LocationRef::from_request(query, headers);
+    super::super::location::workdir_at(st, &location)
 }
