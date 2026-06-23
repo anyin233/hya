@@ -3,7 +3,7 @@
 #[allow(dead_code)]
 mod render_support;
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use yaca_tui::AppState;
 
 use render_support::{buffer_text, find_rendered_text, render_buffer, with_tool_error_message};
@@ -37,4 +37,39 @@ fn tool_error_detail_renders_below_failed_tool_row() {
     );
     assert_eq!(buffer[(status_x, status_y)].fg, Color::Rgb(224, 108, 117));
     assert_eq!(buffer[(detail_x, detail_y)].fg, Color::Rgb(224, 108, 117));
+}
+
+#[test]
+fn denied_tool_error_renders_struck_through_without_detail() {
+    // Given: OpenCode classifies rejected permission errors as denied tool rows.
+    let mut state = AppState::default();
+    with_tool_error_message(
+        &mut state,
+        1,
+        "README.md",
+        "rejected permission: user dismissed",
+    );
+
+    // When: the transcript renders the denied tool row.
+    let buffer = render_buffer(&mut state, 120, 24);
+    let text = buffer_text(&buffer, 120, 24);
+    let (status_x, status_y) = find_rendered_text(&buffer, 120, 24, "→ Read README.md").unwrap();
+
+    // Then: the denied row is crossed out and does not expand as a failed error detail.
+    assert!(
+        buffer[(status_x, status_y)]
+            .modifier
+            .contains(Modifier::CROSSED_OUT),
+        "denied tool icon should be struck through:\n{text}"
+    );
+    assert!(
+        buffer[(status_x + 2, status_y)]
+            .modifier
+            .contains(Modifier::CROSSED_OUT),
+        "denied tool label should be struck through:\n{text}"
+    );
+    assert!(
+        !text.contains("rejected permission"),
+        "denied tool row should not render rejected permission as a failed error detail:\n{text}"
+    );
 }

@@ -1,11 +1,14 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
 use super::transcript_output::collapsed_tool_output;
 use super::transcript_pending::pending_tool_label;
+use super::transcript_tool_status::{
+    inline_status_text, is_denied_error, status_color, tool_style,
+};
 use crate::theme::Theme;
-use crate::tool_labels::status_symbol;
+use crate::tool_labels::{action_symbol, status_symbol};
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX: usize = 48;
@@ -20,37 +23,57 @@ pub fn push_tool_lines(
     let (name, label, input, status) = tool;
     if let Some(label) = pending_tool_label(name, status) {
         lines.push(Line::from(vec![
-            Span::styled("   ", tool_style(theme.muted, selected, theme)),
-            Span::styled("~ ", tool_style(theme.text, selected, theme)),
-            Span::styled(label, tool_style(theme.text, selected, theme)),
+            Span::styled("   ", tool_style(theme.muted, selected, theme, false)),
+            Span::styled("~ ", tool_style(theme.text, selected, theme, false)),
+            Span::styled(label, tool_style(theme.text, selected, theme, false)),
         ]));
         return;
     }
 
+    let denied = is_denied_error(status);
     let color = status_color(status, theme);
+    let symbol = if denied {
+        action_symbol(name)
+    } else {
+        status_symbol(name, status)
+    };
     let mut spans = vec![
-        Span::styled("   ", tool_style(theme.muted, selected, theme)),
+        Span::styled("   ", tool_style(theme.muted, selected, theme, false)),
         Span::styled(
-            format!("{} ", status_symbol(name, status)),
-            tool_style(color, selected, theme),
+            format!("{symbol} "),
+            tool_style(color, selected, theme, denied),
         ),
         Span::styled(
             format!("{label} "),
-            tool_style(color, selected, theme).add_modifier(Modifier::BOLD),
+            tool_style(color, selected, theme, denied).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(input_label(input), tool_style(theme.muted, selected, theme)),
+        Span::styled(
+            input_label(input),
+            tool_style(theme.muted, selected, theme, denied),
+        ),
     ];
     if let Some(status) = inline_status_text(status) {
-        spans.push(Span::styled("· ", tool_style(theme.muted, selected, theme)));
-        spans.push(Span::styled(status, tool_style(color, selected, theme)));
+        spans.push(Span::styled(
+            "· ",
+            tool_style(theme.muted, selected, theme, false),
+        ));
+        spans.push(Span::styled(
+            status,
+            tool_style(color, selected, theme, false),
+        ));
     }
     lines.push(Line::from(spans));
 
-    if let ToolStatus::Error { message } = status {
+    if let ToolStatus::Error { message } = status
+        && !denied
+    {
         lines.push(Line::from(vec![
-            Span::styled("   ", tool_style(theme.muted, selected, theme)),
-            Span::styled("▏ ", tool_style(theme.error, selected, theme)),
-            Span::styled(message.clone(), tool_style(theme.error, selected, theme)),
+            Span::styled("   ", tool_style(theme.muted, selected, theme, false)),
+            Span::styled("▏ ", tool_style(theme.error, selected, theme, false)),
+            Span::styled(
+                message.clone(),
+                tool_style(theme.error, selected, theme, false),
+            ),
         ]));
     }
 
@@ -107,9 +130,9 @@ fn push_output_line(
     lines: &mut Vec<Line<'static>>,
 ) {
     lines.push(Line::from(vec![
-        Span::styled("   ", tool_style(theme.muted, selected, theme)),
-        Span::styled("▏ ", tool_style(color, selected, theme)),
-        Span::styled(text.to_string(), tool_style(color, selected, theme)),
+        Span::styled("   ", tool_style(theme.muted, selected, theme, false)),
+        Span::styled("▏ ", tool_style(color, selected, theme, false)),
+        Span::styled(text.to_string(), tool_style(color, selected, theme, false)),
     ]));
 }
 
@@ -148,55 +171,6 @@ fn ellipsize_input(input: &str) -> String {
     }
 }
 
-pub fn status_label(status: &ToolStatus) -> &'static str {
-    match status {
-        ToolStatus::Pending => "pending",
-        ToolStatus::Running => "running",
-        ToolStatus::Completed { .. } => "completed",
-        ToolStatus::Error { .. } => "error",
-    }
-}
-
-fn status_color(status: &ToolStatus, theme: &Theme) -> Color {
-    match status {
-        ToolStatus::Pending | ToolStatus::Running => theme.warning,
-        ToolStatus::Completed {
-            exit_code: Some(exit_code),
-            ..
-        } if *exit_code != 0 => theme.error,
-        ToolStatus::Completed { .. } => theme.muted,
-        ToolStatus::Error { .. } => theme.error,
-    }
-}
-
-fn inline_status_text(status: &ToolStatus) -> Option<String> {
-    match status {
-        ToolStatus::Pending | ToolStatus::Running => {
-            Some(format!("{}{}", status_label(status), status_suffix(status)))
-        }
-        ToolStatus::Error { .. } => None,
-        ToolStatus::Completed {
-            time_ms,
-            exit_code: Some(exit_code),
-            ..
-        } if *exit_code != 0 => Some(format!("exit {exit_code} ✗ {time_ms}ms")),
-        ToolStatus::Completed { .. } => None,
-    }
-}
-
-fn status_suffix(status: &ToolStatus) -> String {
-    match status {
-        ToolStatus::Pending | ToolStatus::Running => " …".to_string(),
-        ToolStatus::Completed {
-            time_ms,
-            exit_code: Some(exit_code),
-            ..
-        } => format!(" (exit {exit_code}) ✓ {time_ms}ms"),
-        ToolStatus::Completed { time_ms, .. } => format!(" ✓ {time_ms}ms"),
-        ToolStatus::Error { .. } => " ✗".to_string(),
-    }
-}
-
 fn output_line_color(line: &str, theme: &Theme) -> Color {
     if line.starts_with("@@") {
         theme.muted
@@ -207,15 +181,6 @@ fn output_line_color(line: &str, theme: &Theme) -> Color {
     } else {
         theme.text
     }
-}
-
-fn tool_style(fg: Color, selected: bool, theme: &Theme) -> Style {
-    let bg = if selected {
-        theme.block
-    } else {
-        theme.background
-    };
-    Style::default().fg(fg).bg(bg)
 }
 
 #[cfg(test)]

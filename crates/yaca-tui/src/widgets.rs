@@ -24,6 +24,7 @@ mod transcript_pending;
 mod transcript_reasoning;
 mod transcript_scroll;
 mod transcript_text;
+mod transcript_tool_status;
 mod transcript_tools;
 
 pub use overlays::{render_dialog, render_picker};

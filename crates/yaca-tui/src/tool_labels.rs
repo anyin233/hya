@@ -6,14 +6,20 @@ pub(crate) fn status_symbol(name: &str, status: &ToolStatus) -> &'static str {
         ToolStatus::Error { .. } => "×",
         ToolStatus::Pending | ToolStatus::Running if name == "task" => "•",
         ToolStatus::Completed { .. } if name == "task" => "✓",
-        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => match name {
-            "edit" | "write" => "←",
-            "find" | "grep" | "glob" => "✱",
-            "todowrite" => "#",
-            "webfetch" => "%",
-            "websearch" => "◈",
-            _ => "→",
-        },
+        ToolStatus::Pending | ToolStatus::Running | ToolStatus::Completed { .. } => {
+            action_symbol(name)
+        }
+    }
+}
+
+pub(crate) fn action_symbol(name: &str) -> &'static str {
+    match name {
+        "edit" | "write" => "←",
+        "find" | "grep" | "glob" => "✱",
+        "todowrite" => "#",
+        "webfetch" => "%",
+        "websearch" => "◈",
+        _ => "→",
     }
 }
 

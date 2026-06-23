@@ -1,4 +1,4 @@
-use super::transcript_tools::status_label;
+use super::transcript_tool_status::status_label;
 use crate::view_model::TimelinePart;
 
 pub(super) fn text_from_parts(parts: &[TimelinePart]) -> String {
