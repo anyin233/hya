@@ -5,7 +5,7 @@ pub(in crate::opencode) fn tool_state(state: &ToolPartState) -> Value {
     match state {
         ToolPartState::Pending { input } => json!({
             "status": "pending",
-            "input": input.to_string(),
+            "input": pending_input(input),
         }),
         ToolPartState::Running { input } => json!({
             "status": "running",
@@ -33,6 +33,14 @@ pub(in crate::opencode) fn tool_state(state: &ToolPartState) -> Value {
             "error": { "name": "ToolError", "message": message },
             "result": value.clone().unwrap_or_else(|| json!(message)),
         }),
+    }
+}
+
+fn pending_input(input: &Value) -> String {
+    match input {
+        Value::String(value) => value.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
     }
 }
 
