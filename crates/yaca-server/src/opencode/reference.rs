@@ -183,7 +183,7 @@ fn materialize_git(references: &[Value]) {
         let Some(repository) = source.get("repository").and_then(Value::as_str) else {
             continue;
         };
-        super::reference_repository::materialize(
+        super::reference_cache::materialize(
             repository,
             source.get("branch").and_then(Value::as_str),
             PathBuf::from(path),
