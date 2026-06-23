@@ -1,5 +1,6 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
+use crate::ansi;
 use crate::tool_inputs;
 use crate::tool_labels::{action_label, websearch_provider_label};
 use crate::tool_outputs;
@@ -84,7 +85,7 @@ fn part_to_timeline(part: &PartProjection) -> TimelinePart {
                     exit_code: tool_outputs::exit_code(&name, output),
                 },
                 ToolPartState::Error { message, .. } => ToolStatus::Error {
-                    message: ellipsize(message, 40),
+                    message: sanitized_error_message(message),
                 },
             };
             TimelinePart::Tool {
@@ -185,4 +186,10 @@ fn ellipsize(s: &str, max: usize) -> String {
         let head: String = cleaned.chars().take(max).collect();
         format!("{head}…")
     }
+}
+
+fn sanitized_error_message(message: &str) -> String {
+    ansi::clean_inline(message)
+        .map(|cleaned| ellipsize(&cleaned, 40))
+        .unwrap_or_default()
 }

@@ -34,6 +34,33 @@ fn generic_tool_output_collapses_after_three_lines_like_opencode() {
     );
 }
 
+#[test]
+fn generic_tool_output_strips_ansi_and_control_sequences() {
+    // Given: a completed generic tool returns terminal control sequences.
+    let mut state = AppState::default();
+    with_completed_generic_output(
+        &mut state,
+        "\u{1b}[31mred\u{1b}[0m \u{1b}]8;;https://evil.test\u{7}link\u{1b}]8;;\u{7} \u{8}done",
+    );
+
+    // When: the transcript is rendered.
+    let output = render(&mut state, 100, 24);
+
+    // Then: the readable text remains, but terminal controls do not leak into the block.
+    assert!(
+        output.contains("▏ red link done"),
+        "generic output should keep readable text after sanitizing controls:\n{output}"
+    );
+    assert!(
+        !output.contains('\u{1b}')
+            && !output.contains('\u{7}')
+            && !output.contains('\u{8}')
+            && !output.contains("[31m")
+            && !output.contains("evil.test"),
+        "generic output should strip ANSI, OSC, and C0 controls:\n{output}"
+    );
+}
+
 fn with_completed_generic_output(state: &mut AppState, output: &str) {
     let session = SessionId::new();
     let message = MessageId::new();

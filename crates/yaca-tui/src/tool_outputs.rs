@@ -18,9 +18,6 @@ pub(crate) fn completed_text(
     if name == "task" {
         return tool_tasks::snapshot_text(input, output, time_ms);
     }
-    if matches!(name, "bash" | "shell") {
-        return output_text(output).and_then(|text| clean_multiline_output(&ansi::strip(&text)));
-    }
 
     output_text(output)
 }
@@ -33,7 +30,7 @@ pub(crate) fn exit_code(name: &str, output: &serde_json::Value) -> Option<i64> {
 }
 
 fn output_text(output: &serde_json::Value) -> Option<String> {
-    if let Some(text) = output.as_str().and_then(clean_multiline_output) {
+    if let Some(text) = output.as_str().and_then(ansi::clean_multiline) {
         return Some(text);
     }
 
@@ -48,22 +45,11 @@ fn output_text(output: &serde_json::Value) -> Option<String> {
         if let Some(text) = output
             .get(key)
             .and_then(serde_json::Value::as_str)
-            .and_then(clean_multiline_output)
+            .and_then(ansi::clean_multiline)
         {
             return Some(text);
         }
     }
 
     None
-}
-
-fn clean_multiline_output(text: &str) -> Option<String> {
-    let cleaned = text
-        .trim_matches(|ch| matches!(ch, '\n' | '\r'))
-        .replace('\r', "");
-    if cleaned.trim().is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
 }

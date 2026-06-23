@@ -73,3 +73,32 @@ fn denied_tool_error_renders_struck_through_without_detail() {
         "denied tool row should not render rejected permission as a failed error detail:\n{text}"
     );
 }
+
+#[test]
+fn tool_error_detail_strips_ansi_and_control_sequences() {
+    // Given: a failed tool reports a message containing terminal control sequences.
+    let mut state = AppState::default();
+    with_tool_error_message(
+        &mut state,
+        1,
+        "README.md",
+        "\u{1b}[31mred\u{1b}[0m \u{1b}]8;;https://evil.test\u{7}link\u{1b}]8;;\u{7} \u{8}done",
+    );
+
+    // When: the transcript renders the tool error detail.
+    let output = buffer_text(&render_buffer(&mut state, 120, 24), 120, 24);
+
+    // Then: the readable message is preserved without leaking terminal controls.
+    assert!(
+        output.contains("red link done"),
+        "tool error detail should keep readable text after sanitizing controls:\n{output}"
+    );
+    assert!(
+        !output.contains('\u{1b}')
+            && !output.contains('\u{7}')
+            && !output.contains('\u{8}')
+            && !output.contains("[31m")
+            && !output.contains("evil.test"),
+        "tool error detail should strip ANSI, OSC, and C0 controls:\n{output}"
+    );
+}

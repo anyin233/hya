@@ -37,6 +37,46 @@ pub(crate) fn strip(text: &str) -> String {
     output
 }
 
+pub(crate) fn clean_inline(text: &str) -> Option<String> {
+    let stripped = strip(text);
+    let cleaned = stripped
+        .chars()
+        .filter_map(inline_char)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+pub(crate) fn clean_multiline(text: &str) -> Option<String> {
+    let stripped = strip(text);
+    let cleaned = stripped
+        .trim_matches(|ch| matches!(ch, '\n' | '\r'))
+        .chars()
+        .filter_map(multiline_char)
+        .collect::<String>();
+    (!cleaned.trim().is_empty()).then_some(cleaned)
+}
+
+fn inline_char(ch: char) -> Option<char> {
+    match ch {
+        '\n' | '\t' | '\r' => Some(' '),
+        ch if ch.is_control() => None,
+        ch => Some(ch),
+    }
+}
+
+fn multiline_char(ch: char) -> Option<char> {
+    match ch {
+        '\n' => Some('\n'),
+        '\t' => Some(' '),
+        '\r' => None,
+        ch if ch.is_control() => None,
+        ch => Some(ch),
+    }
+}
+
 fn consume_string_escape<I>(chars: &mut std::iter::Peekable<I>)
 where
     I: Iterator<Item = char>,
