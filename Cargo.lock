@@ -3194,6 +3194,7 @@ dependencies = [
 name = "yaca-server"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "futures",

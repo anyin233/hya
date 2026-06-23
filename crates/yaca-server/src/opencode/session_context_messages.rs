@@ -106,12 +106,13 @@ fn assistant_message(
     time: MessageTime,
     tool_times: &BTreeMap<PartId, ToolTime>,
 ) -> Value {
+    let mut time_value = json!({ "created": time.created.unwrap_or(0) });
+    if let Some(completed) = time.completed {
+        time_value["completed"] = json!(completed);
+    }
     let mut value = json!({
         "id": message.id.to_string(),
-        "time": {
-            "created": time.created.unwrap_or(0),
-            "completed": time.completed,
-        },
+        "time": time_value,
         "type": "assistant",
         "agent": projection
             .session
