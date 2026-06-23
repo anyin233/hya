@@ -9,6 +9,7 @@ pub(super) struct AgentChange {
     pub(super) mode: Option<String>,
     pub(super) hidden: Option<bool>,
     pub(super) model: Option<String>,
+    pub(super) variant: Option<String>,
     pub(super) prompt: Option<String>,
     pub(super) remove: bool,
 }
@@ -19,6 +20,7 @@ struct AgentFrontmatter {
     mode: Option<String>,
     hidden: Option<bool>,
     model: Option<String>,
+    variant: Option<String>,
     disable: Option<bool>,
     disabled: Option<bool>,
 }
@@ -37,6 +39,7 @@ struct InlineAgent {
     mode: Option<String>,
     hidden: Option<bool>,
     model: Option<String>,
+    variant: Option<String>,
     prompt: Option<String>,
     system: Option<String>,
     disable: Option<bool>,
@@ -108,6 +111,7 @@ fn append_inline_agents(
             mode,
             hidden: agent.hidden,
             model: agent.model,
+            variant: agent.variant,
             prompt: agent.system.or(agent.prompt),
             remove: agent.disable.unwrap_or(false) || agent.disabled.unwrap_or(false),
         });
@@ -154,6 +158,7 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         mode,
         hidden: frontmatter.hidden,
         model: frontmatter.model,
+        variant: frontmatter.variant,
         prompt: Some(prompt),
         remove: frontmatter.disable.unwrap_or(false) || frontmatter.disabled.unwrap_or(false),
     })

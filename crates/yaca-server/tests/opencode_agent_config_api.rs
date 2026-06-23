@@ -89,6 +89,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
       "mode": "subagent",
       "hidden": true,
       "model": "openai/gpt-5",
+      "variant": "high",
       "prompt": "Think structurally."
     },
     "plan": {
@@ -155,6 +156,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["system"], "Think structurally.");
     assert_eq!(architect["model"]["providerID"], "openai");
     assert_eq!(architect["model"]["id"], "gpt-5");
+    assert_eq!(architect["model"]["variant"], "high");
     assert_eq!(find_agent(api_agents, "triage")["mode"], "primary");
     assert!(agent_named(api_agents, "summary").is_none());
 }

@@ -40,6 +40,8 @@ struct AgentModelRef {
     id: String,
     #[serde(rename = "providerID")]
     provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -77,9 +79,16 @@ async fn agent(
                     .model
                     .as_deref()
                     .map(agent_model_ref)
+                    .map(|mut model| {
+                        if let Some(variant) = agent.variant {
+                            model.variant = Some(variant);
+                        }
+                        model
+                    })
                     .unwrap_or_else(|| AgentModelRef {
                         id: model.model_id.clone(),
                         provider_id: model.provider_id.clone(),
+                        variant: model.variant.clone(),
                     }),
                 request: RequestInfo {
                     headers: BTreeMap::new(),
@@ -108,11 +117,13 @@ fn agent_model_ref(model: &str) -> AgentModelRef {
         return AgentModelRef {
             id: model_id.to_string(),
             provider_id: provider_id.to_string(),
+            variant: None,
         };
     }
     AgentModelRef {
         id: model.to_string(),
         provider_id: "yaca".to_string(),
+        variant: None,
     }
 }
 
