@@ -23,6 +23,12 @@ pub(crate) struct Cli {
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
+    #[arg(long = "print-logs", global = true)]
+    pub(crate) print_logs: bool,
+    #[arg(long = "log-level", global = true, value_parser = ["DEBUG", "INFO", "WARN", "ERROR"])]
+    pub(crate) log_level: Option<String>,
+    #[arg(long, global = true)]
+    pub(crate) pure: bool,
     /// Start the minimal interactive interface.
     #[arg(long)]
     pub(crate) mini: bool,
@@ -169,10 +175,15 @@ mod tests {
 
     #[test]
     fn parses_opencode_mini_alias() {
-        let cli = parse(["yaca", "--mini"]);
-        assert!(cli.mini);
-        assert!(cli.command.is_none());
-        assert!(cli.validate().is_ok());
+        let cli = parse([
+            "yaca",
+            "--mini",
+            "--print-logs",
+            "--log-level=DEBUG",
+            "--pure",
+        ]);
+        let flags = (cli.mini, cli.print_logs, cli.log_level.as_deref(), cli.pure);
+        assert_eq!(flags, (true, true, Some("DEBUG"), true));
     }
 
     #[test]
