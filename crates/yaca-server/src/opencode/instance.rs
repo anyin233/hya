@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use axum::Json;
@@ -46,6 +47,10 @@ struct AgentInfo {
     hidden: bool,
     permission: Vec<PermissionRule>,
     model: AgentModel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
     options: Value,
@@ -99,6 +104,8 @@ async fn agent(
                 hidden: agent.hidden,
                 permission: agent_permissions(&agent.name, &build_permissions, agent.permissions),
                 model: model_info(agent.model.as_deref().unwrap_or(st.agent.model.as_str())),
+                color: agent.color,
+                steps: agent.steps,
                 prompt: if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())
                 } else {

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -19,6 +20,8 @@ pub(super) struct AgentChange {
     pub(super) hidden: Option<bool>,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) color: Option<String>,
+    pub(super) steps: Option<NonZeroU64>,
     pub(super) request_headers: Option<RequestHeaders>,
     pub(super) request_body: Option<RequestBody>,
     pub(super) permissions: Option<Vec<PermissionRule>>,
@@ -33,6 +36,10 @@ struct AgentFrontmatter {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    color: Option<String>,
+    steps: Option<NonZeroU64>,
+    #[serde(rename = "maxSteps")]
+    max_steps: Option<NonZeroU64>,
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
@@ -55,6 +62,10 @@ struct InlineAgent {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    color: Option<String>,
+    steps: Option<NonZeroU64>,
+    #[serde(rename = "maxSteps")]
+    max_steps: Option<NonZeroU64>,
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
@@ -125,6 +136,7 @@ fn append_inline_agents(
 ) {
     for (name, agent) in map.unwrap_or_default() {
         let (request_headers, request_body) = request_parts(agent.request);
+        let steps = agent.steps.or(agent.max_steps);
         let mode = if primary {
             Some("primary".to_string())
         } else {
@@ -137,6 +149,8 @@ fn append_inline_agents(
             hidden: agent.hidden,
             model: agent.model,
             variant: agent.variant,
+            color: agent.color,
+            steps,
             request_headers,
             request_body,
             permissions: permission_rules(agent.permissions, agent.permission),
@@ -187,6 +201,7 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
     } else {
         frontmatter.mode
     };
+    let steps = frontmatter.steps.or(frontmatter.max_steps);
     let (request_headers, request_body) = request_parts(frontmatter.request);
     Some(AgentChange {
         name: file.name,
@@ -195,6 +210,8 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         hidden: frontmatter.hidden,
         model: frontmatter.model,
         variant: frontmatter.variant,
+        color: frontmatter.color,
+        steps,
         request_headers,
         request_body,
         permissions: permission_rules(frontmatter.permissions, frontmatter.permission),

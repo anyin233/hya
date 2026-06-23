@@ -82,7 +82,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     std::fs::create_dir_all(workdir.join(".opencode")).unwrap();
     std::fs::write(
         workdir.join("opencode.jsonc"),
-        r#"{
+        r##"{
   "agent": {
     "architect": {
       "description": "Architecture reviewer",
@@ -90,6 +90,8 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
       "hidden": true,
       "model": "openai/gpt-5",
       "variant": "high",
+      "color": "#A855F7",
+      "steps": 9,
       "request": {
         "headers": { "x-agent": "architect" },
         "body": { "reasoning_effort": "high" }
@@ -105,6 +107,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     },
     "plan": {
       "description": "Inline plan mode",
+      "maxSteps": 7,
       "prompt": "Plan inline."
     },
     "summary": {
@@ -112,7 +115,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     }
   }
 }
-"#,
+"##,
     )
     .unwrap();
     std::fs::write(
@@ -146,6 +149,8 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["hidden"], true);
     assert_eq!(architect["model"]["providerID"], "openai");
     assert_eq!(architect["model"]["modelID"], "gpt-5");
+    assert_eq!(architect["color"], "#A855F7");
+    assert_eq!(architect["steps"], 9);
     assert_eq!(architect["prompt"], "Think structurally.");
     assert_agent_permissions(&architect["permission"]);
 
@@ -153,6 +158,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(plan["description"], "Inline plan mode");
     assert_eq!(plan["mode"], "primary");
     assert_eq!(plan["native"], true);
+    assert_eq!(plan["steps"], 7);
     assert_eq!(plan["prompt"], "Plan inline.");
     assert!(agent_named(&agents, "summary").is_none());
 
@@ -169,9 +175,12 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["model"]["providerID"], "openai");
     assert_eq!(architect["model"]["id"], "gpt-5");
     assert_eq!(architect["model"]["variant"], "high");
+    assert_eq!(architect["color"], "#A855F7");
+    assert_eq!(architect["steps"], 9);
     assert_eq!(architect["request"]["headers"]["x-agent"], "architect");
     assert_eq!(architect["request"]["body"]["reasoning_effort"], "high");
     assert_agent_permissions(&architect["permissions"]);
+    assert_eq!(find_agent(api_agents, "plan")["steps"], 7);
     assert_eq!(find_agent(api_agents, "triage")["mode"], "primary");
     assert!(agent_named(api_agents, "summary").is_none());
 }
