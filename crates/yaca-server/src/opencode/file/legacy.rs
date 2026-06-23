@@ -131,10 +131,10 @@ pub(super) async fn content(
         return Ok(Json(text_content(String::new())));
     }
     let path = resolve_existing(&root, &query.path)?;
-    let bytes = tokio::fs::read(path)
+    let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(content_from_bytes(bytes)))
+    Ok(Json(content_from_bytes(&path, bytes)))
 }
 
 pub(super) async fn find_text(
@@ -239,11 +239,11 @@ fn collect_text_matches(
     }
 }
 
-fn content_from_bytes(bytes: Vec<u8>) -> LegacyContent {
+fn content_from_bytes(path: &Path, bytes: Vec<u8>) -> LegacyContent {
     match String::from_utf8(bytes) {
         Ok(text) if !text.contains('\0') => text_content(text.trim().to_string()),
-        Ok(text) => binary_content(text.into_bytes()),
-        Err(error) => binary_content(error.into_bytes()),
+        Ok(text) => binary_content(path, text.into_bytes()),
+        Err(error) => binary_content(path, error.into_bytes()),
     }
 }
 
@@ -256,8 +256,8 @@ fn text_content(content: String) -> LegacyContent {
     }
 }
 
-fn binary_content(bytes: Vec<u8>) -> LegacyContent {
-    let mime = mime::sniff(&bytes);
+fn binary_content(path: &Path, bytes: Vec<u8>) -> LegacyContent {
+    let mime = mime::for_path(path, Some(&bytes));
     LegacyContent {
         kind: "binary",
         content: base64::engine::general_purpose::STANDARD.encode(bytes),
