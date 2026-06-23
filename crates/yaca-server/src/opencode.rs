@@ -19,6 +19,7 @@ mod event;
 mod event_heartbeat;
 mod experimental;
 mod experimental_sync;
+mod experimental_tool;
 mod experimental_workspace;
 mod experimental_worktree;
 mod file;

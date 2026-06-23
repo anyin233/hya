@@ -1,6 +1,3 @@
-use std::collections::BTreeMap;
-
-use axum::extract::Query;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -41,8 +38,8 @@ pub(super) fn router() -> Router<ServerState> {
             "/experimental/control-plane/move-session",
             post(move_session),
         )
-        .route("/experimental/tool", get(tool_list))
-        .route("/experimental/tool/ids", get(tool_ids))
+        .route("/experimental/tool", get(super::experimental_tool::list))
+        .route("/experimental/tool/ids", get(super::experimental_tool::ids))
         .route(
             "/experimental/session",
             get(super::session_list::list_sessions),
@@ -75,43 +72,6 @@ async fn console_orgs() -> Json<Value> {
 
 async fn resource(State(st): State<ServerState>) -> Json<Value> {
     Json(json!(st.mcp_http.resources(&st.mcp_manager).await))
-}
-
-async fn tool_list(
-    State(st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    if query.get("provider").is_none_or(String::is_empty) {
-        return Err(ApiError::bad_request("tool list missing provider"));
-    }
-    if query.get("model").is_none_or(String::is_empty) {
-        return Err(ApiError::bad_request("tool list missing model"));
-    }
-    let mut schemas = st.engine.tool_schemas();
-    schemas.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
-    Ok(Json(
-        schemas
-            .into_iter()
-            .map(|schema| {
-                json!({
-                    "id": schema.name.to_string(),
-                    "description": schema.description,
-                    "parameters": schema.input_schema,
-                })
-            })
-            .collect(),
-    ))
-}
-
-async fn tool_ids(State(st): State<ServerState>) -> Json<Vec<String>> {
-    let mut ids: Vec<_> = st
-        .engine
-        .tool_schemas()
-        .into_iter()
-        .map(|schema| schema.name.to_string())
-        .collect();
-    ids.sort();
-    Json(ids)
 }
 
 async fn ok_true() -> Json<bool> {
