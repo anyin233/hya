@@ -99,7 +99,7 @@ async fn reply_request(
     if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
         return Ok(response);
     }
-    if reply_to_pending(&st, session, &request, payload.reply, payload.message).await {
+    if reply_to_pending(&st, session, &request, payload.reply, payload.message).await? {
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Ok(permission_not_found(&request).into_response())
@@ -119,7 +119,7 @@ async fn reply_legacy_request(
         }
         Err(error) => return Err(error),
     }
-    if reply_to_pending(&st, session, &request, payload.response, None).await {
+    if reply_to_pending(&st, session, &request, payload.response, None).await? {
         Ok(Json(true).into_response())
     } else {
         Ok(permission_not_found(&request).into_response())
@@ -130,21 +130,21 @@ async fn reply_root_request(
     State(st): State<ServerState>,
     Path(request): Path<String>,
     Json(payload): Json<Value>,
-) -> Response {
+) -> Result<Response, ApiError> {
     if !request.starts_with("per") {
-        return ApiError::bad_request("invalid permission request id").into_response();
+        return Err(ApiError::bad_request("invalid permission request id"));
     }
     let Ok((reply, message)) = parse_reply_payload(&payload) else {
-        return ApiError::bad_request("invalid permission reply").into_response();
+        return Err(ApiError::bad_request("invalid permission reply"));
     };
     if st
         .permission_requests
         .reply_any(&request, pending_reply(reply), message)
-        .await
+        .await?
     {
-        Json(true).into_response()
+        Ok(Json(true).into_response())
     } else {
-        permission_not_found(&request).into_response()
+        Ok(permission_not_found(&request).into_response())
     }
 }
 
@@ -154,15 +154,16 @@ async fn reply_to_pending(
     request: &str,
     reply: WirePermissionReply,
     message: Option<String>,
-) -> bool {
+) -> Result<bool, ApiError> {
     let reply = match reply {
         WirePermissionReply::Once => crate::pending::PermissionReply::Once,
         WirePermissionReply::Always => crate::pending::PermissionReply::Always,
         WirePermissionReply::Reject => crate::pending::PermissionReply::Reject,
     };
-    st.permission_requests
+    Ok(st
+        .permission_requests
         .reply(session, request, reply, message)
-        .await
+        .await?)
 }
 
 fn parse_reply_payload(payload: &Value) -> Result<(WirePermissionReply, Option<String>), ()> {
@@ -201,16 +202,19 @@ fn permission_not_found(request: &str) -> (StatusCode, Json<Value>) {
 async fn list_saved(
     State(st): State<ServerState>,
     Query(query): Query<SavedPermissionQuery>,
-) -> Json<SavedPermissionList> {
-    Json(SavedPermissionList {
+) -> Result<Json<SavedPermissionList>, ApiError> {
+    Ok(Json(SavedPermissionList {
         data: st
             .permission_requests
             .list_saved(query.project_id.as_deref())
-            .await,
-    })
+            .await?,
+    }))
 }
 
-async fn remove_saved(State(st): State<ServerState>, Path(id): Path<String>) -> StatusCode {
-    st.permission_requests.remove_saved(&id).await;
-    StatusCode::NO_CONTENT
+async fn remove_saved(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    st.permission_requests.remove_saved(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

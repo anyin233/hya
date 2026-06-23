@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use yaca_proto::{Event, Projection, Role, SessionId};
-use yaca_store::{LedgerEntry, SessionStore};
+use yaca_store::{LedgerEntry, SavedPermission, SessionStore};
 
 fn temp_db() -> String {
     let nanos = SystemTime::now()
@@ -117,4 +117,27 @@ async fn token_ledger_records_and_reads_by_role() {
             .iter()
             .any(|e| e.role == "planner" && e.iteration == Some(1))
     );
+}
+
+#[tokio::test]
+async fn saved_permission_resumes_after_reconnect() {
+    let path = temp_db();
+    let entry = SavedPermission {
+        id: "psv_per_1".to_string(),
+        project_id: "global".to_string(),
+        action: "bash".to_string(),
+        resource: "*".to_string(),
+    };
+    {
+        let store = SessionStore::connect(&path).await.unwrap();
+        store.save_permission(&entry).await.unwrap();
+    }
+
+    let reopened = SessionStore::connect(&path).await.unwrap();
+    let saved = reopened.list_saved_permissions(None).await.unwrap();
+    assert_eq!(saved, vec![entry]);
+
+    reopened.remove_saved_permission("psv_per_1").await.unwrap();
+    let reopened = SessionStore::connect(&path).await.unwrap();
+    assert_eq!(reopened.list_saved_permissions(None).await.unwrap(), vec![]);
 }

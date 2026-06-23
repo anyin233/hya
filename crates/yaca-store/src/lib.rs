@@ -6,6 +6,7 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 pub mod error;
+mod permission;
 mod sync;
 
 use std::str::FromStr;
@@ -16,7 +17,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use yaca_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
 
 pub use error::StoreError;
+pub use permission::SavedPermission;
 
+#[derive(Clone)]
 pub struct SessionStore {
     pool: sqlx::SqlitePool,
 }
