@@ -246,8 +246,8 @@ fn permission_panel_keeps_footer_blocker_status_visible() {
 
     // Then: the statusline remains visible below the permission body.
     assert!(
-        bottom_row.contains("awaiting permission"),
-        "footer statusline should expose the permission blocker, got {bottom_row:?} in:\n{text}"
+        bottom_row.contains("△ 1 Permission"),
+        "footer statusline should expose the OpenCode permission count, got {bottom_row:?} in:\n{text}"
     );
     assert!(
         bottom_row.contains("ctrl+p commands"),

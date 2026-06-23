@@ -6,7 +6,7 @@ const SIDEBAR_BREAKPOINT: u16 = 120;
 
 pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
     if state.permission.is_some() {
-        return "awaiting permission".to_string();
+        return "△ 1 Permission".to_string();
     }
     if state.question.is_some() {
         return "awaiting answer".to_string();

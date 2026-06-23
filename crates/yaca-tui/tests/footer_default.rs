@@ -2,7 +2,7 @@
 mod render_support;
 
 use render_support::{render, with_assistant_message};
-use yaca_tui::{AppState, ConnectorState, ConnectorView};
+use yaca_tui::{AppState, ConnectorState, ConnectorView, PermissionPrompt, PermissionPromptStage};
 
 #[test]
 fn default_footer_omits_legacy_navigation_hints() {
@@ -126,6 +126,35 @@ fn footer_renders_lsp_status_like_opencode() {
     assert!(
         bottom_row.contains("/status"),
         "footer should expose the OpenCode status command with LSP state, got {bottom_row:?}"
+    );
+}
+
+#[test]
+fn footer_renders_permission_count_like_opencode() {
+    // Given: an active permission prompt blocks the composer.
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash".to_string(),
+            detail: "git status".to_string(),
+            selected: 0,
+            reply: String::new(),
+            stage: PermissionPromptStage::Permission,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the footer renders the OpenCode status strip.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: permission status uses OpenCode's count label, not the old yaca wording.
+    assert!(
+        bottom_row.contains("△ 1 Permission"),
+        "footer should show the OpenCode permission count, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("awaiting permission"),
+        "footer should not show legacy permission copy, got {bottom_row:?}"
     );
 }
 
