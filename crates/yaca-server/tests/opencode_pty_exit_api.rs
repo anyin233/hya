@@ -69,6 +69,19 @@ async fn wait_for_exit(app: axum::Router, id: &str) -> Value {
     panic!("pty did not exit");
 }
 
+async fn wait_for_retained_exited(app: axum::Router) -> Value {
+    for _ in 0..50 {
+        let (status, list) = request(app.clone(), "GET", "/api/pty", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let data = list["data"].as_array().unwrap();
+        if data.len() == 25 && data.iter().all(|item| item["status"] == "exited") {
+            return list;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("exited ptys were not capped");
+}
+
 #[tokio::test]
 async fn opencode_pty_legacy_hides_exited_sessions() {
     let app = router(state().await);
@@ -107,4 +120,42 @@ async fn opencode_pty_legacy_hides_exited_sessions() {
 
     let (status, _) = request(app, "DELETE", &format!("/api/pty/{id}"), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn opencode_pty_caps_retained_exited_sessions() {
+    let app = router(state().await);
+    let mut ids = Vec::new();
+    for index in 0..26 {
+        let (status, created) = request(
+            app.clone(),
+            "POST",
+            "/api/pty",
+            Some(json!({
+                "command": "/bin/sh",
+                "args": ["-c", format!("exit {}", index % 10)]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        ids.push(created["data"]["id"].as_str().unwrap().to_string());
+    }
+
+    let retained = wait_for_retained_exited(app.clone()).await;
+    let retained_ids: Vec<String> = retained["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    let missing: Vec<&String> = ids
+        .iter()
+        .filter(|id| !retained_ids.iter().any(|retained| retained == *id))
+        .collect();
+    assert_eq!(missing.len(), 1);
+
+    let first = missing[0];
+    let (status, missing) = request(app, "GET", &format!("/api/pty/{first}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["_tag"], "PtyNotFoundError");
 }

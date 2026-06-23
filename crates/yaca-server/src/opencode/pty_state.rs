@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +21,8 @@ pub(crate) struct PtyState {
 pub(super) struct PtyRuntime {
     next: u64,
     pub(super) sessions: BTreeMap<String, PtySession>,
-    tickets: BTreeMap<String, ConnectTicket>,
+    pub(super) exited: VecDeque<String>,
+    pub(super) tickets: BTreeMap<String, ConnectTicket>,
 }
 
 pub(super) struct PtySession {
@@ -33,8 +34,8 @@ pub(super) struct PtySession {
     pub(super) output: broadcast::Sender<PtyEvent>,
 }
 
-struct ConnectTicket {
-    pty_id: String,
+pub(super) struct ConnectTicket {
+    pub(super) pty_id: String,
     expires_at: Instant,
 }
 
@@ -174,6 +175,7 @@ impl PtyState {
     pub(super) async fn remove(&self, id: &str) -> bool {
         let mut state = self.inner.write().await;
         state.tickets.retain(|_, ticket| ticket.pty_id != id);
+        state.exited.retain(|exited| exited != id);
         let Some(session) = state.sessions.remove(id) else {
             return false;
         };
