@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 use yaca_proto::{Envelope, Event, MessageId, PartId, PartProjection, SessionId, ToolPartState};
 
+use super::message_context_parts::tool_attachment_parts;
+
 #[derive(Clone, Copy, Default)]
 struct OpenCodePartTime {
     start: Option<u64>,
@@ -73,7 +75,7 @@ pub(super) fn opencode_part(
             "type": "tool",
             "callID": call.to_string(),
             "tool": name.as_str(),
-            "state": tool_state_value(state, context.time(*id)),
+            "state": tool_state_value(session, message, *id, state, context.time(*id)),
         }),
     }
 }
@@ -159,7 +161,13 @@ fn update_tool_time(
     }
 }
 
-fn tool_state_value(state: &ToolPartState, time: OpenCodePartTime) -> Value {
+fn tool_state_value(
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    state: &ToolPartState,
+    time: OpenCodePartTime,
+) -> Value {
     match state {
         ToolPartState::Pending { input } => json!({
             "phase": "pending",
@@ -177,16 +185,22 @@ fn tool_state_value(state: &ToolPartState, time: OpenCodePartTime) -> Value {
             input,
             output,
             time_ms,
-        } => json!({
-            "phase": "completed",
-            "status": "completed",
-            "input": object_or_empty(input),
-            "output": tool_output_text(output),
-            "title": "",
-            "metadata": {},
-            "time": completed_time(time, *time_ms),
-            "time_ms": time_ms,
-        }),
+        } => {
+            let mut out = json!({
+                "phase": "completed",
+                "status": "completed",
+                "input": object_or_empty(input),
+                "output": tool_output_text(output),
+                "title": "",
+                "metadata": {},
+                "time": completed_time(time, *time_ms),
+                "time_ms": time_ms,
+            });
+            if let Some(attachments) = tool_attachment_parts(session, message, part, output) {
+                out["attachments"] = json!(attachments);
+            }
+            out
+        }
         ToolPartState::Error {
             input,
             message,

@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use yaca_proto::{MessageId, MessageProjection, SessionId};
+use yaca_proto::{MessageId, MessageProjection, PartId, SessionId};
 
 pub(super) fn prompt_attachment_parts(
     session: SessionId,
@@ -9,7 +9,16 @@ pub(super) fn prompt_attachment_parts(
         .files
         .iter()
         .enumerate()
-        .filter_map(|(index, file)| file_part(session, message.id, index, file));
+        .filter_map(|(index, file)| {
+            file_part(
+                session,
+                message.id,
+                message.id.as_uuid(),
+                "file",
+                index,
+                file,
+            )
+        });
     let agents = message
         .agents
         .iter()
@@ -18,12 +27,42 @@ pub(super) fn prompt_attachment_parts(
     files.chain(agents).collect()
 }
 
-fn file_part(session: SessionId, message: MessageId, index: usize, file: &Value) -> Option<Value> {
-    let url = file.get("uri").and_then(Value::as_str)?;
+pub(super) fn tool_attachment_parts(
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    output: &Value,
+) -> Option<Vec<Value>> {
+    let attachments = output.get("attachments")?.as_array()?;
+    let parts = attachments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, file)| {
+            file_part(session, message, part.as_uuid(), "tool_file", index, file)
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn file_part(
+    session: SessionId,
+    message: MessageId,
+    seed: uuid::Uuid,
+    kind: &str,
+    index: usize,
+    file: &Value,
+) -> Option<Value> {
+    let url = file
+        .get("uri")
+        .or_else(|| file.get("url"))
+        .and_then(Value::as_str)?;
     let mime = file.get("mime").and_then(Value::as_str)?;
-    let filename = file.get("name").and_then(Value::as_str);
+    let filename = file
+        .get("name")
+        .or_else(|| file.get("filename"))
+        .and_then(Value::as_str);
     let mut part = json!({
-        "id": derived_part_id(message, "file", index),
+        "id": derived_part_id(seed, kind, index),
         "sessionID": session.to_string(),
         "messageID": message.to_string(),
         "type": "file",
@@ -47,7 +86,7 @@ fn agent_part(
 ) -> Option<Value> {
     let name = agent.get("name").and_then(Value::as_str)?;
     let mut part = json!({
-        "id": derived_part_id(message, "agent", index),
+        "id": derived_part_id(message.as_uuid(), "agent", index),
         "sessionID": session.to_string(),
         "messageID": message.to_string(),
         "type": "agent",
@@ -79,11 +118,12 @@ fn source_span(value: &Value) -> Option<Value> {
     }))
 }
 
-fn derived_part_id(message: MessageId, kind: &str, index: usize) -> String {
-    let mut bytes = *message.as_uuid().as_bytes();
+fn derived_part_id(seed: uuid::Uuid, kind: &str, index: usize) -> String {
+    let mut bytes = *seed.as_bytes();
     bytes[0] ^= match kind {
         "file" => 0xf1,
         "agent" => 0xa6,
+        "tool_file" => 0x7c,
         _ => 0x1d,
     };
     for (offset, byte) in index.to_le_bytes().iter().enumerate().take(8) {
