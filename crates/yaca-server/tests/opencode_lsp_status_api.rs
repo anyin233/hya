@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -28,6 +28,26 @@ impl LspProvider for ConnectedLsp {
     }
 
     async fn execute(&self, _request: LspRequest) -> Result<Vec<Value>, LspError> {
+        Ok(Vec::new())
+    }
+}
+
+struct RecordingLsp {
+    seen: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+#[async_trait]
+impl LspProvider for RecordingLsp {
+    async fn has_clients(&self, _file: &Path) -> Result<bool, LspError> {
+        Ok(false)
+    }
+
+    async fn execute(&self, _request: LspRequest) -> Result<Vec<Value>, LspError> {
+        Ok(Vec::new())
+    }
+
+    async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
+        self.seen.lock().unwrap().push(workdir.to_path_buf());
         Ok(Vec::new())
     }
 }
@@ -96,4 +116,26 @@ async fn opencode_lsp_status_reports_connected_provider() {
             "status": "connected"
         }])
     );
+}
+
+#[tokio::test]
+async fn opencode_lsp_status_uses_workspace_routed_directory() {
+    let default = tempdir();
+    let scoped = tempdir().join("scoped dir");
+    std::fs::create_dir_all(&scoped).unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let encoded_scoped = scoped.to_string_lossy().replace(' ', "%20");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = router(
+        state(
+            default,
+            LspPlane::new(Arc::new(RecordingLsp { seen: seen.clone() })),
+        )
+        .await,
+    );
+
+    let (status, _body) = get_json(app, &format!("/lsp?directory={encoded_scoped}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(seen.lock().unwrap().as_slice(), &[scoped]);
 }

@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use axum::Json;
 use axum::Router;
+use axum::extract::Query;
+use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -135,14 +138,14 @@ async fn skill(
     Json(discover_skills(&workdir(&st)))
 }
 
-async fn lsp(axum::extract::State(st): axum::extract::State<ServerState>) -> Json<Vec<Value>> {
-    Json(
-        st.engine
-            .lsp()
-            .status(&workdir(&st))
-            .await
-            .unwrap_or_default(),
-    )
+async fn lsp(
+    axum::extract::State(st): axum::extract::State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<Vec<Value>> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
+    Json(st.engine.lsp().status(&workdir).await.unwrap_or_default())
 }
 
 fn command_info(
