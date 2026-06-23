@@ -136,7 +136,7 @@ async fn create(
     State(st): State<ServerState>,
     body: Bytes,
 ) -> Result<Json<DataResponse<OpenCodeSessionInfo>>, ApiError> {
-    let req = if body.is_empty() {
+    let req = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
         CreateV2Request::default()
     } else {
         serde_json::from_slice(&body)
