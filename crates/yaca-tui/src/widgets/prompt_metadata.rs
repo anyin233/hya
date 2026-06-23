@@ -9,6 +9,7 @@ use crate::theme::Theme;
 
 const COMPACT_METADATA_WIDTH: u16 = 80;
 const COMMAND_HINT_WIDTH: u16 = 66;
+const FOOTER_MIN_RIGHT_GAP: usize = 3;
 const MODEL_METADATA_WIDTH: u16 = 120;
 
 pub(super) fn composer_identity_metadata(
@@ -112,37 +113,37 @@ pub(super) fn composer_footer_metadata(
     let policy = ComposerWidthPolicy::for_width(policy_width);
     let context_label = composer_context_label(state);
     let show_usage = policy.show_usage && (context_label.is_some() || state.cost_label.is_some());
-    let context = if show_usage {
+    let mut context = if show_usage {
         context_label.unwrap_or_default()
     } else {
         String::new()
     };
-    let cost = if show_usage {
+    let mut cost = if show_usage {
         state.cost_label.as_deref().unwrap_or("")
     } else {
         ""
     };
-    let context_separator = if context.is_empty() || cost.is_empty() {
+    let mut context_separator = if context.is_empty() || cost.is_empty() {
         ""
     } else {
         " · "
     };
-    let command_hint = if policy.show_command_hint {
+    let mut command_hint = if policy.show_command_hint {
         "ctrl+p commands"
     } else {
         ""
     };
-    let agent_hint = if policy.show_command_hint && !show_usage {
-        "tab agents"
+    let mut agent_hint = if policy.show_command_hint && !show_usage {
+        "tab yolo"
     } else {
         ""
     };
-    let agent_separator = if agent_hint.is_empty() || command_hint.is_empty() {
+    let mut agent_separator = if agent_hint.is_empty() || command_hint.is_empty() {
         ""
     } else {
         "   "
     };
-    let command_separator = if command_hint.is_empty()
+    let mut command_separator = if command_hint.is_empty()
         || !agent_hint.is_empty()
         || (context.is_empty() && cost.is_empty())
     {
@@ -151,14 +152,33 @@ pub(super) fn composer_footer_metadata(
         "   "
     };
     let left_width = UnicodeWidthStr::width(left_text.as_str());
-    let right_width = UnicodeWidthStr::width(context.as_str())
+    let mut right_width = UnicodeWidthStr::width(context.as_str())
         + UnicodeWidthStr::width(context_separator)
         + UnicodeWidthStr::width(cost)
         + UnicodeWidthStr::width(agent_hint)
         + UnicodeWidthStr::width(agent_separator)
         + UnicodeWidthStr::width(command_separator)
         + UnicodeWidthStr::width(command_hint);
-    let status_gap_width = usize::from(render_width).saturating_sub(left_width + right_width);
+    let render_width = usize::from(render_width);
+    if right_width > 0
+        && left_width + right_width + FOOTER_MIN_RIGHT_GAP > render_width
+        && (!agent_hint.is_empty() || !command_hint.is_empty())
+    {
+        agent_hint = "";
+        agent_separator = "";
+        command_hint = "";
+        command_separator = "";
+        right_width = UnicodeWidthStr::width(context.as_str())
+            + UnicodeWidthStr::width(context_separator)
+            + UnicodeWidthStr::width(cost);
+    }
+    if right_width > 0 && left_width + right_width + FOOTER_MIN_RIGHT_GAP > render_width {
+        context.clear();
+        cost = "";
+        context_separator = "";
+        right_width = 0;
+    }
+    let status_gap_width = render_width.saturating_sub(left_width + right_width);
     let footer_style = Style::default().fg(theme.muted).bg(theme.background);
     let mut spans = vec![Span::styled(left_text, footer_style)];
     spans.push(Span::styled(" ".repeat(status_gap_width), footer_style));

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use yaca_tui::{AppState, DialogItem};
 
-use super::agent_cycle::{next_agent_label, previous_agent_label};
+use super::agent_cycle::previous_agent_label;
 use super::block_action::{SelectedBlockAction, selected_block_action};
 use super::commands::{self, CommandKind, CustomCommand};
 use super::leader_key::{LeaderAction, LeaderKey};
@@ -260,11 +260,9 @@ impl Controller {
             KeyCode::BackTab => self.select_previous_agent(),
             KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => self.select_previous_agent(),
             KeyCode::Tab => {
-                next_agent_label(&self.app.agent, &self.agents).map_or(TuiEffect::None, |agent| {
-                    self.app.agent = agent.clone();
-                    self.disarm_exit();
-                    TuiEffect::SelectAgent(agent)
-                })
+                self.app.yolo = !self.app.yolo;
+                self.disarm_exit();
+                TuiEffect::None
             }
             KeyCode::Enter => self.submit_input(),
             KeyCode::Backspace => self.edit_prompt(|prompt, app| prompt.backspace(app)),
@@ -589,6 +587,9 @@ mod command_palette_tests;
 mod input_edit_tests;
 
 #[cfg(test)]
+mod tab_mode_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
@@ -742,50 +743,6 @@ mod tests {
 
         assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
         assert_eq!(controller.app.input, "read @README.md ");
-    }
-
-    #[test]
-    fn tab_and_shift_tab_cycle_agents_when_no_popup_is_active() {
-        let mut controller = Controller::new(AppState {
-            agent: "build".to_string(),
-            ..AppState::default()
-        });
-        controller.set_agents(
-            ["build", "plan", "review"]
-                .into_iter()
-                .map(|label| DialogItem {
-                    label: label.to_string(),
-                    detail: "agent profile".to_string(),
-                })
-                .collect(),
-        );
-
-        assert_eq!(
-            controller.handle_key(key(KeyCode::Tab)),
-            TuiEffect::SelectAgent("plan".to_string())
-        );
-        assert_eq!(controller.app.agent, "plan");
-        assert!(!controller.app.yolo);
-        assert_eq!(
-            controller.handle_key(key(KeyCode::Tab)),
-            TuiEffect::SelectAgent("review".to_string())
-        );
-        assert_eq!(
-            controller.handle_key(key(KeyCode::Tab)),
-            TuiEffect::SelectAgent("build".to_string())
-        );
-        assert_eq!(
-            controller.handle_key(key(KeyCode::BackTab)),
-            TuiEffect::SelectAgent("review".to_string())
-        );
-        assert_eq!(
-            controller.handle_key(key(KeyCode::BackTab)),
-            TuiEffect::SelectAgent("plan".to_string())
-        );
-        assert_eq!(
-            controller.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)),
-            TuiEffect::SelectAgent("build".to_string())
-        );
     }
 
     #[test]

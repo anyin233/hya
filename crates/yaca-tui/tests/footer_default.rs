@@ -58,7 +58,7 @@ fn idle_composer_metadata_occupies_bottom_row() {
 }
 
 #[test]
-fn default_footer_shows_agent_shortcut_until_usage_exists() {
+fn default_footer_shows_yolo_shortcut_until_usage_exists() {
     // Given: an idle OpenCode-style composer before any usage data exists.
     let mut state = AppState::default();
 
@@ -66,10 +66,10 @@ fn default_footer_shows_agent_shortcut_until_usage_exists() {
     let text = render(&mut state, 100, 16);
     let bottom_row = text.lines().last().unwrap_or_default();
 
-    // Then: the footer shows agent and command affordances, not placeholder cost.
+    // Then: the footer shows yolo and command affordances, not placeholder cost.
     assert!(
-        bottom_row.contains("tab agents"),
-        "OpenCode default footer should expose the agent-cycle shortcut, got {bottom_row:?}"
+        bottom_row.contains("tab yolo"),
+        "OpenCode default footer should expose the yolo toggle shortcut, got {bottom_row:?}"
     );
     assert!(
         bottom_row.contains("ctrl+p commands"),
@@ -221,6 +221,33 @@ fn footer_renders_permission_count_like_opencode() {
     assert!(
         !bottom_row.contains("awaiting permission"),
         "footer should not show legacy permission copy, got {bottom_row:?}"
+    );
+}
+
+#[test]
+fn yolo_footer_hides_shortcuts_when_status_copy_needs_the_row() {
+    // Given: the yolo status copy is already long enough to carry the footer.
+    let mut state = AppState {
+        yolo: true,
+        ..AppState::default()
+    };
+
+    // When: it renders at a common 100-column terminal width.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: right-side hints are hidden instead of being glued to the yolo copy.
+    assert!(
+        bottom_row.contains("BUILD · YOLO mode"),
+        "yolo footer should keep the mode status visible, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("referencestab"),
+        "footer text and right hints should not concatenate, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("tab yolo") && !bottom_row.contains("ctrl+p commands"),
+        "right hints should be hidden when they do not fit, got {bottom_row:?}"
     );
 }
 
