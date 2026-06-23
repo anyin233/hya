@@ -155,7 +155,7 @@ async fn doc() -> Json<Value> {
         ("/api/provider/{providerID}", &["get"]),
         ("/api/model", &["get"]),
         ("/api/event", &["get"]),
-        ("/api/fs/read/{path}", &["get"]),
+        ("/api/fs/read/*", &["get"]),
         ("/api/fs/list", &["get"]),
         ("/api/fs/find", &["get"]),
         ("/api/permission/request", &["get"]),
