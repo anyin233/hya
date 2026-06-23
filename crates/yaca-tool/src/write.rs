@@ -8,9 +8,7 @@ use yaca_proto::{ToolName, ToolSchema};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
-
-const UTF8_BOM: char = '\u{feff}';
-const UTF8_BOM_BYTES: &[u8; 3] = b"\xEF\xBB\xBF";
+use crate::utf8_bom;
 
 #[derive(Deserialize)]
 struct WriteInput {
@@ -60,20 +58,24 @@ impl Tool for WriteTool {
 
         let exists = path.exists();
         let source_has_bom = if exists {
-            tokio::fs::read(&path).await?.starts_with(UTF8_BOM_BYTES)
+            utf8_bom::file_has_bom(&path).await?
         } else {
             false
         };
-        let (incoming_has_bom, content) = split_bom(&input.content);
+        let (incoming_has_bom, content) = utf8_bom::split(&input.content);
         let desired_bom = source_has_bom || incoming_has_bom;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&path, encode_with_bom(content, desired_bom)).await?;
-        ctx.formatter
+        tokio::fs::write(&path, utf8_bom::encode(content, desired_bom)).await?;
+        let formatted = ctx
+            .formatter
             .format_file(&workdir, &path)
             .await
             .map_err(|error| ToolError::Other(error.to_string()))?;
+        if formatted {
+            utf8_bom::sync_file(&path, desired_bom).await?;
+        }
 
         Ok(json!({
             "ok": true,
@@ -87,23 +89,6 @@ impl Tool for WriteTool {
             },
         }))
     }
-}
-
-fn split_bom(text: &str) -> (bool, &str) {
-    if text.starts_with(UTF8_BOM) {
-        return (true, &text[UTF8_BOM.len_utf8()..]);
-    }
-    (false, text)
-}
-
-fn encode_with_bom(text: &str, bom: bool) -> Vec<u8> {
-    let extra = if bom { UTF8_BOM_BYTES.len() } else { 0 };
-    let mut out = Vec::with_capacity(text.len() + extra);
-    if bom {
-        out.extend_from_slice(UTF8_BOM_BYTES);
-    }
-    out.extend_from_slice(text.as_bytes());
-    out
 }
 
 async fn assert_external_file(ctx: &ToolCtx, workdir: &Path, path: &Path) -> Result<(), ToolError> {

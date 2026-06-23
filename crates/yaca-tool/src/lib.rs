@@ -23,6 +23,7 @@ pub mod spawn;
 mod task;
 pub mod todo;
 pub mod tool;
+mod utf8_bom;
 mod webfetch;
 mod websearch;
 mod websearch_response;

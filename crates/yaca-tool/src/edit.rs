@@ -10,9 +10,7 @@ use crate::edit_replace;
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
-
-const UTF8_BOM: char = '\u{feff}';
-const UTF8_BOM_BYTES: &[u8; 3] = b"\xEF\xBB\xBF";
+use crate::utf8_bom;
 
 #[derive(Deserialize)]
 struct EditInput {
@@ -76,27 +74,32 @@ impl Tool for EditTool {
             if let Some(parent) = path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let (incoming_has_bom, new) = split_bom(&input.new);
-            tokio::fs::write(&path, encode_with_bom(new, incoming_has_bom)).await?;
-            ctx.formatter
+            let (incoming_has_bom, new) = utf8_bom::split(&input.new);
+            tokio::fs::write(&path, utf8_bom::encode(new, incoming_has_bom)).await?;
+            let formatted = ctx
+                .formatter
                 .format_file(&workdir, &path)
                 .await
                 .map_err(|error| ToolError::Other(error.to_string()))?;
+            if formatted {
+                utf8_bom::sync_file(&path, incoming_has_bom).await?;
+            }
             return Ok(success_result(true, 0, &path, &workdir, "", new));
         }
-        let (source_has_bom, content) = read_utf8_text(&path).await?;
+        let (source_has_bom, content) = utf8_bom::read_text(&path).await?;
         let replacement =
             edit_replace::replace(&content, &input.old, &input.new, input.replace_all)?;
-        let (incoming_has_bom, updated) = split_bom(&replacement.content);
-        tokio::fs::write(
-            &path,
-            encode_with_bom(updated, source_has_bom || incoming_has_bom),
-        )
-        .await?;
-        ctx.formatter
+        let (incoming_has_bom, updated) = utf8_bom::split(&replacement.content);
+        let desired_bom = source_has_bom || incoming_has_bom;
+        tokio::fs::write(&path, utf8_bom::encode(updated, desired_bom)).await?;
+        let formatted = ctx
+            .formatter
             .format_file(&workdir, &path)
             .await
             .map_err(|error| ToolError::Other(error.to_string()))?;
+        if formatted {
+            utf8_bom::sync_file(&path, desired_bom).await?;
+        }
         Ok(success_result(
             false,
             replacement.replaced,
@@ -172,32 +175,6 @@ fn change_line_count(text: &str) -> usize {
 fn relative_title(path: &Path, workdir: &Path) -> String {
     path.strip_prefix(workdir)
         .map_or_else(|_| display_path(path), display_path)
-}
-
-async fn read_utf8_text(path: &Path) -> Result<(bool, String), ToolError> {
-    let bytes = tokio::fs::read(path).await?;
-    let source_has_bom = bytes.starts_with(UTF8_BOM_BYTES);
-    let bytes = bytes.strip_prefix(UTF8_BOM_BYTES).unwrap_or(&bytes);
-    let text = std::str::from_utf8(bytes)
-        .map_err(|err| ToolError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, err)))?;
-    Ok((source_has_bom, text.to_string()))
-}
-
-fn split_bom(text: &str) -> (bool, &str) {
-    if text.starts_with(UTF8_BOM) {
-        return (true, &text[UTF8_BOM.len_utf8()..]);
-    }
-    (false, text)
-}
-
-fn encode_with_bom(text: &str, bom: bool) -> Vec<u8> {
-    let extra = if bom { UTF8_BOM_BYTES.len() } else { 0 };
-    let mut out = Vec::with_capacity(text.len() + extra);
-    if bom {
-        out.extend_from_slice(UTF8_BOM_BYTES);
-    }
-    out.extend_from_slice(text.as_bytes());
-    out
 }
 
 async fn assert_external_file(ctx: &ToolCtx, workdir: &Path, path: &Path) -> Result<(), ToolError> {
