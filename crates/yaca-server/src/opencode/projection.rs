@@ -121,11 +121,26 @@ pub(super) fn snapshot(
         .unwrap_or(0);
     let updated = envs.last().map(|env| env.ts_millis).unwrap_or(created);
     let info = session_info(session, projection, &meta, created, updated);
+    let message_context = super::message_projection::OpenCodeMessageContext::new(
+        projection.session.agent.as_ref().unwrap_or(&meta.agent),
+        projection.session.model.as_ref().unwrap_or(&meta.model),
+        projection
+            .session
+            .workdir
+            .as_deref()
+            .unwrap_or(&meta.workdir),
+        envs,
+    );
+    let mut parent = None;
     let messages = projection
         .session
         .messages
         .iter()
-        .map(|message| opencode_message(session, message))
+        .map(|message| {
+            let out = opencode_message(session, message, &message_context, parent);
+            parent = Some(message.id);
+            out
+        })
         .collect();
     Some(OpenCodeSessionSnapshot { info, messages })
 }
