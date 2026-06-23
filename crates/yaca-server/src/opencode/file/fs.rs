@@ -117,7 +117,7 @@ pub(super) async fn find(
     .into_iter()
     .filter_map(|path| fs_entry_for_path(&root, path))
     .collect::<Vec<_>>();
-    entries.truncate(limit.min(200));
+    entries.truncate(limit);
     Ok(Json(crate::opencode::location::response_at(
         &st, &location, entries,
     )))

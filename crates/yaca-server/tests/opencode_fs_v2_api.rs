@@ -131,6 +131,20 @@ async fn opencode_v2_fs_find_uses_opencode_default_limit() {
 }
 
 #[tokio::test]
+async fn opencode_v2_fs_find_accepts_unbounded_positive_limits() {
+    let workdir = tempdir();
+    for index in 0..205 {
+        std::fs::write(workdir.join(format!("match-{index:03}.txt")), "match\n").unwrap();
+    }
+    let app = router(state(workdir).await);
+
+    let (status, found) = get_json(app, "/api/fs/find?query=match&type=file&limit=205").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found["data"].as_array().unwrap().len(), 205);
+}
+
+#[tokio::test]
 async fn opencode_v2_fs_find_matches_fuzzy_file_queries() {
     let workdir = tempdir();
     std::fs::create_dir_all(workdir.join("src")).unwrap();
