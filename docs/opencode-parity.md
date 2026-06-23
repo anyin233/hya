@@ -2,13 +2,12 @@
 
 Last refreshed: 2026-06-22.
 
-OpenCode baseline: `sst/opencode` `origin/dev`
-`23fd5907be901c0b6727e7646823d4168d43389f`
-(`fix(opencode): normalize CLI test line endings`). The preceding generated
-API commit `49d3f8680285affe15b95c1bdd92faf4c9c68719` keeps the same OpenAPI
-path/method set as yaca's compatibility skeleton; its schema-only changes fix
-`plugin.added`/`reference.updated` event payload names and narrow the wording
-for session agent/model switching.
+OpenCode baseline: `anomalyco/opencode` `origin/dev`
+`975b1132f1bdfe24caa27e45100f27683cc7748a`
+(`refactor(plugin): use direct runtime registry`). Since
+`23fd5907be901c0b6727e7646823d4168d43389f`, upstream changed plugin/runtime
+registry internals but did not change the SDK OpenAPI path/method/schema
+surface used for this parity pass.
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
 session, abort, file, instance metadata, VCS, prompt_async, session switching,
