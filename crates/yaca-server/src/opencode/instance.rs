@@ -18,7 +18,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/command", get(command))
         .route("/agent", get(agent))
         .route("/skill", get(skill))
-        .route("/lsp", get(empty_array))
+        .route("/lsp", get(lsp))
         .route("/formatter", get(empty_array))
 }
 
@@ -136,6 +136,16 @@ async fn skill(
 
 async fn empty_array() -> Json<Vec<Value>> {
     Json(Vec::new())
+}
+
+async fn lsp(axum::extract::State(st): axum::extract::State<ServerState>) -> Json<Vec<Value>> {
+    Json(
+        st.engine
+            .lsp()
+            .status(&workdir(&st))
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 fn command_info(
