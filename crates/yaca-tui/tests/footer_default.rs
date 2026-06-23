@@ -130,6 +130,32 @@ fn footer_renders_project_mcp_without_app_version() {
 }
 
 #[test]
+fn footer_hides_mcp_segment_when_no_connectors_are_connected() {
+    // Given: OpenCode has MCP entries, but none are connected.
+    let mut state = AppState {
+        mcp: vec![ConnectorView {
+            name: "linear-server".to_string(),
+            state: ConnectorState::Failed("spawn failed".to_string()),
+        }],
+        ..AppState::default()
+    };
+
+    // When: the composer footer renders the connected-session status strip.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: OpenCode does not render a misleading 0 MCP footer segment.
+    assert!(
+        !bottom_row.contains("MCP"),
+        "footer should hide MCP when no connectors are connected, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("/status"),
+        "footer should keep the status command visible, got {bottom_row:?}"
+    );
+}
+
+#[test]
 fn footer_renders_lsp_status_like_opencode() {
     // Given: a narrow shell where the sidebar is hidden but LSP state is known.
     let mut state = AppState {

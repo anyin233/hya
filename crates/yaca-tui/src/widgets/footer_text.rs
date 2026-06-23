@@ -74,5 +74,8 @@ fn mcp_label(state: &AppState) -> Option<String> {
         .iter()
         .filter(|connector| matches!(connector.state, ConnectorState::Connected))
         .count();
+    if connected == 0 {
+        return None;
+    }
     Some(format!("⊙ {connected} MCP"))
 }
