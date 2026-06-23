@@ -1,13 +1,13 @@
 # OpenCode Parity Matrix
 
-Last refreshed: 2026-06-22.
+Last refreshed: 2026-06-23.
 
 OpenCode baseline: `anomalyco/opencode` `origin/dev`
-`975b1132f1bdfe24caa27e45100f27683cc7748a`
-(`refactor(plugin): use direct runtime registry`). Since
-`23fd5907be901c0b6727e7646823d4168d43389f`, upstream changed plugin/runtime
-registry internals but did not change the SDK OpenAPI path/method/schema
-surface used for this parity pass.
+`fbf889db83c83db8f4304279cdb5c0398efb5143`
+(`fix(tui): preserve worker rejection handling (#33448)`). Since
+`975b1132f1bdfe24caa27e45100f27683cc7748a`, upstream changed TUI worker
+rejection handling, location-aware autocomplete, and path formatting, but did
+not change the SDK OpenAPI path/method/schema surface used for this parity pass.
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
 session, abort, file, instance metadata, VCS, prompt_async, session switching,
