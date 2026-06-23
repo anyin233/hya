@@ -13,6 +13,35 @@ pub fn save_token_in(dir: &Path, provider: &str, token: &str) -> std::io::Result
     std::fs::write(dir.join(format!("{provider}.yaml")), body)
 }
 
+pub fn list_tokens_in(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut providers = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry?.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+                    continue;
+                }
+                if let Some(provider) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    providers.push(provider.to_string());
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    providers.sort();
+    Ok(providers)
+}
+
+pub fn remove_token_in(dir: &Path, provider: &str) -> std::io::Result<bool> {
+    match std::fs::remove_file(dir.join(format!("{provider}.yaml"))) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 #[must_use]
 pub fn load_token_in(dir: &Path, provider: &str) -> Option<String> {
     let content = std::fs::read_to_string(dir.join(format!("{provider}.yaml"))).ok()?;
@@ -66,6 +95,16 @@ pub fn save_token(provider: &str, token: &str) -> std::io::Result<()> {
     save_token_in(&dir, provider, token)
 }
 
+pub fn list_tokens() -> std::io::Result<Vec<String>> {
+    let dir = auth_dir().ok_or_else(|| std::io::Error::other("no config directory"))?;
+    list_tokens_in(&dir)
+}
+
+pub fn remove_token(provider: &str) -> std::io::Result<bool> {
+    let dir = auth_dir().ok_or_else(|| std::io::Error::other("no config directory"))?;
+    remove_token_in(&dir, provider)
+}
+
 #[must_use]
 pub fn load_token(provider: &str) -> Option<String> {
     load_token_in(&auth_dir()?, provider)
@@ -114,5 +153,22 @@ mod tests {
         let token = r#"sk-a:b"c\d e"#;
         save_token_in(&dir, "p", token).unwrap();
         assert_eq!(load_token_in(&dir, "p"), Some(token.to_string()));
+    }
+
+    #[test]
+    fn lists_and_removes_saved_tokens() {
+        let dir = tempdir();
+        save_token_in(&dir, "openai", "sk-openai").unwrap();
+        save_token_in(&dir, "anthropic", "sk-anthropic").unwrap();
+        std::fs::write(dir.join("notes.txt"), "ignore").unwrap();
+
+        assert_eq!(
+            list_tokens_in(&dir).unwrap(),
+            vec!["anthropic".to_string(), "openai".to_string()]
+        );
+        assert!(remove_token_in(&dir, "openai").unwrap());
+        assert_eq!(load_token_in(&dir, "openai"), None);
+        assert!(!remove_token_in(&dir, "missing").unwrap());
+        assert_eq!(list_tokens_in(&dir).unwrap(), vec!["anthropic".to_string()]);
     }
 }

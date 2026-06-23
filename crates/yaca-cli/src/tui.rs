@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_proto::{ModelRef, SessionId, now_millis};
+use yaca_proto::{AgentName, ModelRef, SessionId, now_millis};
 use yaca_provider::ReasoningEffort;
 use yaca_tool::{
     Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
@@ -74,6 +74,11 @@ fn action_label(action: ToolAction) -> String {
         ToolAction::Bash => "bash",
         ToolAction::Task => "task",
         ToolAction::Mcp => "mcp",
+        ToolAction::WebFetch => "webfetch",
+        ToolAction::WebSearch => "websearch",
+        ToolAction::TodoWrite => "todowrite",
+        ToolAction::Skill => "skill",
+        ToolAction::Lsp => "lsp",
         ToolAction::ExternalDirectory => "external-dir",
     }
     .to_string()
@@ -357,6 +362,7 @@ fn spawn_turn(
     agent: &AgentSpec,
     session: SessionId,
     prompt: String,
+    command: Option<(String, String)>,
     done_tx: &mpsc::UnboundedSender<()>,
     cancel: &CancellationToken,
 ) -> JoinHandle<()> {
@@ -367,7 +373,15 @@ fn spawn_turn(
     tokio::spawn(async move {
         let prompt = reference::expand_mentions(&agent.workdir, &prompt)
             .unwrap_or_else(|e| format!("{prompt}\n\n[reference expansion error: {e}]"));
-        if let Err(e) = engine.admit_user_prompt(session, prompt).await {
+        let admitted = match command {
+            Some((name, arguments)) => {
+                engine
+                    .admit_command_prompt(session, name, arguments, prompt)
+                    .await
+            }
+            None => engine.admit_user_prompt(session, prompt).await,
+        };
+        if let Err(e) = admitted {
             let _ = engine
                 .inject_system_message(session, format!("input error: {e}"))
                 .await;
@@ -448,7 +462,7 @@ pub async fn run(
     let mut events = EventStream::new();
     let mut current_turn: Option<JoinHandle<()>> = None;
     let mut pending: Option<oneshot::Sender<Decision>> = None;
-    let mut pending_question: Option<oneshot::Sender<QuestionAnswer>> = None;
+    let mut pending_question: Option<yaca_tool::QuestionReply> = None;
 
     terminal
         .draw(|f| yaca_tui::draw(f, &mut controller.app))
@@ -545,7 +559,9 @@ pub async fn run(
                                 turn_cancel.cancel();
                             }
                             TuiEffect::SelectModel(model) => {
-                                agent.model = ModelRef::new(model);
+                                let model = ModelRef::new(model);
+                                agent.model = model.clone();
+                                let _ = engine.switch_model(session, model).await;
                             }
                             TuiEffect::SelectReasoning(level) => {
                                 let message =
@@ -555,6 +571,9 @@ pub async fn run(
                             TuiEffect::SelectAgent(name) => {
                                 if let Some(profile) = agents::profile_by_name(&profiles, &name) {
                                     agents::apply_profile(&mut agent, &base_system_prompt, profile);
+                                    let _ = engine
+                                        .switch_agent(session, AgentName::new(&name))
+                                        .await;
                                     let _ = engine
                                         .inject_system_message(
                                             session,
@@ -659,13 +678,43 @@ pub async fn run(
                                 controller.app.running = true;
                                 turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(
-                                    &engine, &agent, session, prompt, &done_tx, &turn_cancel,
+                                    &engine,
+                                    &agent,
+                                    session,
+                                    prompt,
+                                    None,
+                                    &done_tx,
+                                    &turn_cancel,
+                                ));
+                            }
+                            TuiEffect::SubmitCommand {
+                                prompt,
+                                command,
+                                arguments,
+                            } => {
+                                let prompt = route_agent_mention(
+                                    &profiles,
+                                    &mut agent,
+                                    &base_system_prompt,
+                                    prompt,
+                                );
+                                controller.app.running = true;
+                                turn_cancel = CancellationToken::new();
+                                current_turn = Some(spawn_turn(
+                                    &engine,
+                                    &agent,
+                                    session,
+                                    prompt,
+                                    Some((command, arguments)),
+                                    &done_tx,
+                                    &turn_cancel,
                                 ));
                             }
                             TuiEffect::SubmitConfigured {
                                 prompt,
                                 agent: command_agent,
                                 model,
+                                command,
                             } => {
                                 if let Some(model) = model {
                                     agent.model = ModelRef::new(model);
@@ -689,7 +738,13 @@ pub async fn run(
                                 controller.app.running = true;
                                 turn_cancel = CancellationToken::new();
                                 current_turn = Some(spawn_turn(
-                                    &engine, &agent, session, prompt, &done_tx, &turn_cancel,
+                                    &engine,
+                                    &agent,
+                                    session,
+                                    prompt,
+                                    command,
+                                    &done_tx,
+                                    &turn_cancel,
                                 ));
                             }
                             TuiEffect::None => {}

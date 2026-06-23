@@ -1,6 +1,7 @@
+use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use yaca_proto::{
-    Event, FinishReason, Message, MessageId, Part, PartId, SessionId, ToolCallId, ToolName,
+    Event, FinishReason, Message, MessageId, Part, PartId, Role, SessionId, ToolCallId, ToolName,
 };
 
 use crate::wire::{tool_input, tool_result};
@@ -8,15 +9,23 @@ use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
 pub struct GoogleProtocol;
 
-fn parts_text(parts: &[Part]) -> String {
-    let mut s = String::new();
-    for p in parts {
-        if let Part::Text { text, .. } = p {
-            s.push_str(text);
-        }
-    }
-    s
-}
+const MEDIA_MIMES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "audio/wav",
+    "audio/mp3",
+    "audio/aiff",
+    "audio/aac",
+    "audio/ogg",
+    "audio/flac",
+];
+const MAX_MEDIA_ENCODED_BYTES: usize = 28 * 1024 * 1024;
+const MAX_MEDIA_DECODED_BYTES: usize = 20 * 1024 * 1024;
 
 fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
     let mut model_parts: Vec<Value> = Vec::new();
@@ -44,6 +53,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
                 }));
             }
             Part::Reasoning { .. } => {}
+            Part::Media { .. } => {}
         }
     }
     if !model_parts.is_empty() {
@@ -52,6 +62,75 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
     if !responses.is_empty() {
         out.push(json!({ "role": "user", "parts": responses }));
     }
+}
+
+fn user_parts(parts: &[Part]) -> Result<Vec<Value>, ProviderError> {
+    let mut out = Vec::new();
+    for part in parts {
+        match part {
+            Part::Text { text, .. } => {
+                if !text.is_empty() {
+                    out.push(json!({ "text": text }));
+                }
+            }
+            Part::Media {
+                media_type, data, ..
+            } => {
+                let (mime, base64) = validate_media(media_type, data)?;
+                out.push(json!({
+                    "inlineData": { "mimeType": mime, "data": base64 }
+                }));
+            }
+            Part::Reasoning { .. } | Part::Tool { .. } => {}
+        }
+    }
+    Ok(out)
+}
+
+fn validate_media(media_type: &str, data: &str) -> Result<(String, String), ProviderError> {
+    let mime = media_type.to_ascii_lowercase();
+    if !MEDIA_MIMES.contains(&mime.as_str()) {
+        return Err(ProviderError::Incompatible(format!(
+            "Google does not support media type {media_type}"
+        )));
+    }
+    let base64 = if let Some(url) = data.strip_prefix("data:") {
+        let (header, value) = url.split_once(',').ok_or_else(|| {
+            ProviderError::Incompatible(
+                "Google media data URL must contain valid base64".to_string(),
+            )
+        })?;
+        if header.to_ascii_lowercase() != format!("{mime};base64") {
+            return Err(ProviderError::Incompatible(format!(
+                "Google media type {media_type} does not match data URL type {header}"
+            )));
+        }
+        value
+    } else {
+        data
+    };
+    if base64.len() > MAX_MEDIA_ENCODED_BYTES {
+        return Err(ProviderError::Incompatible(format!(
+            "Google media exceeds the {MAX_MEDIA_ENCODED_BYTES} byte encoded limit"
+        )));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64)
+        .map_err(|_| {
+            ProviderError::Incompatible("Google media must contain valid base64".to_string())
+        })?;
+    if bytes.len() > MAX_MEDIA_DECODED_BYTES {
+        return Err(ProviderError::Incompatible(format!(
+            "Google media exceeds the {MAX_MEDIA_DECODED_BYTES} byte decoded limit"
+        )));
+    }
+    let canonical = base64::engine::general_purpose::STANDARD.encode(bytes);
+    if canonical != base64 {
+        return Err(ProviderError::Incompatible(
+            "Google media must contain canonical base64".to_string(),
+        ));
+    }
+    Ok((mime, canonical))
 }
 
 impl Protocol for GoogleProtocol {
@@ -67,7 +146,7 @@ impl Protocol for GoogleProtocol {
                     system_text.push_str(content);
                 }
                 Message::User { parts, .. } => {
-                    contents.push(json!({"role":"user","parts":[{"text": parts_text(parts)}]}));
+                    contents.push(json!({"role":"user","parts": user_parts(parts)?}));
                 }
                 Message::Assistant { parts, .. } => emit_assistant(&mut contents, parts),
             }
@@ -160,6 +239,7 @@ impl GoogleDecoder {
         out.push(Event::MessageFinished {
             session,
             message,
+            role: Role::Assistant,
             finish,
         });
         out

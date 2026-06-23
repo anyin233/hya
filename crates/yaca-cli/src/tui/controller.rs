@@ -13,10 +13,16 @@ pub enum TuiEffect {
     Exit,
     Interrupt,
     Submit(String),
+    SubmitCommand {
+        prompt: String,
+        command: String,
+        arguments: String,
+    },
     SubmitConfigured {
         prompt: String,
         agent: Option<String>,
         model: Option<String>,
+        command: Option<(String, String)>,
     },
     SelectModel(String),
     SelectAgent(String),
@@ -462,9 +468,14 @@ impl Controller {
                             prompt,
                             agent: custom.agent.clone(),
                             model: custom.model.clone(),
+                            command: Some((name.to_string(), arguments.to_string())),
                         }
                     } else {
-                        TuiEffect::Submit(prompt)
+                        TuiEffect::SubmitCommand {
+                            prompt,
+                            command: name.to_string(),
+                            arguments: arguments.to_string(),
+                        }
                     }
                 } else {
                     TuiEffect::SystemMessage(format!("unknown command /{name}; try /help"))
@@ -1207,7 +1218,11 @@ mod tests {
 
         assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
-            TuiEffect::Submit("Create Button in src/ui. Args: Button src/ui".to_string())
+            TuiEffect::SubmitCommand {
+                prompt: "Create Button in src/ui. Args: Button src/ui".to_string(),
+                command: "component".to_string(),
+                arguments: "Button src/ui".to_string(),
+            }
         );
     }
 
@@ -1230,6 +1245,7 @@ mod tests {
                 prompt: "Plan checkout flow".to_string(),
                 agent: Some("plan".to_string()),
                 model: Some("anthropic/claude-sonnet".to_string()),
+                command: Some(("planit".to_string(), "checkout flow".to_string())),
             }
         );
     }

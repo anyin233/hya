@@ -1,6 +1,8 @@
 //! `yaca-provider` — Provider/Protocol/Route abstraction normalizing every LLM
 //! into the canonical `yaca_proto::Event` stream (design.md §4, the keystone).
 
+use std::collections::BTreeMap;
+
 pub mod anthropic;
 pub mod dev;
 pub mod fake;
@@ -61,6 +63,13 @@ pub struct Capabilities {
     pub max_context: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderModel {
+    pub provider_id: String,
+    pub model_id: String,
+    pub capabilities: Capabilities,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReasoningEffort {
     Low,
@@ -116,12 +125,16 @@ pub struct CompletionRequest {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub reasoning: Option<ReasoningEffort>,
+    pub headers: BTreeMap<String, String>,
 }
 
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn id(&self) -> &str;
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>;
+    fn catalog(&self) -> Vec<ProviderModel> {
+        Vec::new()
+    }
     async fn stream(
         &self,
         req: CompletionRequest,

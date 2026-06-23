@@ -54,6 +54,8 @@ pub enum ToolPartState {
     Error {
         input: serde_json::Value,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
     },
 }
 
@@ -67,6 +69,13 @@ pub enum Part {
     Reasoning {
         id: PartId,
         text: String,
+    },
+    Media {
+        id: PartId,
+        media_type: String,
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
     },
     Tool {
         id: PartId,

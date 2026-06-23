@@ -10,6 +10,7 @@ pub mod ids;
 pub mod message;
 pub mod model;
 pub mod projection;
+pub mod workspace;
 
 pub use event::{Envelope, Event};
 pub use ids::{
@@ -19,6 +20,7 @@ pub use ids::{
 pub use message::{CostBreakdown, FinishReason, Message, Part, Role, TokenUsage, ToolPartState};
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{MessageProjection, PartProjection, Projection, SessionProjection};
+pub use workspace::WorkspaceAdapterInfo;
 
 /// Unix-epoch milliseconds. Used for `Envelope.ts_millis` and DB timestamps.
 #[must_use]

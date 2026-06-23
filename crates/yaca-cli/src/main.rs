@@ -6,10 +6,17 @@
 //! keys build real OpenAI/Anthropic/Google routes. With no usable config, an
 //! offline echo provider keeps the whole stack runnable.
 
+mod agent_cmd;
 mod auth;
+mod auth_cmd;
+mod cli_args;
 mod config;
+mod formatter_config;
+mod models_cmd;
 mod permission;
+mod plugins;
 mod rpc;
+mod serve;
 mod skills;
 mod tui;
 
@@ -19,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{
@@ -29,7 +36,6 @@ use yaca_core::{
 };
 use yaca_proto::{AgentName, MemberId, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
-use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{
     Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
@@ -37,83 +43,11 @@ use yaca_tool::{
 };
 
 use yaca_mcp::{McpManager, McpServerConfig};
+use yaca_plugin::config::PluginSpec;
+use yaca_plugin::{HostInfo, PermissionBridge, PluginHost};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
-
-#[derive(Parser)]
-#[command(
-    name = "yaca",
-    version,
-    about = "yaca — a multi-agent coding agent",
-    long_about = None
-)]
-struct Cli {
-    /// Headless goal mode: iterate the agent until an independent evaluator
-    /// reports the goal met, or the iteration cap trips.
-    #[arg(short = 'p', long = "prompt", value_name = "GOAL")]
-    prompt: Option<String>,
-    /// Iteration cap for `-p` goal mode.
-    #[arg(long, default_value_t = 6)]
-    max_iterations: u32,
-    /// Model id to use (overrides config `default_model` + `YACA_MODEL`).
-    #[arg(long, global = true, value_name = "MODEL")]
-    model: Option<String>,
-    /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
-    #[arg(long, global = true)]
-    yolo: bool,
-    /// SQLite database for the interactive TUI (empty = in-memory).
-    #[arg(long, default_value = "")]
-    db: String,
-    /// Resume an existing session id in the interactive TUI.
-    #[arg(long)]
-    resume: Option<String>,
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Run a single prompt headlessly and print the resulting transcript.
-    Exec {
-        /// The user prompt to send to the agent.
-        prompt: String,
-        /// Emit the event stream as JSONL instead of a rendered transcript.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Start the HTTP + SSE server.
-    Serve {
-        /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
-        #[arg(long, default_value = "127.0.0.1:8080")]
-        bind: String,
-        /// SQLite database path. Empty string uses an in-memory store.
-        #[arg(long, default_value = "")]
-        db: String,
-    },
-    /// Replay a session's event log from a database as JSON lines.
-    TailSession {
-        /// Session id (UUID).
-        id: String,
-        /// SQLite database path the session was written to.
-        #[arg(long)]
-        db: String,
-    },
-    /// Save an auth token for a provider id (used instead of an inline api_key).
-    Login {
-        /// Provider id as it appears in your yaca config.
-        provider: String,
-        /// The bearer/API token to store.
-        token: String,
-    },
-    /// List sessions stored in a database.
-    Sessions {
-        /// SQLite database path.
-        #[arg(long)]
-        db: String,
-    },
-    /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
-    Rpc,
-}
+use cli_args::{Cli, Command};
 
 fn today() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -206,21 +140,83 @@ fn spawn_team_supervisor(
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             let engine = engine.clone();
-            let specs: Vec<MemberSpec> = req
-                .members
-                .into_iter()
-                .map(|m| MemberSpec {
-                    id: MemberId::new(),
-                    agent: base.clone(),
-                    directive: m.prompt,
-                })
-                .collect();
+            let base = base.clone();
             tokio::spawn(async move {
-                let evidence = run_team(engine.clone(), req.parent, specs, req.cancel).await;
+                let parent = req.parent;
+                let members = req.members;
+                let cancel = req.cancel;
+                let background = req.background;
+                let mut reply = Some(req.reply);
+                let specs: Vec<MemberSpec> = if background {
+                    let mut specs = Vec::new();
+                    let mut started = Vec::new();
+                    for member in members {
+                        let id = MemberId::new();
+                        let session = match member
+                            .task_id
+                            .as_deref()
+                            .and_then(|task_id| task_id.parse::<SessionId>().ok())
+                        {
+                            Some(session) => session,
+                            None => {
+                                match engine
+                                    .create(CreateSession {
+                                        parent: Some(parent),
+                                        agent: base.name.clone(),
+                                        model: base.model.clone(),
+                                        workdir: base.workdir.to_string_lossy().into_owned(),
+                                    })
+                                    .await
+                                {
+                                    Ok(session) => session,
+                                    Err(err) => {
+                                        started.push(MemberOutcome {
+                                            member: id.to_string(),
+                                            session: "-".to_string(),
+                                            status: "failed".to_string(),
+                                            summary: err.to_string(),
+                                        });
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
+                        started.push(MemberOutcome {
+                            member: id.to_string(),
+                            session: session.to_string(),
+                            status: "running".to_string(),
+                            summary: "The task is working in the background.".to_string(),
+                        });
+                        specs.push(MemberSpec {
+                            id,
+                            agent: base.clone(),
+                            directive: member.prompt,
+                            session: Some(session),
+                        });
+                    }
+                    if let Some(reply) = reply.take() {
+                        let _ = reply.send(started);
+                    }
+                    specs
+                } else {
+                    members
+                        .into_iter()
+                        .map(|m| MemberSpec {
+                            id: MemberId::new(),
+                            agent: base.clone(),
+                            directive: m.prompt,
+                            session: m
+                                .task_id
+                                .as_deref()
+                                .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                        })
+                        .collect()
+                };
+                let evidence = run_team(engine.clone(), parent, specs, cancel).await;
                 let envelope = TeamEvidenceEnvelope {
                     members: evidence.clone(),
                 };
-                let _ = project_envelope(&engine, req.parent, &envelope).await;
+                let _ = project_envelope(&engine, parent, &envelope).await;
                 let outcomes: Vec<MemberOutcome> = evidence
                     .into_iter()
                     .map(|e| MemberOutcome {
@@ -233,7 +229,9 @@ fn spawn_team_supervisor(
                         summary: e.summary,
                     })
                     .collect();
-                let _ = req.reply.send(outcomes);
+                if !background && let Some(reply) = reply.take() {
+                    let _ = reply.send(outcomes);
+                }
             });
         }
     });
@@ -244,11 +242,13 @@ async fn build_session_engine(
     router: ProviderRouter,
     model: &str,
     mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
 ) -> (
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
     McpManager,
+    Arc<PluginHost>,
 ) {
     let router = Arc::new(router);
     let mut registry = ToolRegistry::builtins();
@@ -258,6 +258,12 @@ async fn build_session_engine(
             eprintln!("yaca: skipping MCP tool ({error})");
         }
     }
+    let plugin_host = Arc::new(PluginHost::connect_all(plugins, host_info()).await);
+    for tool in plugin_host.tools() {
+        if let Err(error) = registry.register(tool) {
+            eprintln!("yaca: skipping plugin tool ({error})");
+        }
+    }
     let tools = Arc::new(registry);
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -265,18 +271,34 @@ async fn build_session_engine(
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
     let (permission, asks) = PermissionPlane::new(rules);
+    let permission = if plugin_host.is_empty() {
+        permission
+    } else {
+        permission.with_interceptor(Arc::new(PermissionBridge::new(plugin_host.clone())))
+    };
     let (interaction, questions) = InteractionPlane::new();
     let (spawner, spawn_rx) = SpawnerPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
-    let engine = Arc::new(
+    let mut engine_builder =
         SessionEngine::new(store, router, tools, permission, EventBus::default())
             .with_compaction(summarizer, compaction_config())
+            .with_formatter(formatter_config::load_plane())
             .with_interaction(interaction)
-            .with_spawner(spawner),
-    );
+            .with_spawner(spawner);
+    if !plugin_host.is_empty() {
+        engine_builder = engine_builder.with_hooks(plugin_host.clone());
+    }
+    let engine = Arc::new(engine_builder);
     spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
-    (engine, asks, questions, mcp_manager)
+    (engine, asks, questions, mcp_manager, plugin_host)
+}
+
+fn host_info() -> HostInfo {
+    HostInfo {
+        name: "yaca".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
 }
 
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
@@ -302,6 +324,7 @@ struct RuntimeConfig {
     model: String,
     models: Vec<config::ModelEntry>,
     mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
 }
 
 /// Resolve a provider router + active model from yaca's config, falling back
@@ -327,6 +350,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: cfg.models,
                 mcp: cfg.mcp,
+                plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
             }
         }
         Ok(None) => {
@@ -336,6 +360,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
+                plugins: Vec::new(),
             }
         }
         Err(e) => {
@@ -346,6 +371,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
+                plugins: Vec::new(),
             }
         }
     }
@@ -373,8 +399,14 @@ async fn cmd_exec(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    )
+    .await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -417,8 +449,14 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    )
+    .await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -472,8 +510,14 @@ async fn cmd_goal(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
     let evaluator_router = runtime.router.clone();
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
+    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    )
+    .await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
     let session = engine
@@ -528,8 +572,14 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
+    let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        runtime.router,
+        &runtime.model,
+        runtime.mcp,
+        runtime.plugins,
+    )
+    .await;
     let agent = agent_with_model(&runtime.model);
     let session = match resume {
         Some(id) => {
@@ -562,45 +612,13 @@ async fn cmd_tui(
     .await
 }
 
-async fn cmd_serve(
-    bind: String,
-    db: String,
-    model_override: Option<String>,
-    yolo: bool,
-) -> anyhow::Result<()> {
-    let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
-        build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
-    let policy = if yolo {
-        eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
-        PermissionPolicy::Yolo
-    } else {
-        PermissionPolicy::ReadOnly
-    };
-    let _responder = spawn_auto_responder(asks, policy);
-    let state = AppState {
-        engine,
-        agent: Arc::new(agent_with_model(&runtime.model)),
-    };
-    let listener = tokio::net::TcpListener::bind(&bind)
-        .await
-        .with_context(|| format!("bind {bind}"))?;
-    let addr = listener.local_addr().context("read local addr")?;
-    println!("yaca server listening on http://{addr}");
-    axum::serve(listener, server_router(state))
-        .await
-        .context("serve http")?;
-    Ok(())
-}
-
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let uuid = uuid::Uuid::parse_str(&id).context("parse session id")?;
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _, _mcp_manager) =
-        build_session_engine(store, router, &model, BTreeMap::new()).await;
+    let (engine, _asks, _, _mcp_manager, _plugin_host) =
+        build_session_engine(store, router, &model, BTreeMap::new(), Vec::new()).await;
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
@@ -633,15 +651,10 @@ async fn cmd_sessions(db: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_login(provider: String, token: String) -> anyhow::Result<()> {
-    auth::save_token(&provider, &token).with_context(|| format!("save token for {provider}"))?;
-    println!("Saved auth token for provider '{provider}'.");
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    cli.validate().map_err(anyhow::Error::msg)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let db = cli.db.clone();
@@ -651,10 +664,40 @@ async fn main() -> anyhow::Result<()> {
     }
     match cli.command {
         None => cmd_tui(model, db, resume, yolo).await,
+        Some(Command::Run {
+            message,
+            format,
+            json,
+        }) => cmd_exec(message.join(" "), model, yolo, json || format == "json").await,
         Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, yolo, json).await,
-        Some(Command::Serve { bind, db }) => cmd_serve(bind, db, model, yolo).await,
+        Some(Command::Serve {
+            bind,
+            hostname,
+            port,
+            mdns,
+            db,
+            ..
+        }) => {
+            serve::cmd_serve(
+                cli_args::serve_bind(bind, hostname, port, mdns),
+                db,
+                model,
+                yolo,
+            )
+            .await
+        }
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
-        Some(Command::Login { provider, token }) => cmd_login(provider, token).await,
+        Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
+        Some(Command::Auth { command }) => auth_cmd::run(command).await,
+        Some(Command::Agent { command }) => agent_cmd::run(command),
+        Some(Command::Models {
+            provider,
+            verbose,
+            refresh,
+        }) => {
+            let runtime = resolve_runtime(model);
+            models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
+        }
         Some(Command::Sessions { db }) => cmd_sessions(db).await,
         Some(Command::Rpc) => cmd_rpc(model, yolo).await,
     }
