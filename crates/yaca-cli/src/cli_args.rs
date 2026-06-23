@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::agent_cmd::AgentCommand;
 use crate::auth_cmd::AuthCommand;
 
 #[derive(Parser)]
@@ -117,6 +118,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage agents.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     /// List configured models.
     Models {
         /// Provider id to filter models by.
@@ -149,11 +155,8 @@ pub(crate) fn serve_bind(
     }
     let (default_host, default_port) = bind.rsplit_once(':').unwrap_or((&bind, "8080"));
     let host = hostname.unwrap_or_else(|| {
-        if mdns {
-            "0.0.0.0".to_string()
-        } else {
-            default_host.to_string()
-        }
+        let host = if mdns { "0.0.0.0" } else { default_host };
+        host.to_string()
     });
     let port = port.map_or_else(|| default_port.to_string(), |port| port.to_string());
     format!("{host}:{port}")
@@ -167,10 +170,7 @@ mod tests {
     use super::Cli;
 
     fn parse<const N: usize>(args: [&str; N]) -> Cli {
-        match Cli::try_parse_from(args) {
-            Ok(cli) => cli,
-            Err(err) => panic!("{err}"),
-        }
+        Cli::try_parse_from(args).unwrap_or_else(|err| panic!("{err}"))
     }
 
     #[test]

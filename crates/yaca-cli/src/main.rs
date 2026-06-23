@@ -6,6 +6,7 @@
 //! keys build real OpenAI/Anthropic/Google routes. With no usable config, an
 //! offline echo provider keeps the whole stack runnable.
 
+mod agent_cmd;
 mod auth;
 mod auth_cmd;
 mod cli_args;
@@ -687,6 +688,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
+        Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Models {
             provider,
             verbose,
