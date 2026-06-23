@@ -37,14 +37,14 @@ fn question_panel_keeps_footer_blocker_status_visible() {
     let bottom_row = text.lines().last().unwrap_or_default();
 
     // Then: the question body is attached to the bottom footer and the
-    // statusline exposes the blocker instead of scrollback.
+    // statusline keeps OpenCode's session status strip instead of a question label.
     assert!(
         question_y >= footer_y.saturating_sub(10) && question_y < footer_y,
         "question prompt should render as a footer body, got row {question_y} of {footer_y}:\n{text}"
     );
     assert!(
-        bottom_row.contains("awaiting answer"),
-        "footer statusline should expose the question blocker, got {bottom_row:?} in:\n{text}"
+        bottom_row.contains("0 LSP") && bottom_row.contains("/status"),
+        "footer statusline should keep the OpenCode session status strip, got {bottom_row:?} in:\n{text}"
     );
     assert!(
         bottom_row.contains("ctrl+p commands"),
@@ -53,6 +53,10 @@ fn question_panel_keeps_footer_blocker_status_visible() {
     assert!(
         !bottom_row.contains("scroll 5"),
         "question blocker should take precedence over scrollback, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("awaiting answer"),
+        "OpenCode footer does not add a question blocker label, got {bottom_row:?}"
     );
 }
 

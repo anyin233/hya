@@ -9,7 +9,7 @@ pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
         return "△ 1 Permission".to_string();
     }
     if state.question.is_some() {
-        return "awaiting answer".to_string();
+        return default_footer_text(state, width);
     }
     if state.scroll_back > 0 {
         return format!(
