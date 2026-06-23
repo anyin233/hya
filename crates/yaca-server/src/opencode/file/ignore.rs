@@ -11,6 +11,7 @@ struct Rule {
     pattern: String,
     directory: bool,
     negated: bool,
+    anchored: bool,
 }
 
 impl IgnoreSet {
@@ -50,6 +51,9 @@ impl Rule {
     fn matches(&self, path: &str) -> bool {
         if self.directory {
             return path.starts_with(&self.pattern);
+        }
+        if self.anchored {
+            return pattern_matches(&self.pattern, path);
         }
         if self.pattern.contains('/') {
             return pattern_matches(&self.pattern, path);
@@ -93,11 +97,13 @@ fn parse_rule(line: &str) -> Option<Rule> {
     if trimmed.is_empty() {
         return None;
     }
+    let anchored = trimmed.starts_with('/');
     let directory = trimmed.ends_with('/');
     let pattern = trimmed.trim_start_matches('/').to_string();
     Some(Rule {
         pattern,
         directory,
         negated,
+        anchored,
     })
 }
