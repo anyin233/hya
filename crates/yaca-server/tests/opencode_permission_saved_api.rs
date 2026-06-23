@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -16,7 +17,43 @@ use yaca_tool::{Action, PermissionPlane, PermissionRules, Resource, ToolRegistry
 
 const WORKDIR: &str = "/tmp/yaca-opencode-permission-saved-api";
 
+fn temp_db() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir()
+        .join(format!(
+            "yaca-permission-saved-{nanos}-{}.db",
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
 async fn state() -> (
+    axum::Router,
+    PermissionPlane,
+    Arc<SessionEngine>,
+    Arc<AgentSpec>,
+) {
+    state_with_store(SessionStore::connect_memory().await.unwrap()).await
+}
+
+async fn state_at(
+    path: &str,
+) -> (
+    axum::Router,
+    PermissionPlane,
+    Arc<SessionEngine>,
+    Arc<AgentSpec>,
+) {
+    state_with_store(SessionStore::connect(path).await.unwrap()).await
+}
+
+async fn state_with_store(
+    store: SessionStore,
+) -> (
     axum::Router,
     PermissionPlane,
     Arc<SessionEngine>,
@@ -25,7 +62,6 @@ async fn state() -> (
     let (permission, permission_rx) = PermissionPlane::new(PermissionRules::default());
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
-    let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(SessionEngine::new(
         store,
         providers,
@@ -157,6 +193,57 @@ async fn opencode_permission_saved_lists_and_removes_always_reply() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, saved) = request(app, "GET", "/api/permission/saved".to_string(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["data"], json!([]));
+}
+
+#[tokio::test]
+async fn opencode_permission_saved_persists_across_restart() {
+    let db = temp_db();
+    let (app, permission, engine, agent) = state_at(&db).await;
+    let session = create_session(&engine, &agent).await;
+    let task_session = session.parse().unwrap();
+    let task = tokio::spawn(async move {
+        permission
+            .for_session(task_session)
+            .assert(Action::Bash, Resource::Command("pwd".to_string()))
+            .await
+    });
+
+    let request_id = wait_for_permission(app.clone(), &session).await;
+    let (status, _) = request(
+        app,
+        "POST",
+        format!("/api/session/{session}/permission/{request_id}/reply"),
+        Some(json!({"reply": "always"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    task.await.unwrap().unwrap();
+
+    let (reopened, _, _, _) = state_at(&db).await;
+    let (status, saved) = request(
+        reopened.clone(),
+        "GET",
+        "/api/permission/saved".to_string(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["data"][0]["action"], "bash");
+
+    let id = saved["data"][0]["id"].as_str().unwrap();
+    let (status, _) = request(
+        reopened,
+        "DELETE",
+        format!("/api/permission/saved/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (reopened, _, _, _) = state_at(&db).await;
+    let (status, saved) = request(reopened, "GET", "/api/permission/saved".to_string(), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["data"], json!([]));
 }

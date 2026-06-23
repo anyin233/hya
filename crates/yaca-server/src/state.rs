@@ -21,10 +21,11 @@ pub struct AppState {
 impl AppState {
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
+        let permission_requests = pending::PermissionRequests::new(engine.store().clone());
         Self {
             engine,
             agent,
-            permission_requests: Default::default(),
+            permission_requests,
             question_requests: Default::default(),
             mcp_manager: Default::default(),
             workspace_adapters: Vec::new(),
@@ -33,7 +34,8 @@ impl AppState {
 
     #[must_use]
     pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
-        self.permission_requests = pending::PermissionRequests::spawn(rx);
+        self.permission_requests =
+            pending::PermissionRequests::spawn(rx, self.engine.store().clone());
         self
     }
 

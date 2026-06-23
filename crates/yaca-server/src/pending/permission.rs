@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use serde::Serialize;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use yaca_proto::SessionId;
+use yaca_store::{SessionStore, StoreError};
 use yaca_tool::{Action, AskRequest, Decision, Resource};
 
-#[derive(Clone, Default)]
+use super::saved_permission::{SavedPermissions, action_name};
+
+#[derive(Clone)]
 pub(crate) struct PermissionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingPermission>>>,
-    saved: Arc<Mutex<BTreeMap<String, SavedPermissionInfo>>>,
+    saved: SavedPermissions,
 }
 
 struct PendingPermission {
@@ -19,7 +21,7 @@ struct PendingPermission {
     reply: oneshot::Sender<Decision>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub(crate) struct PermissionRequestView {
     id: String,
     #[serde(rename = "sessionID")]
@@ -37,19 +39,18 @@ pub(crate) enum PermissionReply {
     Reject,
 }
 
-#[derive(Clone, Serialize)]
-pub(crate) struct SavedPermissionInfo {
-    id: String,
-    #[serde(rename = "projectID")]
-    project_id: String,
-    action: String,
-    resource: String,
-}
-
 impl PermissionRequests {
     #[must_use]
-    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
-        let requests = Self::default();
+    pub(crate) fn new(store: SessionStore) -> Self {
+        Self {
+            inner: Arc::default(),
+            saved: SavedPermissions::new(store),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<AskRequest>, store: SessionStore) -> Self {
+        let requests = Self::new(store);
         let inner = requests.inner.clone();
         std::mem::drop(tokio::spawn(async move {
             while let Some(req) = rx.recv().await {
@@ -93,14 +94,14 @@ impl PermissionRequests {
         id: &str,
         reply: PermissionReply,
         message: Option<String>,
-    ) -> bool {
+    ) -> Result<bool, StoreError> {
         let (entry, related) = {
             let mut pending = self.inner.lock().await;
             let Some(entry) = pending.get(id) else {
-                return false;
+                return Ok(false);
             };
             if entry.session != Some(session) {
-                return false;
+                return Ok(false);
             }
             let action = entry.action;
             let entry = pending.remove(id);
@@ -112,17 +113,17 @@ impl PermissionRequests {
             (entry, related)
         };
         let Some(entry) = entry else {
-            return false;
+            return Ok(false);
         };
         let save_action = entry.action;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.remember_saved(id, save_action).await;
+            self.saved.remember(id, save_action).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
         }
-        ok
+        Ok(ok)
     }
 
     pub(crate) async fn reply_any(
@@ -130,11 +131,11 @@ impl PermissionRequests {
         id: &str,
         reply: PermissionReply,
         message: Option<String>,
-    ) -> bool {
+    ) -> Result<bool, StoreError> {
         let (entry, related) = {
             let mut pending = self.inner.lock().await;
             let Some(entry) = pending.get(id) else {
-                return false;
+                return Ok(false);
             };
             let action = entry.action;
             let session = entry.session;
@@ -151,51 +152,28 @@ impl PermissionRequests {
             (entry, related)
         };
         let Some(entry) = entry else {
-            return false;
+            return Ok(false);
         };
         let save_action = entry.action;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.remember_saved(id, save_action).await;
+            self.saved.remember(id, save_action).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
         }
-        ok
+        Ok(ok)
     }
 
-    pub(crate) async fn list_saved(&self, project_id: Option<&str>) -> Vec<SavedPermissionInfo> {
-        self.saved
-            .lock()
-            .await
-            .values()
-            .filter(|entry| project_id.is_none_or(|project_id| entry.project_id == project_id))
-            .cloned()
-            .collect()
+    pub(crate) async fn list_saved(
+        &self,
+        project_id: Option<&str>,
+    ) -> Result<Vec<super::SavedPermissionInfo>, StoreError> {
+        self.saved.list(project_id).await
     }
 
-    pub(crate) async fn remove_saved(&self, id: &str) {
-        self.saved.lock().await.remove(id);
-    }
-
-    async fn remember_saved(&self, request_id: &str, action: Action) {
-        let action = action_name(action);
-        let mut saved = self.saved.lock().await;
-        if saved.values().any(|entry| {
-            entry.project_id == "global" && entry.action == action && entry.resource == "*"
-        }) {
-            return;
-        }
-        let id = format!("psv_{request_id}");
-        saved.insert(
-            id.clone(),
-            SavedPermissionInfo {
-                id,
-                project_id: "global".to_string(),
-                action,
-                resource: "*".to_string(),
-            },
-        );
+    pub(crate) async fn remove_saved(&self, id: &str) -> Result<(), StoreError> {
+        self.saved.remove(id).await
     }
 }
 
@@ -240,11 +218,4 @@ fn related_decision(reply: PermissionReply) -> Decision {
         PermissionReply::Always => Decision::AllowAlways,
         PermissionReply::Reject => Decision::Reject { feedback: None },
     }
-}
-
-fn action_name(action: Action) -> String {
-    serde_json::to_value(action)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_string())
 }

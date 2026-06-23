@@ -88,6 +88,12 @@ impl From<yaca_core::CoreError> for ApiError {
     }
 }
 
+impl From<yaca_store::StoreError> for ApiError {
+    fn from(e: yaca_store::StoreError) -> Self {
+        Self::internal(e.to_string())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.status, self.message).into_response()
