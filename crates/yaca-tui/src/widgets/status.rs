@@ -15,12 +15,12 @@ pub fn render_runtime_status(frame: &mut Frame, area: Rect, state: &AppState, th
         return;
     }
     frame.render_widget(
-        Paragraph::new(runtime_status_line(state, theme)).style(theme.base()),
+        Paragraph::new(runtime_status_line(state, theme, area.width)).style(theme.base()),
         area,
     );
 }
 
-fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
+fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {
     let model = if state.model.is_empty() {
         "offline"
     } else {
@@ -71,16 +71,38 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
             Span::styled("branch", Style::default().fg(theme.muted)),
         ]);
     } else if show_home_hint(state) {
-        spans.extend([
-            Span::styled("   ", Style::default().fg(theme.muted)),
-            Span::styled(
-                "Show keyboard shortcuts with ",
-                Style::default().fg(theme.muted),
-            ),
-            Span::styled("ctrl+p", Style::default().fg(theme.text)),
-        ]);
+        if show_no_model_tip(state) {
+            spans.extend([
+                Span::styled("   ", Style::default().fg(theme.muted)),
+                Span::styled("● Tip ", Style::default().fg(theme.warning)),
+                Span::styled("Run ", Style::default().fg(theme.muted)),
+                Span::styled("/connect", Style::default().fg(theme.text)),
+                Span::styled(no_model_tip_suffix(width), Style::default().fg(theme.muted)),
+            ]);
+        } else {
+            spans.extend([
+                Span::styled("   ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    "Show keyboard shortcuts with ",
+                    Style::default().fg(theme.muted),
+                ),
+                Span::styled("ctrl+p", Style::default().fg(theme.text)),
+            ]);
+        }
     }
     Line::from(spans)
+}
+
+fn show_no_model_tip(state: &AppState) -> bool {
+    state.model_provider_label.is_none() && state.model.is_empty()
+}
+
+const fn no_model_tip_suffix(width: u16) -> &'static str {
+    if width <= 80 {
+        " to start coding"
+    } else {
+        " to add an AI provider and start coding"
+    }
 }
 
 fn show_home_hint(state: &AppState) -> bool {

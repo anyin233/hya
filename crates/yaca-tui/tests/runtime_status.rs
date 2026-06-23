@@ -114,6 +114,42 @@ fn runtime_status_shows_which_key_home_hint_on_empty_home() {
 }
 
 #[test]
+fn runtime_status_shows_opencode_no_model_tip_on_empty_home() {
+    // Given: an idle empty home screen before a provider-backed model is connected.
+    let mut state = AppState::default();
+
+    // When: the home-bottom runtime strip renders.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "/connect");
+
+    // Then: it mirrors OpenCode's no-model home tip.
+    assert!(
+        status_row.contains("Tip Run /connect to add an AI provider and start coding"),
+        "runtime strip should expose OpenCode's no-model tip, got {status_row:?}"
+    );
+}
+
+#[test]
+fn runtime_status_compacts_no_model_tip_at_eighty_columns() {
+    // Given: the no-model home tip renders in a narrow terminal.
+    let mut state = AppState::default();
+
+    // When: the home-bottom runtime strip renders.
+    let buffer = render_buffer(&mut state, 80, 16);
+    let status_row = find_row(&buffer, 80, 16, "/connect");
+
+    // Then: the message fits instead of being clipped mid-word.
+    assert!(
+        status_row.contains("Tip Run /connect to start coding"),
+        "narrow no-model tip should use complete compact copy, got {status_row:?}"
+    );
+    assert!(
+        !status_row.contains("add an AI provider"),
+        "narrow no-model tip should not use the wide copy, got {status_row:?}"
+    );
+}
+
+#[test]
 fn runtime_status_shows_subagent_view_hint_while_running() {
     // Given: a running shell is streaming a turn.
     let mut state = AppState {
