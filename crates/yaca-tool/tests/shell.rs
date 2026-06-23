@@ -51,13 +51,16 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
 }
 
 #[tokio::test]
-async fn shell_runs_in_open_code_workdir_and_returns_description_metadata() {
+async fn shell_runs_in_open_code_workdir_and_uses_command_metadata() {
     // Given
     let dir = tempdir();
     let subdir = dir.join("subdir");
     tokio::fs::create_dir_all(&subdir).await.unwrap();
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir.clone());
     let tool = ToolRegistry::builtins().get("shell").unwrap();
+    let schema = tool.schema();
+    let properties = schema.input_schema["properties"].as_object().unwrap();
+    assert!(!properties.contains_key("description"));
 
     // When
     let out = tool
@@ -65,7 +68,6 @@ async fn shell_runs_in_open_code_workdir_and_returns_description_metadata() {
             &ctx,
             json!({
                 "command": "pwd",
-                "description": "Prints working directory",
                 "workdir": "subdir",
                 "timeout": 1000
             }),
@@ -74,8 +76,8 @@ async fn shell_runs_in_open_code_workdir_and_returns_description_metadata() {
         .unwrap();
 
     // Then
-    assert_eq!(out["title"], "Prints working directory");
-    assert_eq!(out["metadata"]["description"], "Prints working directory");
+    assert_eq!(out["title"], "pwd");
+    assert!(out["metadata"].get("description").is_none());
     assert_eq!(out["metadata"]["exit"], 0);
     assert_eq!(out["metadata"]["truncated"], false);
     assert_eq!(out["exit_code"], 0);
@@ -127,7 +129,6 @@ async fn shell_times_out_and_reports_shell_metadata() {
             &ctx,
             json!({
                 "command": "sleep 1",
-                "description": "Sleeps too long",
                 "timeout": 50
             }),
         )
@@ -135,7 +136,7 @@ async fn shell_times_out_and_reports_shell_metadata() {
         .unwrap();
 
     // Then
-    assert_eq!(out["title"], "Sleeps too long");
+    assert_eq!(out["title"], "sleep 1");
     assert_eq!(out["metadata"]["exit"], json!(null));
     assert!(out["output"].as_str().unwrap().contains("<shell_metadata>"));
     assert!(
@@ -155,10 +156,7 @@ async fn shell_checks_bash_permission_before_running() {
 
     // When
     let result = tool
-        .execute(
-            &ctx,
-            json!({ "command": "echo blocked", "description": "Prints blocked" }),
-        )
+        .execute(&ctx, json!({ "command": "echo blocked" }))
         .await;
 
     // Then
@@ -179,7 +177,6 @@ async fn shell_saves_full_output_when_truncated() {
             &ctx,
             json!({
                 "command": command,
-                "description": "Print large output",
                 "timeout": 1000
             }),
         )
@@ -219,7 +216,6 @@ async fn shell_requires_external_directory_permission_for_outside_workdir() {
             &ctx,
             json!({
                 "command": "pwd",
-                "description": "Print outside directory",
                 "workdir": outside.to_string_lossy()
             }),
         )

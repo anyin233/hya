@@ -28,8 +28,6 @@ enum ShellWait {
 struct ShellInput {
     command: String,
     #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
     timeout: Option<u64>,
     #[serde(default)]
     workdir: Option<String>,
@@ -53,7 +51,6 @@ impl Tool for ShellTool {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string" },
-                    "description": { "type": "string" },
                     "timeout": { "type": "integer", "minimum": 1 },
                     "workdir": { "type": "string" },
                     "env": {
@@ -75,7 +72,6 @@ impl Tool for ShellTool {
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         let ShellInput {
             command,
-            description,
             timeout,
             workdir,
             env,
@@ -87,7 +83,6 @@ impl Tool for ShellTool {
         let cwd = cwd(ctx, workdir.as_deref());
         assert_external_workdir(ctx, &cwd).await?;
         let timeout_ms = timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
-        let description = description.unwrap_or_else(|| command.clone());
         let mut child = {
             let mut proc = tokio::process::Command::new("sh");
             proc.arg("-c")
@@ -163,7 +158,6 @@ impl Tool for ShellTool {
         let mut metadata = Map::from_iter([
             ("output".to_string(), json!(truncate(&raw_output))),
             ("exit".to_string(), json!(status_code)),
-            ("description".to_string(), json!(description.clone())),
             ("truncated".to_string(), json!(truncated)),
         ]);
         if let Some(output_path) = output_path {
@@ -174,7 +168,7 @@ impl Tool for ShellTool {
             "stdout": truncate(&stdout),
             "stderr": truncate(&stderr),
             "exit_code": status_code,
-            "title": description,
+            "title": command,
             "output": output,
             "metadata": metadata,
         }))

@@ -3,11 +3,11 @@
 Last refreshed: 2026-06-23.
 
 OpenCode baseline: `anomalyco/opencode` `origin/dev`
-`fbf889db83c83db8f4304279cdb5c0398efb5143`
-(`fix(tui): preserve worker rejection handling (#33448)`). Since
-`975b1132f1bdfe24caa27e45100f27683cc7748a`, upstream changed TUI worker
-rejection handling, location-aware autocomplete, and path formatting, but did
-not change the SDK OpenAPI path/method/schema surface used for this parity pass.
+`237595e2421473b871f613de87e5588d8aa8acae`
+(`chore: generate`). Since
+`fbf889db83c83db8f4304279cdb5c0398efb5143`, upstream removed the model-authored
+Bash/shell `description` input and regenerated docs, but did not change the HTTP
+path/method surface used for this parity pass.
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
 session, abort, file, instance metadata, VCS, prompt_async, session switching,
@@ -33,7 +33,7 @@ legacy read/delete/command/init/prompt_async/summarize/diff/permission/shell/mes
 HTTP route increments, basic provider auth list/logout CLI support, plus
 empty-backend v2 credential/integration mutation route compatibility, and
 top-level OpenCode `--mini` CLI aliasing to yaca's default TUI, basic
-OpenCode-compatible `run [message..]` plus `--format json` CLI aliasing for yaca's headless prompt execution, basic `models [provider]` listing over yaca's configured catalog, `providers` as an alias for yaca's auth token list/logout commands, accepted OpenCode global `--print-logs`/`--log-level`/`--pure` flags, and OpenCode-compatible `serve --hostname`/`--port` binding aliases plus accepted `--cors`/`--mdns` flags. Session-selected
+OpenCode-compatible `run [message..]` plus `--format json` CLI aliasing for yaca's headless prompt execution, basic `models [provider]` listing over yaca's configured catalog, `providers` as an alias for yaca's auth token list/logout commands, accepted OpenCode global `--print-logs`/`--log-level`/`--pure` flags, current OpenCode shell tool behavior without model-authored `description`, and OpenCode-compatible `serve --hostname`/`--port` binding aliases plus accepted `--cors`/`--mdns` flags. Session-selected
 models are recorded without catalog validation and used when constructing the
 next provider request. V2 prompt admission preserves OpenCode `files` and
 `agents` prompt attachment metadata through v2 context/message reads, and file
@@ -58,7 +58,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Core turn loop | Implemented | `SessionEngine::run_turn` supports multi-round tool calls, cancellation, compaction, provider streaming, and event projection. |
 | Direct shell execution | Implemented | `SessionEngine::run_shell`, native `POST /sessions/:id/shell`, and OpenCode legacy/v2 session shell routes execute the real shell tool and record a synthetic user message plus assistant tool result. |
 | Run status and abort | Partial | Server routes now maintain per-session run tokens, expose OpenCode-shaped `GET /session/status`, and support `POST /session/:sessionID/abort`; shell cancellation kills the spawned Unix process group. |
-| Core tools | Mostly implemented | Builtins include `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `shell`, `question`, `lsp`, `skill`, `task`, plus `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit` aliases matching OpenCode names. |
+| Core tools | Mostly implemented | Builtins include `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `shell`, `question`, `lsp`, `skill`, `task`, plus `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit` aliases matching OpenCode names. Shell now follows current OpenCode command-titled output and no longer exposes or records a model-authored `description`. |
 | Permission system | Native superset | yaca has explicit `PermissionPlane`, rules, child-session derivation, TUI approval, headless scoped/read-only/yolo policies, and OpenCode plugin permission hook mapping. |
 | Project context | Implemented | CLI discovers `AGENTS.md`, builds an environment/context system prompt, and includes available skills. |
 | Skills | Implemented substrate | `.yaca/skills` and `~/.config/yaca/skills` discovery plus `skill` tool loading are present; v2 `/api/skill` returns OpenCode-shaped location-wrapped skill metadata for local skills. |
