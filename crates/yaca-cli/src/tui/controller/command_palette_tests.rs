@@ -252,3 +252,44 @@ fn ctrl_p_palette_prepends_suggested_commands_with_category() {
         regular_model.1
     );
 }
+
+#[test]
+fn think_dialog_marks_max_effort_current_when_selected() {
+    // Given
+    let mut controller = Controller::new(AppState {
+        reasoning_effort: Some("max".to_string()),
+        ..AppState::default()
+    });
+
+    // When
+    type_text(&mut controller, "/think");
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+    // Then
+    let dialog = controller.app.dialog.as_ref().expect("think dialog");
+    let labels = dialog
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["off", "low", "medium", "high", "max"]);
+    assert_eq!(dialog.selected, 4);
+    assert_eq!(dialog.items[4].detail, "current");
+}
+
+#[test]
+fn think_dialog_enter_selects_max_effort() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+    type_text(&mut controller, "/think");
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+    // When
+    for _ in 0..4 {
+        assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+    }
+    let effect = controller.handle_key(key(KeyCode::Enter));
+
+    // Then
+    assert_eq!(effect, TuiEffect::SelectReasoning("max".to_string()));
+}

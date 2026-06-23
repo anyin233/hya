@@ -66,6 +66,7 @@ pub enum ReasoningEffort {
     Low,
     Medium,
     High,
+    Max,
 }
 
 impl ReasoningEffort {
@@ -75,6 +76,7 @@ impl ReasoningEffort {
             "low" => Some(Self::Low),
             "medium" | "med" => Some(Self::Medium),
             "high" => Some(Self::High),
+            "max" => Some(Self::Max),
             _ => None,
         }
     }
@@ -85,6 +87,17 @@ impl ReasoningEffort {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+
+    #[must_use]
+    pub fn openai_effort(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Max => "xhigh",
         }
     }
 
@@ -94,6 +107,7 @@ impl ReasoningEffort {
             Self::Low => 1024,
             Self::Medium => 4096,
             Self::High => 16384,
+            Self::Max => 32768,
         }
     }
 
@@ -103,6 +117,7 @@ impl ReasoningEffort {
             Self::Low => 1024,
             Self::Medium => 8192,
             Self::High => 24576,
+            Self::Max => 32768,
         }
     }
 }
@@ -138,4 +153,22 @@ pub trait Protocol: Send + Sync {
 pub trait Decoder: Send {
     fn push(&mut self, data: &str) -> Result<Vec<Event>, ProviderError>;
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReasoningEffort;
+
+    #[test]
+    fn reasoning_effort_parses_max_when_requested() {
+        // Given
+        let requested = "max";
+
+        // When
+        let effort = ReasoningEffort::parse(requested);
+
+        // Then
+        assert_eq!(effort, Some(ReasoningEffort::Max));
+        assert_eq!(effort.map(ReasoningEffort::as_str), Some("max"));
+    }
 }

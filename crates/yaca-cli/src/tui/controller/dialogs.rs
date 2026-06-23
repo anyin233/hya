@@ -122,7 +122,7 @@ impl Controller {
                             TuiEffect::SelectAgent(agent.label.clone())
                         })
                         .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::Think) => ["off", "low", "medium", "high"]
+                    Some(DialogMode::Think) => ["off", "low", "medium", "high", "max"]
                         .get(selected)
                         .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
                         .unwrap_or(TuiEffect::None),

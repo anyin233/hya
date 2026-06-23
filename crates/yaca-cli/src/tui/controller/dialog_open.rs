@@ -173,7 +173,7 @@ impl Controller {
 
     pub(super) fn open_think_dialog(&mut self) {
         let current = self.app.reasoning_effort.as_deref().unwrap_or("off");
-        let items = ["off", "low", "medium", "high"]
+        let items = ["off", "low", "medium", "high", "max"]
             .iter()
             .map(|level| DialogItem {
                 label: (*level).to_string(),

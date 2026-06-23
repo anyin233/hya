@@ -284,7 +284,7 @@ fn apply_reasoning(agent: &mut AgentSpec, app: &mut AppState, level: &str) -> St
         app.reasoning_effort = Some(effort.as_str().to_string());
         return format!("thinking effort: {}", effort.as_str());
     }
-    format!("unknown thinking effort '{level}' (use low|medium|high|off)")
+    format!("unknown thinking effort '{level}' (use low|medium|high|max|off)")
 }
 
 fn spawn_turn(

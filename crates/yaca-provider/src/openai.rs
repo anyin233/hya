@@ -56,7 +56,7 @@ impl Protocol for OpenAiChatProtocol {
             body["max_tokens"] = json!(m);
         }
         if let Some(effort) = req.reasoning {
-            body["reasoning_effort"] = json!(effort.as_str());
+            body["reasoning_effort"] = json!(effort.openai_effort());
         }
         Ok(body)
     }
