@@ -72,3 +72,63 @@ async fn opencode_sync_replay_accepts_non_empty_event_history() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["sessionID"], "ses_00000000000000000000000000000000");
 }
+
+#[tokio::test]
+async fn opencode_sync_replay_rejects_mixed_aggregates() {
+    let (status, _body) = post_json(
+        router(state().await),
+        "/sync/replay",
+        json!({
+            "directory": "/tmp/yaca-opencode-sync-replay-api",
+            "events": [
+                {
+                    "id": "evt_00000000000000000000000000",
+                    "aggregateID": "ses_00000000000000000000000000000000",
+                    "seq": 0,
+                    "type": "session.updated",
+                    "data": {}
+                },
+                {
+                    "id": "evt_00000000000000000000000001",
+                    "aggregateID": "ses_11111111111111111111111111111111",
+                    "seq": 1,
+                    "type": "session.updated",
+                    "data": {}
+                }
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn opencode_sync_replay_rejects_non_contiguous_sequences() {
+    let (status, _body) = post_json(
+        router(state().await),
+        "/sync/replay",
+        json!({
+            "directory": "/tmp/yaca-opencode-sync-replay-api",
+            "events": [
+                {
+                    "id": "evt_00000000000000000000000000",
+                    "aggregateID": "ses_00000000000000000000000000000000",
+                    "seq": 10,
+                    "type": "session.updated",
+                    "data": {}
+                },
+                {
+                    "id": "evt_00000000000000000000000001",
+                    "aggregateID": "ses_00000000000000000000000000000000",
+                    "seq": 12,
+                    "type": "session.updated",
+                    "data": {}
+                }
+            ]
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

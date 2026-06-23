@@ -37,6 +37,41 @@ pub(super) async fn history(
     Ok(Json(out))
 }
 
+pub(super) async fn replay(Json(payload): Json<Value>) -> Result<Json<Value>, ApiError> {
+    if payload.get("directory").and_then(Value::as_str).is_none() {
+        return Err(ApiError::bad_request("sync replay missing directory"));
+    }
+    let Some(events) = payload.get("events").and_then(Value::as_array) else {
+        return Err(ApiError::bad_request("sync replay requires events"));
+    };
+    let Some(first) = events.first() else {
+        return Err(ApiError::bad_request("sync replay requires events"));
+    };
+    let Some(session_id) = first.get("aggregateID").and_then(Value::as_str) else {
+        return Err(ApiError::bad_request(
+            "sync replay event missing aggregateID",
+        ));
+    };
+    let start = first
+        .get("seq")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ApiError::bad_request("sync replay event missing seq"))?;
+    for (index, event) in events.iter().enumerate() {
+        if event.get("aggregateID").and_then(Value::as_str) != Some(session_id) {
+            return Err(ApiError::bad_request(
+                "sync replay events must belong to the same aggregate",
+            ));
+        }
+        let expected = start + u64::try_from(index).unwrap_or(u64::MAX);
+        if event.get("seq").and_then(Value::as_u64) != Some(expected) {
+            return Err(ApiError::bad_request(format!(
+                "sync replay sequence mismatch at index {index}: expected {expected}"
+            )));
+        }
+    }
+    Ok(Json(json!({ "sessionID": session_id })))
+}
+
 pub(super) async fn steal(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
