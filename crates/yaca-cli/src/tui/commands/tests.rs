@@ -15,6 +15,7 @@ fn resolves_slash_commands_and_aliases() {
     assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
     assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
+    assert_eq!(resolve_slash("status"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
     assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
     assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
@@ -36,6 +37,7 @@ fn help_items_come_from_registered_commands() {
     assert!(items.iter().any(|item| item.label == "/resume"));
     assert!(items.iter().any(|item| item.label == "/new"));
     assert!(items.iter().any(|item| item.label == "/export"));
+    assert!(items.iter().any(|item| item.label == "/status"));
     assert!(items.iter().any(|item| item.label == "/quit"));
     assert!(items.iter().any(|item| item.label == "/help"));
 }
@@ -55,6 +57,20 @@ fn status_commands_advertise_opencode_leader_shortcut() {
 
     assert!(matches!(tools_detail, Some(detail) if detail.starts_with("MCP · leader s")));
     assert!(matches!(mcp_detail, Some(detail) if detail.starts_with("MCP · leader s")));
+}
+
+#[test]
+fn status_command_matches_opencode_system_command() {
+    let items = help_items();
+
+    let status_detail = items
+        .iter()
+        .find(|item| item.label == "/status")
+        .map(|item| item.detail.as_str());
+
+    assert!(
+        matches!(status_detail, Some(detail) if detail.starts_with("System · leader s · View status"))
+    );
 }
 
 #[test]

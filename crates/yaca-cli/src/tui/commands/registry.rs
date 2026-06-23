@@ -148,6 +148,15 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         suggested: false,
     },
     CommandSpec {
+        name: "status",
+        aliases: &[],
+        description: "View status",
+        key_hint: "leader s",
+        kind: CommandKind::Tools,
+        category: CommandCategory::System,
+        suggested: false,
+    },
+    CommandSpec {
         name: "quit",
         aliases: &["exit", "q"],
         description: "Exit yaca",

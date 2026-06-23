@@ -17,6 +17,15 @@ fn arm_leader(controller: &mut Controller) {
     assert_eq!(controller.handle_key(ctrl('x')), TuiEffect::None);
 }
 
+fn type_text(controller: &mut Controller, text: &str) {
+    for ch in text.chars() {
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Char(ch))),
+            TuiEffect::None
+        );
+    }
+}
+
 #[test]
 fn ctrl_x_then_m_opens_model_dialog() {
     // Given
@@ -114,6 +123,23 @@ fn ctrl_x_then_s_opens_status_dialog() {
     // When
     arm_leader(&mut controller);
     let effect = controller.handle_key(key(KeyCode::Char('s')));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("status dialog").title,
+        "tools"
+    );
+}
+
+#[test]
+fn slash_status_opens_status_dialog() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+
+    // When
+    type_text(&mut controller, "/status");
+    let effect = controller.handle_key(key(KeyCode::Enter));
 
     // Then
     assert_eq!(effect, TuiEffect::None);
