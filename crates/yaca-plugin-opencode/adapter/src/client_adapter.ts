@@ -81,6 +81,10 @@ export type OpenCodeClientAdapter = {
   readonly config: {
     readonly get: () => Promise<OpenCodeClientResponse<Readonly<Record<string, unknown>>>>
   }
+  readonly auth: {
+    readonly set: (options: unknown) => Promise<OpenCodeClientResponse<boolean>>
+    readonly remove: (options: unknown) => Promise<OpenCodeClientResponse<boolean>>
+  }
   readonly path: {
     readonly get: () => Promise<OpenCodeClientResponse<OpenCodePath>>
   }
@@ -128,6 +132,10 @@ export function createOpenCodeClientAdapter(
     config: {
       get: async () => ok({}),
     },
+    auth: {
+      set: async () => badRequest("auth mutation is unavailable in the adapter"),
+      remove: async () => badRequest("auth mutation is unavailable in the adapter"),
+    },
     path: {
       get: async () => ok(pathInfo(context)),
     },
@@ -157,19 +165,23 @@ function ok<T>(data: T): OpenCodeClientResponse<T> {
   }
 }
 
+function badRequest<T>(message: string): OpenCodeClientResponse<T> {
+  return {
+    error: {
+      name: "BadRequest",
+      data: { message, kind: "Body" },
+    },
+    response: new Response(null, { status: 400 }),
+  }
+}
+
 async function appLog(
   stderr: TextSink,
   options: unknown,
 ): Promise<OpenCodeClientResponse<boolean>> {
   const parsed = AppLogOptionsSchema.safeParse(options)
   if (!parsed.success) {
-    return {
-      error: {
-        name: "BadRequest",
-        data: { message: parsed.error.message, kind: "Body" },
-      },
-      response: new Response(null, { status: 400 }),
-    }
+    return badRequest(parsed.error.message)
   }
 
   const body = "body" in parsed.data ? parsed.data.body : parsed.data
