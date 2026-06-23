@@ -100,9 +100,11 @@ impl DummyHarness {
                 &agent.workdir.to_string_lossy(),
             )
             .expect("create harness history");
+        let (model, model_provider_label) = super::model_identity::app_fields(model);
         let app = AppState {
             agent: agent.name.as_str().to_string(),
-            model: model.to_string(),
+            model,
+            model_provider_label,
             session_label: session.to_string().chars().take(12).collect(),
             projection: engine.read_projection(session).await.expect("projection"),
             workspace_workdir: Some(agent.workdir.to_string_lossy().into_owned()),
@@ -150,10 +152,7 @@ impl DummyHarness {
         match effect {
             TuiEffect::None => {}
             TuiEffect::SelectModel { model, provider } => {
-                let model_ref = provider
-                    .filter(|provider| !provider.trim().is_empty())
-                    .map_or_else(|| model.clone(), |provider| format!("{provider}/{model}"));
-                self.agent.model = yaca_proto::ModelRef::new(model_ref);
+                self.agent.model = super::model_identity::selected_ref(&model, provider.as_deref());
             }
             TuiEffect::SelectAgent(agent) => {
                 self.agent.name = yaca_proto::AgentName::new(agent);
@@ -174,7 +173,8 @@ impl DummyHarness {
                     self.agent.name = yaca_proto::AgentName::new(agent);
                 }
                 if let Some(model) = model {
-                    self.agent.model = yaca_proto::ModelRef::new(model);
+                    self.agent.model =
+                        super::model_identity::apply_ref(&mut self.controller.app, &model);
                 }
                 self.engine
                     .admit_user_prompt(self.session, prompt)
@@ -245,26 +245,4 @@ impl DummyHarness {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn key(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::empty())
-    }
-
-    #[tokio::test]
-    async fn dummy_harness_switches_model_and_returns_fixed_response() {
-        let mut harness = DummyHarness::new(vec!["alpha", "beta"]).await;
-
-        harness.type_text("/model");
-        harness.press(key(KeyCode::Enter)).await;
-        harness.press(key(KeyCode::Down)).await;
-        harness.press(key(KeyCode::Enter)).await;
-        harness.type_text("hello");
-        harness.press(key(KeyCode::Enter)).await;
-
-        assert_eq!(harness.seen_models(), vec!["beta".to_string()]);
-        assert!(harness.transcript().contains("dummy response"));
-    }
-}
+mod tests;

@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_proto::{ModelRef, SessionId, now_millis};
+use yaca_proto::{SessionId, now_millis};
 use yaca_provider::ReasoningEffort;
 use yaca_tool::{
     Action as ToolAction, AskRequest, Decision, QuestionAnswer, QuestionKind, QuestionRequest,
@@ -54,6 +54,7 @@ mod history;
 mod leader_key;
 mod mcp_view;
 mod message_scroll;
+mod model_identity;
 mod permission_input;
 mod prompt;
 mod question_input;
@@ -359,9 +360,11 @@ pub async fn run(
         .read_projection(session)
         .await
         .context("prime projection")?;
+    let (model, model_provider_label) = model_identity::app_fields(&model);
     let app = AppState {
         agent: agent.name.as_str().to_string(),
         model,
+        model_provider_label,
         session_label: session.to_string().chars().take(12).collect(),
         projection,
         yolo: initial_yolo,
@@ -490,10 +493,7 @@ pub async fn run(
                                 turn_cancel.cancel();
                             }
                             TuiEffect::SelectModel { model, provider } => {
-                                let model_ref = provider
-                                    .filter(|provider| !provider.trim().is_empty())
-                                    .map_or_else(|| model.clone(), |provider| format!("{provider}/{model}"));
-                                agent.model = ModelRef::new(model_ref);
+                                agent.model = model_identity::selected_ref(&model, provider.as_deref());
                             }
                             TuiEffect::SelectReasoning(level) => {
                                 let message =
@@ -606,9 +606,8 @@ pub async fn run(
                                     }
                                     session = resume;
                                     if let Some(meta) = meta_for(&history, &id) {
-                                        controller.app.model = meta.model.clone();
+                                        agent.model = model_identity::apply_ref(&mut controller.app, &meta.model);
                                         controller.app.agent = meta.agent.clone();
-                                        agent.model = ModelRef::new(meta.model);
                                         let workdir = PathBuf::from(meta.workdir);
                                         controller.set_agents(agents::dialog_items(&profiles));
                                         controller.set_references(all_reference_items(&workdir, &profiles));
@@ -646,7 +645,7 @@ pub async fn run(
                                 model,
                             } => {
                                 if let Some(model) = model {
-                                    agent.model = ModelRef::new(model);
+                                    agent.model = model_identity::apply_ref(&mut controller.app, &model);
                                 }
                                 if let Some(profile) = command_agent
                                     .as_deref()

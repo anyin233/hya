@@ -1,3 +1,4 @@
+use super::super::model_identity;
 use super::*;
 
 impl Controller {
@@ -7,10 +8,20 @@ impl Controller {
         let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
             Some(CommandKind::Model) if !arguments.is_empty() => {
-                let model = arguments.to_string();
-                let provider = provider_label_for_model(&self.available_models, &model);
-                self.app.set_model_identity(model.clone(), provider.clone());
-                TuiEffect::SelectModel { model, provider }
+                match model_identity::resolve_model_argument(&self.available_models, arguments) {
+                    Ok(identity) => {
+                        self.app
+                            .set_model_identity(identity.model.clone(), identity.provider.clone());
+                        TuiEffect::SelectModel {
+                            model: identity.model,
+                            provider: identity.provider,
+                        }
+                    }
+                    Err(ambiguous) => TuiEffect::SystemMessage(format!(
+                        "ambiguous model {}; use provider/model",
+                        ambiguous.model
+                    )),
+                }
             }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
@@ -86,5 +97,98 @@ impl Controller {
             return TuiEffect::None;
         };
         self.dispatch_slash(command)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use yaca_tui::AppState;
+
+    use crate::config::ModelEntry;
+
+    use super::super::{Controller, TuiEffect};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    fn type_text(controller: &mut Controller, text: &str) {
+        for ch in text.chars() {
+            assert_eq!(
+                controller.handle_key(key(KeyCode::Char(ch))),
+                TuiEffect::None
+            );
+        }
+    }
+
+    fn duplicate_model_controller() -> Controller {
+        Controller::with_models_and_sessions(
+            AppState {
+                model: "claude-sonnet".to_string(),
+                model_provider_label: Some("anthropic".to_string()),
+                ..AppState::default()
+            },
+            vec![
+                ModelEntry {
+                    id: "gpt-5".to_string(),
+                    provider: "anthropic".to_string(),
+                },
+                ModelEntry {
+                    id: "gpt-5".to_string(),
+                    provider: "openai".to_string(),
+                },
+                ModelEntry {
+                    id: "claude-sonnet".to_string(),
+                    provider: "anthropic".to_string(),
+                },
+            ],
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn slash_model_accepts_provider_qualified_model_identity() {
+        // Given
+        let mut controller = duplicate_model_controller();
+
+        // When
+        type_text(&mut controller, "/model openai/gpt-5");
+        let effect = controller.handle_key(key(KeyCode::Enter));
+
+        // Then
+        assert_eq!(
+            effect,
+            TuiEffect::SelectModel {
+                model: "gpt-5".to_string(),
+                provider: Some("openai".to_string()),
+            }
+        );
+        assert_eq!(controller.app.model, "gpt-5");
+        assert_eq!(
+            controller.app.model_provider_label.as_deref(),
+            Some("openai")
+        );
+    }
+
+    #[test]
+    fn slash_model_rejects_ambiguous_bare_model_identity() {
+        // Given
+        let mut controller = duplicate_model_controller();
+
+        // When
+        type_text(&mut controller, "/model gpt-5");
+        let effect = controller.handle_key(key(KeyCode::Enter));
+
+        // Then
+        assert_eq!(
+            effect,
+            TuiEffect::SystemMessage("ambiguous model gpt-5; use provider/model".to_string())
+        );
+        assert_eq!(controller.app.model, "claude-sonnet");
+        assert_eq!(
+            controller.app.model_provider_label.as_deref(),
+            Some("anthropic")
+        );
     }
 }

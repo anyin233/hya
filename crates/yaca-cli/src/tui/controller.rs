@@ -8,6 +8,7 @@ use super::block_action::selected_block_action;
 use super::commands::{self, CommandKind, CustomCommand};
 use super::leader_key::{LeaderAction, LeaderKey};
 use super::message_scroll::handle_message_scroll_key;
+use super::model_identity;
 use super::prompt::{PromptState, cursor_index};
 use super::selection::{MessageSelectionStep, next_selected_message};
 use crate::config::ModelEntry;
@@ -29,11 +30,9 @@ pub struct SessionSummary {
 }
 
 fn provider_label_for_model(models: &[ModelEntry], model: &str) -> Option<String> {
-    models
-        .iter()
-        .find(|entry| entry.id == model)
-        .map(|entry| entry.provider.clone())
-        .filter(|label| !label.trim().is_empty())
+    model_identity::resolve_model_argument(models, model)
+        .ok()
+        .and_then(|identity| identity.provider)
 }
 
 fn is_ctrl_shift_d(key: &KeyEvent) -> bool {
