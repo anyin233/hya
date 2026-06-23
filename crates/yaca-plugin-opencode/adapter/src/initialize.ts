@@ -29,8 +29,18 @@ const InitializeParamsSchema = z
   .strict()
 
 type LoadedHooksResult =
-  | { readonly hooks: readonly OpenCodeHooks[]; readonly response?: undefined }
+  | {
+      readonly hooks: readonly OpenCodeHooks[]
+      readonly workspaceAdapters: readonly WorkspaceAdapterEntry[]
+      readonly response?: undefined
+    }
   | { readonly hooks?: undefined; readonly response: HandledRequest }
+
+type WorkspaceAdapterEntry = {
+  readonly type: string
+  readonly name: string
+  readonly description: string
+}
 
 export async function handleInitialize(
   request: JsonRpcRequest,
@@ -67,6 +77,7 @@ export async function handleInitialize(
       },
       hooks: hookRegistrationsFrom(loaded.hooks),
       tools: registry.infos,
+      workspaceAdapters: loaded.workspaceAdapters,
     }),
     shouldExit: false,
   }
@@ -91,8 +102,9 @@ async function loadConfiguredHooks(
     throw error
   }
   if (envFlag(context.env.OPENCODE_PURE)) {
-    return { hooks: [] }
+    return { hooks: [], workspaceAdapters: [] }
   }
+  const workspaceAdapters: WorkspaceAdapterEntry[] = []
   const directory = context.env.YACA_DIRECTORY ?? process.cwd()
   const worktree = context.env.YACA_WORKTREE ?? directory
   const discovered = await discoverPluginSpecs({
@@ -107,12 +119,12 @@ async function loadConfiguredHooks(
   })
   const loaded = await loadLocalPluginHooks(
     [...discovered, ...options.plugin],
-    pluginInput(context.env, context.stderr, directory, worktree),
+    pluginInput(context.env, context.stderr, directory, worktree, workspaceAdapters),
   )
   for (const error of loaded.errors) {
     await context.stderr.write(`opencode plugin ${error.spec}: ${error.message}\n`)
   }
-  return { hooks: loaded.hooks }
+  return { hooks: loaded.hooks, workspaceAdapters }
 }
 
 function nonemptyEnv(value: string | undefined): string | undefined {
@@ -128,6 +140,7 @@ function pluginInput(
   stderr: RequestContext["stderr"],
   directory: string,
   worktree: string,
+  workspaceAdapters: WorkspaceAdapterEntry[],
 ): Readonly<Record<string, unknown>> {
   const project = createOpenCodeProject(env, worktree)
   return {
@@ -143,7 +156,31 @@ function pluginInput(
     serverUrl: new URL(env.YACA_SERVER_URL ?? "http://127.0.0.1:0"),
     $,
     experimental_workspace: {
-      register: () => undefined,
+      register: (type: string, adapter: unknown) => {
+        const entry = workspaceAdapterEntry(type, adapter)
+        if (entry !== undefined) {
+          workspaceAdapters.push(entry)
+        }
+      },
     },
   }
+}
+
+function workspaceAdapterEntry(
+  type: string,
+  adapter: unknown,
+): WorkspaceAdapterEntry | undefined {
+  if (!isRecord(adapter)) {
+    return undefined
+  }
+  const name = adapter.name
+  const description = adapter.description
+  if (typeof name !== "string" || typeof description !== "string") {
+    return undefined
+  }
+  return { type, name, description }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
