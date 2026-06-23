@@ -33,6 +33,9 @@ pub struct FormatterError(pub String);
 #[async_trait]
 pub trait FormatterProvider: Send + Sync {
     async fn status(&self, workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError>;
+    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -118,6 +121,10 @@ impl FormatterProvider for BuiltinFormatterProvider {
             })
             .collect())
     }
+
+    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -137,6 +144,13 @@ impl FormatterPlane {
         match &self.provider {
             Some(provider) => provider.status(workdir).await,
             None => Ok(Vec::new()),
+        }
+    }
+
+    pub async fn format_file(&self, workdir: &Path, file: &Path) -> Result<bool, FormatterError> {
+        match &self.provider {
+            Some(provider) => provider.format_file(workdir, file).await,
+            None => Ok(false),
         }
     }
 }

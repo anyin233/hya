@@ -1,14 +1,17 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use yaca_tool::{
-    Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspPlane, Mode,
+    PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx,
+    ToolError, ToolRegistry, WebSearchPlane,
 };
 
 fn allow(action: Action, pat: &str) -> Rule {
@@ -32,6 +35,10 @@ fn tempdir() -> PathBuf {
 }
 
 fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
+    ctx_with_formatter(rules, workdir, FormatterPlane::default())
+}
+
+fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
@@ -45,8 +52,26 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter,
         workdir,
         cancel: CancellationToken::new(),
+    }
+}
+
+struct RewritingFormatter;
+
+#[async_trait]
+impl FormatterProvider for RewritingFormatter {
+    async fn status(
+        &self,
+        _workdir: &Path,
+    ) -> Result<Vec<yaca_tool::FormatterStatus>, FormatterError> {
+        Ok(Vec::new())
+    }
+
+    async fn format_file(&self, _workdir: &Path, file: &Path) -> Result<bool, FormatterError> {
+        tokio::fs::write(file, "formatted\n").await.unwrap();
+        Ok(true)
     }
 }
 
@@ -78,6 +103,30 @@ async fn write_accepts_open_code_file_path_and_returns_metadata() {
     assert_eq!(out["metadata"]["exists"], false);
     assert_eq!(out["ok"], true);
     assert_eq!(out["bytes"], 6);
+}
+
+#[tokio::test]
+async fn write_runs_formatter_after_successful_write() {
+    // Given
+    let dir = tempdir();
+    let formatter = FormatterPlane::new(Arc::new(RewritingFormatter));
+    let ctx = ctx_with_formatter(vec![allow(Action::Edit, "*")], dir.clone(), formatter);
+    let tool = ToolRegistry::builtins().get("write").unwrap();
+
+    // When
+    tool.execute(
+        &ctx,
+        json!({ "filePath": "src/generated.txt", "content": "raw\n" }),
+    )
+    .await
+    .unwrap();
+
+    // Then
+    let target = dir.join("src/generated.txt");
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "formatted\n"
+    );
 }
 
 #[tokio::test]

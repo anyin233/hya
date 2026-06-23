@@ -153,6 +153,7 @@ impl SessionEngine {
                     skills: self.skills.clone(),
                     websearch: self.websearch.clone(),
                     lsp: self.lsp.clone(),
+                    formatter: self.formatter.clone(),
                     workdir: agent.workdir.clone(),
                     cancel,
                 };

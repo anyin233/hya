@@ -42,6 +42,7 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         skills,
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),
     }
