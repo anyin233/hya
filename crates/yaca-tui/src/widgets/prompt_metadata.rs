@@ -1,4 +1,4 @@
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -82,7 +82,10 @@ pub(super) fn composer_identity_metadata(
             Span::styled(" · ", Style::default().fg(theme.muted).bg(theme.element)),
             Span::styled(
                 effort.to_string(),
-                Style::default().fg(theme.accent).bg(theme.element),
+                Style::default()
+                    .fg(theme.warning)
+                    .bg(theme.element)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]);
     }
