@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use serde_json::{Value, json};
-use yaca_proto::{
-    AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId,
-};
+use serde_json::Value;
+use yaca_proto::{AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
+
+use super::message_parts::{OpenCodePartContext, opencode_part};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct OpenCodeMessage {
@@ -104,6 +104,7 @@ pub(super) struct OpenCodeMessageContext {
     variant: Option<String>,
     workdir: String,
     times: BTreeMap<MessageId, OpenCodeMessageTime>,
+    parts: OpenCodePartContext,
 }
 
 impl OpenCodeMessageContext {
@@ -121,11 +122,16 @@ impl OpenCodeMessageContext {
             variant: model.variant,
             workdir: workdir.to_string(),
             times: message_times(envs),
+            parts: OpenCodePartContext::new(envs),
         }
     }
 
     fn time(&self, message: MessageId) -> OpenCodeMessageTime {
         self.times.get(&message).copied().unwrap_or_default()
+    }
+
+    fn parts(&self) -> &OpenCodePartContext {
+        &self.parts
     }
 }
 
@@ -144,7 +150,7 @@ pub(super) fn opencode_message(
         parts: message
             .parts
             .iter()
-            .map(|part| opencode_part(session, message.id, part))
+            .map(|part| opencode_part(session, message.id, part, context.parts()))
             .collect(),
     }
 }
@@ -233,39 +239,6 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, OpenCodeMessageTime> 
 
 fn millis(ts: i64) -> u64 {
     u64::try_from(ts).unwrap_or(0)
-}
-
-fn opencode_part(session: SessionId, message: MessageId, part: &PartProjection) -> Value {
-    match part {
-        PartProjection::Text { id, text } => json!({
-            "id": id.to_string(),
-            "sessionID": session.to_string(),
-            "messageID": message.to_string(),
-            "type": "text",
-            "text": text,
-        }),
-        PartProjection::Reasoning { id, text } => json!({
-            "id": id.to_string(),
-            "sessionID": session.to_string(),
-            "messageID": message.to_string(),
-            "type": "reasoning",
-            "text": text,
-        }),
-        PartProjection::Tool {
-            id,
-            call,
-            name,
-            state,
-        } => json!({
-            "id": id.to_string(),
-            "sessionID": session.to_string(),
-            "messageID": message.to_string(),
-            "type": "tool",
-            "callID": call.to_string(),
-            "tool": name.as_str(),
-            "state": state,
-        }),
-    }
 }
 
 fn role_name(role: Role) -> &'static str {
