@@ -41,7 +41,7 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/experimental/resource", get(resource))
         .route("/sync/history", post(super::experimental_sync::history))
-        .route("/sync/replay", post(sync_replay))
+        .route("/sync/replay", post(super::experimental_sync::replay))
         .route("/sync/steal", post(super::experimental_sync::steal))
         .route("/sync/start", post(ok_true))
 }
@@ -162,25 +162,6 @@ async fn workspace_warp(
         )));
     }
     Ok(StatusCode::NO_CONTENT.into_response())
-}
-
-async fn sync_replay(Json(payload): Json<Value>) -> Result<Json<Value>, ApiError> {
-    if payload.get("directory").and_then(Value::as_str).is_none() {
-        return Err(ApiError::bad_request("sync replay missing directory"));
-    }
-    let Some(first) = payload
-        .get("events")
-        .and_then(Value::as_array)
-        .and_then(|events| events.first())
-    else {
-        return Err(ApiError::bad_request("sync replay requires events"));
-    };
-    let Some(session_id) = first.get("aggregateID").and_then(Value::as_str) else {
-        return Err(ApiError::bad_request(
-            "sync replay event missing aggregateID",
-        ));
-    };
-    Ok(Json(json!({ "sessionID": session_id })))
 }
 
 async fn move_session(
