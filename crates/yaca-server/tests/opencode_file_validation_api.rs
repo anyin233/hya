@@ -109,6 +109,30 @@ async fn opencode_find_file_matches_fuzzy_file_queries() {
 }
 
 #[tokio::test]
+async fn opencode_file_list_honors_gitignore_negation() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join(".gitignore"), "*.log\n!important.log\n").unwrap();
+    std::fs::write(workdir.join("debug.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("important.log"), "kept\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/file?path=.").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entries = listing.as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "debug.log" && entry["ignored"] == true)
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "important.log" && entry["ignored"] == false)
+    );
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");
