@@ -1,6 +1,7 @@
 mod error;
 mod footer_text;
 mod identity;
+mod keybindings;
 mod overlays;
 mod permission;
 mod prompt;
@@ -30,6 +31,7 @@ mod transcript_tools;
 #[cfg(test)]
 mod transcript_tools_tests;
 
+pub use keybindings::render_keybindings;
 pub use overlays::{render_dialog, render_picker};
 pub use permission::render_permission;
 pub use prompt::{prompt_cursor, prompt_height, render_footer, render_prompt};

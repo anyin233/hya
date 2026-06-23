@@ -24,11 +24,7 @@ pub(super) enum LeaderAction {
 }
 
 impl LeaderKey {
-    pub(super) fn handle(&mut self, key: &KeyEvent) -> Option<LeaderAction> {
-        self.handle_at(key, Instant::now())
-    }
-
-    fn handle_at(&mut self, key: &KeyEvent, now: Instant) -> Option<LeaderAction> {
+    pub(super) fn handle_at(&mut self, key: &KeyEvent, now: Instant) -> Option<LeaderAction> {
         if let Some(armed_at) = self.armed_at {
             if now.saturating_duration_since(armed_at) <= LEADER_TIMEOUT {
                 self.armed_at = None;
@@ -54,6 +50,22 @@ impl LeaderKey {
             return Some(LeaderAction::Arm);
         }
         None
+    }
+
+    pub(super) fn expire_if_stale_at(&mut self, now: Instant) -> bool {
+        let Some(armed_at) = self.armed_at else {
+            return false;
+        };
+        if now.saturating_duration_since(armed_at) <= LEADER_TIMEOUT {
+            return false;
+        }
+        self.armed_at = None;
+        true
+    }
+
+    pub(super) fn timeout_remaining_at(&self, now: Instant) -> Option<Duration> {
+        self.armed_at
+            .map(|armed_at| LEADER_TIMEOUT.saturating_sub(now.saturating_duration_since(armed_at)))
     }
 }
 

@@ -400,8 +400,16 @@ pub async fn run(
         .context("draw")?;
 
     loop {
+        let leader_keybindings_timeout = controller.leader_keybindings_timeout();
         tokio::select! {
             biased;
+            _ = async move {
+                if let Some(timeout) = leader_keybindings_timeout {
+                    tokio::time::sleep(timeout).await;
+                }
+            }, if leader_keybindings_timeout.is_some() => {
+                let _ = controller.expire_leader_keybindings();
+            }
             msg = bus.recv() => match msg {
                 Ok(env) => {
                     if env.event.session() == Some(session) {

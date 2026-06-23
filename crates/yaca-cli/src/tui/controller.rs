@@ -6,7 +6,7 @@ use yaca_tui::{AppState, DialogItem};
 use super::agent_cycle::previous_agent_label;
 use super::block_action::selected_block_action;
 use super::commands::{self, CommandKind, CustomCommand};
-use super::leader_key::{LeaderAction, LeaderKey};
+use super::leader_key::LeaderKey;
 use super::message_scroll::handle_message_scroll_key;
 use super::model_identity;
 use super::prompt::{PromptState, cursor_index};
@@ -17,6 +17,8 @@ mod completion;
 mod dialog_open;
 mod dialogs;
 mod effects;
+mod leader_actions;
+mod leader_timeout;
 mod message_actions;
 mod slash;
 
@@ -124,6 +126,11 @@ impl Controller {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> TuiEffect {
+        self.handle_key_at(key, Instant::now())
+    }
+
+    fn handle_key_at(&mut self, key: KeyEvent, now: Instant) -> TuiEffect {
+        let _ = self.expire_leader_keybindings_at(now);
         if key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('d')) {
             return self.handle_ctrl_d();
         }
@@ -135,7 +142,7 @@ impl Controller {
             }
             return self.handle_dialog_key(key);
         }
-        if let Some(action) = self.leader_key.handle(&key) {
+        if let Some(action) = self.leader_key.handle_at(&key, now) {
             return self.handle_leader_action(action);
         }
         let modified_enter = key.code == KeyCode::Enter
@@ -309,32 +316,6 @@ impl Controller {
             self.disarm_exit();
             TuiEffect::SelectAgent(agent)
         })
-    }
-
-    fn handle_leader_action(&mut self, action: LeaderAction) -> TuiEffect {
-        match action {
-            LeaderAction::Arm | LeaderAction::Cancel => TuiEffect::None,
-            LeaderAction::ModelList => {
-                self.open_model_dialog();
-                TuiEffect::None
-            }
-            LeaderAction::AgentList => {
-                self.open_agent_dialog();
-                TuiEffect::None
-            }
-            LeaderAction::SessionList => {
-                self.open_resume_dialog();
-                TuiEffect::None
-            }
-            LeaderAction::SessionNew => TuiEffect::NewSession,
-            LeaderAction::SessionCompact => TuiEffect::CompactTranscript,
-            LeaderAction::StatusView => {
-                self.open_tools_dialog();
-                TuiEffect::None
-            }
-            LeaderAction::SessionExport => TuiEffect::ExportTranscript,
-            LeaderAction::Exit => TuiEffect::Exit,
-        }
     }
 
     fn select_previous_message(&mut self) -> TuiEffect {
@@ -563,6 +544,9 @@ mod scroll_tests;
 
 #[cfg(test)]
 mod leader_key_tests;
+
+#[cfg(test)]
+mod leader_key_preview_tests;
 
 #[cfg(test)]
 mod app_exit_tests;

@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use yaca_proto::{Envelope, Projection};
 
 mod ansi;
+mod keybindings;
 mod layout;
 mod theme;
 mod tool_inputs;
@@ -20,6 +21,8 @@ mod tool_todos;
 mod view_model;
 mod widgets;
 
+pub use keybindings::{KeyBindingGroup, KeyBindingItem, KeyBindingsView};
+
 #[derive(Default)]
 pub struct AppState {
     pub projection: Projection,
@@ -30,6 +33,7 @@ pub struct AppState {
     pub question: Option<QuestionPrompt>,
     pub picker: Option<Picker>,
     pub dialog: Option<DialogView>,
+    pub keybindings: Option<KeyBindingsView>,
     pub attachments: Vec<PromptAttachment>,
     pub input: String,
     pub input_cursor: Option<usize>,
@@ -224,8 +228,18 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
         widgets::render_picker(frame, overlay_area(area, layout.prompt), picker, &theme);
     } else if let Some(dialog) = &state.dialog {
         widgets::render_dialog(frame, overlay_area(area, layout.prompt), dialog, &theme);
-    } else if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
-        frame.set_cursor_position(cursor);
+    } else {
+        if let Some(keybindings) = &state.keybindings {
+            widgets::render_keybindings(
+                frame,
+                overlay_area(area, layout.prompt),
+                keybindings,
+                &theme,
+            );
+        }
+        if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
+            frame.set_cursor_position(cursor);
+        }
     }
 }
 
