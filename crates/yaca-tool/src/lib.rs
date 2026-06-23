@@ -11,6 +11,7 @@ pub mod interaction;
 mod invalid;
 mod lsp;
 mod lsp_path;
+mod lsp_plane;
 pub mod permission;
 mod plan;
 mod question;
@@ -37,7 +38,7 @@ pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
 };
-pub use lsp::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
+pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use permission::{
     Action, AskRequest, Decision, Mode, PermissionError, PermissionInterceptor, PermissionPlane,
     PermissionRules, Resource, Rule, glob_match,

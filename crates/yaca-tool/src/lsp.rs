@@ -1,138 +1,16 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use thiserror::Error;
 use yaca_proto::{ToolName, ToolSchema};
 
 use crate::lsp_path::{absolutize, display_path, file_uri, normalize, resolve_file};
+use crate::lsp_plane::{LspOperation, LspRequest};
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum LspOperation {
-    GoToDefinition,
-    FindReferences,
-    Hover,
-    DocumentSymbol,
-    WorkspaceSymbol,
-    GoToImplementation,
-    PrepareCallHierarchy,
-    IncomingCalls,
-    OutgoingCalls,
-}
-
-impl LspOperation {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::GoToDefinition => "goToDefinition",
-            Self::FindReferences => "findReferences",
-            Self::Hover => "hover",
-            Self::DocumentSymbol => "documentSymbol",
-            Self::WorkspaceSymbol => "workspaceSymbol",
-            Self::GoToImplementation => "goToImplementation",
-            Self::PrepareCallHierarchy => "prepareCallHierarchy",
-            Self::IncomingCalls => "incomingCalls",
-            Self::OutgoingCalls => "outgoingCalls",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LspRequest {
-    pub operation: LspOperation,
-    pub file: PathBuf,
-    pub uri: String,
-    pub line: u32,
-    pub character: u32,
-    pub query: Option<String>,
-}
-
-#[derive(Error, Debug)]
-#[error("{0}")]
-pub struct LspError(pub String);
-
-#[async_trait]
-pub trait LspProvider: Send + Sync {
-    async fn has_clients(&self, file: &Path) -> Result<bool, LspError>;
-    async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError>;
-    async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
-        if self.has_clients(workdir).await? {
-            Ok(vec![json!({
-                "id": "lsp",
-                "name": "lsp",
-                "root": "",
-                "status": "connected"
-            })])
-        } else {
-            Ok(Vec::new())
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct LspPlane {
-    provider: Option<Arc<dyn LspProvider>>,
-}
-
-impl LspPlane {
-    #[must_use]
-    pub fn new(provider: Arc<dyn LspProvider>) -> Self {
-        Self {
-            provider: Some(provider),
-        }
-    }
-
-    async fn has_clients(&self, file: &Path) -> Result<bool, LspError> {
-        match &self.provider {
-            Some(provider) => provider.has_clients(file).await,
-            None => Ok(false),
-        }
-    }
-
-    async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError> {
-        match &self.provider {
-            Some(provider) => provider.execute(request).await,
-            None => Err(LspError(
-                "No LSP server available for this file type.".to_string(),
-            )),
-        }
-    }
-
-    pub async fn workspace_symbols(
-        &self,
-        workdir: &Path,
-        query: String,
-    ) -> Result<Vec<Value>, LspError> {
-        let file = normalize(&absolutize(workdir));
-        match &self.provider {
-            Some(provider) => {
-                provider
-                    .execute(LspRequest {
-                        operation: LspOperation::WorkspaceSymbol,
-                        file: file.clone(),
-                        uri: file_uri(&file),
-                        line: 0,
-                        character: 0,
-                        query: Some(query),
-                    })
-                    .await
-            }
-            None => Ok(Vec::new()),
-        }
-    }
-
-    pub async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
-        match &self.provider {
-            Some(provider) => provider.status(workdir).await,
-            None => Ok(Vec::new()),
-        }
-    }
-}
+pub(crate) use crate::lsp_plane::LspPlane;
 
 pub(crate) struct LspTool;
 
