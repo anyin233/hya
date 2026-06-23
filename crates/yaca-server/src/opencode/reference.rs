@@ -23,7 +23,7 @@ pub(in crate::opencode) async fn list(st: &ServerState) -> Vec<Value> {
         .iter()
         .filter_map(|(name, entry)| {
             valid_alias(name)
-                .then(|| local_reference(name, entry, &base))
+                .then(|| reference(name, entry, &base))
                 .flatten()
         })
         .collect()
@@ -96,33 +96,94 @@ fn reference_entries(config: &Value) -> Option<&Map<String, Value>> {
         .and_then(Value::as_object)
 }
 
-fn local_reference(name: &str, entry: &Value, base: &Path) -> Option<Value> {
-    let (path, description, hidden) = match entry {
-        Value::String(value) if is_local_shorthand(value) => (value.as_str(), None, None),
-        Value::Object(object) => (
+fn reference(name: &str, entry: &Value, base: &Path) -> Option<Value> {
+    match entry {
+        Value::String(value) if is_local_shorthand(value) => {
+            local_reference(name, value, None, None, base)
+        }
+        Value::String(value) => git_reference(name, value, None, None, None),
+        Value::Object(object) if object.contains_key("path") => local_reference(
+            name,
             object.get("path")?.as_str()?,
             object.get("description").and_then(Value::as_str),
             object.get("hidden").and_then(Value::as_bool),
+            base,
         ),
-        _ => return None,
-    };
-    let path = resolve_path(base, path).to_string_lossy().into_owned();
+        Value::Object(object) if object.contains_key("repository") => git_reference(
+            name,
+            object.get("repository")?.as_str()?,
+            object.get("branch").and_then(Value::as_str),
+            object.get("description").and_then(Value::as_str),
+            object.get("hidden").and_then(Value::as_bool),
+        ),
+        _ => None,
+    }
+}
+
+fn local_reference(
+    name: &str,
+    value: &str,
+    description: Option<&str>,
+    hidden: Option<bool>,
+    base: &Path,
+) -> Option<Value> {
+    let path = resolve_path(base, value).to_string_lossy().into_owned();
+    reference_value(
+        name,
+        &path,
+        description,
+        hidden,
+        Map::from_iter([
+            ("type".to_string(), json!("local")),
+            ("path".to_string(), json!(path)),
+        ]),
+    )
+}
+
+fn git_reference(
+    name: &str,
+    repository: &str,
+    branch: Option<&str>,
+    description: Option<&str>,
+    hidden: Option<bool>,
+) -> Option<Value> {
+    if let Some(branch) = branch
+        && !super::reference_repository::valid_branch(branch)
+    {
+        return None;
+    }
+    let parsed = super::reference_repository::parse(repository)?;
+    let path = super::reference_repository::cache_path(&parsed)
+        .to_string_lossy()
+        .into_owned();
     let mut source = Map::from_iter([
-        ("type".to_string(), json!("local")),
-        ("path".to_string(), json!(path.clone())),
+        ("type".to_string(), json!("git")),
+        ("repository".to_string(), json!(repository)),
     ]);
+    source.insert(
+        "branch".to_string(),
+        branch.map_or(Value::Null, |branch| json!(branch)),
+    );
+    reference_value(name, &path, description, hidden, source)
+}
+
+fn reference_value(
+    name: &str,
+    path: &str,
+    description: Option<&str>,
+    hidden: Option<bool>,
+    mut source: Map<String, Value>,
+) -> Option<Value> {
     let mut out = Map::from_iter([
         ("name".to_string(), json!(name)),
         ("path".to_string(), json!(path)),
     ]);
-    if let Some(description) = description {
-        source.insert("description".to_string(), json!(description));
-        out.insert("description".to_string(), json!(description));
-    }
-    if let Some(hidden) = hidden {
-        source.insert("hidden".to_string(), json!(hidden));
-        out.insert("hidden".to_string(), json!(hidden));
-    }
+    let description = description.map_or(Value::Null, |description| json!(description));
+    let hidden = hidden.map_or(Value::Null, |hidden| json!(hidden));
+    source.insert("description".to_string(), description.clone());
+    source.insert("hidden".to_string(), hidden.clone());
+    out.insert("description".to_string(), description);
+    out.insert("hidden".to_string(), hidden);
     out.insert("source".to_string(), Value::Object(source));
     Some(Value::Object(out))
 }
