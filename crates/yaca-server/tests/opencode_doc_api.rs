@@ -97,6 +97,7 @@ async fn opencode_doc_route_returns_openapi_document() {
     assert!(body["paths"]["/experimental/control-plane/move-session"]["post"].is_object());
     assert!(body["paths"]["/experimental/session/{sessionID}/background"].is_object());
     assert!(body["paths"]["/api/session/{sessionID}/permission/{requestID}/reply"].is_object());
+    assert!(body["paths"]["/api/session/{sessionID}/message/{messageID}"]["get"].is_object());
     assert!(body["paths"]["/api/session/{sessionID}/question/{requestID}/reject"].is_object());
     assert!(body["paths"]["/api/integration/{integrationID}/connect/key"].is_object());
     assert!(body["paths"]["/api/integration/attempt/{attemptID}"].is_object());
