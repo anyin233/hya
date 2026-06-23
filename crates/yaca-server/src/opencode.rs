@@ -35,6 +35,7 @@ mod session_context;
 mod session_context_messages;
 mod session_context_tool_state;
 mod session_context_tool_time;
+mod session_create_legacy;
 mod session_delete;
 mod session_diff;
 mod session_fork;
@@ -84,6 +85,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(project_copy::router())
         .merge(pty::router())
         .merge(question::router())
+        .merge(session_create_legacy::router())
         .merge(session_context::router())
         .merge(session_message_v2::router())
         .merge(session_prompt::router())

@@ -129,6 +129,28 @@ async fn legacy_message_info_matches_opencode_required_shape() {
 }
 
 #[tokio::test]
+async fn legacy_session_post_creates_opencode_session_info() {
+    let app = router(state().await);
+
+    let (status, body) = post_json(
+        app,
+        "/session".to_string(),
+        json!({
+            "agent": "build",
+            "model": {"providerID": "yaca", "id": "fake"},
+            "location": {"directory": WORKDIR}
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["agent"], "build");
+    assert_eq!(body["model"]["id"], "fake");
+    assert_eq!(body["directory"], WORKDIR);
+    assert!(body["id"].as_str().is_some_and(|id| id.starts_with("ses_")));
+}
+
+#[tokio::test]
 async fn legacy_session_message_post_accepts_opencode_prompt_parts() {
     let app = router(state().await);
     let session = create_session(app.clone()).await;
