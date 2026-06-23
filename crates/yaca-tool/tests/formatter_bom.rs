@@ -125,3 +125,32 @@ async fn edit_restores_utf8_bom_after_formatter_rewrites_file() {
         b"\xEF\xBB\xBFformatted\n"
     );
 }
+
+#[tokio::test]
+async fn apply_patch_restores_utf8_bom_after_formatter_rewrites_file() {
+    // Given: an existing UTF-8 BOM file and a formatter that rewrites without BOM.
+    let dir = tempdir();
+    let target = dir.join("bom.txt");
+    tokio::fs::write(&target, b"\xEF\xBB\xBFold\n")
+        .await
+        .unwrap();
+    let formatter = FormatterPlane::new(Arc::new(BomDroppingFormatter));
+    let ctx = ctx_with_formatter(dir.clone(), formatter);
+    let tool = ToolRegistry::builtins().get("apply_patch").unwrap();
+
+    // When: apply_patch updates the file without requiring BOM in the patch body.
+    tool.execute(
+        &ctx,
+        json!({
+            "patchText": "*** Begin Patch\n*** Update File: bom.txt\n@@\n-old\n+new\n*** End Patch\n"
+        }),
+    )
+    .await
+    .unwrap();
+
+    // Then: yaca restores the desired BOM after formatter output.
+    assert_eq!(
+        tokio::fs::read(&target).await.unwrap(),
+        b"\xEF\xBB\xBFformatted\n"
+    );
+}

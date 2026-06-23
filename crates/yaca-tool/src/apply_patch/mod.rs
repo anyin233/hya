@@ -11,6 +11,7 @@ use yaca_proto::{ToolName, ToolSchema};
 use crate::lsp_post_edit;
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
+use crate::utf8_bom;
 
 pub(crate) struct ApplyPatchTool;
 
@@ -72,10 +73,14 @@ impl Tool for ApplyPatchTool {
             let summary = apply::apply_hunk(&ctx.workdir, hunk).await?;
             if !matches!(summary.action, apply::FileAction::Delete) {
                 let path = resolve_workdir_path(&ctx.workdir, &summary.path)?;
-                ctx.formatter
+                let formatted = ctx
+                    .formatter
                     .format_file(&ctx.workdir, &path)
                     .await
                     .map_err(|error| ToolError::Other(error.to_string()))?;
+                if formatted {
+                    utf8_bom::sync_file(&path, summary.bom).await?;
+                }
                 lsp_paths.push(path);
             }
             summaries.push(summary);

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::apply_patch::parse::{Hunk, UpdateChunk};
 use crate::tool::ToolError;
+use crate::utf8_bom;
 
 #[derive(Clone, Copy)]
 pub(crate) enum FileAction {
@@ -33,6 +34,7 @@ pub(crate) struct FileSummary {
     pub action: FileAction,
     pub additions: usize,
     pub deletions: usize,
+    pub bom: bool,
 }
 
 impl FileSummary {
@@ -45,23 +47,26 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
     match hunk {
         Hunk::Add { path, contents } => {
             let target = workdir.join(&path);
-            write_with_parent(&target, &contents).await?;
+            let (bom, contents) = utf8_bom::split(&contents);
+            write_with_parent(&target, contents, bom).await?;
             Ok(FileSummary {
                 path,
                 action: FileAction::Add,
                 additions: contents.lines().count(),
                 deletions: 0,
+                bom,
             })
         }
         Hunk::Delete { path } => {
             let target = workdir.join(&path);
-            let old = tokio::fs::read_to_string(&target).await?;
+            let (bom, old) = utf8_bom::read_text(&target).await?;
             tokio::fs::remove_file(&target).await?;
             Ok(FileSummary {
                 path,
                 action: FileAction::Delete,
                 additions: 0,
                 deletions: old.lines().count(),
+                bom,
             })
         }
         Hunk::Update {
@@ -70,13 +75,13 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
             chunks,
         } => {
             let target = workdir.join(&path);
-            let old = tokio::fs::read_to_string(&target).await?;
-            let new = derive_new_contents(&path, &old, &chunks)?;
-            let additions = count_added_lines(&old, &new);
-            let deletions = count_deleted_lines(&old, &new);
+            let (source_has_bom, old) = utf8_bom::read_text(&target).await?;
+            let new = derive_new_contents(&path, &old, source_has_bom, &chunks)?;
+            let additions = count_added_lines(&old, &new.text);
+            let deletions = count_deleted_lines(&old, &new.text);
             let final_path = move_path.as_deref().unwrap_or(&path);
             let final_target = workdir.join(final_path);
-            write_with_parent(&final_target, &new).await?;
+            write_with_parent(&final_target, &new.text, new.bom).await?;
             if move_path.is_some() && final_target != target {
                 tokio::fs::remove_file(&target).await?;
             }
@@ -85,26 +90,36 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
                 action: FileAction::Modify,
                 additions,
                 deletions,
+                bom: new.bom,
             })
         }
     }
 }
 
-async fn write_with_parent(path: &Path, content: &str) -> Result<(), ToolError> {
+async fn write_with_parent(path: &Path, content: &str, bom: bool) -> Result<(), ToolError> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(path, content.as_bytes()).await?;
+    tokio::fs::write(path, utf8_bom::encode(content, bom)).await?;
     Ok(())
+}
+
+struct NewContent {
+    text: String,
+    bom: bool,
 }
 
 fn derive_new_contents(
     file_path: &str,
     original: &str,
+    source_has_bom: bool,
     chunks: &[UpdateChunk],
-) -> Result<String, ToolError> {
+) -> Result<NewContent, ToolError> {
     if chunks.is_empty() {
-        return Ok(ensure_trailing_newline(original));
+        return Ok(NewContent {
+            text: ensure_trailing_newline(original),
+            bom: source_has_bom,
+        });
     }
     let mut lines = split_content_lines(original);
     let mut replacements = Vec::new();
@@ -142,7 +157,12 @@ fn derive_new_contents(
     for (start, delete_count, new_lines) in replacements.into_iter().rev() {
         lines.splice(start..start + delete_count, new_lines);
     }
-    Ok(format_lines(&lines))
+    let formatted = format_lines(&lines);
+    let (incoming_has_bom, text) = utf8_bom::split(&formatted);
+    Ok(NewContent {
+        text: text.to_string(),
+        bom: source_has_bom || incoming_has_bom,
+    })
 }
 
 fn split_content_lines(content: &str) -> Vec<String> {
