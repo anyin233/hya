@@ -73,7 +73,11 @@ fn parse_skill(content: &str) -> Option<(String, String, String)> {
 }
 
 fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".yaca/skills")];
+    let mut dirs = vec![
+        workdir.join(".opencode/skill"),
+        workdir.join(".opencode/skills"),
+        workdir.join(".yaca/skills"),
+    ];
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(PathBuf::from(home).join(".config/yaca/skills"));
     }

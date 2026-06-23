@@ -108,3 +108,33 @@ async fn opencode_skill_and_command_routes_include_builtin_customize_skill() {
             .contains("opencode.json")
     );
 }
+
+#[tokio::test]
+async fn opencode_skill_and_command_routes_discover_opencode_project_skills() {
+    // Given: a workspace with an OpenCode project skill on disk.
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".opencode/skills/release")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/skills/release/SKILL.md"),
+        "---\nname: release\ndescription: Prepare a release\n---\nCheck version, changelog, and tag.\n",
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: metadata is requested for that workspace.
+    let uri = format!("/skill?directory={}", workdir.display());
+    let (skill_status, skills) = get_json(app.clone(), &uri).await;
+    let uri = format!("/command?directory={}", workdir.display());
+    let (command_status, commands) = get_json(app, &uri).await;
+
+    // Then: the OpenCode project skill is available as both a skill and command.
+    assert_eq!(skill_status, StatusCode::OK);
+    let skill = find_named(&skills, "release");
+    assert_eq!(skill["description"], "Prepare a release");
+    assert_eq!(skill["content"], "Check version, changelog, and tag.\n");
+
+    assert_eq!(command_status, StatusCode::OK);
+    let command = find_named(&commands, "release");
+    assert_eq!(command["source"], "skill");
+    assert_eq!(command["template"], "Check version, changelog, and tag.\n");
+}
