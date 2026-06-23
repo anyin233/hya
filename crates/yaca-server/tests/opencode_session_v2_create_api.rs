@@ -78,6 +78,18 @@ async fn opencode_v2_session_create_accepts_empty_body() {
 }
 
 #[tokio::test]
+async fn opencode_v2_session_create_treats_whitespace_body_as_empty() {
+    let app = router(state().await);
+    let (status, body) = post_session(app, Body::from(" \n\t ")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["agent"], "build");
+    assert_eq!(body["data"]["model"]["providerID"], "yaca");
+    assert_eq!(body["data"]["model"]["id"], "fake");
+    assert_eq!(body["data"]["directory"], WORKDIR);
+}
+
+#[tokio::test]
 async fn opencode_v2_session_create_accepts_parent_id() {
     let app = router(state().await);
     let (status, parent) = post_session(app.clone(), Body::empty()).await;
