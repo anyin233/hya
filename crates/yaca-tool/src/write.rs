@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use yaca_proto::{ToolName, ToolSchema};
 
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
+use crate::lsp_post_edit;
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
 use crate::utf8_bom;
@@ -76,6 +77,7 @@ impl Tool for WriteTool {
         if formatted {
             utf8_bom::sync_file(&path, desired_bom).await?;
         }
+        let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
 
         Ok(json!({
             "ok": true,
@@ -83,7 +85,7 @@ impl Tool for WriteTool {
             "title": relative_title(&path, &workdir),
             "output": "Wrote file successfully.",
             "metadata": {
-                "diagnostics": {},
+                "diagnostics": diagnostics,
                 "filepath": display_path(&path),
                 "exists": exists,
             },

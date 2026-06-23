@@ -57,6 +57,12 @@ pub struct LspError(pub String);
 pub trait LspProvider: Send + Sync {
     async fn has_clients(&self, file: &Path) -> Result<bool, LspError>;
     async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError>;
+    async fn touch_file(&self, _file: &Path, _kind: &str) -> Result<(), LspError> {
+        Ok(())
+    }
+    async fn diagnostics(&self) -> Result<Value, LspError> {
+        Ok(json!({}))
+    }
     async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
         if self.has_clients(workdir).await? {
             Ok(vec![json!({
@@ -127,6 +133,20 @@ impl LspPlane {
         match &self.provider {
             Some(provider) => provider.status(workdir).await,
             None => Ok(Vec::new()),
+        }
+    }
+
+    pub async fn touch_file(&self, file: &Path, kind: &str) -> Result<(), LspError> {
+        match &self.provider {
+            Some(provider) => provider.touch_file(file, kind).await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn diagnostics(&self) -> Result<Value, LspError> {
+        match &self.provider {
+            Some(provider) => provider.diagnostics().await,
+            None => Ok(json!({})),
         }
     }
 }
