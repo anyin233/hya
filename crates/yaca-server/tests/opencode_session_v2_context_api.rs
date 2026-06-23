@@ -107,13 +107,16 @@ async fn opencode_v2_context_completed_tool_content_matches_opencode_shape() {
     assert_eq!(status, StatusCode::OK);
     let session = created["data"]["id"].as_str().expect("session id");
 
-    let (status, _) = post_json(
+    let (status, shell) = post_json(
         app.clone(),
         format!("/api/session/{session}/shell"),
         json!({"agent": "build", "command": "printf yaca-v2-context-tool"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let call = shell["data"]["parts"][0]["callID"]
+        .as_str()
+        .expect("call id");
 
     let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
     assert_eq!(status, StatusCode::OK);
@@ -129,6 +132,7 @@ async fn opencode_v2_context_completed_tool_content_matches_opencode_shape() {
         })
         .find(|content| content["state"]["status"] == "completed")
         .expect("completed tool content");
+    assert_eq!(content["id"], call);
     assert_eq!(content["provider"]["executed"], true);
     assert_eq!(content["state"]["outputPaths"], json!([]));
 
