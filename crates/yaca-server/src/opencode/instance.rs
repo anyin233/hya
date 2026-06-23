@@ -75,8 +75,13 @@ async fn dispose() -> Json<bool> {
     Json(true)
 }
 
-async fn path(axum::extract::State(st): axum::extract::State<ServerState>) -> Json<PathInfo> {
-    let workdir = workdir(&st);
+async fn path(
+    axum::extract::State(st): axum::extract::State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<PathInfo> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
     let home = home_dir();
     Json(PathInfo {
         home: home.to_string_lossy().into_owned(),
@@ -134,8 +139,13 @@ async fn command() -> Json<Vec<CommandInfo>> {
 
 async fn skill(
     axum::extract::State(st): axum::extract::State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
 ) -> Json<Vec<SkillInfo>> {
-    Json(discover_skills(&workdir(&st)))
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    Json(discover_skills(&super::location::workdir_at(
+        &st, &location,
+    )))
 }
 
 async fn lsp(

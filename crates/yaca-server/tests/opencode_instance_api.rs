@@ -223,6 +223,32 @@ async fn opencode_agent_routes_expose_permission_rules() {
 }
 
 #[tokio::test]
+async fn opencode_instance_metadata_routes_use_workspace_routing() {
+    let workdir = tempdir();
+    let scoped = workdir.join("scoped dir");
+    std::fs::create_dir_all(scoped.join(".yaca/skills/scoped")).unwrap();
+    std::fs::write(
+        scoped.join(".yaca/skills/scoped/SKILL.md"),
+        "---\nname: scoped\ndescription: Scoped skill\n---\nUse scoped skill.\n",
+    )
+    .unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let scoped_text = scoped.to_string_lossy();
+    let encoded_scoped = scoped_text.replace(' ', "%20");
+    let app = router(state(workdir).await);
+
+    let (status, paths) = get_json(app.clone(), &format!("/path?directory={encoded_scoped}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(paths["directory"], scoped_text.as_ref());
+    assert_eq!(paths["worktree"], scoped_text.as_ref());
+
+    let (status, skills) = get_json(app, &format!("/skill?directory={encoded_scoped}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(skills[0]["name"], "scoped");
+    assert_eq!(skills[0]["description"], "Scoped skill");
+}
+
+#[tokio::test]
 async fn opencode_vcs_routes_return_status_diff_and_apply_patch() {
     let workdir = tempdir();
     init_git_repo(&workdir);
