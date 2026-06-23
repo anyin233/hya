@@ -78,6 +78,10 @@ impl Tool for EditTool {
             }
             let (incoming_has_bom, new) = split_bom(&input.new);
             tokio::fs::write(&path, encode_with_bom(new, incoming_has_bom)).await?;
+            ctx.formatter
+                .format_file(&workdir, &path)
+                .await
+                .map_err(|error| ToolError::Other(error.to_string()))?;
             return Ok(success_result(true, 0, &path, &workdir, "", new));
         }
         let (source_has_bom, content) = read_utf8_text(&path).await?;
@@ -89,6 +93,10 @@ impl Tool for EditTool {
             encode_with_bom(updated, source_has_bom || incoming_has_bom),
         )
         .await?;
+        ctx.formatter
+            .format_file(&workdir, &path)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
         Ok(success_result(
             false,
             replacement.replaced,
