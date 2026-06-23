@@ -36,6 +36,9 @@ pub(super) struct AgentChange {
 #[derive(Default, Deserialize)]
 struct AgentConfig {
     default_agent: Option<String>,
+    permissions: Option<Vec<ConfigPermissionRule>>,
+    permission: Option<LegacyPermissions>,
+    tools: Option<LegacyTools>,
     agent: Option<BTreeMap<String, InlineAgent>>,
     agents: Option<BTreeMap<String, InlineAgent>>,
     mode: Option<BTreeMap<String, InlineAgent>>,
@@ -105,6 +108,24 @@ pub(super) fn default_agent(workdir: &Path) -> Option<String> {
         }
     }
     default_agent
+}
+
+pub(super) fn global_permissions(workdir: &Path) -> Vec<PermissionRule> {
+    let mut rules = Vec::new();
+    for path in config_paths(workdir) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some(config) = parse_config(&content) else {
+            continue;
+        };
+        if let Some(config_rules) =
+            permission_rules(config.permissions, config.permission, config.tools)
+        {
+            rules.extend(config_rules);
+        }
+    }
+    rules
 }
 
 fn config_paths(workdir: &Path) -> [PathBuf; 4] {
