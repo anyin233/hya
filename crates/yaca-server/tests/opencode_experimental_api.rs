@@ -151,6 +151,18 @@ async fn opencode_experimental_workspace_tool_session_and_sync_routes_return_saf
             .any(|tool| tool["id"] == "read" && tool["parameters"].is_object())
     );
 
+    let (status, _body) = request_json(app.clone(), "GET", "/experimental/tool", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _body) = request_json(
+        app.clone(),
+        "GET",
+        "/experimental/tool?provider=opencode",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     let (status, tool_ids) = request_json(app.clone(), "GET", "/experimental/tool/ids", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(tool_ids.as_array().unwrap().iter().any(|id| id == "read"));

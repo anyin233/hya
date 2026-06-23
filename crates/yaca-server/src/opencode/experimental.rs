@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use axum::extract::Query;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -72,10 +75,19 @@ async fn resource(State(st): State<ServerState>) -> Json<Value> {
     Json(json!(st.mcp_http.resources(&st.mcp_manager).await))
 }
 
-async fn tool_list(State(st): State<ServerState>) -> Json<Vec<Value>> {
+async fn tool_list(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    if query.get("provider").is_none_or(String::is_empty) {
+        return Err(ApiError::bad_request("tool list missing provider"));
+    }
+    if query.get("model").is_none_or(String::is_empty) {
+        return Err(ApiError::bad_request("tool list missing model"));
+    }
     let mut schemas = st.engine.tool_schemas();
     schemas.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
-    Json(
+    Ok(Json(
         schemas
             .into_iter()
             .map(|schema| {
@@ -86,7 +98,7 @@ async fn tool_list(State(st): State<ServerState>) -> Json<Vec<Value>> {
                 })
             })
             .collect(),
-    )
+    ))
 }
 
 async fn tool_ids(State(st): State<ServerState>) -> Json<Vec<String>> {
