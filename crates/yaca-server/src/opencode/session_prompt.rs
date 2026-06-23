@@ -109,7 +109,7 @@ async fn prompt(
     let (admitted_seq, time_created) = admission_info(&envelopes, admitted)?;
     if let Some(run) = run {
         let engine = st.engine.clone();
-        let agent = st.agent.clone();
+        let agent = super::reference::agent_with_guidance(&st).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
             let _guard = run;
@@ -148,7 +148,8 @@ async fn command(
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
-    let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+    let agent = super::reference::agent_with_guidance(&st).await;
+    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
     Ok(Json(MessageResponse { data }))
 }

@@ -214,7 +214,7 @@ async fn prompt_async(
     }
     let runs = st.runs.clone();
     let engine = st.engine.clone();
-    let agent = st.agent.clone();
+    let agent = super::reference::agent_with_guidance(&st).await;
     std::mem::drop(tokio::spawn(async move {
         let Some(run) = runs.start(session) else {
             publish_background_error(&engine, session, "session busy".to_string()).await;
@@ -323,7 +323,8 @@ async fn command(
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
-    let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+    let agent = super::reference::agent_with_guidance(&st).await;
+    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
     Ok(Json(load_message(&st, session, message).await?).into_response())
 }
 
@@ -390,7 +391,7 @@ pub(in crate::opencode) async fn run_session_init(
         .runs
         .start(session)
         .ok_or_else(|| ApiError::bad_request("Bad request"))?;
-    let mut agent = (*st.agent).clone();
+    let mut agent = super::reference::agent_with_guidance(st).await;
     agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
     st.engine
         .admit_command_prompt_with_id(

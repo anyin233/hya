@@ -48,7 +48,8 @@ async fn prompt(
         let Some(run) = st.runs.start(session) else {
             return Ok(super::errors::session_busy(session));
         };
-        let _finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+        let agent = super::reference::agent_with_guidance(&st).await;
+        let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
     }
     Ok(Json(super::session_legacy::load_message(&st, session, message).await?).into_response())
 }
