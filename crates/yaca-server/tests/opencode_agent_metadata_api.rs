@@ -121,6 +121,12 @@ async fn opencode_agent_routes_include_native_agent_catalog() {
     assert_eq!(find_agent(&agents, "plan")["mode"], "primary");
     assert_eq!(find_agent(&agents, "general")["mode"], "subagent");
     assert_eq!(find_agent(&agents, "explore")["mode"], "subagent");
+    assert!(
+        find_agent(&agents, "explore")["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("file search specialist")
+    );
     assert_eq!(find_agent(&agents, "compaction")["hidden"], true);
     assert_eq!(find_agent(&agents, "title")["hidden"], true);
     assert_eq!(find_agent(&agents, "summary")["hidden"], true);
@@ -144,6 +150,24 @@ async fn opencode_agent_routes_include_native_agent_catalog() {
         ]
     );
     assert_eq!(find_agent(api_agents, "general")["mode"], "subagent");
+    assert!(
+        find_agent(api_agents, "explore")["system"]
+            .as_str()
+            .unwrap()
+            .contains("file search specialist")
+    );
+    assert!(
+        find_agent(api_agents, "title")["system"]
+            .as_str()
+            .unwrap()
+            .contains("title generator")
+    );
+    assert!(
+        find_agent(api_agents, "summary")["system"]
+            .as_str()
+            .unwrap()
+            .contains("pull request description")
+    );
     assert_eq!(find_agent(api_agents, "compaction")["hidden"], true);
 }
 

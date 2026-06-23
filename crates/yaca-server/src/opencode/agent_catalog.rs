@@ -129,7 +129,7 @@ fn native_entries() -> Vec<AgentEntry> {
             request_headers: BTreeMap::new(),
             request_body: BTreeMap::new(),
             permissions: Vec::new(),
-            prompt: None,
+            prompt: super::agent_native_prompts::get(agent.name).map(str::to_string),
         })
         .collect()
 }
