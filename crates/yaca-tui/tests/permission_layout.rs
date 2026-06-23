@@ -41,6 +41,10 @@ fn permission_panel_uses_opencode_left_rail_without_box_border() {
         "permission panel should use OpenCode's reject label:\n{text}"
     );
     assert!(
+        !text.contains("wants to run"),
+        "permission panel should show the requested action as an OpenCode header, not a yaca sentence:\n{text}"
+    );
+    assert!(
         !text.contains("Allow all task") && !text.contains("Deny"),
         "permission panel should not render legacy yaca option labels:\n{text}"
     );

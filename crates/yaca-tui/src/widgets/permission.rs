@@ -65,10 +65,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             Line::from(vec![
                 rail(),
                 Span::styled("→ ", Style::default().fg(theme.muted)),
-                Span::styled(
-                    format!("{} wants to run:", prompt.title),
-                    Style::default().fg(theme.text),
-                ),
+                Span::styled(prompt.title.as_str(), Style::default().fg(theme.text)),
             ]),
             Line::from(vec![
                 rail(),
