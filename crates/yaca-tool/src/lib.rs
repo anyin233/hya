@@ -5,6 +5,7 @@ mod edit;
 mod edit_replace;
 mod formatter;
 mod formatter_catalog;
+mod formatter_definition;
 pub mod interaction;
 mod invalid;
 mod lsp;
