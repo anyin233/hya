@@ -1,8 +1,9 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::overlays::ellipsize;
 use crate::theme::Theme;
@@ -32,7 +33,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
     frame.render_widget(Clear, clear_rect);
 
     let inner_width = usize::from(width).saturating_sub(4);
-    let feedback_width = inner_width.saturating_sub("█".len());
+    let feedback_width = inner_width;
     let rail_style = Style::default().fg(theme.warning).bg(theme.element);
     let reject_rail_style = Style::default().fg(theme.error).bg(theme.element);
     let rail = || Span::styled("▏ ", rail_style);
@@ -52,6 +53,7 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
                 vec![Span::styled(format!(" {label} "), style), Span::raw(" ")]
             }),
     );
+    let mut cursor = None;
     let lines = match prompt.stage {
         PermissionPromptStage::Permission => vec![
             header_line(
@@ -111,39 +113,43 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
                 ),
             ]),
         ],
-        PermissionPromptStage::Reject => vec![
-            header_line(
-                reject_rail(),
-                theme,
-                "Reject permission",
-                Style::default()
-                    .fg(theme.error)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Line::from(vec![
-                reject_rail(),
-                Span::styled(
-                    ellipsize("Tell OpenCode what to do differently", inner_width),
-                    Style::default().fg(theme.muted),
+        PermissionPromptStage::Reject => {
+            let visible_reply = ellipsize(&prompt.reply, feedback_width);
+            cursor = Some(reply_cursor_position(
+                &visible_reply,
+                rect.x + 2,
+                rect.y + 3,
+            ));
+            vec![
+                header_line(
+                    reject_rail(),
+                    theme,
+                    "Reject permission",
+                    Style::default()
+                        .fg(theme.error)
+                        .add_modifier(Modifier::BOLD),
                 ),
-            ]),
-            Line::from(vec![reject_rail()]),
-            Line::from(vec![
-                reject_rail(),
-                Span::styled(
-                    ellipsize(&prompt.reply, feedback_width),
-                    Style::default().fg(theme.text),
-                ),
-                Span::styled("█", Style::default().fg(theme.primary)),
-            ]),
-            Line::from(vec![
-                reject_rail(),
-                Span::styled(
-                    "enter confirm · esc cancel",
-                    Style::default().fg(theme.muted),
-                ),
-            ]),
-        ],
+                Line::from(vec![
+                    reject_rail(),
+                    Span::styled(
+                        ellipsize("Tell OpenCode what to do differently", inner_width),
+                        Style::default().fg(theme.muted),
+                    ),
+                ]),
+                Line::from(vec![reject_rail()]),
+                Line::from(vec![
+                    reject_rail(),
+                    Span::styled(visible_reply, Style::default().fg(theme.text)),
+                ]),
+                Line::from(vec![
+                    reject_rail(),
+                    Span::styled(
+                        "enter confirm · esc cancel",
+                        Style::default().fg(theme.muted),
+                    ),
+                ]),
+            ]
+        }
     };
     frame.render_widget(
         Paragraph::new(lines)
@@ -151,6 +157,9 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             .wrap(Wrap { trim: false }),
         rect,
     );
+    if let Some(cursor) = cursor {
+        frame.set_cursor_position(cursor);
+    }
 }
 
 fn header_line<'a>(
@@ -167,4 +176,11 @@ fn header_line<'a>(
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         ),
     ])
+}
+
+fn reply_cursor_position(reply: &str, x: u16, y: u16) -> Position {
+    Position {
+        x: x.saturating_add(u16::try_from(UnicodeWidthStr::width(reply)).unwrap_or(u16::MAX)),
+        y,
+    }
 }
