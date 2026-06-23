@@ -65,7 +65,7 @@ async fn reply_request(
     State(st): State<ServerState>,
     Path((id, request)): Path<(String, String)>,
     Json(payload): Json<ReplyPayload>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     load_session(&st, session, None).await?;
     if st
@@ -73,26 +73,22 @@ async fn reply_request(
         .reply(session, &request, payload.answers)
         .await
     {
-        Ok(StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT.into_response())
     } else {
-        Err(ApiError::not_found(format!(
-            "question request not found: {request}"
-        )))
+        Ok(question_not_found(&request).into_response())
     }
 }
 
 async fn reject_request(
     State(st): State<ServerState>,
     Path((id, request)): Path<(String, String)>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     load_session(&st, session, None).await?;
     if st.question_requests.reject(session, &request).await {
-        Ok(StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT.into_response())
     } else {
-        Err(ApiError::not_found(format!(
-            "question request not found: {request}"
-        )))
+        Ok(question_not_found(&request).into_response())
     }
 }
 
