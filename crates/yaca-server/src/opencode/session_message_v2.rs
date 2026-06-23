@@ -19,6 +19,7 @@ struct MessagesQuery {
     limit: Option<usize>,
     order: Option<MessageOrder>,
     cursor: Option<String>,
+    before: Option<String>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -63,6 +64,22 @@ async fn messages(
     Path(id): Path<String>,
     Query(query): Query<MessagesQuery>,
 ) -> Result<Response, ApiError> {
+    if query.cursor.is_some() || query.order.is_some() {
+        return messages_with_yaca_cursor(st, id, query).await;
+    }
+    super::session_message_v2_before::messages(st, id, query.limit, query.before).await
+}
+
+async fn messages_with_yaca_cursor(
+    st: ServerState,
+    id: String,
+    query: MessagesQuery,
+) -> Result<Response, ApiError> {
+    if query.before.is_some() {
+        return Err(ApiError::bad_request(
+            "before cannot be combined with cursor",
+        ));
+    }
     if query.cursor.is_some() && query.order.is_some() {
         return Ok(super::errors::invalid_cursor(
             "Cursor cannot be combined with order",

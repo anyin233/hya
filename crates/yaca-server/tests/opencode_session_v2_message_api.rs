@@ -46,18 +46,21 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = get_response(app, uri).await;
     let status = resp.status();
     (status, body_json(resp).await)
+}
+
+async fn get_response(app: axum::Router, uri: String) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
@@ -96,8 +99,11 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, default_page) =
-        get_json(app.clone(), format!("/api/session/{session}/message")).await;
+    let (status, default_page) = get_json(
+        app.clone(),
+        format!("/api/session/{session}/message?order=desc"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(default_page["data"][0]["type"], "assistant");
     assert_eq!(
@@ -160,6 +166,74 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
 }
 
 #[tokio::test]
+async fn opencode_v2_session_message_route_supports_before_headers() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session".to_string(),
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/sessions/{session}/prompt"),
+        json!({"text": "hello"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let first = get_response(
+        app.clone(),
+        format!("/api/session/{session}/message?limit=1"),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let cursor = first
+        .headers()
+        .get("x-next-cursor")
+        .expect("next cursor")
+        .to_str()
+        .expect("cursor text")
+        .to_string();
+    let link = first
+        .headers()
+        .get("link")
+        .expect("link")
+        .to_str()
+        .expect("link text");
+    let exposed = first
+        .headers()
+        .get("access-control-expose-headers")
+        .expect("exposed headers");
+    assert_eq!(exposed, "Link, X-Next-Cursor");
+    assert!(link.contains(&cursor));
+    let body = body_json(first).await;
+    assert_eq!(body.as_array().expect("array").len(), 1);
+    assert_eq!(body[0]["type"], "assistant");
+
+    let second = get_response(
+        app.clone(),
+        format!("/api/session/{session}/message?limit=1&before={cursor}"),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    assert!(second.headers().get("x-next-cursor").is_none());
+    let body = body_json(second).await;
+    assert_eq!(body.as_array().expect("array").len(), 1);
+    assert_eq!(body[0]["type"], "user");
+
+    let bad = get_response(
+        app,
+        format!("/api/session/{session}/message?before={cursor}"),
+    )
+    .await;
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn opencode_v2_session_message_limit_zero_returns_all_messages() {
     let app = router(state().await);
     let (status, created) = post_json(
@@ -179,6 +253,10 @@ async fn opencode_v2_session_message_limit_zero_returns_all_messages() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
+    let (status, page) = get_json(app.clone(), format!("/api/session/{session}/message")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page.as_array().expect("messages").len(), 2);
+
     let (status, page) = get_json(
         app.clone(),
         format!("/api/session/{session}/message?limit=0"),
@@ -186,10 +264,10 @@ async fn opencode_v2_session_message_limit_zero_returns_all_messages() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["data"].as_array().expect("messages").len(), 2);
+    assert_eq!(page.as_array().expect("messages").len(), 2);
 
     let (status, page) = get_json(app, format!("/api/session/{session}/message?limit=201")).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["data"].as_array().expect("messages").len(), 2);
+    assert_eq!(page.as_array().expect("messages").len(), 2);
 }
