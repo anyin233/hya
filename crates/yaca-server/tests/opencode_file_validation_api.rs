@@ -133,6 +133,35 @@ async fn opencode_file_list_honors_gitignore_negation() {
 }
 
 #[tokio::test]
+async fn opencode_file_list_honors_anchored_gitignore_patterns() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join(".gitignore"), "/root-only.log\n").unwrap();
+    std::fs::write(workdir.join("root-only.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("src/root-only.log"), "kept\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, root_listing) = get_json(app.clone(), "/file?path=.").await;
+    let (status_src, src_listing) = get_json(app, "/file?path=src").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status_src, StatusCode::OK);
+    assert!(
+        root_listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "root-only.log" && entry["ignored"] == true)
+    );
+    assert!(
+        src_listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "src/root-only.log" && entry["ignored"] == false)
+    );
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");
