@@ -741,7 +741,7 @@ impl Controller {
         self.app.dialog = Some(DialogView {
             title: "commands".to_string(),
             subtitle: "select a command; enter runs".to_string(),
-            items: commands::help_items_with_custom(&self.custom_commands),
+            items: commands::palette_items_with_custom(&self.custom_commands),
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::CommandPalette);

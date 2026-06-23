@@ -53,8 +53,8 @@ fn status_commands_advertise_opencode_leader_shortcut() {
         .find(|item| item.label == "/mcp")
         .map(|item| item.detail.as_str());
 
-    assert!(matches!(tools_detail, Some(detail) if detail.starts_with("leader s")));
-    assert!(matches!(mcp_detail, Some(detail) if detail.starts_with("leader s")));
+    assert!(matches!(tools_detail, Some(detail) if detail.starts_with("MCP · leader s")));
+    assert!(matches!(mcp_detail, Some(detail) if detail.starts_with("MCP · leader s")));
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn export_command_advertises_opencode_session_export_shortcut() {
         .find(|item| item.label == "/export")
         .map(|item| item.detail.as_str());
 
-    assert!(matches!(export_detail, Some(detail) if detail.starts_with("leader x")));
+    assert!(matches!(export_detail, Some(detail) if detail.starts_with("Session · leader x")));
 }
 
 #[test]
@@ -80,9 +80,9 @@ fn command_help_avoids_unimplemented_leader_shortcuts() {
             .map(|item| item.detail.as_str())
     };
 
-    assert!(matches!(detail("/agent"), Some(text) if text.starts_with("leader a")));
-    assert!(matches!(detail("/init"), Some(text) if text.starts_with("/init")));
-    assert!(matches!(detail("/think"), Some(text) if text.starts_with("/think")));
+    assert!(matches!(detail("/agent"), Some(text) if text.starts_with("Agent · leader a")));
+    assert!(matches!(detail("/init"), Some(text) if text.starts_with("Context · /init")));
+    assert!(matches!(detail("/think"), Some(text) if text.starts_with("Agent · /think")));
 }
 
 #[test]
@@ -118,7 +118,7 @@ All args: $ARGUMENTS
     )
     .unwrap();
 
-    let commands = load_markdown_commands_from_dirs(&[commands_dir]).unwrap();
+    let commands = custom::load_markdown_commands_from_dirs(&[commands_dir]).unwrap();
 
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].name, "component");

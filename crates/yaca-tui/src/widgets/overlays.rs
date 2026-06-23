@@ -6,7 +6,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
-use crate::{DialogView, Picker};
+use crate::{DialogItem, DialogView, Picker};
 
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     let area = frame.area();
@@ -14,14 +14,19 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     let item_rows = u16::try_from(dialog.items.len())
         .unwrap_or(u16::MAX)
         .min(10);
-    let height = item_rows.saturating_add(6).min(area.height).max(8);
+    let category_rows = dialog_category_rows(dialog.items.iter().take(usize::from(item_rows)));
+    let height = item_rows
+        .saturating_add(category_rows)
+        .saturating_add(6)
+        .min(area.height)
+        .max(8);
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
         width,
         height,
     };
-    frame.render_widget(Clear, rect);
+    clear_overlay_band(frame, area, rect);
 
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
@@ -35,7 +40,18 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
         )),
         Line::from(""),
     ];
+    let mut last_category: Option<&str> = None;
     for (idx, item) in dialog.items.iter().enumerate().take(usize::from(item_rows)) {
+        let (category, detail_text) = split_category_detail(&item.detail);
+        if category.is_some() && category != last_category {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", category.unwrap_or_default()),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        last_category = category;
         let selected = idx == dialog.selected;
         let marker = if selected { "> " } else { "  " };
         let style = if selected {
@@ -46,10 +62,10 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
         } else {
             Style::default().fg(theme.text)
         };
-        let detail = if item.detail.is_empty() {
+        let detail = if detail_text.is_empty() {
             String::new()
         } else {
-            format!("  {}", ellipsize(&item.detail, inner_width / 2))
+            format!("  {}", ellipsize(detail_text, inner_width / 2))
         };
         lines.push(Line::from(vec![
             Span::styled(marker.to_string(), Style::default().fg(theme.primary)),
@@ -71,6 +87,37 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     );
 }
 
+fn dialog_category_rows<'a>(items: impl Iterator<Item = &'a DialogItem>) -> u16 {
+    let mut rows = 0_u16;
+    let mut last_category: Option<&str> = None;
+    for item in items {
+        let (category, _) = split_category_detail(&item.detail);
+        if category.is_some() && category != last_category {
+            rows = rows.saturating_add(1);
+        }
+        last_category = category;
+    }
+    rows
+}
+
+fn split_category_detail(detail: &str) -> (Option<&str>, &str) {
+    let Some((category, rest)) = detail.split_once(" · ") else {
+        return (None, detail);
+    };
+    if is_dialog_category(category) {
+        (Some(category), rest)
+    } else {
+        (None, detail)
+    }
+}
+
+fn is_dialog_category(label: &str) -> bool {
+    matches!(
+        label,
+        "Agent" | "Context" | "Custom" | "MCP" | "Permissions" | "Session" | "Suggested" | "System"
+    )
+}
+
 pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
     let area = frame.area();
     let item_rows = u16::try_from(picker.entries.len())
@@ -84,7 +131,7 @@ pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
         width,
         height,
     };
-    frame.render_widget(Clear, rect);
+    clear_overlay_band(frame, area, rect);
     let inner_width = usize::from(width).saturating_sub(6);
     let mut lines = vec![
         Line::from(Span::styled(
@@ -124,6 +171,18 @@ pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
             .style(Style::default().fg(theme.text).bg(theme.element))
             .wrap(Wrap { trim: false }),
         rect,
+    );
+}
+
+fn clear_overlay_band(frame: &mut Frame, area: Rect, rect: Rect) {
+    frame.render_widget(
+        Clear,
+        Rect {
+            x: area.x,
+            y: rect.y,
+            width: area.width,
+            height: rect.height,
+        },
     );
 }
 

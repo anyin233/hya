@@ -1,0 +1,168 @@
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandKind {
+    Model,
+    Resume,
+    NewSession,
+    Compact,
+    Init,
+    Agent,
+    Tools,
+    Yolo,
+    Think,
+    Export,
+    Quit,
+    Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommandCategory {
+    Agent,
+    Context,
+    Mcp,
+    Permissions,
+    Session,
+    System,
+}
+
+impl CommandCategory {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Agent => "Agent",
+            Self::Context => "Context",
+            Self::Mcp => "MCP",
+            Self::Permissions => "Permissions",
+            Self::Session => "Session",
+            Self::System => "System",
+        }
+    }
+}
+
+pub(super) struct CommandSpec {
+    pub(super) name: &'static str,
+    pub(super) aliases: &'static [&'static str],
+    pub(super) description: &'static str,
+    pub(super) key_hint: &'static str,
+    pub(super) kind: CommandKind,
+    pub(super) category: CommandCategory,
+    pub(super) suggested: bool,
+}
+
+pub(super) const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "model",
+        aliases: &["models"],
+        description: "Select the model for the next assistant turn",
+        key_hint: "leader m",
+        kind: CommandKind::Model,
+        category: CommandCategory::Agent,
+        suggested: true,
+    },
+    CommandSpec {
+        name: "resume",
+        aliases: &["sessions"],
+        description: "Resume a previous conversation",
+        key_hint: "leader l",
+        kind: CommandKind::Resume,
+        category: CommandCategory::Session,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "new",
+        aliases: &["clear"],
+        description: "Start a new conversation",
+        key_hint: "leader n",
+        kind: CommandKind::NewSession,
+        category: CommandCategory::Session,
+        suggested: true,
+    },
+    CommandSpec {
+        name: "compact",
+        aliases: &[],
+        description: "Compact prior conversation context",
+        key_hint: "leader c",
+        kind: CommandKind::Compact,
+        category: CommandCategory::Context,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "init",
+        aliases: &[],
+        description: "Create AGENTS.md project instructions",
+        key_hint: "/init",
+        kind: CommandKind::Init,
+        category: CommandCategory::Context,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "agent",
+        aliases: &["agents"],
+        description: "Select the active agent profile",
+        key_hint: "leader a",
+        kind: CommandKind::Agent,
+        category: CommandCategory::Agent,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "tools",
+        aliases: &[],
+        description: "Show builtin tools and MCP status",
+        key_hint: "leader s",
+        kind: CommandKind::Tools,
+        category: CommandCategory::Mcp,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "mcp",
+        aliases: &[],
+        description: "Show MCP and builtin tool status",
+        key_hint: "leader s",
+        kind: CommandKind::Tools,
+        category: CommandCategory::Mcp,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "yolo",
+        aliases: &[],
+        description: "Toggle or set auto-approve mode",
+        key_hint: "/yolo",
+        kind: CommandKind::Yolo,
+        category: CommandCategory::Permissions,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "think",
+        aliases: &[],
+        description: "Set reasoning effort for future turns",
+        key_hint: "/think",
+        kind: CommandKind::Think,
+        category: CommandCategory::Agent,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "export",
+        aliases: &[],
+        description: "Export the current transcript as Markdown",
+        key_hint: "leader x",
+        kind: CommandKind::Export,
+        category: CommandCategory::Session,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "quit",
+        aliases: &["exit", "q"],
+        description: "Exit yaca",
+        key_hint: "ctrl-c ctrl-c",
+        kind: CommandKind::Quit,
+        category: CommandCategory::System,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "help",
+        aliases: &["?"],
+        description: "Show commands and shortcuts",
+        key_hint: "?",
+        kind: CommandKind::Help,
+        category: CommandCategory::System,
+        suggested: false,
+    },
+];
