@@ -50,7 +50,7 @@ pub(super) struct CommandSpec {
 pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "model",
-        aliases: &["models"],
+        aliases: &["models", "mo"],
         description: "Select the model for the next assistant turn",
         key_hint: "leader m",
         kind: CommandKind::Model,
@@ -59,7 +59,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "resume",
-        aliases: &["sessions"],
+        aliases: &["sessions", "continue"],
         description: "Resume a previous conversation",
         key_hint: "leader l",
         kind: CommandKind::Resume,
@@ -113,7 +113,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mcp",
-        aliases: &[],
+        aliases: &["mcps"],
         description: "Show MCP and builtin tool status",
         key_hint: "leader s",
         kind: CommandKind::Tools,

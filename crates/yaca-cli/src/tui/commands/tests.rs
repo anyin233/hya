@@ -6,8 +6,10 @@ use super::*;
 fn resolves_slash_commands_and_aliases() {
     assert_eq!(resolve_slash("model"), Some(CommandKind::Model));
     assert_eq!(resolve_slash("models"), Some(CommandKind::Model));
+    assert_eq!(resolve_slash("mo"), Some(CommandKind::Model));
     assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
     assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
+    assert_eq!(resolve_slash("continue"), Some(CommandKind::Resume));
     assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
     assert_eq!(resolve_slash("clear"), Some(CommandKind::NewSession));
     assert_eq!(resolve_slash("compact"), Some(CommandKind::Compact));
@@ -15,6 +17,7 @@ fn resolves_slash_commands_and_aliases() {
     assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
     assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
+    assert_eq!(resolve_slash("mcps"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("status"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
     assert_eq!(resolve_slash("think"), Some(CommandKind::Think));

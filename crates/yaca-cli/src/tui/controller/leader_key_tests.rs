@@ -90,6 +90,48 @@ fn ctrl_x_then_l_opens_resume_dialog() {
 }
 
 #[test]
+fn slash_mo_opens_model_dialog() {
+    // Given
+    let mut controller =
+        Controller::with_models(AppState::default(), vec!["alpha".into(), "beta".into()]);
+
+    // When
+    type_text(&mut controller, "/mo ");
+    let effect = controller.handle_key(key(KeyCode::Enter));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("model dialog").title,
+        "select model"
+    );
+}
+
+#[test]
+fn slash_continue_opens_resume_dialog() {
+    // Given
+    let mut controller = Controller::with_sessions(
+        AppState::default(),
+        vec![SessionSummary {
+            id: "sess-1".to_string(),
+            title: "Earlier task".to_string(),
+            detail: "fake - just now".to_string(),
+        }],
+    );
+
+    // When
+    type_text(&mut controller, "/continue ");
+    let effect = controller.handle_key(key(KeyCode::Enter));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("resume dialog").title,
+        "resume session"
+    );
+}
+
+#[test]
 fn ctrl_x_then_n_requests_new_session() {
     // Given
     let mut controller = Controller::new(AppState::default());
@@ -139,6 +181,23 @@ fn slash_status_opens_status_dialog() {
 
     // When
     type_text(&mut controller, "/status");
+    let effect = controller.handle_key(key(KeyCode::Enter));
+
+    // Then
+    assert_eq!(effect, TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("status dialog").title,
+        "tools"
+    );
+}
+
+#[test]
+fn slash_mcps_opens_status_dialog() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+
+    // When
+    type_text(&mut controller, "/mcps ");
     let effect = controller.handle_key(key(KeyCode::Enter));
 
     // Then
