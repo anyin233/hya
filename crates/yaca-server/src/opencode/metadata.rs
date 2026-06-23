@@ -29,8 +29,8 @@ struct AgentInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'static str>,
-    mode: &'static str,
+    description: Option<String>,
+    mode: String,
     hidden: bool,
     permissions: Vec<PermissionRule>,
 }
@@ -64,23 +64,32 @@ async fn agent(
 ) -> Json<LocationResponse<Vec<AgentInfo>>> {
     let model = model_ref_parts(&st.agent.model);
     let location = LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
     Json(super::location::response_at(
         &st,
         &location,
-        super::agent_catalog::native_agents()
-            .iter()
+        super::agent_catalog::list(&workdir)
+            .into_iter()
             .map(|agent| AgentInfo {
-                id: agent.name.to_string(),
-                model: AgentModelRef {
-                    id: model.model_id.clone(),
-                    provider_id: model.provider_id.clone(),
-                },
+                id: agent.name.clone(),
+                model: agent
+                    .model
+                    .as_deref()
+                    .map(agent_model_ref)
+                    .unwrap_or_else(|| AgentModelRef {
+                        id: model.model_id.clone(),
+                        provider_id: model.provider_id.clone(),
+                    }),
                 request: RequestInfo {
                     headers: BTreeMap::new(),
                     body: json!({}),
                 },
-                system: (agent.name == "build").then(|| st.agent.system_prompt.clone()),
+                system: if agent.name == "build" && agent.prompt.is_none() {
+                    Some(st.agent.system_prompt.clone())
+                } else {
+                    agent.prompt
+                },
                 description: agent.description,
                 mode: agent.mode,
                 hidden: agent.hidden,
@@ -92,6 +101,19 @@ async fn agent(
             })
             .collect(),
     ))
+}
+
+fn agent_model_ref(model: &str) -> AgentModelRef {
+    if let Some((provider_id, model_id)) = model.split_once('/') {
+        return AgentModelRef {
+            id: model_id.to_string(),
+            provider_id: provider_id.to_string(),
+        };
+    }
+    AgentModelRef {
+        id: model.to_string(),
+        provider_id: "yaca".to_string(),
+    }
 }
 
 async fn command(

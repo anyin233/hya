@@ -146,3 +146,69 @@ async fn opencode_agent_routes_include_native_agent_catalog() {
     assert_eq!(find_agent(api_agents, "general")["mode"], "subagent");
     assert_eq!(find_agent(api_agents, "compaction")["hidden"], true);
 }
+
+#[tokio::test]
+async fn opencode_agent_routes_discover_project_agent_files() {
+    // Given: a workspace with OpenCode agent and mode markdown files.
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".opencode/agents")).unwrap();
+    std::fs::create_dir_all(workdir.join(".opencode/modes")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/agents/reviewer.md"),
+        "---\ndescription: Reviews changes\nmode: subagent\nhidden: true\nmodel: anthropic/claude\n---\nReview carefully.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir.join(".opencode/modes/audit.md"),
+        "---\ndescription: Audit mode\n---\nAudit thoroughly.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir.join(".opencode/agents/plan.md"),
+        "---\ndescription: Custom plan mode\n---\nPlan in project style.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir.join(".opencode/agents/compaction.md"),
+        "---\ndescription: Custom compaction\n---\nCompact in project style.\n",
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: both legacy and v2 agent routes are listed for that workspace.
+    let uri = format!("/agent?directory={}", workdir.display());
+    let api_uri = format!("/api/agent?directory={}", workdir.display());
+    let (status, agents) = get_json(app.clone(), &uri).await;
+    let (api_status, api_agents) = get_json(app, &api_uri).await;
+
+    // Then: project agents are merged with native agents and preserve metadata.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(api_status, StatusCode::OK);
+    let reviewer = find_agent(&agents, "reviewer");
+    assert_eq!(reviewer["description"], "Reviews changes");
+    assert_eq!(reviewer["mode"], "subagent");
+    assert_eq!(reviewer["hidden"], true);
+    assert_eq!(reviewer["model"]["providerID"], "anthropic");
+    assert_eq!(reviewer["model"]["modelID"], "claude");
+    assert_eq!(reviewer["prompt"], "Review carefully.");
+
+    let audit = find_agent(&agents, "audit");
+    assert_eq!(audit["description"], "Audit mode");
+    assert_eq!(audit["mode"], "primary");
+    assert_eq!(audit["prompt"], "Audit thoroughly.");
+
+    let plan = find_agent(&agents, "plan");
+    assert_eq!(plan["description"], "Custom plan mode");
+    assert_eq!(plan["mode"], "primary");
+    assert_eq!(plan["native"], true);
+    assert_eq!(plan["prompt"], "Plan in project style.");
+    assert_eq!(find_agent(&agents, "compaction")["hidden"], true);
+
+    let api_agents = &api_agents["data"];
+    let reviewer = find_agent(api_agents, "reviewer");
+    assert_eq!(reviewer["description"], "Reviews changes");
+    assert_eq!(reviewer["model"]["providerID"], "anthropic");
+    assert_eq!(reviewer["model"]["id"], "claude");
+    assert_eq!(reviewer["system"], "Review carefully.");
+    assert_eq!(find_agent(api_agents, "audit")["mode"], "primary");
+}
