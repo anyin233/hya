@@ -26,7 +26,10 @@ struct AgentInfo {
     id: String,
     model: AgentModelRef,
     request: RequestInfo,
-    system: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'static str>,
     mode: &'static str,
     hidden: bool,
     permissions: Vec<PermissionRule>,
@@ -61,24 +64,33 @@ async fn agent(
 ) -> Json<LocationResponse<Vec<AgentInfo>>> {
     let model = model_ref_parts(&st.agent.model);
     let location = LocationRef::from_request(&query, &headers);
+    let build_permissions = super::agent_permission::from_engine(&st.engine);
     Json(super::location::response_at(
         &st,
         &location,
-        vec![AgentInfo {
-            id: st.agent.name.to_string(),
-            model: AgentModelRef {
-                id: model.model_id,
-                provider_id: model.provider_id,
-            },
-            request: RequestInfo {
-                headers: BTreeMap::new(),
-                body: json!({}),
-            },
-            system: st.agent.system_prompt.clone(),
-            mode: "primary",
-            hidden: false,
-            permissions: super::agent_permission::from_engine(&st.engine),
-        }],
+        super::agent_catalog::native_agents()
+            .iter()
+            .map(|agent| AgentInfo {
+                id: agent.name.to_string(),
+                model: AgentModelRef {
+                    id: model.model_id.clone(),
+                    provider_id: model.provider_id.clone(),
+                },
+                request: RequestInfo {
+                    headers: BTreeMap::new(),
+                    body: json!({}),
+                },
+                system: (agent.name == "build").then(|| st.agent.system_prompt.clone()),
+                description: agent.description,
+                mode: agent.mode,
+                hidden: agent.hidden,
+                permissions: if agent.name == "build" {
+                    build_permissions.clone()
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect(),
     ))
 }
 
