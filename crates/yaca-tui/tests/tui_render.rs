@@ -227,6 +227,7 @@ fn question_and_picker_overlays_are_borderless() {
             options: vec!["yes".to_string(), "no".to_string()],
             selected: 0,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         ..AppState::default()

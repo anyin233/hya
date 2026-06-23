@@ -1,14 +1,24 @@
 #[allow(dead_code)]
 mod render_support;
 
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::layout::Position;
 use ratatui::style::{Color, Modifier};
 use render_support::{render, render_buffer, with_assistant_message};
-use yaca_tui::{AppState, QuestionPrompt};
+use yaca_tui::{AppState, QuestionPrompt, draw};
 
 fn row_index(text: &str, needle: &str) -> usize {
     text.lines()
         .position(|row| row.contains(needle))
         .unwrap_or_else(|| panic!("missing {needle:?} in:\n{text}"))
+}
+
+fn cursor_position(state: &mut AppState, width: u16, height: u16) -> Position {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| draw(frame, state)).unwrap();
+    terminal.backend().cursor_position()
 }
 
 #[test]
@@ -20,6 +30,7 @@ fn question_panel_keeps_footer_blocker_status_visible() {
             options: vec!["yes".to_string(), "no".to_string()],
             selected: 0,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         scroll_back: 5,
@@ -69,6 +80,7 @@ fn question_panel_keeps_footer_row_background_separate() {
             options: vec!["fast".to_string(), "careful".to_string()],
             selected: 1,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         ..AppState::default()
@@ -92,6 +104,7 @@ fn question_panel_uses_opencode_option_labels_and_hint() {
             options: vec!["fast".to_string(), "careful".to_string()],
             selected: 0,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         ..AppState::default()
@@ -132,6 +145,7 @@ fn question_panel_renders_prompt_as_body_text() {
             options: vec!["fast".to_string(), "careful".to_string()],
             selected: 0,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         ..AppState::default()
@@ -167,6 +181,7 @@ fn question_panel_highlights_selected_option_like_opencode() {
             options: vec!["fast".to_string(), "careful".to_string()],
             selected: 0,
             input: String::new(),
+            input_cursor: None,
             allow_custom: false,
         }),
         ..AppState::default()
@@ -203,6 +218,7 @@ fn question_panel_renders_custom_answer_like_opencode() {
             options: vec!["fast".to_string(), "careful".to_string()],
             selected: 2,
             input: "slow and safe".to_string(),
+            input_cursor: None,
             allow_custom: true,
         }),
         ..AppState::default()
@@ -228,4 +244,68 @@ fn question_panel_renders_custom_answer_like_opencode() {
         !text.contains("enter save") && !text.contains("esc cancel"),
         "custom answer editing should not expose legacy save/cancel wording:\n{text}"
     );
+}
+
+#[test]
+fn question_custom_answer_places_cursor_at_input_cursor() {
+    // Given: an allow-custom question has an explicit cursor in the answer text.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 2,
+            input: "slow and safe".to_string(),
+            input_cursor: Some("slow and".len()),
+            allow_custom: true,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the question footer renders.
+    let width = 100;
+    let height = 20;
+    let buffer = render_buffer(&mut state, width, height);
+    let (x, y) = render_support::find_rendered_text(&buffer, width, height, "slow and safe")
+        .unwrap_or_else(|| {
+            panic!(
+                "missing custom answer in:\n{}",
+                render_support::buffer_text(&buffer, width, height)
+            )
+        });
+    let cursor = cursor_position(&mut state, width, height);
+
+    // Then: terminal cursor follows the logical input cursor.
+    assert_eq!(cursor, Position { x: x + 8, y });
+}
+
+#[test]
+fn question_custom_answer_places_cursor_on_empty_input() {
+    // Given: an allow-custom question has a selected empty custom answer.
+    let mut state = AppState {
+        question: Some(QuestionPrompt {
+            prompt: "Pick a mode".to_string(),
+            options: vec!["fast".to_string(), "careful".to_string()],
+            selected: 2,
+            input: String::new(),
+            input_cursor: Some(0),
+            allow_custom: true,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the question footer renders.
+    let width = 100;
+    let height = 20;
+    let buffer = render_buffer(&mut state, width, height);
+    let (x, y) = render_support::find_rendered_text(&buffer, width, height, "Type your own answer")
+        .unwrap_or_else(|| {
+            panic!(
+                "missing custom answer option in:\n{}",
+                render_support::buffer_text(&buffer, width, height)
+            )
+        });
+    let cursor = cursor_position(&mut state, width, height);
+
+    // Then: the terminal cursor remains on the editable custom-answer row.
+    assert_eq!(cursor, Position { x, y: y + 1 });
 }

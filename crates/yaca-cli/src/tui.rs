@@ -479,6 +479,7 @@ pub async fn run(
                         options,
                         selected: 0,
                         input,
+                        input_cursor: None,
                         allow_custom,
                     });
                 }

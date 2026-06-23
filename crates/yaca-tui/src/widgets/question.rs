@@ -1,8 +1,9 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::overlays::ellipsize;
 use crate::QuestionPrompt;
@@ -59,12 +60,29 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
             theme,
         ));
     }
+    let mut cursor = None;
     if question.options.is_empty() {
+        cursor = Some(question_cursor_position(
+            question,
+            rect.x.saturating_add(2),
+            rect.y
+                .saturating_add(u16::try_from(lines.len()).unwrap_or(u16::MAX)),
+            inner_width.saturating_sub(2),
+        ));
         lines.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.primary)),
             Span::styled(question.input.clone(), Style::default().fg(theme.text)),
         ]));
-    } else if question.allow_custom && !question.input.is_empty() {
+    } else if question.allow_custom
+        && (question.selected == question.options.len() || !question.input.is_empty())
+    {
+        cursor = Some(question_cursor_position(
+            question,
+            rect.x.saturating_add(3),
+            rect.y
+                .saturating_add(u16::try_from(lines.len()).unwrap_or(u16::MAX)),
+            inner_width.saturating_sub(3),
+        ));
         lines.push(Line::from(Span::styled(
             format!(
                 "   {}",
@@ -84,6 +102,9 @@ pub fn render_question(frame: &mut Frame, question: &QuestionPrompt, theme: &The
             .wrap(Wrap { trim: false }),
         rect,
     );
+    if let Some(cursor) = cursor {
+        frame.set_cursor_position(cursor);
+    }
 }
 
 fn option_line(
@@ -125,4 +146,26 @@ const fn question_hint(question: &QuestionPrompt) -> &'static str {
     } else {
         "↑↓ select   enter submit   esc dismiss"
     }
+}
+
+fn question_cursor_position(
+    question: &QuestionPrompt,
+    x: u16,
+    y: u16,
+    max_width: usize,
+) -> Position {
+    let prefix = input_cursor_prefix(&question.input, question.input_cursor);
+    let column = UnicodeWidthStr::width(prefix).min(max_width);
+    Position {
+        x: x.saturating_add(u16::try_from(column).unwrap_or(u16::MAX)),
+        y,
+    }
+}
+
+fn input_cursor_prefix(input: &str, cursor: Option<usize>) -> &str {
+    let mut idx = cursor.unwrap_or(input.len()).min(input.len());
+    while !input.is_char_boundary(idx) {
+        idx = idx.saturating_sub(1);
+    }
+    &input[..idx]
 }

@@ -184,6 +184,7 @@ pub struct QuestionPrompt {
     pub options: Vec<String>,
     pub selected: usize,
     pub input: String,
+    pub input_cursor: Option<usize>,
     pub allow_custom: bool,
 }
 
