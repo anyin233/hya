@@ -10,9 +10,6 @@ use yaca_proto::Projection;
 
 use crate::{ApiError, ServerState, parse_session};
 
-const DEFAULT_LIMIT: usize = 50;
-const MAX_LIMIT: usize = 200;
-
 pub(super) fn router() -> Router<ServerState> {
     Router::new().route("/api/session/:id/message", get(messages))
 }
@@ -69,10 +66,6 @@ async fn messages(
             "Cursor cannot be combined with order",
         ));
     }
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
-    if !(1..=MAX_LIMIT).contains(&limit) {
-        return Err(ApiError::bad_request("limit must be between 1 and 200"));
-    }
     let decoded = match query.cursor.as_deref().map(decode_cursor).transpose() {
         Ok(decoded) => decoded,
         Err(()) => return Ok(super::errors::invalid_cursor("Invalid cursor")),
@@ -92,6 +85,10 @@ async fn messages(
     if matches!(order, MessageOrder::Desc) {
         items.reverse();
     }
+    let limit = query
+        .limit
+        .filter(|limit| *limit > 0)
+        .unwrap_or(items.len());
     let start = decoded
         .as_ref()
         .map(|cursor| cursor_start(&items, cursor, limit))

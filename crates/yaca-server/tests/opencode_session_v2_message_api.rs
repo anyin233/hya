@@ -151,3 +151,38 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
         })
     );
 }
+
+#[tokio::test]
+async fn opencode_v2_session_message_limit_zero_returns_all_messages() {
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session".to_string(),
+        json!({"location": {"directory": WORKDIR}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/sessions/{session}/prompt"),
+        json!({"text": "hello"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, page) = get_json(
+        app.clone(),
+        format!("/api/session/{session}/message?limit=0"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["data"].as_array().expect("messages").len(), 2);
+
+    let (status, page) = get_json(app, format!("/api/session/{session}/message?limit=201")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["data"].as_array().expect("messages").len(), 2);
+}
