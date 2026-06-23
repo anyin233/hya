@@ -13,6 +13,7 @@ use crate::theme::Theme;
 
 const PROMPT_GUTTER_WIDTH: u16 = 2;
 const MAX_INPUT_ROWS: usize = 6;
+const FIRST_PROMPT_PLACEHOLDER: &str = r#"Ask anything... "Fix a TODO in the codebase""#;
 
 pub fn render_prompt(
     frame: &mut Frame,
@@ -32,10 +33,23 @@ pub fn render_prompt(
     };
     let input_lines = visible_input_lines(&state.input, state.input_cursor, area.width);
     let mut lines = vec![Line::from("")];
-    lines.extend(input_lines.into_iter().map(|text| {
+    let show_placeholder =
+        !state.running && state.input.is_empty() && state.projection.session.messages.is_empty();
+    lines.extend(input_lines.into_iter().enumerate().map(|(idx, text)| {
+        let placeholder = show_placeholder && idx == 0;
+        let text = if placeholder {
+            FIRST_PROMPT_PLACEHOLDER.to_string()
+        } else {
+            text
+        };
+        let text_style = if placeholder {
+            Style::default().fg(theme.muted).bg(theme.element)
+        } else {
+            Style::default().fg(theme.text).bg(theme.element)
+        };
         Line::from(vec![
             Span::styled("▌ ", Style::default().fg(rail).bg(theme.element)),
-            Span::styled(text, Style::default().fg(theme.text).bg(theme.element)),
+            Span::styled(text, text_style),
         ])
     }));
     lines.push(composer_identity_metadata(
