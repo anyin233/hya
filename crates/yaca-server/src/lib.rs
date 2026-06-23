@@ -23,9 +23,10 @@ mod pending;
 mod runs;
 mod state;
 
+pub use state::AppState;
 pub(crate) use state::ServerState;
-pub use state::{AppState, FormatterStatus};
 pub use yaca_proto::WorkspaceAdapterInfo;
+pub use yaca_tool::FormatterStatus;
 
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);

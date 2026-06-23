@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use serde::Serialize;
 use tokio::sync::mpsc;
 use yaca_core::{AgentSpec, SessionEngine};
 use yaca_mcp::McpManager;
 use yaca_proto::WorkspaceAdapterInfo;
-use yaca_tool::{AskRequest, QuestionRequest};
+use yaca_tool::{AskRequest, FormatterStatus, QuestionRequest};
 
 use crate::{opencode, pending, runs};
 
@@ -18,24 +17,6 @@ pub struct AppState {
     mcp_manager: Arc<McpManager>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct FormatterStatus {
-    name: String,
-    extensions: Vec<String>,
-    enabled: bool,
-}
-
-impl FormatterStatus {
-    #[must_use]
-    pub fn new(name: impl Into<String>, extensions: Vec<String>, enabled: bool) -> Self {
-        Self {
-            name: name.into(),
-            extensions,
-            enabled,
-        }
-    }
 }
 
 impl AppState {
