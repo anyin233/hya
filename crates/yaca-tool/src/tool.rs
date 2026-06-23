@@ -400,18 +400,22 @@ impl Tool for GrepTool {
             meta.as_ref().is_some_and(std::fs::Metadata::is_dir),
         )
         .await?;
-        let mut files = if meta.as_ref().is_some_and(std::fs::Metadata::is_file) {
-            vec![root.clone()]
+        let search_root = if meta.as_ref().is_some_and(std::fs::Metadata::is_file) {
+            root.parent()
+                .map_or_else(|| root.clone(), Path::to_path_buf)
         } else {
+            root.clone()
+        };
+        let mut files = {
             let mut files = Vec::new();
-            walk(&root, &mut files);
+            walk(&search_root, &mut files);
             files
         };
         files.sort();
         let mut rows = Vec::new();
         for f in files {
             if let Some(include) = &input.include
-                && !matches_include(include, &f, &root)
+                && !matches_include(include, &f, &search_root)
             {
                 continue;
             }

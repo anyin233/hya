@@ -161,6 +161,31 @@ async fn grep_supports_regex_include_and_open_code_output_shape() {
 }
 
 #[tokio::test]
+async fn grep_uses_parent_directory_when_path_is_a_file() {
+    let workdir = tempdir();
+    let src = workdir.join("src");
+    tokio::fs::create_dir_all(&src).await.unwrap();
+    tokio::fs::write(src.join("main.rs"), "needle in main\n")
+        .await
+        .unwrap();
+    tokio::fs::write(src.join("lib.rs"), "needle in lib\n")
+        .await
+        .unwrap();
+    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let ctx = ctx_with(workdir);
+
+    let out = tool
+        .execute(&ctx, json!({ "pattern": "needle", "path": "src/main.rs" }))
+        .await
+        .unwrap();
+
+    let output = out["output"].as_str().unwrap();
+    assert_eq!(out["metadata"]["matches"], 2);
+    assert!(output.contains("main.rs"));
+    assert!(output.contains("lib.rs"));
+}
+
+#[tokio::test]
 async fn glob_requires_external_directory_permission_for_outside_path() {
     let workdir = tempdir();
     let outside = tempdir();
