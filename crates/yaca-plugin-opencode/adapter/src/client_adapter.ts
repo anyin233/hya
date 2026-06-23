@@ -75,6 +75,11 @@ type OpenCodeClientContext = {
 export type OpenCodeClientAdapter = {
   readonly app: {
     readonly log: (options: unknown) => Promise<OpenCodeClientResponse<boolean>>
+    readonly agents: () => Promise<OpenCodeClientResponse<readonly unknown[]>>
+    readonly skills: () => Promise<OpenCodeClientResponse<readonly unknown[]>>
+  }
+  readonly config: {
+    readonly get: () => Promise<OpenCodeClientResponse<Readonly<Record<string, unknown>>>>
   }
   readonly path: {
     readonly get: () => Promise<OpenCodeClientResponse<OpenCodePath>>
@@ -88,6 +93,9 @@ export type OpenCodeClientAdapter = {
   }
   readonly lsp: {
     readonly status: () => Promise<OpenCodeClientResponse<readonly unknown[]>>
+  }
+  readonly tool: {
+    readonly ids: () => Promise<OpenCodeClientResponse<readonly string[]>>
   }
   readonly vcs: {
     readonly get: () => Promise<OpenCodeClientResponse<OpenCodeVcsInfo>>
@@ -114,6 +122,11 @@ export function createOpenCodeClientAdapter(
   return {
     app: {
       log: async (options) => appLog(stderr, options),
+      agents: async () => ok([]),
+      skills: async () => ok([]),
+    },
+    config: {
+      get: async () => ok({}),
     },
     path: {
       get: async () => ok(pathInfo(context)),
@@ -127,6 +140,9 @@ export function createOpenCodeClientAdapter(
     },
     lsp: {
       status: async () => ok([]),
+    },
+    tool: {
+      ids: async () => ok([]),
     },
     vcs: {
       get: async () => ok(await vcsInfo(context)),
