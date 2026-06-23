@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState, WorkspaceAdapterInfo};
 
-use super::{location, worktree_git};
+use super::{location, workspace_id, worktree_git};
 
 pub(super) async fn adapters(State(st): State<ServerState>) -> Json<Vec<WorkspaceAdapterInfo>> {
     let mut adapters = vec![WorkspaceAdapterInfo {
@@ -122,12 +122,12 @@ async fn workspace_list(st: &ServerState) -> Result<Vec<Info>, ApiError> {
 
 fn workspace_info(source: &Path, info: &worktree_git::Info) -> Info {
     Info {
-        id: stable_id("wrk", info.directory()),
+        id: workspace_id::workspace(info.directory()),
         r#type: "worktree",
         name: info.name().to_string(),
         branch: info.branch().map(ToString::to_string),
         directory: info.directory().to_string(),
-        project_id: stable_id("proj", &source.to_string_lossy()),
+        project_id: workspace_id::project(source.to_string_lossy().as_ref()),
         time_used: 0,
     }
 }
@@ -148,13 +148,4 @@ fn workspace_error(name: &'static str, message: impl Into<String>) -> Response {
         })),
     )
         .into_response()
-}
-
-fn stable_id(prefix: &str, text: &str) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in text.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{prefix}_{hash:016x}")
 }
