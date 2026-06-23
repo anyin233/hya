@@ -54,8 +54,11 @@ pub(super) fn router() -> Router<ServerState> {
             get(get_one).patch(update).delete(remove),
         )
         .route("/api/session/:id/init", post(init))
-        .route("/api/session/:id/compact", post(compact))
-        .route("/api/session/:id/wait", post(wait))
+        .route(
+            "/api/session/:id/compact",
+            post(super::session_wait::compact),
+        )
+        .route("/api/session/:id/wait", post(super::session_wait::wait))
 }
 
 async fn list(
@@ -226,17 +229,6 @@ async fn init(
     }
     let data = super::session_legacy::run_session_init(&st, session, req).await?;
     Ok(Json(DataResponse { data }).into_response())
-}
-
-async fn compact(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    super::session_unavailable::unavailable_operation(&st, &id, "compact").await
-}
-
-async fn wait(State(st): State<ServerState>, Path(id): Path<String>) -> Result<Response, ApiError> {
-    super::session_unavailable::unavailable_operation(&st, &id, "wait").await
 }
 
 async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, ApiError> {
