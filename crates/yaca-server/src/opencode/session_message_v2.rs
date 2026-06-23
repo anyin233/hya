@@ -11,7 +11,9 @@ use yaca_proto::Projection;
 use crate::{ApiError, ServerState, parse_session};
 
 pub(super) fn router() -> Router<ServerState> {
-    Router::new().route("/api/session/:id/message", get(messages))
+    Router::new()
+        .route("/api/session/:id/message", get(messages))
+        .route("/api/session/:id/message/:message", get(message))
 }
 
 #[derive(Deserialize)]
@@ -70,6 +72,21 @@ async fn messages(
     super::session_message_v2_before::messages(st, id, query.limit, query.before).await
 }
 
+async fn message(
+    State(st): State<ServerState>,
+    Path((id, message)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let items = match load_v2_messages(&st, &id).await? {
+        Ok(items) => items,
+        Err(response) => return Ok(response),
+    };
+    let message = items
+        .into_iter()
+        .find(|item| message_id(item) == Some(message.as_str()))
+        .ok_or_else(|| ApiError::not_found("message not found"))?;
+    Ok(Json(message).into_response())
+}
+
 async fn messages_with_yaca_cursor(
     st: ServerState,
     id: String,
@@ -94,13 +111,10 @@ async fn messages_with_yaca_cursor(
         .map(|cursor| cursor.order)
         .or(query.order)
         .unwrap_or(MessageOrder::Desc);
-    let session = parse_session(&id)?;
-    let envs = st.engine.replay(session).await?;
-    if envs.is_empty() {
-        return Ok(super::errors::session_not_found(&id));
-    }
-    let projection = Projection::from_events(&envs);
-    let mut items = super::session_context_messages::v2_messages(&envs, &projection);
+    let mut items = match load_v2_messages(&st, &id).await? {
+        Ok(items) => items,
+        Err(response) => return Ok(response),
+    };
     if matches!(order, MessageOrder::Desc) {
         items.reverse();
     }
@@ -118,6 +132,22 @@ async fn messages_with_yaca_cursor(
         data,
     })
     .into_response())
+}
+
+async fn load_v2_messages(
+    st: &ServerState,
+    id: &str,
+) -> Result<Result<Vec<Value>, Response>, ApiError> {
+    let session = parse_session(id)?;
+    let envs = st.engine.replay(session).await?;
+    if envs.is_empty() {
+        return Ok(Err(super::errors::session_not_found(id)));
+    }
+    let projection = Projection::from_events(&envs);
+    Ok(Ok(super::session_context_messages::v2_messages(
+        &envs,
+        &projection,
+    )))
 }
 
 fn cursor_start(messages: &[Value], cursor: &MessageCursor, limit: usize) -> usize {

@@ -106,6 +106,7 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(default_page["data"][0]["type"], "assistant");
+    let assistant = default_page["data"][0]["id"].as_str().expect("message id");
     assert_eq!(
         default_page["data"][0]["content"][0]["text"],
         "assistant answer"
@@ -113,6 +114,15 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     assert_eq!(default_page["data"][1]["type"], "user");
     assert!(default_page["cursor"]["previous"].as_str().is_some());
     assert!(default_page["cursor"]["next"].as_str().is_some());
+
+    let (status, detail) = get_json(
+        app.clone(),
+        format!("/api/session/{session}/message/{assistant}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["id"], assistant);
+    assert_eq!(detail["content"][0]["text"], "assistant answer");
 
     let (status, first) = get_json(
         app.clone(),
@@ -142,13 +152,8 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({
-            "_tag": "InvalidCursorError",
-            "message": "Cursor cannot be combined with order",
-        })
-    );
+    assert_eq!(body["_tag"], "InvalidCursorError");
+    assert_eq!(body["message"], "Cursor cannot be combined with order");
 
     let (status, body) = get_json(
         app,
@@ -156,13 +161,8 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({
-            "_tag": "InvalidCursorError",
-            "message": "Invalid cursor",
-        })
-    );
+    assert_eq!(body["_tag"], "InvalidCursorError");
+    assert_eq!(body["message"], "Invalid cursor");
 }
 
 #[tokio::test]
