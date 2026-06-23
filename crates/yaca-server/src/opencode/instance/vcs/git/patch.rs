@@ -12,15 +12,17 @@ const MAX_TOTAL_PATCH_BYTES: usize = 10_000_000;
 pub(super) fn for_item(
     workdir: &Path,
     item: &GitItem,
-    has_head: bool,
+    ref_name: Option<&str>,
     context: Option<usize>,
     current_total_bytes: usize,
 ) -> Result<String, ApiError> {
-    let patch = if item.code == "??" || !has_head {
+    let patch = if item.code == "??" {
         untracked_raw(workdir, &item.file)?
-    } else {
+    } else if let Some(ref_name) = ref_name {
         let unified = format!("--unified={}", context.unwrap_or(PATCH_CONTEXT_LINES));
-        text(workdir, &["diff", &unified, "HEAD", "--", &item.file])?
+        text(workdir, &["diff", &unified, ref_name, "--", &item.file])?
+    } else {
+        untracked_raw(workdir, &item.file)?
     };
     Ok(cap_patch(&item.file, patch, current_total_bytes))
 }

@@ -53,10 +53,10 @@ pub(super) fn is_repo(workdir: &Path) -> bool {
 }
 
 pub(super) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
-    let has_head = has_head(workdir);
+    let ref_name = has_head(workdir).then_some("HEAD");
     let mut out = Vec::new();
     for item in status::items(workdir)? {
-        let (additions, deletions) = stats(workdir, &item, has_head)?;
+        let (additions, deletions) = stats(workdir, &item, ref_name)?;
         out.push(FileStatus {
             file: item.file,
             additions,
@@ -72,13 +72,13 @@ pub(super) fn diff(
     mode: &str,
     context: Option<usize>,
 ) -> Result<Vec<FileDiff>, ApiError> {
-    let items = diff_items(workdir, mode)?;
-    let has_head = has_head(workdir);
+    let (ref_name, items) = diff_items(workdir, mode)?;
+    let ref_name = ref_name.as_deref();
     let mut total_patch_bytes = 0;
     let mut out = Vec::new();
     for item in items {
-        let (additions, deletions) = stats(workdir, &item, has_head)?;
-        let patch = patch::for_item(workdir, &item, has_head, context, total_patch_bytes)?;
+        let (additions, deletions) = stats(workdir, &item, ref_name)?;
+        let patch = patch::for_item(workdir, &item, ref_name, context, total_patch_bytes)?;
         total_patch_bytes = total_patch_bytes.saturating_add(patch.len());
         out.push(FileDiff {
             patch,
@@ -128,24 +128,27 @@ pub(super) fn apply_patch(workdir: &Path, patch: &str) -> Result<(), ()> {
         .and_then(|status| status.success().then_some(()).ok_or(()))
 }
 
-fn diff_items(workdir: &Path, mode: &str) -> Result<Vec<GitItem>, ApiError> {
+fn diff_items(workdir: &Path, mode: &str) -> Result<(Option<String>, Vec<GitItem>), ApiError> {
     match mode {
-        "git" => status::items(workdir),
+        "git" => Ok((
+            has_head(workdir).then(|| "HEAD".to_string()),
+            status::items(workdir)?,
+        )),
         "branch" => branch_items(workdir),
         _ => Err(ApiError::bad_request("invalid vcs diff mode")),
     }
 }
 
-fn branch_items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
+fn branch_items(workdir: &Path) -> Result<(Option<String>, Vec<GitItem>), ApiError> {
     let Some(default) = default_branch(workdir) else {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     };
     if branch(workdir).as_deref() == Some(default.as_str()) {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     }
     let ref_name = format!("origin/{default}");
     let Some(base) = output(workdir, &["merge-base", "HEAD", &ref_name]) else {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     };
     let out = text(workdir, &["diff", "--name-status", &base])?;
     let mut items: Vec<_> = out.lines().filter_map(item_from_name_status).collect();
@@ -155,7 +158,7 @@ fn branch_items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
             .filter(|item| item.code == "??"),
     );
     items.sort_by(|a, b| a.file.cmp(&b.file));
-    Ok(items)
+    Ok((Some(base), items))
 }
 
 fn item_from_name_status(line: &str) -> Option<GitItem> {
@@ -177,11 +180,18 @@ fn status_name(code: &str) -> &'static str {
     }
 }
 
-fn stats(workdir: &Path, item: &GitItem, has_head: bool) -> Result<(usize, usize), ApiError> {
-    if item.code == "??" || !has_head {
+fn stats(
+    workdir: &Path,
+    item: &GitItem,
+    ref_name: Option<&str>,
+) -> Result<(usize, usize), ApiError> {
+    let Some(ref_name) = ref_name else {
+        return Ok((line_count(&workdir.join(&item.file))?, 0));
+    };
+    if item.code == "??" {
         return Ok((line_count(&workdir.join(&item.file))?, 0));
     }
-    let out = text(workdir, &["diff", "--numstat", "HEAD", "--", &item.file])?;
+    let out = text(workdir, &["diff", "--numstat", ref_name, "--", &item.file])?;
     let Some(line) = out.lines().next() else {
         return Ok((0, 0));
     };

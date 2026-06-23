@@ -126,6 +126,27 @@ async fn opencode_vcs_branch_diff_includes_untracked_files() {
 }
 
 #[tokio::test]
+async fn opencode_vcs_branch_diff_uses_merge_base_for_committed_changes() {
+    let workdir = tempdir();
+    init_branch_repo(&workdir);
+    git(&workdir, &["add", "."]);
+    git(&workdir, &["commit", "-m", "feature changes"]);
+    let app = router(state(workdir).await);
+
+    let (status, diff) = get_json(app, "/vcs/diff?mode=branch&context=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let item = diff
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["file"] == "branch-only.txt")
+        .unwrap();
+    assert_eq!(item["status"], "added");
+    assert_eq!(item["additions"], 1);
+    assert!(item["patch"].as_str().unwrap().contains("+fresh"));
+}
+
+#[tokio::test]
 async fn opencode_vcs_diff_caps_oversized_untracked_patch() {
     let workdir = tempdir();
     init_repo_with_head(&workdir);

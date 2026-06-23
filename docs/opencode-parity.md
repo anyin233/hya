@@ -3,10 +3,11 @@
 Last refreshed: 2026-06-23.
 
 OpenCode baseline: `anomalyco/opencode` `origin/dev`
-`237595e2421473b871f613de87e5588d8aa8acae`
-(`chore: generate`). Since
-`fbf889db83c83db8f4304279cdb5c0398efb5143`, upstream removed the model-authored
-Bash/shell `description` input and regenerated docs, but did not change the HTTP
+`4a710e467997e27405956a80d80fce4eda774178`
+(`fix(core): await plugin readiness`). Since
+`237595e2421473b871f613de87e5588d8aa8acae`, upstream added plugin readiness
+waiting for config references; yaca's plugin host already waits for plugin
+`initialize` during connection, and the update did not change the HTTP
 path/method surface used for this parity pass.
 
 yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
@@ -42,6 +43,8 @@ reads derive OpenCode `file` and `agent` parts from prompt attachments, and
 legacy completed tool states expose file attachments from tool outputs. The Google provider request encoder accepts canonical
 media parts for Gemini image, audio, and video inline data. Provider replay now
 preserves structured JSON tool errors while keeping primitive errors as plain text.
+VCS branch-mode diffs now use the merge-base ref for both patches and
+additions/deletions, matching OpenCode's committed branch-change behavior.
 
 ## Status Summary
 
@@ -85,7 +88,7 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
 | Event stream | `/event` sends legacy OpenCode-style `properties`, `/api/event` sends OpenCode's unscoped `server.connected` frame plus native v2 live frames with `data` and location metadata/session-directory filtering, and `/global/event` wraps legacy frames in OpenCode's `{ payload }` envelope; SSE routes use OpenCode cache/buffering/nosniff headers; `server.connected`, native `session.created`, session state `session.updated`, command `command.executed`, user/assistant `message.updated`, text/reasoning/tool `message.part.updated`, OpenCode-driven tool part updates, text/reasoning final snapshot updates, text/reasoning `message.part.delta`, `message.part.removed`, and `message.removed` expose OpenCode-shaped payloads, unmapped yaca events fall back to `yaca.envelope`, and yaca status/error envelopes publish OpenCode-shaped `session.status`/`session.error`. Missing OpenCode's full native step part event taxonomy, heartbeat events, durable event replay, and exact location semantics for non-session server-wide events; latest OpenCode retired the durable/generated `session.next.interrupt.requested` and `session.next.prompt.promoted` events before yaca implemented any durable `session.next.*` stream. |
 | Revert/snapshot/diff | OpenCode has snapshot-backed `revert`, `unrevert`, compaction-part summarize, durable compaction checkpoints, context-epoch baseline rebuilds after compaction, and message diff APIs. yaca exposes `GET /session/:id/diff` with the current no-summary empty response, `POST /session/:id/summarize` with a yaca-native persisted system summary, and revert/unrevert routes that record or clear the OpenCode-shaped session `revert` field and reject busy sessions with OpenCode-shaped `SessionBusyError` bodies. yaca still has no equivalent snapshot restore/revert service, OpenCode compaction part/checkpoint, or persisted message summary diffs yet. |
 | File HTTP routes | Basic OpenCode legacy file HTTP routes and v2 filesystem read/list/find routes are present, including legacy `directory` query/header routing, root `.gitignore`/`.ignore` ignored flags with simple `*` glob support for legacy listing, common image/PDF MIME sniffing for binary content, location query/header routing for v2 filesystem routes, location-wrapped v2 entries, and raw v2 file reads. Remaining gaps are exact filesystem service ranking/advanced glob semantics, full mime-types coverage, nested ignore file parity, and real LSP-backed symbol search when available. |
-| Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, apply, and v2 location/agent/command/skill endpoints are present. VCS status plus git/branch-mode diff list untracked files, preserve special paths, and cap oversized single-file and total patch output with OpenCode-format empty patch placeholders. Remaining gaps are branch-mode edge-case parity, OpenCode batch-patch behavior, real LSP/formatter status integration, and full command/agent/skill config/plugin merging. |
+| Instance routes | Basic path, agent, command, skill, lsp, formatter, dispose, VCS info, status, diff, raw diff, apply, and v2 location/agent/command/skill endpoints are present. VCS status plus git/branch-mode diff list untracked files, preserve special paths, use the branch merge-base for committed branch patches/stats, and cap oversized single-file and total patch output with OpenCode-format empty patch placeholders. Remaining gaps are OpenCode batch-patch behavior, real LSP/formatter status integration, and full command/agent/skill config/plugin merging. |
 | Config/catalog routes | Legacy `/config`/`/config/providers` and provider/model v2 routes exist, including OpenCode location query/header wrappers for v2 catalog responses and enumeration of configured server HTTP providers/models. Missing full OpenCode config/catalog metadata, durable update semantics, and models.dev-backed provider metadata; yaca reads its own `~/.config/yaca/config.yaml`. |
 | Global control routes | `/global/health`, `/global/event`, `/global/config`, `/global/dispose`, and `/global/upgrade` are present. Global config is runtime-only, dispose returns OpenCode-shaped success without full lifecycle teardown/events, and upgrade validates request shape but reports OpenCode's unknown-installation fallback instead of performing an installation update. Missing durable global config persistence, global instance disposal lifecycle, upgrade/uninstall behavior, and update events. |
 | Provider/auth breadth | OpenCode `/auth/:providerID` accepts `api`, `oauth`, and `wellknown` payloads and persists the effective token to yaca's local token file; legacy `/provider` and v2 provider/model routes expose configured server HTTP providers/models and fall back to the active yaca model for non-catalog providers; v2 provider lookup uses OpenCode's typed provider-not-found body; legacy `/provider/auth` exposes an API key method for each exposed provider; unsupported provider OAuth authorize/callback payloads return 400; CLI supports `login`, `auth list`, and `auth logout`; v2 credential update/remove succeeds with OpenCode's empty-backend status, and integration connect/complete failures now return OpenCode's `InvalidRequestError`/`integration_authorization` body. The already constructed provider router is not hot-reloaded after token mutation. Missing AI SDK provider breadth, OpenAI websocket pool/retry behavior, full models.dev metadata/autoload, release/cost/status/modality metadata beyond yaca-known tool/context capability, real OAuth authorize/callback flows, Codex OAuth model filtering such as OpenCode's `gpt-5.5-pro` suppression, plugin-supplied provider auth methods, real credential storage, real integration providers/auth flows, and Console/org switching. |
@@ -106,8 +109,8 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
    attachment semantics.
 3. Add LSP-backed `/find/symbol` results for the file HTTP API.
 4. Add TUI skill picker/error handling parity from OpenCode `9dadc24`.
-5. Tighten remaining VCS branch-mode edge cases and batch-patch behavior to
-   match OpenCode's `project/vcs.ts` exactly.
+5. Tighten remaining VCS batch-patch behavior to match OpenCode's
+   `project/vcs.ts` exactly.
 6. Add OpenCode-compatible compaction checkpoints/parts, context baseline rebuild
    after compaction, summarize, revert, unrevert, and remaining OpenCode-only
    session lifecycle details.
