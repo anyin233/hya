@@ -4,6 +4,7 @@ use crate::ServerState;
 
 mod agent_permission;
 mod catalog;
+mod command_catalog;
 mod control;
 mod errors;
 mod event;
