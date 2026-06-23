@@ -33,15 +33,7 @@ pub(super) async fn history(
             out.push(history_event(&aggregate, &env)?);
         }
     }
-    out.sort_by_key(|event| {
-        (
-            event["aggregate_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            event["seq"].as_u64().unwrap_or_default(),
-        )
-    });
+    out.sort_by_key(|event| event["seq"].as_u64().unwrap_or_default());
     Ok(Json(out))
 }
 

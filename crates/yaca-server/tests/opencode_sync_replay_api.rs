@@ -107,6 +107,38 @@ async fn opencode_sync_replay_events_are_returned_by_history() {
 }
 
 #[tokio::test]
+async fn opencode_sync_history_orders_replayed_events_by_sequence() {
+    let app = router(state().await);
+    let first = "ses_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let second = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for (aggregate, seq) in [(first, 1_u64), (second, 2_u64)] {
+        let (status, _body) = post_json(
+            app.clone(),
+            "/sync/replay",
+            json!({
+                "directory": "/tmp/yaca-opencode-sync-replay-api",
+                "events": [{
+                    "id": format!("evt_{seq}"),
+                    "aggregateID": aggregate,
+                    "seq": seq,
+                    "type": "session.updated",
+                    "data": {}
+                }]
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (status, history) = post_json(app, "/sync/history", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history[0]["aggregate_id"], first);
+    assert_eq!(history[0]["seq"], 1);
+    assert_eq!(history[1]["aggregate_id"], second);
+    assert_eq!(history[1]["seq"], 2);
+}
+
+#[tokio::test]
 async fn opencode_sync_replay_rejects_mixed_aggregates() {
     let (status, _body) = post_json(
         router(state().await),
