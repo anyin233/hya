@@ -12,6 +12,7 @@ mod invalid;
 mod lsp;
 mod lsp_path;
 mod lsp_plane;
+mod lsp_post_edit;
 pub mod permission;
 mod plan;
 mod question;

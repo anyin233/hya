@@ -8,6 +8,7 @@ use yaca_proto::ToolSchema;
 
 use crate::edit_replace;
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
+use crate::lsp_post_edit;
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 use crate::utf8_bom;
@@ -84,7 +85,16 @@ impl Tool for EditTool {
             if formatted {
                 utf8_bom::sync_file(&path, incoming_has_bom).await?;
             }
-            return Ok(success_result(true, 0, &path, &workdir, "", new));
+            let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
+            return Ok(success_result(
+                true,
+                0,
+                &path,
+                &workdir,
+                "",
+                new,
+                diagnostics,
+            ));
         }
         let (source_has_bom, content) = utf8_bom::read_text(&path).await?;
         let replacement =
@@ -100,6 +110,7 @@ impl Tool for EditTool {
         if formatted {
             utf8_bom::sync_file(&path, desired_bom).await?;
         }
+        let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
         Ok(success_result(
             false,
             replacement.replaced,
@@ -107,6 +118,7 @@ impl Tool for EditTool {
             &workdir,
             &content,
             updated,
+            diagnostics,
         ))
     }
 }
@@ -124,6 +136,7 @@ fn success_result(
     workdir: &Path,
     content_old: &str,
     content_new: &str,
+    diagnostics: Value,
 ) -> Value {
     let diff = file_diff(path, content_old, content_new);
     let filepath = display_path(path);
@@ -134,7 +147,7 @@ fn success_result(
         "title": relative_title(path, workdir),
         "output": "Edit applied successfully.",
         "metadata": {
-            "diagnostics": {},
+            "diagnostics": diagnostics,
             "diff": patch.clone(),
             "filediff": {
                 "file": filepath,
