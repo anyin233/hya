@@ -26,7 +26,7 @@ struct RecordingProvider {
 #[async_trait]
 impl Provider for RecordingProvider {
     fn id(&self) -> &str {
-        "dummy"
+        "test"
     }
 
     fn capabilities(&self, _model: &yaca_proto::ModelRef) -> Option<Capabilities> {
@@ -149,8 +149,11 @@ impl DummyHarness {
     async fn apply_effect(&mut self, effect: TuiEffect) {
         match effect {
             TuiEffect::None => {}
-            TuiEffect::SelectModel(model) => {
-                self.agent.model = yaca_proto::ModelRef::new(model);
+            TuiEffect::SelectModel { model, provider } => {
+                let model_ref = provider
+                    .filter(|provider| !provider.trim().is_empty())
+                    .map_or_else(|| model.clone(), |provider| format!("{provider}/{model}"));
+                self.agent.model = yaca_proto::ModelRef::new(model_ref);
             }
             TuiEffect::SelectAgent(agent) => {
                 self.agent.name = yaca_proto::AgentName::new(agent);

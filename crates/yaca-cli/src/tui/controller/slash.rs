@@ -9,8 +9,8 @@ impl Controller {
             Some(CommandKind::Model) if !arguments.is_empty() => {
                 let model = arguments.to_string();
                 let provider = provider_label_for_model(&self.available_models, &model);
-                self.app.set_model_identity(model.clone(), provider);
-                TuiEffect::SelectModel(model)
+                self.app.set_model_identity(model.clone(), provider.clone());
+                TuiEffect::SelectModel { model, provider }
             }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();

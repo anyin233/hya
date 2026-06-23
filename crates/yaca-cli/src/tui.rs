@@ -489,8 +489,11 @@ pub async fn run(
                             TuiEffect::Interrupt => {
                                 turn_cancel.cancel();
                             }
-                            TuiEffect::SelectModel(model) => {
-                                agent.model = ModelRef::new(model);
+                            TuiEffect::SelectModel { model, provider } => {
+                                let model_ref = provider
+                                    .filter(|provider| !provider.trim().is_empty())
+                                    .map_or_else(|| model.clone(), |provider| format!("{provider}/{model}"));
+                                agent.model = ModelRef::new(model_ref);
                             }
                             TuiEffect::SelectReasoning(level) => {
                                 let message =

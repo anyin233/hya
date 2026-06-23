@@ -4,12 +4,20 @@ use yaca_tui::{DialogItem, DialogView};
 
 impl Controller {
     pub(super) fn open_model_dialog(&mut self) {
+        self.open_model_dialog_for_provider(None);
+    }
+
+    pub(super) fn open_model_dialog_for_provider(&mut self, provider: Option<&str>) {
+        let current_provider = self.app.model_provider_label.as_deref();
         let mut items = self
             .available_models
             .iter()
+            .filter(|entry| provider.is_none_or(|provider| entry.provider == provider))
             .map(|entry| DialogItem {
                 label: entry.id.clone(),
-                detail: if entry.id == self.app.model {
+                detail: if entry.id == self.app.model
+                    && Some(entry.provider.as_str()) == current_provider
+                {
                     format!("{} · current", entry.provider)
                 } else {
                     entry.provider.clone()
@@ -24,11 +32,22 @@ impl Controller {
         }
         let selected = items
             .iter()
-            .position(|item| item.label == self.app.model)
+            .position(|item| {
+                item.label == self.app.model
+                    && item
+                        .detail
+                        .split_once(" · ")
+                        .map_or(item.detail.as_str(), |(provider, _)| provider)
+                        == current_provider.unwrap_or_default()
+            })
             .unwrap_or(0);
         self.app.dialog = Some(DialogView {
-            title: "select model".to_string(),
-            subtitle: "next turn uses the selected model".to_string(),
+            title: provider.unwrap_or("select model").to_string(),
+            subtitle: if provider.is_some() {
+                "select a model from this provider".to_string()
+            } else {
+                "next turn uses the selected model".to_string()
+            },
             items,
             selected,
         });

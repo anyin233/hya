@@ -80,18 +80,33 @@ impl Controller {
             }
             KeyCode::Enter => {
                 let selected = dialog.selected;
-                let selected_label = dialog.items.get(selected).map(|item| item.label.clone());
+                let selected_item = dialog
+                    .items
+                    .get(selected)
+                    .map(|item| (item.label.clone(), item.detail.clone()));
+                let selected_label = selected_item.as_ref().map(|item| item.0.as_str());
                 self.app.dialog = None;
                 let mode = self.dialog_mode.take();
                 match mode {
-                    Some(DialogMode::Model) => self
-                        .available_models
-                        .get(selected)
+                    Some(DialogMode::Model) => selected_item
+                        .as_ref()
+                        .and_then(|(label, detail)| {
+                            let provider = detail
+                                .split_once(" · ")
+                                .map_or(detail.as_str(), |(provider, _)| provider);
+                            self.available_models
+                                .iter()
+                                .find(|entry| entry.id == *label && entry.provider == provider)
+                        })
                         .map(|entry| {
                             let model = entry.id.clone();
+                            let provider = entry.provider.clone();
                             self.app
-                                .set_model_identity(model.clone(), Some(entry.provider.clone()));
-                            TuiEffect::SelectModel(model)
+                                .set_model_identity(model.clone(), Some(provider.clone()));
+                            TuiEffect::SelectModel {
+                                model,
+                                provider: Some(provider),
+                            }
                         })
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::Resume) => self
@@ -112,10 +127,20 @@ impl Controller {
                         .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::CommandPalette) => {
-                        self.dispatch_palette_command(selected_label.as_deref())
+                        self.dispatch_palette_command(selected_label)
                     }
                     Some(DialogMode::Skills) => {
-                        self.apply_skill_selection(selected_label.as_deref());
+                        self.apply_skill_selection(selected_label);
+                        TuiEffect::None
+                    }
+                    Some(DialogMode::Provider) => {
+                        if let Some(provider) = selected_label.filter(|provider| {
+                            self.available_models
+                                .iter()
+                                .any(|entry| entry.provider == *provider)
+                        }) {
+                            self.open_model_dialog_for_provider(Some(provider));
+                        }
                         TuiEffect::None
                     }
                     Some(DialogMode::CommandCompletion) => {
@@ -123,10 +148,7 @@ impl Controller {
                         TuiEffect::None
                     }
                     Some(
-                        DialogMode::Provider
-                        | DialogMode::Help
-                        | DialogMode::Tools
-                        | DialogMode::ReferenceCompletion,
+                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
                     )
                     | None => TuiEffect::None,
                 }

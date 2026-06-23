@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use yaca_tui::{AppState, DialogItem};
 
 use super::agent_cycle::previous_agent_label;
-use super::block_action::{SelectedBlockAction, selected_block_action};
+use super::block_action::selected_block_action;
 use super::commands::{self, CommandKind, CustomCommand};
 use super::leader_key::{LeaderAction, LeaderKey};
 use super::message_scroll::handle_message_scroll_key;
@@ -15,32 +15,11 @@ use crate::config::ModelEntry;
 mod completion;
 mod dialog_open;
 mod dialogs;
+mod effects;
 mod slash;
 
 use self::dialogs::DialogMode;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TuiEffect {
-    None,
-    Exit,
-    Interrupt,
-    Submit(String),
-    SubmitConfigured {
-        prompt: String,
-        agent: Option<String>,
-        model: Option<String>,
-    },
-    SelectModel(String),
-    SelectAgent(String),
-    SelectReasoning(String),
-    ResumeSession(String),
-    NewSession,
-    CompactTranscript,
-    InitProject,
-    ExportTranscript,
-    SelectedBlock(SelectedBlockAction),
-    SystemMessage(String),
-}
+pub use self::effects::TuiEffect;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSummary {
@@ -898,7 +877,10 @@ mod tests {
         assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
         assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
-            TuiEffect::SelectModel("gamma".to_string())
+            TuiEffect::SelectModel {
+                model: "gamma".to_string(),
+                provider: Some("test".to_string()),
+            }
         );
         assert_eq!(controller.app.model, "gamma");
         assert_eq!(controller.app.model_provider_label.as_deref(), Some("test"));
