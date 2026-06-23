@@ -97,6 +97,9 @@ fn pattern_matches_from(
         pattern_matches_star(pattern, value, pattern_index + 1, value_index, memo)
     } else if value_index == value.len() {
         false
+    } else if let Some(literal) = escaped_literal(pattern, pattern_index) {
+        literal == value[value_index]
+            && pattern_matches_from(pattern, value, pattern_index + 2, value_index + 1, memo)
     } else if pattern[pattern_index] == b'?' {
         value[value_index] != b'/'
             && pattern_matches_from(pattern, value, pattern_index + 1, value_index + 1, memo)
@@ -165,6 +168,18 @@ fn pattern_matches_star(
         }
     }
     false
+}
+
+fn escaped_literal(pattern: &[u8], start: usize) -> Option<u8> {
+    if pattern.get(start) != Some(&b'\\') {
+        return None;
+    }
+    let literal = *pattern.get(start + 1)?;
+    match literal {
+        b'*' | b'[' | b' ' | b'#' | b'!' | b'$' | b'.' | b'|' | b'+' | b'(' | b')' | b'{'
+        | b'^' | b'\\' => Some(literal),
+        _ => None,
+    }
 }
 
 fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(bool, usize)> {

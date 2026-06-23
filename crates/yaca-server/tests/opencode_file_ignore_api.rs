@@ -100,3 +100,32 @@ async fn opencode_file_list_matches_slash_aware_ignore_globs() {
     assert!(has_ignored(&deep_listing, "src/deep/a.trace", true));
     assert!(has_ignored(&cache_listing, "src/deep/cache/a.tmp", true));
 }
+
+#[tokio::test]
+async fn opencode_file_list_honors_escaped_ignore_literals() {
+    let workdir = tempdir();
+    std::fs::write(
+        workdir.join(".gitignore"),
+        "literal\\*.log\nliteral\\[ab].log\n\\#hash.log\n\\!important.log\nspace\\ name.log\n",
+    )
+    .unwrap();
+    std::fs::write(workdir.join("literal*.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("literalx.log"), "kept\n").unwrap();
+    std::fs::write(workdir.join("literal[ab].log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("literala.log"), "kept\n").unwrap();
+    std::fs::write(workdir.join("#hash.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("!important.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("space name.log"), "ignored\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/file?path=.").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(has_ignored(&listing, "literal*.log", true));
+    assert!(has_ignored(&listing, "literalx.log", false));
+    assert!(has_ignored(&listing, "literal[ab].log", true));
+    assert!(has_ignored(&listing, "literala.log", false));
+    assert!(has_ignored(&listing, "#hash.log", true));
+    assert!(has_ignored(&listing, "!important.log", true));
+    assert!(has_ignored(&listing, "space name.log", true));
+}
