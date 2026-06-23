@@ -78,8 +78,10 @@ mod skill_catalog;
 mod sse;
 mod sync_projector;
 mod tui;
+mod workspace_id;
 mod worktree_git;
 mod worktree_git_info;
+mod worktree_git_lookup;
 
 pub(crate) use global::GlobalState;
 pub(crate) use mcp_state::McpHttpState;

@@ -84,8 +84,17 @@ pub(super) fn workdir(st: &ServerState) -> PathBuf {
 }
 
 pub(super) fn workdir_at(st: &ServerState, location: &LocationRef) -> PathBuf {
-    let path = location.directory.as_ref().unwrap_or(&st.agent.workdir);
-    match std::fs::canonicalize(path) {
+    let path = location
+        .directory
+        .clone()
+        .or_else(|| {
+            location
+                .workspace_id
+                .as_deref()
+                .and_then(|id| super::worktree_git_lookup::directory_for_id(&st.agent.workdir, id))
+        })
+        .unwrap_or_else(|| st.agent.workdir.clone());
+    match std::fs::canonicalize(&path) {
         Ok(path) => path,
         Err(_) => path.clone(),
     }
