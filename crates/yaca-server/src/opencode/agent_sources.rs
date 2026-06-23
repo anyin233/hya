@@ -35,6 +35,7 @@ pub(super) struct AgentChange {
 
 #[derive(Default, Deserialize)]
 struct AgentConfig {
+    default_agent: Option<String>,
     agent: Option<BTreeMap<String, InlineAgent>>,
     agents: Option<BTreeMap<String, InlineAgent>>,
     mode: Option<BTreeMap<String, InlineAgent>>,
@@ -88,6 +89,22 @@ pub(super) fn config_agents(workdir: &Path) -> Vec<AgentChange> {
         append_inline_agents(config.modes, true, &mut agents);
     }
     agents
+}
+
+pub(super) fn default_agent(workdir: &Path) -> Option<String> {
+    let mut default_agent = None;
+    for path in config_paths(workdir) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Some(config) = parse_config(&content) else {
+            continue;
+        };
+        if config.default_agent.is_some() {
+            default_agent = config.default_agent;
+        }
+    }
+    default_agent
 }
 
 fn config_paths(workdir: &Path) -> [PathBuf; 4] {

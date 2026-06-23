@@ -58,6 +58,11 @@ async fn create_session(
     directory: &str,
     info: &Map<String, Value>,
 ) -> Result<(), ApiError> {
+    let workdir = info
+        .get("directory")
+        .and_then(Value::as_str)
+        .unwrap_or(directory)
+        .to_string();
     st.engine
         .create_with_id(
             Some(session),
@@ -70,17 +75,19 @@ async fn create_session(
                     .get("agent")
                     .and_then(Value::as_str)
                     .map(AgentName::new)
-                    .unwrap_or_else(|| st.agent.name.clone()),
+                    .unwrap_or_else(|| default_agent(st, &workdir)),
                 model: model_ref(info).unwrap_or_else(|| st.agent.model.clone()),
-                workdir: info
-                    .get("directory")
-                    .and_then(Value::as_str)
-                    .unwrap_or(directory)
-                    .to_string(),
+                workdir,
             },
         )
         .await?;
     Ok(())
+}
+
+fn default_agent(st: &ServerState, workdir: &str) -> AgentName {
+    super::agent_catalog::default_name(std::path::Path::new(workdir))
+        .map(AgentName::new)
+        .unwrap_or_else(|| st.agent.name.clone())
 }
 
 async fn apply_info(

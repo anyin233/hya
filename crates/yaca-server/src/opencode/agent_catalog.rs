@@ -83,6 +83,19 @@ const NATIVE_AGENTS: &[NativeAgent] = &[
 ];
 
 pub(super) fn list(workdir: &Path) -> Vec<AgentEntry> {
+    let configured_default = super::agent_sources::default_agent(workdir);
+    let mut agents = merged_entries(workdir);
+    sort_agents(&mut agents, configured_default.as_deref());
+    agents
+}
+
+pub(super) fn default_name(workdir: &Path) -> Option<String> {
+    let configured_default = super::agent_sources::default_agent(workdir);
+    let agents = merged_entries(workdir);
+    selected_default(&agents, configured_default.as_deref()).map(|agent| agent.name.clone())
+}
+
+fn merged_entries(workdir: &Path) -> Vec<AgentEntry> {
     let mut agents = native_entries();
     for change in super::agent_sources::config_agents(workdir) {
         apply_change(&mut agents, change);
@@ -91,6 +104,39 @@ pub(super) fn list(workdir: &Path) -> Vec<AgentEntry> {
         apply_change(&mut agents, change);
     }
     agents
+}
+
+fn sort_agents(agents: &mut [AgentEntry], configured_default: Option<&str>) {
+    agents.sort_by(|left, right| {
+        let left_default = is_default(left, configured_default);
+        let right_default = is_default(right, configured_default);
+        right_default
+            .cmp(&left_default)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn selected_default<'a>(
+    agents: &'a [AgentEntry],
+    configured_default: Option<&str>,
+) -> Option<&'a AgentEntry> {
+    if let Some(name) = configured_default {
+        return agents
+            .iter()
+            .find(|agent| agent.name == name && selectable(agent));
+    }
+    agents.iter().find(|agent| selectable(agent))
+}
+
+fn is_default(agent: &AgentEntry, configured_default: Option<&str>) -> bool {
+    match configured_default {
+        Some(name) => agent.name == name,
+        None => agent.name == "build",
+    }
+}
+
+fn selectable(agent: &AgentEntry) -> bool {
+    agent.mode != "subagent" && !agent.hidden
 }
 
 fn native_entries() -> Vec<AgentEntry> {
