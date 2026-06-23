@@ -1,16 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
 use tokio::process::Command;
 
-#[derive(Serialize)]
-pub(super) struct Info {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
-    directory: String,
-}
+pub(super) use super::worktree_git_info::Info;
 
 struct Entry {
     path: String,
@@ -18,6 +11,14 @@ struct Entry {
 }
 
 pub(super) async fn list(source: &Path) -> Result<Vec<String>, String> {
+    Ok(infos(source)
+        .await?
+        .into_iter()
+        .map(Info::into_directory)
+        .collect())
+}
+
+pub(super) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
     if !is_git_source(source).await {
         return Ok(Vec::new());
     }
@@ -25,9 +26,13 @@ pub(super) async fn list(source: &Path) -> Result<Vec<String>, String> {
     Ok(entries(source)
         .await?
         .into_iter()
-        .filter_map(|entry| {
+        .filter(|entry| {
             let path = PathBuf::from(&entry.path);
-            (canonical_text(&path) != primary).then_some(entry.path)
+            canonical_text(&path) != primary
+        })
+        .map(|entry| {
+            let branch = entry.branch.as_deref().and_then(branch_name);
+            Info::from_path(entry.path, branch)
         })
         .collect())
 }
@@ -71,11 +76,7 @@ pub(super) async fn create(source: &Path, requested: Option<&str>) -> Result<Inf
         ],
     )
     .await?;
-    Ok(Info {
-        name: slug,
-        branch: Some(branch),
-        directory: directory_text,
-    })
+    Ok(Info::new(slug, Some(branch), directory_text))
 }
 
 pub(super) async fn remove(source: &Path, directory: &str) -> Result<bool, String> {
