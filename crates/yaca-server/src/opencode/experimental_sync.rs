@@ -46,9 +46,9 @@ pub(super) async fn replay(
     State(st): State<ServerState>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    if payload.get("directory").and_then(Value::as_str).is_none() {
+    let Some(directory) = payload.get("directory").and_then(Value::as_str) else {
         return Err(ApiError::bad_request("sync replay missing directory"));
-    }
+    };
     let Some(events) = payload.get("events").and_then(Value::as_array) else {
         return Err(ApiError::bad_request("sync replay requires events"));
     };
@@ -77,11 +77,13 @@ pub(super) async fn replay(
             )));
         }
     }
-    st.engine
+    let inserted = st
+        .engine
         .store()
         .replay_sync_events(events)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    super::sync_projector::project_replay(&st, directory, &inserted).await?;
     Ok(Json(json!({ "sessionID": session_id })))
 }
 
