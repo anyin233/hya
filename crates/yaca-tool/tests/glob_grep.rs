@@ -105,7 +105,7 @@ async fn glob_supports_path_and_open_code_output_shape() {
 }
 
 #[tokio::test]
-async fn glob_uses_parent_directory_when_path_is_a_file() {
+async fn glob_rejects_file_path_like_opencode() {
     let workdir = tempdir();
     let src = workdir.join("src");
     tokio::fs::create_dir_all(&src).await.unwrap();
@@ -118,15 +118,12 @@ async fn glob_uses_parent_directory_when_path_is_a_file() {
     let tool = ToolRegistry::builtins().get("glob").unwrap();
     let ctx = ctx_with(workdir.clone());
 
-    let out = tool
+    let err = tool
         .execute(&ctx, json!({ "pattern": "*.rs", "path": "src/main.rs" }))
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert_eq!(out["title"], "src");
-    assert_eq!(out["metadata"]["count"], 2);
-    assert!(out["output"].as_str().unwrap().contains("main.rs"));
-    assert!(out["output"].as_str().unwrap().contains("lib.rs"));
+    assert!(err.to_string().contains("glob path must be a directory"));
 }
 
 #[tokio::test]
