@@ -113,6 +113,10 @@ fn runtime_status_shows_selected_block_actions_when_prompt_is_empty() {
 
     // Then: it exposes the same revert/branch actions handled by the controller.
     assert!(
+        status_row.contains("Message Actions"),
+        "selected block actions should use OpenCode's dialog title, got {status_row:?}"
+    );
+    assert!(
         status_row.contains("r revert · b branch"),
         "selected block action hint should be visible, got {status_row:?}"
     );
