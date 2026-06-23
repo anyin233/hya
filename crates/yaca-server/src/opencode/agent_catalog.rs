@@ -84,7 +84,7 @@ pub(super) fn list(workdir: &Path) -> Vec<AgentEntry> {
     for change in super::agent_sources::config_agents(workdir) {
         apply_change(&mut agents, change);
     }
-    for change in super::agent_sources::disk_agents(workdir) {
+    for change in super::agent_disk_sources::disk_agents(workdir) {
         apply_change(&mut agents, change);
     }
     agents
