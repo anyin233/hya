@@ -1,8 +1,25 @@
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use yaca_tool::{BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterProvider};
+
+fn tempdir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "yaca-formatter-test-{nanos}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 async fn status_json(config: FormatterConfig) -> serde_json::Value {
     let provider = BuiltinFormatterProvider::new(config);
@@ -82,4 +99,74 @@ async fn custom_formatter_command_is_reported_enabled() {
             "enabled": true
         })
     }));
+}
+
+#[tokio::test]
+async fn custom_formatter_command_formats_matching_extension() {
+    // Given: a custom formatter command with an environment override.
+    let dir = tempdir();
+    let target = dir.join("note.txt");
+    tokio::fs::write(&target, "raw\n").await.unwrap();
+    let script = dir.join("formatter.sh");
+    tokio::fs::write(&script, "printf '%s\\n' \"$FORMATTER_MARK\" > \"$1\"\n")
+        .await
+        .unwrap();
+
+    let mut environment = BTreeMap::new();
+    environment.insert("FORMATTER_MARK".to_string(), "formatted".to_string());
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "textfmt".to_string(),
+        FormatterEntry {
+            command: Some(vec![
+                "sh".to_string(),
+                script.to_string_lossy().into_owned(),
+                "$FILE".to_string(),
+            ]),
+            environment,
+            extensions: Some(vec![".txt".to_string()]),
+            ..FormatterEntry::default()
+        },
+    );
+    let provider = BuiltinFormatterProvider::new(FormatterConfig::Custom(entries));
+
+    // When: formatting a file with the matching extension.
+    let formatted = provider.format_file(&dir, &target).await.unwrap();
+
+    // Then: the formatter ran and rewrote the file.
+    assert!(formatted);
+    assert_eq!(
+        tokio::fs::read_to_string(&target).await.unwrap(),
+        "formatted\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn builtin_formatter_command_formats_matching_extension() {
+    // Given: a built-in formatter enabled by its OpenCode project probe.
+    let dir = tempdir();
+    tokio::fs::write(
+        dir.join("composer.json"),
+        r#"{"require-dev":{"laravel/pint":"^1"}}"#,
+    )
+    .await
+    .unwrap();
+    let bin_dir = dir.join("vendor/bin");
+    tokio::fs::create_dir_all(&bin_dir).await.unwrap();
+    let pint = bin_dir.join("pint");
+    tokio::fs::write(&pint, "#!/bin/sh\nprintf 'pint\\n' > \"$1\"\n")
+        .await
+        .unwrap();
+    std::fs::set_permissions(&pint, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let target = dir.join("app.php");
+    tokio::fs::write(&target, "raw\n").await.unwrap();
+    let provider = BuiltinFormatterProvider::new(FormatterConfig::Builtins);
+
+    // When: formatting a matching PHP file.
+    let formatted = provider.format_file(&dir, &target).await.unwrap();
+
+    // Then: yaca executes the OpenCode built-in command.
+    assert!(formatted);
+    assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "pint\n");
 }

@@ -1,11 +1,14 @@
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
 use thiserror::Error;
+use tokio::process::Command;
 
-use crate::formatter_definition::{builtin_enabled, definitions_for_config};
+use crate::formatter_command::{FormatterCommand, builtin_enabled, command_for_definition};
+use crate::formatter_definition::definitions_for_config;
 
 pub use crate::formatter_definition::{FormatterConfig, FormatterEntry};
 
@@ -66,8 +69,25 @@ impl FormatterProvider for BuiltinFormatterProvider {
             .collect())
     }
 
-    async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
-        Ok(false)
+    async fn format_file(&self, workdir: &Path, file: &Path) -> Result<bool, FormatterError> {
+        let Some(extension) = dotted_extension(file) else {
+            return Ok(false);
+        };
+        let mut ran = false;
+        for item in definitions_for_config(&self.config) {
+            if !item
+                .extensions
+                .iter()
+                .any(|candidate| candidate == &extension)
+            {
+                continue;
+            }
+            if let Some(command) = command_for_definition(&item, workdir) {
+                ran = true;
+                run_formatter(command, workdir, file).await;
+            }
+        }
+        Ok(ran)
     }
 }
 
@@ -97,4 +117,31 @@ impl FormatterPlane {
             None => Ok(false),
         }
     }
+}
+
+fn dotted_extension(file: &Path) -> Option<String> {
+    file.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(|extension| format!(".{extension}"))
+}
+
+async fn run_formatter(command: FormatterCommand, workdir: &Path, file: &Path) {
+    let file = file.to_string_lossy();
+    let argv: Vec<String> = command
+        .argv
+        .into_iter()
+        .map(|part| part.replace("$FILE", &file))
+        .collect();
+    let Some((program, args)) = argv.split_first() else {
+        return;
+    };
+    let _status = Command::new(program)
+        .args(args)
+        .current_dir(workdir)
+        .envs(command.environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
