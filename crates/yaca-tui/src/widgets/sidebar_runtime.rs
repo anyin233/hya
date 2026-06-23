@@ -5,11 +5,14 @@ use crate::AppState;
 use crate::theme::Theme;
 
 pub(super) fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    if state.goal.is_none() && state.loop_view.is_none() && !state.yolo {
+    if state.goal.is_none() && state.loop_view.is_none() && !state.yolo && !state.running {
         return;
     }
     lines.push(Line::from(""));
     push_section(lines, "Runtime", theme.accent, theme);
+    if state.running {
+        lines.push(meta("state Running", theme.warning));
+    }
     if let Some(goal) = &state.goal {
         lines.push(meta(
             format!("GOAL:{} turns {}", goal.condition, goal.turns),

@@ -28,3 +28,21 @@ fn context_rail_does_not_duplicate_reasoning_effort() {
         "OpenCode context rail should not duplicate model effort:\n{text}"
     );
 }
+
+#[test]
+fn context_rail_shows_running_state_when_turn_is_streaming() {
+    // Given: an agent turn is currently streaming.
+    let mut state = AppState {
+        running: true,
+        ..AppState::default()
+    };
+
+    // When: the wide OpenCode-style context rail renders.
+    let text = render(&mut state, 124, 36);
+
+    // Then: the rail exposes the session state as text instead of relying on color.
+    assert!(
+        text.contains("Runtime") && text.contains("state Running"),
+        "context rail should show the active runtime state:\n{text}"
+    );
+}
