@@ -23,7 +23,7 @@ yaca-tui = { path = "crates/yaca-tui" }
 yaca-mcp = { path = "crates/yaca-mcp" }
 yaca-plugin = { path = "crates/yaca-plugin" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = "0.24"
