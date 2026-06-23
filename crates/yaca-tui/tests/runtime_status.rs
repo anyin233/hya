@@ -188,10 +188,10 @@ fn runtime_status_shows_selected_block_actions_when_prompt_is_empty() {
     let buffer = render_buffer(&mut state, 120, 16);
     let status_row = find_row(&buffer, 120, 16, "revert");
 
-    // Then: it exposes the same revert/branch actions handled by the controller.
+    // Then: it exposes the same compact revert/branch actions handled by the controller.
     assert!(
-        status_row.contains("Message Actions"),
-        "selected block actions should use OpenCode's dialog title, got {status_row:?}"
+        !status_row.contains("Message Actions"),
+        "selected block actions should stay compact like OpenCode, got {status_row:?}"
     );
     assert!(
         status_row.contains("r revert · b branch"),

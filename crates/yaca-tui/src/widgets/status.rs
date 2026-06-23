@@ -62,8 +62,6 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
     } else if state.selected_message.is_some() && state.input.is_empty() {
         spans.extend([
             Span::styled("   ", Style::default().fg(theme.muted)),
-            Span::styled("Message Actions", Style::default().fg(theme.text)),
-            Span::styled(" · ", Style::default().fg(theme.muted)),
             Span::styled("r ", Style::default().fg(theme.text)),
             Span::styled("revert", Style::default().fg(theme.muted)),
             Span::styled(" · ", Style::default().fg(theme.muted)),
