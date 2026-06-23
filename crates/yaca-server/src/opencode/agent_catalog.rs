@@ -15,8 +15,11 @@ pub(super) struct AgentEntry {
     pub(super) native: bool,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) temperature: Option<f64>,
+    pub(super) top_p: Option<f64>,
     pub(super) color: Option<String>,
     pub(super) steps: Option<NonZeroU64>,
+    pub(super) options: BTreeMap<String, Value>,
     pub(super) request_headers: BTreeMap<String, String>,
     pub(super) request_body: BTreeMap<String, Value>,
     pub(super) permissions: Vec<PermissionRule>,
@@ -101,8 +104,11 @@ fn native_entries() -> Vec<AgentEntry> {
             native: true,
             model: None,
             variant: None,
+            temperature: None,
+            top_p: None,
             color: None,
             steps: None,
+            options: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             request_body: BTreeMap::new(),
             permissions: Vec::new(),
@@ -132,11 +138,20 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
         if let Some(variant) = change.variant {
             existing.variant = Some(variant);
         }
+        if let Some(temperature) = change.temperature {
+            existing.temperature = Some(temperature);
+        }
+        if let Some(top_p) = change.top_p {
+            existing.top_p = Some(top_p);
+        }
         if let Some(color) = change.color {
             existing.color = Some(color);
         }
         if let Some(steps) = change.steps {
             existing.steps = Some(steps);
+        }
+        if let Some(options) = change.options {
+            merge_json_map(&mut existing.options, options);
         }
         if let Some(headers) = change.request_headers {
             existing.request_headers.extend(headers);
@@ -159,12 +174,32 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
             native: false,
             model: change.model,
             variant: change.variant,
+            temperature: change.temperature,
+            top_p: change.top_p,
             color: change.color,
             steps: change.steps,
+            options: change.options.unwrap_or_default(),
             request_headers: change.request_headers.unwrap_or_default(),
             request_body: change.request_body.unwrap_or_default(),
             permissions: change.permissions.unwrap_or_default(),
             prompt: change.prompt,
         });
+    }
+}
+
+fn merge_json_map(target: &mut BTreeMap<String, Value>, patch: BTreeMap<String, Value>) {
+    for (key, value) in patch {
+        merge_json_value(target.entry(key).or_insert(Value::Null), value);
+    }
+}
+
+fn merge_json_value(target: &mut Value, patch: Value) {
+    match (target, patch) {
+        (Value::Object(target), Value::Object(patch)) => {
+            for (key, value) in patch {
+                merge_json_value(target.entry(key).or_insert(Value::Null), value);
+            }
+        }
+        (target, patch) => *target = patch,
     }
 }

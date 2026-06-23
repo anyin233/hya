@@ -90,8 +90,14 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
       "hidden": true,
       "model": "openai/gpt-5",
       "variant": "high",
+      "temperature": 0.2,
+      "top_p": 0.8,
       "color": "#A855F7",
       "steps": 9,
+      "options": {
+        "reasoning": { "summary": "auto" }
+      },
+      "customFlag": "from-rest",
       "request": {
         "headers": { "x-agent": "architect" },
         "body": { "reasoning_effort": "high" }
@@ -149,8 +155,12 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["hidden"], true);
     assert_eq!(architect["model"]["providerID"], "openai");
     assert_eq!(architect["model"]["modelID"], "gpt-5");
+    assert_eq!(architect["temperature"], 0.2);
+    assert_eq!(architect["topP"], 0.8);
     assert_eq!(architect["color"], "#A855F7");
     assert_eq!(architect["steps"], 9);
+    assert_eq!(architect["options"]["reasoning"]["summary"], "auto");
+    assert_eq!(architect["options"]["customFlag"], "from-rest");
     assert_eq!(architect["prompt"], "Think structurally.");
     assert_agent_permissions(&architect["permission"]);
 
