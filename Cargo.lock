@@ -3242,6 +3242,7 @@ dependencies = [
  "serde_json",
  "similar",
  "thiserror 1.0.69",
+ "time",
  "tokio",
  "tokio-util",
  "yaca-proto",
