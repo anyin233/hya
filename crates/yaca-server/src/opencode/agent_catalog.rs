@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::path::Path;
 
 use serde_json::Value;
@@ -14,6 +15,8 @@ pub(super) struct AgentEntry {
     pub(super) native: bool,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) color: Option<String>,
+    pub(super) steps: Option<NonZeroU64>,
     pub(super) request_headers: BTreeMap<String, String>,
     pub(super) request_body: BTreeMap<String, Value>,
     pub(super) permissions: Vec<PermissionRule>,
@@ -98,6 +101,8 @@ fn native_entries() -> Vec<AgentEntry> {
             native: true,
             model: None,
             variant: None,
+            color: None,
+            steps: None,
             request_headers: BTreeMap::new(),
             request_body: BTreeMap::new(),
             permissions: Vec::new(),
@@ -127,6 +132,12 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
         if let Some(variant) = change.variant {
             existing.variant = Some(variant);
         }
+        if let Some(color) = change.color {
+            existing.color = Some(color);
+        }
+        if let Some(steps) = change.steps {
+            existing.steps = Some(steps);
+        }
         if let Some(headers) = change.request_headers {
             existing.request_headers.extend(headers);
         }
@@ -148,6 +159,8 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
             native: false,
             model: change.model,
             variant: change.variant,
+            color: change.color,
+            steps: change.steps,
             request_headers: change.request_headers.unwrap_or_default(),
             request_body: change.request_body.unwrap_or_default(),
             permissions: change.permissions.unwrap_or_default(),

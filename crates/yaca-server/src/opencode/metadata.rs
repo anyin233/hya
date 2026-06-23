@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
@@ -32,6 +33,10 @@ struct AgentInfo {
     description: Option<String>,
     mode: String,
     hidden: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<NonZeroU64>,
     permissions: Vec<PermissionRule>,
 }
 
@@ -102,6 +107,8 @@ async fn agent(
                 description: agent.description,
                 mode: agent.mode,
                 hidden: agent.hidden,
+                color: agent.color,
+                steps: agent.steps,
                 permissions: agent_permissions(&agent.name, &build_permissions, agent.permissions),
             })
             .collect(),
