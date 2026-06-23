@@ -5,23 +5,25 @@
 //! `yaca_mcp::manager::McpManager`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
-use yaca_proto::{Envelope, SessionId, ToolCallId};
+use yaca_proto::{Envelope, SessionId, ToolCallId, WorkspaceAdapterInfo};
 use yaca_tool::Tool;
 
-use crate::client::{ChildGuard, DEFAULT_CALL_TIMEOUT, PluginClient};
+use crate::client::{ChildGuard, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
     EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, METHOD_TOOL_CALL,
-    PROTOCOL_VERSION, ToolCallParams, ToolCallReply, ToolInfo,
+    ToolCallParams, ToolCallReply, ToolInfo,
 };
 use crate::plugin_tool::PluginTool;
+
+mod connection;
 
 const EVENT_CHANNEL_CAP: usize = 256;
 const EVENT_DROP_WARN_EVERY: u64 = 256;
@@ -48,6 +50,7 @@ pub(crate) struct PluginConn {
     pub(crate) id: String,
     pub(crate) hooks: HashMap<HookName, HookPosture>,
     pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) timeout: Duration,
     command: Vec<String>,
     env: BTreeMap<String, String>,
@@ -186,7 +189,7 @@ impl PluginHost {
         let mut set = tokio::task::JoinSet::new();
         for (index, spec) in specs.into_iter().enumerate() {
             let host = host.clone();
-            set.spawn(async move { (index, connect_one(spec, host).await) });
+            set.spawn(async move { (index, connection::connect_one(spec, host).await) });
         }
         let mut collected: Vec<(usize, Arc<PluginConn>)> = Vec::new();
         while let Some(joined) = set.join_next().await {
@@ -227,6 +230,14 @@ impl PluginHost {
     }
 
     #[must_use]
+    pub fn workspace_adapters(&self) -> Vec<WorkspaceAdapterInfo> {
+        self.plugins
+            .iter()
+            .flat_map(|conn| conn.workspace_adapters.iter().cloned())
+            .collect()
+    }
+
+    #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.plugins
             .iter()
@@ -258,71 +269,4 @@ impl PluginHost {
             }
         }
     }
-}
-
-async fn connect_one(spec: PluginSpec, host: HostInfo) -> Result<Arc<PluginConn>, PluginError> {
-    let timeout = spec
-        .timeout_ms
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_CALL_TIMEOUT);
-    let spawn_env = (!spec.env.is_empty()).then_some(&spec.env);
-    let (client, guard) = PluginClient::spawn(&spec.command, spawn_env)?;
-    let init = client.initialize(host.clone()).await?;
-    if init.protocol_version != PROTOCOL_VERSION {
-        return Err(PluginError::ProtocolMismatch {
-            expected: PROTOCOL_VERSION,
-            got: init.protocol_version,
-        });
-    }
-    let mut hooks = HashMap::new();
-    for registration in &init.hooks {
-        let default = registration.name.default_posture();
-        let declared = registration
-            .posture
-            .or_else(|| spec.posture_overrides.get(&registration.name).copied())
-            .unwrap_or(default);
-        hooks.insert(registration.name, force_safer(declared, default));
-    }
-    let has_event_hook = hooks.contains_key(&HookName::Event);
-    let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);
-    let conn = Arc::new(PluginConn {
-        id: spec.id,
-        hooks,
-        tools: init.tools,
-        timeout,
-        command: spec.command,
-        env: spec.env,
-        host_info: host,
-        live: Mutex::new(Some(LiveClient {
-            client,
-            _guard: guard,
-        })),
-        restarts: Mutex::new(Vec::new()),
-        disabled: AtomicBool::new(false),
-        event_tx,
-        event_drops: AtomicU64::new(0),
-    });
-    if has_event_hook {
-        spawn_event_drain(Arc::downgrade(&conn), event_rx);
-    }
-    Ok(conn)
-}
-
-fn force_safer(declared: HookPosture, default: HookPosture) -> HookPosture {
-    if declared == HookPosture::Safe || default == HookPosture::Safe {
-        HookPosture::Safe
-    } else {
-        HookPosture::Open
-    }
-}
-
-fn spawn_event_drain(conn: Weak<PluginConn>, mut rx: mpsc::Receiver<Envelope>) {
-    tokio::spawn(async move {
-        while let Some(envelope) = rx.recv().await {
-            match conn.upgrade() {
-                Some(conn) => conn.notify_event(envelope).await,
-                None => break,
-            }
-        }
-    });
 }

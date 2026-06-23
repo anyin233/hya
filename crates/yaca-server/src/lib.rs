@@ -1,8 +1,5 @@
 //! `yaca-server` — axum HTTP + SSE over `yaca-core` (design.md §11).
 
-use std::convert::Infallible;
-use std::sync::Arc;
-
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};
@@ -11,94 +8,24 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::Stream;
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
-use yaca_core::{AgentSpec, CreateSession, SessionEngine};
-use yaca_mcp::McpManager;
+use yaca_core::CreateSession;
 use yaca_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
     PromptResponse, ShellRequest,
 };
 use yaca_proto::{AgentName, Envelope, ModelRef, SessionId};
-use yaca_tool::{AskRequest, QuestionRequest};
 
 mod opencode;
 mod pending;
 mod runs;
+mod state;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub engine: Arc<SessionEngine>,
-    pub agent: Arc<AgentSpec>,
-    permission_requests: pending::PermissionRequests,
-    question_requests: pending::QuestionRequests,
-    mcp_manager: Arc<McpManager>,
-}
-
-impl AppState {
-    #[must_use]
-    pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
-        Self {
-            engine,
-            agent,
-            permission_requests: Default::default(),
-            question_requests: Default::default(),
-            mcp_manager: Default::default(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
-        self.permission_requests = pending::PermissionRequests::spawn(rx);
-        self
-    }
-
-    #[must_use]
-    pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        self.question_requests = pending::QuestionRequests::spawn(rx);
-        self
-    }
-
-    #[must_use]
-    pub fn with_mcp_manager(mut self, manager: McpManager) -> Self {
-        self.mcp_manager = Arc::new(manager);
-        self
-    }
-}
-
-#[derive(Clone)]
-struct ServerState {
-    engine: Arc<SessionEngine>,
-    agent: Arc<AgentSpec>,
-    runs: runs::RunRegistry,
-    permission_requests: pending::PermissionRequests,
-    question_requests: pending::QuestionRequests,
-    global: opencode::GlobalState,
-    mcp_manager: Arc<McpManager>,
-    mcp_http: opencode::McpHttpState,
-    project: opencode::ProjectState,
-    pty: opencode::PtyState,
-    tui: opencode::TuiState,
-}
-
-impl ServerState {
-    fn new(app: AppState) -> Self {
-        Self {
-            engine: app.engine,
-            agent: app.agent,
-            runs: runs::RunRegistry::default(),
-            permission_requests: app.permission_requests,
-            question_requests: app.question_requests,
-            global: opencode::GlobalState::new(),
-            mcp_manager: app.mcp_manager,
-            mcp_http: opencode::McpHttpState::new(),
-            project: opencode::ProjectState::new(),
-            pty: opencode::PtyState::new(),
-            tui: opencode::TuiState::new(),
-        }
-    }
-}
+pub use state::AppState;
+pub(crate) use state::ServerState;
+pub use yaca_proto::WorkspaceAdapterInfo;
 
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
