@@ -2,8 +2,9 @@
 mod render_support;
 
 use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use render_support::{render, render_buffer};
-use yaca_tui::AppState;
+use yaca_tui::{AppState, ChangedFileView};
 
 fn row_text(buffer: &Buffer, width: u16, y: u16) -> String {
     let mut row = String::new();
@@ -19,6 +20,12 @@ fn row_index(buffer: &Buffer, width: u16, height: u16, needle: &str) -> Option<u
 
 fn symbol_x(buffer: &Buffer, width: u16, y: u16, symbol: &str) -> Option<u16> {
     (0..width).find(|&x| buffer[(x, y)].symbol() == symbol)
+}
+
+fn text_x(buffer: &Buffer, width: u16, y: u16, needle: &str) -> Option<u16> {
+    row_text(buffer, width, y)
+        .find(needle)
+        .and_then(|x| u16::try_from(x).ok())
 }
 
 #[test]
@@ -74,6 +81,73 @@ fn context_rail_renders_agents_as_opencode_card() {
     assert!(row_text(&buffer, width, title_y).contains("│ Agents"));
     assert!(row_text(&buffer, width, title_y + 1).contains("│ sisyphus - ultraworker retry"));
     assert!(row_text(&buffer, width, title_y + 2).contains("└"));
+}
+
+#[test]
+fn context_rail_agents_card_styles_identity_and_status_separately() {
+    // Given: the active agent has an OpenCode-style role/status suffix.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        team: vec![("sisyphus".to_string(), "ultraworker retry".to_string())],
+        ..AppState::default()
+    };
+
+    // When: the wide OpenCode-style shell renders the Agents card.
+    let width = 124;
+    let height = 28;
+    let buffer = render_buffer(&mut state, width, height);
+    let Some(title_y) = row_index(&buffer, width, height, "│ Agents") else {
+        panic!("agents card title row should be visible");
+    };
+    let agent_y = title_y + 1;
+    let Some(agent_x) = text_x(&buffer, width, agent_y, "sisyphus") else {
+        panic!("active agent name should be visible");
+    };
+    let Some(status_x) = text_x(&buffer, width, agent_y, "ultraworker retry") else {
+        panic!("active agent status should be visible");
+    };
+
+    // Then: agent identity uses the semantic agent accent while status stays muted.
+    assert_eq!(
+        buffer[(agent_x, agent_y)].fg,
+        Color::Rgb(0, 188, 212),
+        "agent identity should use the TUI agent accent"
+    );
+    assert_eq!(
+        buffer[(status_x, agent_y)].fg,
+        Color::Rgb(128, 128, 128),
+        "agent status should remain secondary metadata"
+    );
+}
+
+#[test]
+fn context_rail_does_not_render_clipped_agents_card_above_footer() {
+    // Given: preceding sidebar sections consume nearly all body rows.
+    let mut state = AppState {
+        agent: "build".to_string(),
+        changed_files: (0..6)
+            .map(|index| ChangedFileView {
+                path: format!("crates/yaca-tui/src/changed-file-{index}.rs"),
+                additions: Some(1),
+                deletions: Some(0),
+            })
+            .collect(),
+        ..AppState::default()
+    };
+
+    // When: the footer is visible in a moderately tall OpenCode rail.
+    let width = 124;
+    let height = 36;
+    let buffer = render_buffer(&mut state, width, height);
+
+    // Then: the Agents card is never shown without its closing border.
+    if let Some(title_y) = row_index(&buffer, width, height, "│ Agents") {
+        assert!(
+            row_text(&buffer, width, title_y + 2).contains("└"),
+            "agents card should be complete when visible:\n{}",
+            render(&mut state, width, height)
+        );
+    }
 }
 
 #[test]

@@ -32,7 +32,7 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
         .filter(|label| !label.is_empty());
     let mut spans = vec![
         Span::styled("  ▣ ", Style::default().fg(theme.primary)),
-        Span::styled(active_agent_label(state), Style::default().fg(theme.info)),
+        Span::styled(active_agent_label(state), Style::default().fg(theme.agent)),
         Span::styled(" · ", Style::default().fg(theme.muted)),
         Span::styled(model.to_string(), Style::default().fg(theme.text)),
     ];

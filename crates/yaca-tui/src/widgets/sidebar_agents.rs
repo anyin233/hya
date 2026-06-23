@@ -7,26 +7,17 @@ use crate::theme::Theme;
 
 const CARD_WIDTH: usize = 34;
 const INNER_WIDTH: usize = CARD_WIDTH - 2;
+const CONTENT_WIDTH: usize = INNER_WIDTH - 1;
 
 pub(super) fn push_agents(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
     lines.push(Line::from(""));
     lines.push(border_line('┌', '┐', theme));
     lines.push(card_line("Agents", theme, true));
     if state.team.is_empty() {
-        lines.push(card_line(
-            format!("{} - active", agent_label(state)),
-            theme,
-            false,
-        ));
+        lines.push(agent_card_line(&agent_label(state), "active", theme));
     } else {
         for (member, status) in &state.team {
-            let status = status.trim();
-            let label = if status.is_empty() {
-                member.to_string()
-            } else {
-                format!("{member} - {status}")
-            };
-            lines.push(card_line(label, theme, false));
+            lines.push(agent_card_line(member, status, theme));
         }
     }
     lines.push(border_line('└', '┘', theme));
@@ -43,7 +34,7 @@ fn border_line(left: char, right: char, theme: &Theme) -> Line<'static> {
 }
 
 fn card_line(text: impl Into<String>, theme: &Theme, title: bool) -> Line<'static> {
-    let text = fit_cell(&text.into(), INNER_WIDTH - 1);
+    let text = fit_cell(&text.into(), CONTENT_WIDTH);
     let padding = " ".repeat(INNER_WIDTH.saturating_sub(1 + UnicodeWidthStr::width(text.as_str())));
     let text_style = if title {
         Style::default()
@@ -61,6 +52,33 @@ fn card_line(text: impl Into<String>, theme: &Theme, title: bool) -> Line<'stati
         Span::styled(padding, border_style),
         Span::styled("│", border_style),
     ])
+}
+
+fn agent_card_line(member: &str, status: &str, theme: &Theme) -> Line<'static> {
+    let status = status.trim();
+    let label = if status.is_empty() {
+        member.to_string()
+    } else {
+        format!("{member} - {status}")
+    };
+    let visible = fit_cell(&label, CONTENT_WIDTH);
+    let padding =
+        " ".repeat(INNER_WIDTH.saturating_sub(1 + UnicodeWidthStr::width(visible.as_str())));
+    let border_style = Style::default().fg(theme.muted).bg(theme.panel);
+    let identity_style = Style::default().fg(theme.agent).bg(theme.panel);
+    let status_style = Style::default().fg(theme.muted).bg(theme.panel);
+    let mut spans = vec![Span::raw("  "), Span::styled("│ ", border_style)];
+    if UnicodeWidthStr::width(member) <= CONTENT_WIDTH
+        && let Some(rest) = visible.strip_prefix(member)
+    {
+        spans.push(Span::styled(member.to_string(), identity_style));
+        spans.push(Span::styled(rest.to_string(), status_style));
+    } else {
+        spans.push(Span::styled(visible, identity_style));
+    }
+    spans.push(Span::styled(padding, border_style));
+    spans.push(Span::styled("│", border_style));
+    Line::from(spans)
 }
 
 fn fit_cell(text: &str, max_width: usize) -> String {

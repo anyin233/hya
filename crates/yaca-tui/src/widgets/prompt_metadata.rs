@@ -58,7 +58,7 @@ pub(super) fn composer_identity_metadata(
     let status_gap_width = usize::from(render_width).saturating_sub(left_width);
     let mut spans = vec![
         Span::styled("  ", Style::default().bg(theme.element)),
-        Span::styled(agent, Style::default().fg(theme.info).bg(theme.element)),
+        Span::styled(agent, Style::default().fg(theme.agent).bg(theme.element)),
     ];
     if policy.show_model {
         spans.extend([

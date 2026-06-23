@@ -13,6 +13,7 @@ pub struct Theme {
     pub warning: Color,
     pub error: Color,
     pub info: Color,
+    pub agent: Color,
 }
 
 impl Theme {
@@ -31,6 +32,7 @@ impl Theme {
             warning: Color::Rgb(245, 167, 66),
             error: Color::Rgb(224, 108, 117),
             info: Color::Rgb(86, 182, 194),
+            agent: Color::Rgb(0, 188, 212),
         }
     }
 
