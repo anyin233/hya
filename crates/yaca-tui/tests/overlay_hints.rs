@@ -109,6 +109,43 @@ fn dialog_renders_category_headers_for_command_groups() {
 }
 
 #[test]
+fn completion_dialogs_omit_extra_subtitle_chrome() {
+    // Given: inline completion popups use the compact OpenCode list shell.
+    let cases = [
+        ("commands", "select a slash command", "/model"),
+        ("references", "select a file or reference", "@README.md"),
+    ];
+    for (title, subtitle, label) in cases {
+        let mut state = AppState {
+            dialog: Some(DialogView {
+                title: title.to_string(),
+                subtitle: subtitle.to_string(),
+                items: vec![DialogItem {
+                    label: label.to_string(),
+                    detail: "file".to_string(),
+                }],
+                selected: 0,
+            }),
+            ..AppState::default()
+        };
+
+        // When: the completion popup renders.
+        let text = render(&mut state, 100, 24);
+
+        // Then: it keeps the title and footer hints without adding subtitle chrome.
+        assert!(text.contains(title), "dialog title should render:\n{text}");
+        assert!(
+            !text.contains(subtitle),
+            "completion dialog should not render extra subtitle chrome:\n{text}"
+        );
+        assert!(
+            text.contains("↑↓/tab select   enter confirm   esc dismiss"),
+            "completion dialog should keep footer hints:\n{text}"
+        );
+    }
+}
+
+#[test]
 fn dialog_clears_underlying_prompt_rail_at_eighty_columns() {
     // Given: a command dialog tall enough to reach the composer region on a narrow terminal.
     let mut state = AppState {

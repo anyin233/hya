@@ -21,12 +21,18 @@ pub fn render_dialog(frame: &mut Frame, area: Rect, dialog: &DialogView, theme: 
     let visible_range = dialog_visible_range(dialog, area.height);
     let visible_start = visible_range.start;
     let category_rows = dialog_category_rows(dialog.items[visible_range.clone()].iter());
+    let subtitle_rows = if dialog_subtitle(dialog).is_some() {
+        1
+    } else {
+        0
+    };
     let item_rows = u16::try_from(visible_range.len()).unwrap_or(u16::MAX);
     let empty_rows = if dialog.items.is_empty() { 2 } else { 0 };
     let content_height = item_rows
         .saturating_add(category_rows)
         .saturating_add(empty_rows)
-        .saturating_add(5);
+        .saturating_add(subtitle_rows)
+        .saturating_add(4);
     let height = content_height.min(area.height).max(1);
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
@@ -37,17 +43,17 @@ pub fn render_dialog(frame: &mut Frame, area: Rect, dialog: &DialogView, theme: 
     clear_overlay_band(frame, area, rect);
 
     let inner_width = usize::from(width).saturating_sub(6);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            dialog.title.clone(),
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            dialog.subtitle.clone(),
+    let mut lines = vec![Line::from(Span::styled(
+        dialog.title.clone(),
+        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+    ))];
+    if let Some(subtitle) = dialog_subtitle(dialog) {
+        lines.push(Line::from(Span::styled(
+            subtitle.to_string(),
             Style::default().fg(theme.muted),
-        )),
-        Line::from(""),
-    ];
+        )));
+    }
+    lines.push(Line::from(""));
     if dialog.items.is_empty() {
         push_empty_dialog_lines(&mut lines, dialog, theme);
     } else {
@@ -94,6 +100,17 @@ fn dialog_empty_state(dialog: &DialogView) -> (&'static str, &'static str) {
         )
     } else {
         ("No items found", "Try a different query or command")
+    }
+}
+
+fn dialog_subtitle(dialog: &DialogView) -> Option<&str> {
+    if matches!(
+        (dialog.title.as_str(), dialog.subtitle.as_str()),
+        ("commands", "select a slash command") | ("references", "select a file or reference")
+    ) {
+        None
+    } else {
+        Some(dialog.subtitle.as_str())
     }
 }
 
@@ -162,10 +179,16 @@ fn dialog_visible_range(dialog: &DialogView, available_height: u16) -> Range<usi
     loop {
         let range = visible_item_range(dialog.items.len(), dialog.selected, item_limit);
         let category_rows = dialog_category_rows(dialog.items[range.clone()].iter());
+        let subtitle_rows = if dialog_subtitle(dialog).is_some() {
+            1
+        } else {
+            0
+        };
         let height = u16::try_from(range.len())
             .unwrap_or(u16::MAX)
             .saturating_add(category_rows)
-            .saturating_add(5);
+            .saturating_add(subtitle_rows)
+            .saturating_add(4);
         if height <= available_height || item_limit == 0 {
             return range;
         }
