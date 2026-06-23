@@ -10,7 +10,12 @@ pub(super) async fn history(
     State(st): State<ServerState>,
     Json(known): Json<BTreeMap<String, u64>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let mut out = st.sync.history(&known).await;
+    let mut out = st
+        .engine
+        .store()
+        .sync_history(&known)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     for info in st
         .engine
         .store()
@@ -72,7 +77,11 @@ pub(super) async fn replay(
             )));
         }
     }
-    st.sync.replay(events).await;
+    st.engine
+        .store()
+        .replay_sync_events(events)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({ "sessionID": session_id })))
 }
 

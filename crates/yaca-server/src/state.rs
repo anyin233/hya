@@ -68,7 +68,6 @@ pub(crate) struct ServerState {
     pub(crate) mcp_http: opencode::McpHttpState,
     pub(crate) project: opencode::ProjectState,
     pub(crate) pty: opencode::PtyState,
-    pub(crate) sync: opencode::SyncState,
     pub(crate) tui: opencode::TuiState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
 }
@@ -86,7 +85,6 @@ impl ServerState {
             mcp_http: opencode::McpHttpState::new(),
             project: opencode::ProjectState::new(),
             pty: opencode::PtyState::new(),
-            sync: opencode::SyncState::new(),
             tui: opencode::TuiState::new(),
             workspace_adapters: app.workspace_adapters,
         }
