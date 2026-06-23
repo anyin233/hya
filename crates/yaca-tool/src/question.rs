@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use yaca_proto::{ToolName, ToolSchema};
 
-use crate::interaction::{QuestionAnswer, QuestionKind};
+use crate::interaction::{QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
 pub(crate) struct QuestionTool;
@@ -16,21 +16,19 @@ struct QuestionToolInput {
 #[derive(Deserialize)]
 struct QuestionInput {
     question: String,
-    #[serde(default, rename = "header")]
-    _header: String,
+    header: String,
     #[serde(default)]
     options: Vec<QuestionOptionInput>,
     #[serde(default)]
     custom: Option<bool>,
     #[serde(default, rename = "multiple")]
-    _multiple: bool,
+    multiple: bool,
 }
 
 #[derive(Clone, Deserialize)]
 struct QuestionOptionInput {
     label: String,
-    #[serde(rename = "description")]
-    _description: String,
+    description: String,
 }
 
 #[async_trait]
@@ -130,8 +128,22 @@ async fn ask_question(ctx: &ToolCtx, question: &QuestionInput) -> Vec<String> {
             allow_custom: question.custom.unwrap_or(true),
         }
     };
+    let info = QuestionInfo {
+        question: question.question.clone(),
+        header: question.header.clone(),
+        options: question
+            .options
+            .iter()
+            .map(|option| QuestionOption {
+                label: option.label.clone(),
+                description: option.description.clone(),
+            })
+            .collect(),
+        multiple: question.multiple,
+        custom: question.custom,
+    };
 
-    match ctx.interaction.ask(question.question.clone(), kind).await {
+    match ctx.interaction.ask_with_info(info, kind).await {
         Ok(QuestionAnswer::Selected(index)) => labels
             .get(index)
             .cloned()

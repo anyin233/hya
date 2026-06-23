@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use yaca_proto::SessionId;
-use yaca_tool::{QuestionAnswer, QuestionKind, QuestionRequest};
+use yaca_tool::{QuestionAnswer, QuestionInfo as ToolQuestionInfo, QuestionKind, QuestionRequest};
 
 #[derive(Clone, Default)]
 pub(crate) struct QuestionRequests {
@@ -13,7 +13,7 @@ pub(crate) struct QuestionRequests {
 
 struct PendingQuestion {
     session: Option<SessionId>,
-    prompt: String,
+    info: ToolQuestionInfo,
     kind: QuestionKind,
     reply: oneshot::Sender<QuestionAnswer>,
 }
@@ -52,7 +52,7 @@ impl QuestionRequests {
             while let Some(req) = rx.recv().await {
                 let entry = PendingQuestion {
                     session: req.session,
-                    prompt: req.prompt,
+                    info: req.info,
                     kind: req.kind,
                     reply: req.reply,
                 };
@@ -149,44 +149,25 @@ fn question_view(id: &str, entry: &PendingQuestion) -> Option<QuestionRequestVie
     Some(QuestionRequestView {
         id: id.to_string(),
         session_id: entry.session?.to_string(),
-        questions: vec![question_info(&entry.prompt, &entry.kind)],
+        questions: vec![question_info(&entry.info)],
     })
 }
 
-fn question_info(prompt: &str, kind: &QuestionKind) -> QuestionInfo {
-    match kind {
-        QuestionKind::FreeText { .. } => QuestionInfo {
-            question: prompt.to_string(),
-            header: header(prompt),
-            options: Vec::new(),
-            multiple: None,
-            custom: Some(true),
-        },
-        QuestionKind::Select {
-            options,
-            allow_custom,
-        } => QuestionInfo {
-            question: prompt.to_string(),
-            header: header(prompt),
-            options: options
-                .iter()
-                .map(|label| QuestionOption {
-                    label: label.clone(),
-                    description: String::new(),
-                })
-                .collect(),
-            multiple: None,
-            custom: (*allow_custom).then_some(true),
-        },
+fn question_info(info: &ToolQuestionInfo) -> QuestionInfo {
+    QuestionInfo {
+        question: info.question.clone(),
+        header: info.header.clone(),
+        options: info
+            .options
+            .iter()
+            .map(|option| QuestionOption {
+                label: option.label.clone(),
+                description: option.description.clone(),
+            })
+            .collect(),
+        multiple: info.multiple.then_some(true),
+        custom: info.custom,
     }
-}
-
-fn header(prompt: &str) -> String {
-    let trimmed = prompt.trim();
-    if trimmed.is_empty() {
-        return "Question".to_string();
-    }
-    trimmed.chars().take(30).collect()
 }
 
 fn answer_from_reply(kind: QuestionKind, answers: Vec<Vec<String>>) -> QuestionAnswer {

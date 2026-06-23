@@ -3,6 +3,54 @@ use tokio::sync::{mpsc, oneshot};
 use yaca_proto::{QuestionRequestId, SessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionInfo {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multiple: bool,
+    pub custom: Option<bool>,
+}
+
+impl QuestionInfo {
+    #[must_use]
+    pub fn from_prompt_kind(prompt: &str, kind: &QuestionKind) -> Self {
+        let trimmed = prompt.trim();
+        let header = if trimmed.is_empty() {
+            "Question".to_string()
+        } else {
+            trimmed.chars().take(30).collect()
+        };
+        let options = match kind {
+            QuestionKind::FreeText { .. } => Vec::new(),
+            QuestionKind::Select { options, .. } => options
+                .iter()
+                .map(|label| QuestionOption {
+                    label: label.clone(),
+                    description: String::new(),
+                })
+                .collect(),
+        };
+        let custom = match kind {
+            QuestionKind::FreeText { .. } => Some(true),
+            QuestionKind::Select { allow_custom, .. } => (*allow_custom).then_some(true),
+        };
+        Self {
+            question: prompt.to_string(),
+            header,
+            options,
+            multiple: false,
+            custom,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionKind {
     FreeText {
         default: Option<String>,
@@ -25,6 +73,7 @@ pub struct QuestionRequest {
     pub id: QuestionRequestId,
     pub session: Option<SessionId>,
     pub prompt: String,
+    pub info: QuestionInfo,
     pub kind: QuestionKind,
     pub reply: oneshot::Sender<QuestionAnswer>,
 }
@@ -66,11 +115,22 @@ impl InteractionPlane {
         prompt: String,
         kind: QuestionKind,
     ) -> Result<QuestionAnswer, InteractionError> {
+        let info = QuestionInfo::from_prompt_kind(&prompt, &kind);
+        self.ask_with_info(info, kind).await
+    }
+
+    pub async fn ask_with_info(
+        &self,
+        info: QuestionInfo,
+        kind: QuestionKind,
+    ) -> Result<QuestionAnswer, InteractionError> {
         let (tx, rx) = oneshot::channel();
+        let prompt = info.question.clone();
         let req = QuestionRequest {
             id: QuestionRequestId::new(),
             session: self.session,
             prompt,
+            info,
             kind,
             reply: tx,
         };

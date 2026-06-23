@@ -69,6 +69,10 @@ async fn question_asks_multiple_prompts_and_returns_open_code_answer_metadata() 
     let first = rx.recv().await.unwrap();
     assert_eq!(first.session, Some(session));
     assert_eq!(first.prompt, "Pick a color");
+    assert_eq!(first.info.question, "Pick a color");
+    assert_eq!(first.info.header, "Color");
+    assert!(!first.info.multiple);
+    assert_eq!(first.info.options[0].description, "Warm");
     assert_eq!(
         first.kind,
         QuestionKind::Select {
@@ -80,6 +84,7 @@ async fn question_asks_multiple_prompts_and_returns_open_code_answer_metadata() 
 
     let second = rx.recv().await.unwrap();
     assert_eq!(second.prompt, "What should the branch be called?");
+    assert_eq!(second.info.header, "Branch");
     assert_eq!(
         second.kind,
         QuestionKind::FreeText {
@@ -135,6 +140,7 @@ async fn question_supports_multiple_selected_options() {
     });
 
     let request = rx.recv().await.unwrap();
+    assert!(request.info.multiple);
     request
         .reply
         .send(QuestionAnswer::SelectedMany(vec![0, 2]))
