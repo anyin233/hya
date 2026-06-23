@@ -6,7 +6,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use yaca_proto::{ToolName, ToolSchema};
+use yaca_proto::{SessionId, ToolName, ToolSchema};
 
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
@@ -150,7 +150,7 @@ impl Tool for WebSearchTool {
             .assert(Action::WebSearch, Resource::WebSearch(input.query.clone()))
             .await?;
         let provider = ctx.websearch.config.provider;
-        let result = call_provider(&ctx.websearch.config, provider, &input).await?;
+        let result = call_provider(&ctx.websearch.config, provider, &input, ctx.session).await?;
         Ok(json!({
             "title": format!("{}: {}", provider.label(), input.query),
             "output": result.unwrap_or_else(|| "No search results found. Please try a different query.".to_string()),
@@ -163,16 +163,14 @@ async fn call_provider(
     config: &WebSearchConfig,
     provider: WebSearchProvider,
     input: &WebSearchInput,
+    session: Option<SessionId>,
 ) -> Result<Option<String>, ToolError> {
     let (url, tool, arguments) = match provider {
         WebSearchProvider::Exa => (&config.exa_url, "web_search_exa", exa_arguments(input)),
         WebSearchProvider::Parallel => (
             &config.parallel_url,
             "web_search",
-            json!({
-                "objective": input.query,
-                "search_queries": [input.query],
-            }),
+            parallel_arguments(input, session),
         ),
     };
     let url = Url::parse(url).map_err(|e| ToolError::Input(e.to_string()))?;
@@ -216,7 +214,7 @@ async fn call_provider(
         .text()
         .await
         .map_err(|e| ToolError::Other(e.to_string()))?;
-    parse_response(&body)
+    crate::websearch_response::parse_response(&body)
 }
 
 fn exa_url_from_env() -> String {
@@ -246,29 +244,13 @@ fn exa_arguments(input: &WebSearchInput) -> Value {
     value
 }
 
-fn parse_response(body: &str) -> Result<Option<String>, ToolError> {
-    let trimmed = body.trim();
-    if let Some(text) = parse_payload(trimmed)? {
-        return Ok(Some(text));
+fn parallel_arguments(input: &WebSearchInput, session: Option<SessionId>) -> Value {
+    let mut value = json!({
+        "objective": input.query,
+        "search_queries": [input.query],
+    });
+    if let Some(session) = session {
+        value["session_id"] = json!(session.to_string());
     }
-    for line in body.lines() {
-        if let Some(payload) = line.strip_prefix("data: ")
-            && let Some(text) = parse_payload(payload)?
-        {
-            return Ok(Some(text));
-        }
-    }
-    Ok(None)
-}
-
-fn parse_payload(payload: &str) -> Result<Option<String>, ToolError> {
-    let trimmed = payload.trim();
-    if !trimmed.starts_with('{') {
-        return Ok(None);
-    }
-    let value: Value = serde_json::from_str(trimmed)?;
-    Ok(value["result"]["content"]
-        .as_array()
-        .and_then(|items| items.iter().find_map(|item| item["text"].as_str()))
-        .map(ToString::to_string))
+    value
 }

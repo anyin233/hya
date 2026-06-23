@@ -21,6 +21,7 @@ pub mod todo;
 pub mod tool;
 mod webfetch;
 mod websearch;
+mod websearch_response;
 mod write;
 
 pub use interaction::{
