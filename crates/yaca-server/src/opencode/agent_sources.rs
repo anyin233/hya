@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::agent_options::{AgentOptions, from_config as agent_options};
 use super::agent_permission::PermissionRule;
 use super::agent_permission_config::{
-    ConfigPermissionRule, LegacyPermissions, rules as permission_rules,
+    ConfigPermissionRule, LegacyPermissions, LegacyTools, rules as permission_rules,
 };
 
 type RequestBody = BTreeMap<String, Value>;
@@ -58,6 +58,7 @@ struct InlineAgent {
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
+    tools: Option<LegacyTools>,
     prompt: Option<String>,
     system: Option<String>,
     disable: Option<bool>,
@@ -129,7 +130,7 @@ fn append_inline_agents(
             options: agent_options(agent.options, agent.extra),
             request_headers,
             request_body,
-            permissions: permission_rules(agent.permissions, agent.permission),
+            permissions: permission_rules(agent.permissions, agent.permission, agent.tools),
             prompt: agent.system.or(agent.prompt),
             remove: agent.disable.unwrap_or(false) || agent.disabled.unwrap_or(false),
         });

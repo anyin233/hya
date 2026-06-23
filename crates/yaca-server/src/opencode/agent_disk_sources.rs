@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::agent_options::{AgentOptions, from_config as agent_options};
 use super::agent_permission_config::{
-    ConfigPermissionRule, LegacyPermissions, rules as permission_rules,
+    ConfigPermissionRule, LegacyPermissions, LegacyTools, rules as permission_rules,
 };
 use super::agent_sources::AgentChange;
 
@@ -31,6 +31,7 @@ struct AgentFrontmatter {
     request: Option<InlineRequest>,
     permission: Option<LegacyPermissions>,
     permissions: Option<Vec<ConfigPermissionRule>>,
+    tools: Option<LegacyTools>,
     disable: Option<bool>,
     disabled: Option<bool>,
     #[serde(flatten)]
@@ -111,7 +112,11 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         options: agent_options(frontmatter.options, frontmatter.extra),
         request_headers,
         request_body,
-        permissions: permission_rules(frontmatter.permissions, frontmatter.permission),
+        permissions: permission_rules(
+            frontmatter.permissions,
+            frontmatter.permission,
+            frontmatter.tools,
+        ),
         prompt: Some(prompt),
         remove: frontmatter.disable.unwrap_or(false) || frontmatter.disabled.unwrap_or(false),
     })

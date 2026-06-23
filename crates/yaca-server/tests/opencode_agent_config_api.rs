@@ -105,8 +105,12 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
       "permissions": [
         { "action": "read", "resource": "docs/**", "effect": "allow" }
       ],
+      "tools": {
+        "write": false,
+        "webfetch": true
+      },
       "permission": {
-        "edit": "deny",
+        "grep": "deny",
         "bash": { "git *": "ask" }
       },
       "prompt": "Think structurally."
@@ -202,8 +206,15 @@ fn assert_agent_permissions(permissions: &Value) {
     ));
     assert!(
         permissions
+            .contains(&serde_json::json!({"permission": "grep", "pattern": "*", "action": "deny"}))
+    );
+    assert!(
+        permissions
             .contains(&serde_json::json!({"permission": "edit", "pattern": "*", "action": "deny"}))
     );
+    assert!(permissions.contains(
+        &serde_json::json!({"permission": "webfetch", "pattern": "*", "action": "allow"})
+    ));
     assert!(
         permissions.contains(
             &serde_json::json!({"permission": "bash", "pattern": "git *", "action": "ask"})

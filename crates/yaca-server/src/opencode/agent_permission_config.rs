@@ -19,10 +19,12 @@ pub(super) enum LegacyPermissionRule {
 }
 
 pub(super) type LegacyPermissions = BTreeMap<String, LegacyPermissionRule>;
+pub(super) type LegacyTools = BTreeMap<String, bool>;
 
 pub(super) fn rules(
     permissions: Option<Vec<ConfigPermissionRule>>,
     legacy: Option<LegacyPermissions>,
+    tools: Option<LegacyTools>,
 ) -> Option<Vec<PermissionRule>> {
     let mut rules = Vec::new();
     for permission in permissions.unwrap_or_default() {
@@ -32,10 +34,25 @@ pub(super) fn rules(
             permission.effect,
         ));
     }
-    for (permission, rule) in legacy.unwrap_or_default() {
+    let mut legacy_rules = tool_permissions(tools);
+    legacy_rules.extend(legacy.unwrap_or_default());
+    for (permission, rule) in legacy_rules {
         append_legacy_rule(&mut rules, permission, rule);
     }
     (!rules.is_empty()).then_some(rules)
+}
+
+fn tool_permissions(tools: Option<LegacyTools>) -> LegacyPermissions {
+    let mut permissions = LegacyPermissions::new();
+    for (tool, enabled) in tools.unwrap_or_default() {
+        let permission = match tool.as_str() {
+            "write" | "edit" | "patch" => "edit".to_string(),
+            _ => tool,
+        };
+        let action = if enabled { "allow" } else { "deny" };
+        permissions.insert(permission, LegacyPermissionRule::Effect(action.to_string()));
+    }
+    permissions
 }
 
 fn append_legacy_rule(
