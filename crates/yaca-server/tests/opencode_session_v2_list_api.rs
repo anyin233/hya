@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -17,10 +18,16 @@ use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
 use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
+mod support;
+
 const WORKDIR: &str = "/tmp/yaca-opencode-session-v2-list-api";
 const OTHER_WORKDIR: &str = "/tmp/yaca-opencode-session-v2-list-api-other";
 
 async fn state() -> AppState {
+    state_for(WORKDIR.into()).await
+}
+
+async fn state_for(workdir: PathBuf) -> AppState {
     let router =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -33,7 +40,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir,
             reasoning: None,
         }),
     )
@@ -42,6 +49,15 @@ async fn state() -> AppState {
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+fn session_ids(body: &Value) -> Vec<&str> {
+    body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect()
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
@@ -100,6 +116,22 @@ async fn patch_json(app: axum::Router, uri: String, body: Value) -> (StatusCode,
     (status, body_json(resp).await)
 }
 
+async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
 #[tokio::test]
 async fn opencode_v2_session_list_filters_directory() {
     let app = router(state().await);
@@ -108,12 +140,36 @@ async fn opencode_v2_session_list_filters_directory() {
 
     let (status, body) = get_json(app, &format!("/api/session?directory={WORKDIR}")).await;
     assert_eq!(status, StatusCode::OK);
-    let ids = body["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| item["id"].as_str().unwrap())
-        .collect::<Vec<_>>();
+    let ids = session_ids(&body);
+    assert!(ids.contains(&included.as_str()));
+    assert!(!ids.contains(&excluded.as_str()));
+}
+
+#[tokio::test]
+async fn opencode_v2_session_list_filters_worktree_workspace() {
+    if !support::git_available() {
+        eprintln!("skipping: git is not available");
+        return;
+    }
+    let repo = support::init_git_repo("session-v2-list-repo");
+    let app = router(state_for(repo.clone()).await);
+    let (status, workspace) = post_json(
+        app.clone(),
+        "/experimental/workspace",
+        json!({ "type": "worktree", "branch": null }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let workspace_id = workspace["id"].as_str().unwrap();
+    let workspace_dir = workspace["directory"].as_str().unwrap();
+    let included = create_session_in(app.clone(), None, workspace_dir).await;
+    let repo_dir = repo.to_string_lossy();
+    let excluded = create_session_in(app.clone(), None, &repo_dir).await;
+
+    let (status, body) = get_json(app, &format!("/api/session?workspace={workspace_id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let ids = session_ids(&body);
     assert!(ids.contains(&included.as_str()));
     assert!(!ids.contains(&excluded.as_str()));
 }
@@ -134,12 +190,7 @@ async fn opencode_v2_session_list_filters_archived_by_default() {
 
     let (status, body) = get_json(app, "/api/session?limit=10").await;
     assert_eq!(status, StatusCode::OK);
-    let ids = body["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| item["id"].as_str().unwrap())
-        .collect::<Vec<_>>();
+    let ids = session_ids(&body);
     assert!(ids.contains(&active.as_str()));
     assert!(!ids.contains(&archived.as_str()));
 }

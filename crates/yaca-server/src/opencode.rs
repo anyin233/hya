@@ -73,6 +73,7 @@ mod session_switch;
 mod session_update;
 mod session_v2;
 mod session_v2_cursor;
+mod session_v2_workspace;
 mod session_wait;
 mod skill_catalog;
 mod sse;
