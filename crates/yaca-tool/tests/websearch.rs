@@ -22,7 +22,10 @@ fn deny(action: Action, pat: &str) -> Rule {
 }
 
 fn ctx_with(rules: Vec<Rule>, websearch: WebSearchPlane) -> ToolCtx {
-    let session = SessionId::new();
+    ctx_with_session(SessionId::new(), rules, websearch)
+}
+
+fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPlane) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
@@ -125,6 +128,33 @@ async fn websearch_calls_mcp_provider_and_returns_open_code_shape() {
     assert_eq!(sent["params"]["arguments"]["type"], "fast");
     assert_eq!(sent["params"]["arguments"]["livecrawl"], "preferred");
     assert_eq!(sent["params"]["arguments"]["contextMaxCharacters"], 4096);
+}
+
+#[tokio::test]
+async fn websearch_parallel_includes_session_metadata() {
+    // Given
+    let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
+    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let session = SessionId::new();
+    let ctx = ctx_with_session(
+        session,
+        vec![allow(Action::WebSearch, "rust")],
+        WebSearchPlane::new(WebSearchProvider::Parallel, url),
+    );
+
+    // When
+    let _out = tool
+        .execute(&ctx, json!({ "query": "rust" }))
+        .await
+        .unwrap();
+    let sent = request.await.unwrap();
+
+    // Then
+    assert_eq!(sent["params"]["name"], "web_search");
+    assert_eq!(
+        sent["params"]["arguments"]["session_id"],
+        session.to_string()
+    );
 }
 
 #[tokio::test]
