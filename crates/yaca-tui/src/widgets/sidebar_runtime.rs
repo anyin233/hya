@@ -5,11 +5,7 @@ use crate::AppState;
 use crate::theme::Theme;
 
 pub(super) fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, theme: &Theme) {
-    if state.goal.is_none()
-        && state.loop_view.is_none()
-        && !state.yolo
-        && state.reasoning_effort.is_none()
-    {
+    if state.goal.is_none() && state.loop_view.is_none() && !state.yolo {
         return;
     }
     lines.push(Line::from(""));
@@ -31,8 +27,5 @@ pub(super) fn push_runtime(lines: &mut Vec<Line<'static>>, state: &AppState, the
     }
     if state.yolo {
         lines.push(meta("mode YOLO", theme.warning));
-    }
-    if let Some(effort) = &state.reasoning_effort {
-        lines.push(meta(format!("think {effort}"), theme.accent));
     }
 }
