@@ -1,13 +1,9 @@
-use std::collections::BTreeSet;
-use std::path::Path;
-
 use axum::extract::{Path as AxumPath, State};
 use axum::http::header::HeaderMap;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState};
@@ -20,7 +16,7 @@ const CONNECT_TOKEN_HEADER_VALUE: &str = "1";
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
-        .route("/pty/shells", get(shells))
+        .route("/pty/shells", get(super::pty_shell::shells))
         .route("/pty", get(list_legacy).post(create_legacy))
         .route(
             "/pty/:id",
@@ -28,7 +24,7 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/pty/:id/connect-token", post(connect_token))
         .route("/pty/:id/connect", get(super::pty_connect::connect))
-        .route("/api/pty/shells", get(shells))
+        .route("/api/pty/shells", get(super::pty_shell::shells))
         .route("/api/pty", get(list_api).post(create_api))
         .route(
             "/api/pty/:id",
@@ -36,17 +32,6 @@ pub(super) fn router() -> Router<ServerState> {
         )
         .route("/api/pty/:id/connect-token", post(connect_token_api))
         .route("/api/pty/:id/connect", get(super::pty_connect::connect))
-}
-
-#[derive(Serialize)]
-struct ShellItem {
-    path: String,
-    name: String,
-    acceptable: bool,
-}
-
-async fn shells() -> Json<Vec<ShellItem>> {
-    Json(shell_candidates().into_iter().map(shell_item).collect())
 }
 
 async fn list_legacy(State(st): State<ServerState>) -> Json<Vec<PtyInfo>> {
@@ -178,38 +163,6 @@ fn default_cwd(st: &ServerState) -> String {
     location::workdir(st).to_string_lossy().into_owned()
 }
 
-fn shell_candidates() -> Vec<String> {
-    let mut paths = BTreeSet::new();
-    if let Some(shell) = std::env::var_os("SHELL").and_then(|value| value.into_string().ok()) {
-        paths.insert(shell);
-    }
-    for path in [
-        "/bin/bash",
-        "/usr/bin/bash",
-        "/bin/zsh",
-        "/usr/bin/zsh",
-        "/bin/sh",
-        "/usr/bin/sh",
-    ] {
-        paths.insert(path.to_string());
-    }
-    paths.into_iter().collect()
-}
-
-fn shell_item(path: String) -> ShellItem {
-    let acceptable = is_executable(&path);
-    let name = Path::new(&path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path.as_str())
-        .to_string();
-    ShellItem {
-        path,
-        name,
-        acceptable,
-    }
-}
-
 fn running_only(items: Vec<PtyInfo>) -> Vec<PtyInfo> {
     items
         .into_iter()
@@ -219,24 +172,6 @@ fn running_only(items: Vec<PtyInfo>) -> Vec<PtyInfo> {
 
 fn running(info: Option<PtyInfo>) -> Option<PtyInfo> {
     info.filter(|info| info.status == "running")
-}
-
-fn is_executable(path: &str) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }
 
 pub(super) fn pty_not_found(id: &str) -> Response {

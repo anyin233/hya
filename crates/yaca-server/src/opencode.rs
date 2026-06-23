@@ -31,6 +31,7 @@ mod pty;
 mod pty_connect;
 mod pty_payload;
 mod pty_runtime;
+mod pty_shell;
 mod pty_state;
 mod question;
 mod reference;
