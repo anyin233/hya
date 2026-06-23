@@ -60,6 +60,18 @@ pub struct LspError(pub String);
 pub trait LspProvider: Send + Sync {
     async fn has_clients(&self, file: &Path) -> Result<bool, LspError>;
     async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError>;
+    async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
+        if self.has_clients(workdir).await? {
+            Ok(vec![json!({
+                "id": "lsp",
+                "name": "lsp",
+                "root": "",
+                "status": "connected"
+            })])
+        } else {
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -110,6 +122,13 @@ impl LspPlane {
                     })
                     .await
             }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
+        match &self.provider {
+            Some(provider) => provider.status(workdir).await,
             None => Ok(Vec::new()),
         }
     }
