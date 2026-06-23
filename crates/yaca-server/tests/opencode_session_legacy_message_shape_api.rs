@@ -127,3 +127,25 @@ async fn legacy_message_info_matches_opencode_required_shape() {
             >= assistant["time"]["created"].as_u64().unwrap()
     );
 }
+
+#[tokio::test]
+async fn legacy_session_message_post_accepts_opencode_prompt_parts() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let (status, body) = post_json(
+        app.clone(),
+        format!("/session/{session}/message"),
+        json!({"parts": [{"type": "text", "text": "hello from parts"}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["info"]["sessionID"], session);
+    assert_eq!(body["parts"][0]["type"], "text");
+    assert_eq!(body["parts"][0]["text"], "hello from parts");
+
+    let (status, messages) = get_json(app, format!("/session/{session}/message")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(messages[0]["parts"][0]["text"], "hello from parts");
+    assert_eq!(messages[1]["parts"][0]["text"], "assistant answer");
+}
