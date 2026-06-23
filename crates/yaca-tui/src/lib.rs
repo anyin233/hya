@@ -13,6 +13,7 @@ mod layout;
 mod theme;
 mod tool_inputs;
 mod tool_labels;
+mod tool_outputs;
 mod tool_questions;
 mod tool_tasks;
 mod tool_todos;

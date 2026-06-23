@@ -1,11 +1,8 @@
 use yaca_proto::{PartProjection, Projection, Role, ToolPartState};
 
-use crate::ansi;
 use crate::tool_inputs;
 use crate::tool_labels::{action_label, websearch_provider_label};
-use crate::tool_questions;
-use crate::tool_tasks;
-use crate::tool_todos;
+use crate::tool_outputs;
 
 pub enum TimelinePart {
     Text(String),
@@ -83,8 +80,8 @@ fn part_to_timeline(part: &PartProjection) -> TimelinePart {
                     ..
                 } => ToolStatus::Completed {
                     time_ms: *time_ms,
-                    output: completed_tool_output_text(&name, input, output),
-                    exit_code: completed_tool_exit_code(&name, output),
+                    output: tool_outputs::completed_text(&name, input, output, *time_ms),
+                    exit_code: tool_outputs::exit_code(&name, output),
                 },
                 ToolPartState::Error { message, .. } => ToolStatus::Error {
                     message: ellipsize(message, 40),
@@ -187,70 +184,5 @@ fn ellipsize(s: &str, max: usize) -> String {
     } else {
         let head: String = cleaned.chars().take(max).collect();
         format!("{head}…")
-    }
-}
-
-fn completed_tool_output_text(
-    name: &str,
-    input: &serde_json::Value,
-    output: &serde_json::Value,
-) -> Option<String> {
-    if name == "ask_user" {
-        return tool_questions::snapshot_text(input, output);
-    }
-    if name == "todowrite" {
-        return tool_todos::snapshot_text(input);
-    }
-    if name == "task" {
-        return tool_tasks::snapshot_text(input);
-    }
-    if matches!(name, "bash" | "shell") {
-        return completed_output_text(output)
-            .and_then(|text| clean_multiline_output(&ansi::strip(&text)));
-    }
-
-    completed_output_text(output)
-}
-
-fn completed_tool_exit_code(name: &str, output: &serde_json::Value) -> Option<i64> {
-    match name {
-        "bash" | "shell" => output.get("exit_code").and_then(serde_json::Value::as_i64),
-        _ => None,
-    }
-}
-
-fn completed_output_text(output: &serde_json::Value) -> Option<String> {
-    if let Some(text) = output.as_str().and_then(clean_multiline_output) {
-        return Some(text);
-    }
-
-    for key in [
-        "stdout",
-        "stderr",
-        "output",
-        "diff",
-        "diagnostics",
-        "message",
-    ] {
-        if let Some(text) = output
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .and_then(clean_multiline_output)
-        {
-            return Some(text);
-        }
-    }
-
-    None
-}
-
-fn clean_multiline_output(text: &str) -> Option<String> {
-    let cleaned = text
-        .trim_matches(|ch| matches!(ch, '\n' | '\r'))
-        .replace('\r', "");
-    if cleaned.trim().is_empty() {
-        None
-    } else {
-        Some(cleaned)
     }
 }
