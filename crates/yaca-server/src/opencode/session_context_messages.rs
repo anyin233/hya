@@ -149,11 +149,14 @@ fn part_json(part: &PartProjection, tool_times: &BTreeMap<PartId, ToolTime>) -> 
             "text": text,
         }),
         PartProjection::Tool {
-            id, name, state, ..
+            id,
+            call,
+            name,
+            state,
         } => {
             let mut value = json!({
                 "type": "tool",
-                "id": id.to_string(),
+                "id": call.to_string(),
                 "name": name.as_str(),
                 "state": super::session_context_tool_state::tool_state(state),
                 "time": super::session_context_tool_time::tool_time(tool_times.get(id).copied()),
