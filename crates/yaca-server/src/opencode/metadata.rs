@@ -102,11 +102,7 @@ async fn agent(
                 description: agent.description,
                 mode: agent.mode,
                 hidden: agent.hidden,
-                permissions: if agent.name == "build" {
-                    build_permissions.clone()
-                } else {
-                    Vec::new()
-                },
+                permissions: agent_permissions(&agent.name, &build_permissions, agent.permissions),
             })
             .collect(),
     ))
@@ -125,6 +121,20 @@ fn agent_model_ref(model: &str) -> AgentModelRef {
         provider_id: "yaca".to_string(),
         variant: None,
     }
+}
+
+fn agent_permissions(
+    name: &str,
+    build_permissions: &[PermissionRule],
+    configured: Vec<PermissionRule>,
+) -> Vec<PermissionRule> {
+    let mut permissions = if name == "build" {
+        build_permissions.to_vec()
+    } else {
+        Vec::new()
+    };
+    permissions.extend(configured);
+    permissions
 }
 
 async fn command(

@@ -94,6 +94,13 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
         "headers": { "x-agent": "architect" },
         "body": { "reasoning_effort": "high" }
       },
+      "permissions": [
+        { "action": "read", "resource": "docs/**", "effect": "allow" }
+      ],
+      "permission": {
+        "edit": "deny",
+        "bash": { "git *": "ask" }
+      },
       "prompt": "Think structurally."
     },
     "plan": {
@@ -140,6 +147,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["model"]["providerID"], "openai");
     assert_eq!(architect["model"]["modelID"], "gpt-5");
     assert_eq!(architect["prompt"], "Think structurally.");
+    assert_agent_permissions(&architect["permission"]);
 
     let plan = find_agent(&agents, "plan");
     assert_eq!(plan["description"], "Inline plan mode");
@@ -163,6 +171,23 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["model"]["variant"], "high");
     assert_eq!(architect["request"]["headers"]["x-agent"], "architect");
     assert_eq!(architect["request"]["body"]["reasoning_effort"], "high");
+    assert_agent_permissions(&architect["permissions"]);
     assert_eq!(find_agent(api_agents, "triage")["mode"], "primary");
     assert!(agent_named(api_agents, "summary").is_none());
+}
+
+fn assert_agent_permissions(permissions: &Value) {
+    let permissions = permissions.as_array().unwrap();
+    assert!(permissions.contains(
+        &serde_json::json!({"permission": "read", "pattern": "docs/**", "action": "allow"})
+    ));
+    assert!(
+        permissions
+            .contains(&serde_json::json!({"permission": "edit", "pattern": "*", "action": "deny"}))
+    );
+    assert!(
+        permissions.contains(
+            &serde_json::json!({"permission": "bash", "pattern": "git *", "action": "ask"})
+        )
+    );
 }

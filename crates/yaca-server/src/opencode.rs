@@ -4,6 +4,7 @@ use crate::ServerState;
 
 mod agent_catalog;
 mod agent_permission;
+mod agent_permission_config;
 mod agent_sources;
 mod catalog;
 mod command_catalog;

@@ -97,11 +97,7 @@ async fn agent(
                 mode: agent.mode,
                 native: agent.native,
                 hidden: agent.hidden,
-                permission: if agent.name == "build" {
-                    build_permissions.clone()
-                } else {
-                    Vec::new()
-                },
+                permission: agent_permissions(&agent.name, &build_permissions, agent.permissions),
                 model: model_info(agent.model.as_deref().unwrap_or(st.agent.model.as_str())),
                 prompt: if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())
@@ -155,6 +151,20 @@ fn model_info(model: &str) -> AgentModel {
         model_id: model.to_string(),
         provider_id: "yaca".to_string(),
     }
+}
+
+fn agent_permissions(
+    name: &str,
+    build_permissions: &[PermissionRule],
+    configured: Vec<PermissionRule>,
+) -> Vec<PermissionRule> {
+    let mut permissions = if name == "build" {
+        build_permissions.to_vec()
+    } else {
+        Vec::new()
+    };
+    permissions.extend(configured);
+    permissions
 }
 
 fn is_false(value: &bool) -> bool {

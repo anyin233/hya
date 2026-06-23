@@ -4,9 +4,19 @@ use yaca_tool::{Action, Mode, Rule};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct PermissionRule {
-    permission: &'static str,
+    permission: String,
     pattern: String,
-    action: &'static str,
+    action: String,
+}
+
+impl PermissionRule {
+    pub(super) fn new(permission: String, pattern: String, action: String) -> Self {
+        Self {
+            permission,
+            pattern,
+            action,
+        }
+    }
 }
 
 pub(super) fn from_engine(engine: &SessionEngine) -> Vec<PermissionRule> {
@@ -19,11 +29,11 @@ pub(super) fn from_engine(engine: &SessionEngine) -> Vec<PermissionRule> {
 }
 
 fn from_rule(rule: &Rule) -> PermissionRule {
-    PermissionRule {
-        permission: permission_name(rule.action),
-        pattern: rule.resource_pattern.clone(),
-        action: mode_name(rule.mode),
-    }
+    PermissionRule::new(
+        permission_name(rule.action).to_string(),
+        rule.resource_pattern.clone(),
+        mode_name(rule.mode).to_string(),
+    )
 }
 
 fn permission_name(action: Action) -> &'static str {

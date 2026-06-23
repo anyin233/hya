@@ -4,6 +4,11 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::agent_permission::PermissionRule;
+use super::agent_permission_config::{
+    ConfigPermissionRule, LegacyPermissions, rules as permission_rules,
+};
+
 type RequestBody = BTreeMap<String, Value>;
 type RequestHeaders = BTreeMap<String, String>;
 
@@ -16,6 +21,7 @@ pub(super) struct AgentChange {
     pub(super) variant: Option<String>,
     pub(super) request_headers: Option<RequestHeaders>,
     pub(super) request_body: Option<RequestBody>,
+    pub(super) permissions: Option<Vec<PermissionRule>>,
     pub(super) prompt: Option<String>,
     pub(super) remove: bool,
 }
@@ -28,6 +34,8 @@ struct AgentFrontmatter {
     model: Option<String>,
     variant: Option<String>,
     request: Option<InlineRequest>,
+    permission: Option<LegacyPermissions>,
+    permissions: Option<Vec<ConfigPermissionRule>>,
     disable: Option<bool>,
     disabled: Option<bool>,
 }
@@ -48,6 +56,8 @@ struct InlineAgent {
     model: Option<String>,
     variant: Option<String>,
     request: Option<InlineRequest>,
+    permission: Option<LegacyPermissions>,
+    permissions: Option<Vec<ConfigPermissionRule>>,
     prompt: Option<String>,
     system: Option<String>,
     disable: Option<bool>,
@@ -129,6 +139,7 @@ fn append_inline_agents(
             variant: agent.variant,
             request_headers,
             request_body,
+            permissions: permission_rules(agent.permissions, agent.permission),
             prompt: agent.system.or(agent.prompt),
             remove: agent.disable.unwrap_or(false) || agent.disabled.unwrap_or(false),
         });
@@ -186,6 +197,7 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         variant: frontmatter.variant,
         request_headers,
         request_body,
+        permissions: permission_rules(frontmatter.permissions, frontmatter.permission),
         prompt: Some(prompt),
         remove: frontmatter.disable.unwrap_or(false) || frontmatter.disabled.unwrap_or(false),
     })
