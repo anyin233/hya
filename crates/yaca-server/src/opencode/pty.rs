@@ -254,7 +254,7 @@ fn forbidden() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({
-            "_tag": "PtyForbiddenError",
+            "_tag": "ForbiddenError",
             "message": "Invalid PTY connect token request",
         })),
     )
