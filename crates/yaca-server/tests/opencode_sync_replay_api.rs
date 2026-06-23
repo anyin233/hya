@@ -74,6 +74,39 @@ async fn opencode_sync_replay_accepts_non_empty_event_history() {
 }
 
 #[tokio::test]
+async fn opencode_sync_replay_events_are_returned_by_history() {
+    let app = router(state().await);
+    let aggregate = "ses_00000000000000000000000000000000";
+    let (status, body) = post_json(
+        app.clone(),
+        "/sync/replay",
+        json!({
+            "directory": "/tmp/yaca-opencode-sync-replay-api",
+            "events": [{
+                "id": "evt_00000000000000000000000000",
+                "aggregateID": aggregate,
+                "seq": 0,
+                "type": "session.updated",
+                "data": {"title": "remote"}
+            }]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["sessionID"], aggregate);
+
+    let (status, history) = post_json(app.clone(), "/sync/history", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history[0]["aggregate_id"], aggregate);
+    assert_eq!(history[0]["type"], "session.updated");
+    assert_eq!(history[0]["data"]["title"], "remote");
+
+    let (status, filtered) = post_json(app, "/sync/history", json!({aggregate: 0})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(filtered, json!([]));
+}
+
+#[tokio::test]
 async fn opencode_sync_replay_rejects_mixed_aggregates() {
     let (status, _body) = post_json(
         router(state().await),
