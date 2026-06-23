@@ -41,6 +41,32 @@ fn ctx_with(rules: Vec<Rule>, websearch: WebSearchPlane) -> ToolCtx {
     }
 }
 
+#[test]
+fn websearch_schema_includes_open_code_guidance() {
+    // Given
+    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+
+    // When
+    let schema = tool.schema();
+    let properties = &schema.input_schema["properties"];
+
+    // Then
+    assert!(schema.description.contains("The current year is"));
+    assert!(schema.description.contains("MUST use this year"));
+    assert_eq!(
+        properties["livecrawl"]["description"],
+        "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')"
+    );
+    assert_eq!(
+        properties["type"]["description"],
+        "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search"
+    );
+    assert_eq!(
+        properties["contextMaxCharacters"]["description"],
+        "Maximum characters for context string optimized for LLMs (default: 10000)"
+    );
+}
+
 async fn serve_once(body: &'static str) -> (String, tokio::task::JoinHandle<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();

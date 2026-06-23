@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 use yaca_proto::{ToolName, ToolSchema};
 
 use crate::permission::{Action, Resource};
@@ -125,16 +126,16 @@ impl Tool for WebSearchTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("websearch"),
-            description: "Search the web using an OpenCode-compatible MCP search provider."
-                .to_string(),
+            description: include_str!("websearch.txt")
+                .replace("{{year}}", &OffsetDateTime::now_utc().year().to_string()),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Websearch query" },
                     "numResults": { "type": "number", "description": "Number of search results to return (default: 8)" },
-                    "livecrawl": { "type": "string", "enum": ["fallback", "preferred"] },
-                    "type": { "type": "string", "enum": ["auto", "fast", "deep"] },
-                    "contextMaxCharacters": { "type": "number" }
+                    "livecrawl": { "type": "string", "enum": ["fallback", "preferred"], "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')" },
+                    "type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search" },
+                    "contextMaxCharacters": { "type": "number", "description": "Maximum characters for context string optimized for LLMs (default: 10000)" }
                 },
                 "required": ["query"]
             }),

@@ -21,6 +21,7 @@ tokio-util = { workspace = true }
 reqwest = { workspace = true }
 regex = { workspace = true }
 similar = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
