@@ -26,6 +26,8 @@ mod transcript_scroll;
 mod transcript_text;
 mod transcript_tool_status;
 mod transcript_tools;
+#[cfg(test)]
+mod transcript_tools_tests;
 
 pub use overlays::{render_dialog, render_picker};
 pub use permission::render_permission;

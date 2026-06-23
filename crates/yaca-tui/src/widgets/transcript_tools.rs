@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::transcript_diff::{DiffDisplayLine, DiffLineKind, format_unified_diff};
 use super::transcript_output::collapsed_tool_output;
@@ -11,7 +12,7 @@ use crate::theme::Theme;
 use crate::tool_labels::{action_symbol, status_symbol};
 use crate::view_model::ToolStatus;
 
-const TOOL_INPUT_INLINE_MAX: usize = 48;
+const TOOL_INPUT_INLINE_MAX_WIDTH: usize = 48;
 
 pub fn push_tool_lines(
     tool: (&str, &str, &str, &ToolStatus),
@@ -163,10 +164,20 @@ fn input_label(input: &str) -> String {
 
 fn ellipsize_input(input: &str) -> String {
     let cleaned = input.replace('\n', " ");
-    if cleaned.chars().count() <= TOOL_INPUT_INLINE_MAX {
+    if UnicodeWidthStr::width(cleaned.as_str()) <= TOOL_INPUT_INLINE_MAX_WIDTH {
         cleaned
     } else {
-        let head: String = cleaned.chars().take(TOOL_INPUT_INLINE_MAX).collect();
+        let mut head = String::new();
+        let mut width = 0;
+        let limit = TOOL_INPUT_INLINE_MAX_WIDTH.saturating_sub(1);
+        for ch in cleaned.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if width + ch_width > limit {
+                break;
+            }
+            head.push(ch);
+            width += ch_width;
+        }
         format!("{head}…")
     }
 }
@@ -180,45 +191,5 @@ fn output_line_color(line: &str, theme: &Theme) -> Color {
         theme.error
     } else {
         theme.text
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shell_tool_status_fits_an_eighty_column_transcript_budget_with_long_input() {
-        // Given: a long shell command rendered as a completed compact tool row.
-        let theme = Theme::yaca_dark();
-        let mut lines = Vec::new();
-
-        // When: the row is converted into ratatui spans.
-        push_tool_lines(
-            (
-                "shell",
-                "Shell",
-                r#"{"cmd":"printf line one && printf line two"}"#,
-                &ToolStatus::Completed {
-                    time_ms: 9,
-                    output: None,
-                    exit_code: None,
-                },
-            ),
-            80,
-            false,
-            &theme,
-            &mut lines,
-        );
-
-        // Then: the status row leaves room for terminal glyph-width differences at 80 columns.
-        let width = match lines.first() {
-            Some(line) => line.width(),
-            None => panic!("tool row missing"),
-        };
-        assert!(
-            width <= 76,
-            "tool status row should fit the narrow transcript budget, got width {width}"
-        );
     }
 }
