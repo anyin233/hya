@@ -92,6 +92,7 @@ async fn opencode_v2_fs_list_uses_extension_mime_types() {
     let workdir = tempdir();
     std::fs::write(workdir.join("photo.avif"), b"avif").unwrap();
     std::fs::write(workdir.join("icon.svg"), "<svg></svg>\n").unwrap();
+    std::fs::write(workdir.join("favicon.ico"), b"ico").unwrap();
     std::fs::write(workdir.join("sound.mp3"), b"ID3").unwrap();
     let app = router(state(workdir).await);
 
@@ -103,6 +104,10 @@ async fn opencode_v2_fs_list_uses_extension_mime_types() {
         .iter()
         .find(|item| item["path"] == "icon.svg")
         .unwrap();
+    let favicon = files
+        .iter()
+        .find(|item| item["path"] == "favicon.ico")
+        .unwrap();
     let sound = files
         .iter()
         .find(|item| item["path"] == "sound.mp3")
@@ -112,6 +117,7 @@ async fn opencode_v2_fs_list_uses_extension_mime_types() {
         .find(|item| item["path"] == "photo.avif")
         .unwrap();
     assert_eq!(icon["mime"], "image/svg+xml");
+    assert_eq!(favicon["mime"], "image/vnd.microsoft.icon");
     assert_eq!(sound["mime"], "audio/mpeg");
     assert_eq!(photo["mime"], "image/avif");
 }
