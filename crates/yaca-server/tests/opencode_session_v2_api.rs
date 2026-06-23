@@ -398,7 +398,7 @@ async fn opencode_v2_session_init_records_requested_command_message() {
 }
 
 #[tokio::test]
-async fn opencode_v2_session_compact_and_wait_report_unavailable() {
+async fn opencode_v2_session_compact_reports_unavailable_and_wait_returns_when_idle() {
     let app = router(state().await);
     let requested = SessionId::new().to_string();
     let (status, _) = post_json(
@@ -417,13 +417,13 @@ async fn opencode_v2_session_compact_and_wait_report_unavailable() {
     assert_eq!(compact["service"], "session.compact");
 
     let (status, wait) = post_empty(app.clone(), format!("/api/session/{requested}/wait")).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(wait["_tag"], "ServiceUnavailableError");
-    assert_eq!(wait["message"], "Session wait is not available yet");
-    assert_eq!(wait["service"], "session.wait");
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(wait, Value::Null);
 
     let missing = SessionId::new().to_string();
-    let (status, _) = post_empty(app, format!("/api/session/{missing}/compact")).await;
+    let (status, _) = post_empty(app.clone(), format!("/api/session/{missing}/compact")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = post_empty(app, format!("/api/session/{missing}/wait")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 

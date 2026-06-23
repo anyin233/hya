@@ -73,6 +73,7 @@ mod session_unavailable;
 mod session_update;
 mod session_v2;
 mod session_v2_cursor;
+mod session_wait;
 mod skill_catalog;
 mod sse;
 mod sync_projector;
