@@ -3,10 +3,10 @@ use std::path::Path;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use similar::{ChangeTag, TextDiff};
 use yaca_proto::ToolSchema;
 
 use crate::edit_replace;
+use crate::file_diff;
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::lsp_post_edit;
 use crate::permission::{Action, Resource};
@@ -123,12 +123,6 @@ impl Tool for EditTool {
     }
 }
 
-struct FileDiff {
-    patch: String,
-    additions: usize,
-    deletions: usize,
-}
-
 fn success_result(
     created: bool,
     replaced: usize,
@@ -138,7 +132,7 @@ fn success_result(
     content_new: &str,
     diagnostics: Value,
 ) -> Value {
-    let diff = file_diff(path, content_old, content_new);
+    let diff = file_diff::create(path, content_old, content_new);
     let filepath = display_path(path);
     let patch = diff.patch;
     let mut output = "Edit applied successfully.".to_string();
@@ -159,32 +153,6 @@ fn success_result(
             },
         },
     })
-}
-
-fn file_diff(path: &Path, content_old: &str, content_new: &str) -> FileDiff {
-    let diff = TextDiff::from_lines(content_old, content_new);
-    let mut additions = 0;
-    let mut deletions = 0;
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Delete => deletions += change_line_count(change.value()),
-            ChangeTag::Insert => additions += change_line_count(change.value()),
-            ChangeTag::Equal => {}
-        }
-    }
-    let path = display_path(path);
-    FileDiff {
-        patch: diff.unified_diff().header(&path, &path).to_string(),
-        additions,
-        deletions,
-    }
-}
-
-fn change_line_count(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    text.lines().count().max(1)
 }
 
 fn relative_title(path: &Path, workdir: &Path) -> String {

@@ -3,6 +3,7 @@
 mod apply_patch;
 mod edit;
 mod edit_replace;
+mod file_diff;
 mod formatter;
 mod formatter_catalog;
 mod formatter_command;
