@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use yaca_proto::{ToolName, ToolSchema};
 
+use crate::lsp_post_edit;
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
@@ -66,6 +67,7 @@ impl Tool for ApplyPatchTool {
         }
 
         let mut summaries = Vec::with_capacity(hunks.len());
+        let mut lsp_paths = Vec::new();
         for hunk in hunks {
             let summary = apply::apply_hunk(&ctx.workdir, hunk).await?;
             if !matches!(summary.action, apply::FileAction::Delete) {
@@ -74,9 +76,11 @@ impl Tool for ApplyPatchTool {
                     .format_file(&ctx.workdir, &path)
                     .await
                     .map_err(|error| ToolError::Other(error.to_string()))?;
+                lsp_paths.push(path);
             }
             summaries.push(summary);
         }
+        let diagnostics = lsp_post_edit::touch_many_and_diagnostics(&ctx.lsp, &lsp_paths).await?;
 
         let output = format!(
             "Success. Updated the following files:\n{}",
@@ -97,7 +101,14 @@ impl Tool for ApplyPatchTool {
                 })
             })
             .collect();
-        Ok(json!({ "ok": true, "output": output, "files": files }))
+        Ok(json!({
+            "ok": true,
+            "output": output,
+            "files": files,
+            "metadata": {
+                "diagnostics": diagnostics,
+            },
+        }))
     }
 }
 
