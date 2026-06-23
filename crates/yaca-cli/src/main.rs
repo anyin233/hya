@@ -11,6 +11,7 @@ mod auth_cmd;
 mod cli_args;
 mod commands;
 mod config;
+mod models_cmd;
 mod permission;
 mod plugins;
 mod rpc;
@@ -684,6 +685,14 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
+        Some(Command::Models {
+            provider,
+            verbose,
+            refresh,
+        }) => {
+            let runtime = resolve_runtime(model);
+            models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
+        }
         Some(Command::Sessions { db }) => cmd_sessions(db).await,
         Some(Command::Rpc) => cmd_rpc(model, yolo).await,
     }
