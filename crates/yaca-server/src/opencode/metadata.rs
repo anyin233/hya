@@ -91,8 +91,8 @@ async fn agent(
                         variant: model.variant.clone(),
                     }),
                 request: RequestInfo {
-                    headers: BTreeMap::new(),
-                    body: json!({}),
+                    headers: agent.request_headers,
+                    body: json!(agent.request_body),
                 },
                 system: if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())

@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
 use std::path::Path;
+
+use serde_json::Value;
 
 use super::agent_sources::AgentChange;
 
@@ -10,6 +13,8 @@ pub(super) struct AgentEntry {
     pub(super) native: bool,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) request_headers: BTreeMap<String, String>,
+    pub(super) request_body: BTreeMap<String, Value>,
     pub(super) prompt: Option<String>,
 }
 
@@ -91,6 +96,8 @@ fn native_entries() -> Vec<AgentEntry> {
             native: true,
             model: None,
             variant: None,
+            request_headers: BTreeMap::new(),
+            request_body: BTreeMap::new(),
             prompt: None,
         })
         .collect()
@@ -117,6 +124,12 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
         if let Some(variant) = change.variant {
             existing.variant = Some(variant);
         }
+        if let Some(headers) = change.request_headers {
+            existing.request_headers.extend(headers);
+        }
+        if let Some(body) = change.request_body {
+            existing.request_body.extend(body);
+        }
         if let Some(prompt) = change.prompt {
             existing.prompt = Some(prompt);
         }
@@ -129,6 +142,8 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
             native: false,
             model: change.model,
             variant: change.variant,
+            request_headers: change.request_headers.unwrap_or_default(),
+            request_body: change.request_body.unwrap_or_default(),
             prompt: change.prompt,
         });
     }

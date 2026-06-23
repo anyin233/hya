@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::Value;
+
+type RequestBody = BTreeMap<String, Value>;
+type RequestHeaders = BTreeMap<String, String>;
 
 pub(super) struct AgentChange {
     pub(super) name: String,
@@ -10,6 +14,8 @@ pub(super) struct AgentChange {
     pub(super) hidden: Option<bool>,
     pub(super) model: Option<String>,
     pub(super) variant: Option<String>,
+    pub(super) request_headers: Option<RequestHeaders>,
+    pub(super) request_body: Option<RequestBody>,
     pub(super) prompt: Option<String>,
     pub(super) remove: bool,
 }
@@ -21,6 +27,7 @@ struct AgentFrontmatter {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    request: Option<InlineRequest>,
     disable: Option<bool>,
     disabled: Option<bool>,
 }
@@ -40,10 +47,17 @@ struct InlineAgent {
     hidden: Option<bool>,
     model: Option<String>,
     variant: Option<String>,
+    request: Option<InlineRequest>,
     prompt: Option<String>,
     system: Option<String>,
     disable: Option<bool>,
     disabled: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+struct InlineRequest {
+    headers: Option<RequestHeaders>,
+    body: Option<RequestBody>,
 }
 
 pub(super) fn config_agents(workdir: &Path) -> Vec<AgentChange> {
@@ -100,6 +114,7 @@ fn append_inline_agents(
     agents: &mut Vec<AgentChange>,
 ) {
     for (name, agent) in map.unwrap_or_default() {
+        let (request_headers, request_body) = request_parts(agent.request);
         let mode = if primary {
             Some("primary".to_string())
         } else {
@@ -112,10 +127,19 @@ fn append_inline_agents(
             hidden: agent.hidden,
             model: agent.model,
             variant: agent.variant,
+            request_headers,
+            request_body,
             prompt: agent.system.or(agent.prompt),
             remove: agent.disable.unwrap_or(false) || agent.disabled.unwrap_or(false),
         });
     }
+}
+
+fn request_parts(request: Option<InlineRequest>) -> (Option<RequestHeaders>, Option<RequestBody>) {
+    let Some(request) = request else {
+        return (None, None);
+    };
+    (request.headers, request.body)
 }
 
 struct AgentFile {
@@ -152,6 +176,7 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
     } else {
         frontmatter.mode
     };
+    let (request_headers, request_body) = request_parts(frontmatter.request);
     Some(AgentChange {
         name: file.name,
         description: frontmatter.description,
@@ -159,6 +184,8 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         hidden: frontmatter.hidden,
         model: frontmatter.model,
         variant: frontmatter.variant,
+        request_headers,
+        request_body,
         prompt: Some(prompt),
         remove: frontmatter.disable.unwrap_or(false) || frontmatter.disabled.unwrap_or(false),
     })
