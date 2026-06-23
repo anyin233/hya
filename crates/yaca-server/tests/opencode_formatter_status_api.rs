@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axum::body::Body;
@@ -18,6 +19,19 @@ use yaca_tool::{
     FormatterError, FormatterPlane, FormatterProvider, PermissionPlane, PermissionRules,
     ToolRegistry,
 };
+
+fn tempdir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "yaca-server-formatter-test-{nanos}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 async fn state(status: Vec<FormatterStatus>) -> AppState {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
@@ -54,20 +68,39 @@ impl FormatterProvider for StaticFormatterProvider {
     }
 }
 
+struct RecordingFormatterProvider {
+    seen: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+#[async_trait]
+impl FormatterProvider for RecordingFormatterProvider {
+    async fn status(
+        &self,
+        workdir: &std::path::Path,
+    ) -> Result<Vec<FormatterStatus>, FormatterError> {
+        self.seen.lock().unwrap().push(workdir.to_path_buf());
+        Ok(Vec::new())
+    }
+}
+
 async fn provider_state() -> AppState {
+    provider_state_with(PathBuf::from("."), Arc::new(StaticFormatterProvider)).await
+}
+
+async fn provider_state_with(workdir: PathBuf, provider: Arc<dyn FormatterProvider>) -> AppState {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, router, tools, perm, EventBus::default())
-        .with_formatter(FormatterPlane::new(Arc::new(StaticFormatterProvider)));
+        .with_formatter(FormatterPlane::new(provider));
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("fake-model"),
             system_prompt: "system prompt".to_string(),
-            workdir: PathBuf::from("."),
+            workdir,
             reasoning: None,
         }),
     )
@@ -142,4 +175,26 @@ async fn formatter_status_returns_provider_entries() {
             }
         ])
     );
+}
+
+#[tokio::test]
+async fn formatter_status_uses_workspace_routed_directory() {
+    let default = tempdir();
+    let scoped = tempdir().join("scoped dir");
+    std::fs::create_dir_all(&scoped).unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let encoded_scoped = scoped.to_string_lossy().replace(' ', "%20");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = router(
+        provider_state_with(
+            default,
+            Arc::new(RecordingFormatterProvider { seen: seen.clone() }),
+        )
+        .await,
+    );
+
+    let (status, _body) = get_json(app, &format!("/formatter?directory={encoded_scoped}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(seen.lock().unwrap().as_slice(), &[scoped]);
 }
