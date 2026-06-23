@@ -66,6 +66,30 @@ fn default_footer_shows_agent_shortcut_until_usage_exists() {
 }
 
 #[test]
+fn idle_footer_exposes_status_command_like_opencode() {
+    // Given: an idle connected OpenCode-style shell with no MCP connectors.
+    let mut state = AppState::default();
+
+    // When: the composer footer renders the default status strip.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: LSP status and the status command remain visible even before MCP exists.
+    assert!(
+        bottom_row.contains("0 LSP"),
+        "footer should keep the OpenCode LSP count visible, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("/status"),
+        "footer should expose the OpenCode status command, got {bottom_row:?}"
+    );
+    assert!(
+        !bottom_row.contains("MCP"),
+        "footer should not invent an MCP segment before MCP exists, got {bottom_row:?}"
+    );
+}
+
+#[test]
 fn footer_renders_project_mcp_without_app_version() {
     // Given: an idle OpenCode-style footer with worktree, branch, and MCP state.
     let mut state = AppState {

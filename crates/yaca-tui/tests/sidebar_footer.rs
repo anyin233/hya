@@ -4,6 +4,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
+use unicode_width::UnicodeWidthStr;
 use yaca_proto::{Envelope, Event, EventSeq, SessionId};
 use yaca_tui::{AppState, draw};
 
@@ -30,6 +31,11 @@ fn row_text(buffer: &Buffer, width: u16, y: u16) -> String {
         row.push_str(buffer[(x, y)].symbol());
     }
     row
+}
+
+fn column_of(row: &str, needle: &str) -> u16 {
+    let byte_index = row.find(needle).unwrap();
+    u16::try_from(UnicodeWidthStr::width(&row[..byte_index])).unwrap()
 }
 
 fn env(seq: u64, event: Event) -> Envelope {
@@ -117,8 +123,8 @@ fn context_rail_footer_emphasizes_app_name_like_opencode() {
     // Then: the app label is primary text while the version stays muted.
     let version_row = row_containing(&buffer, 124, 36, "yaca 0.0.0").unwrap();
     let rendered = row_text(&buffer, 124, version_row);
-    let label_x = u16::try_from(rendered.find("yaca").unwrap()).unwrap();
-    let version_x = u16::try_from(rendered.find("0.0.0").unwrap()).unwrap();
+    let label_x = column_of(&rendered, "yaca");
+    let version_x = column_of(&rendered, "0.0.0");
     assert_eq!(buffer[(label_x, version_row)].fg, Color::Rgb(238, 238, 238));
     assert_eq!(
         buffer[(version_x, version_row)].fg,
