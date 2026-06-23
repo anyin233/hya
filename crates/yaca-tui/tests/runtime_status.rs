@@ -197,6 +197,10 @@ fn runtime_status_shows_selected_block_actions_when_prompt_is_empty() {
         status_row.contains("r revert · b branch"),
         "selected block action hint should be visible, got {status_row:?}"
     );
+    assert!(
+        status_row.contains("enter actions"),
+        "selected block status should expose the OpenCode message actions dialog, got {status_row:?}"
+    );
 }
 
 #[test]

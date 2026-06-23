@@ -14,6 +14,7 @@ pub(super) enum DialogMode {
     CommandPalette,
     CommandCompletion,
     ReferenceCompletion,
+    MessageActions,
 }
 
 impl Controller {
@@ -132,6 +133,9 @@ impl Controller {
                     Some(DialogMode::Skills) => {
                         self.apply_skill_selection(selected_label);
                         TuiEffect::None
+                    }
+                    Some(DialogMode::MessageActions) => {
+                        self.dispatch_message_action(selected_label, selected)
                     }
                     Some(DialogMode::Provider) => {
                         if let Some(provider) = selected_label.filter(|provider| {

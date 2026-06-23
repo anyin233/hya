@@ -42,6 +42,7 @@ use crate::config::ModelEntry;
 mod agent_cycle;
 mod agents;
 mod block_action;
+mod clipboard;
 mod command_sources;
 mod commands;
 mod controller;
@@ -513,6 +514,13 @@ pub async fn run(
                                 }
                             }
                             TuiEffect::SystemMessage(message) => {
+                                let _ = engine.inject_system_message(session, message).await;
+                            }
+                            TuiEffect::CopyMessage(text) => {
+                                let message = match clipboard::write_clipboard(&text) {
+                                    Ok(()) => "copied message to clipboard".to_string(),
+                                    Err(e) => format!("copy error: {e:#}"),
+                                };
                                 let _ = engine.inject_system_message(session, message).await;
                             }
                             TuiEffect::CompactTranscript => {

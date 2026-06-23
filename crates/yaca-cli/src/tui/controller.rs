@@ -17,6 +17,7 @@ mod completion;
 mod dialog_open;
 mod dialogs;
 mod effects;
+mod message_actions;
 mod slash;
 
 use self::dialogs::DialogMode;
@@ -149,6 +150,14 @@ impl Controller {
             selected_block_action(self.app.selected_message, &self.app.input, &key)
         {
             return TuiEffect::SelectedBlock(action);
+        }
+        if key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.app.selected_message.is_some()
+            && self.app.input.is_empty()
+        {
+            self.open_message_actions_dialog();
+            return TuiEffect::None;
         }
         if handle_message_scroll_key(&mut self.app, &key) {
             return TuiEffect::None;
@@ -557,6 +566,9 @@ mod leader_key_tests;
 
 #[cfg(test)]
 mod app_exit_tests;
+
+#[cfg(test)]
+mod message_actions_tests;
 
 #[cfg(test)]
 mod command_palette_tests;

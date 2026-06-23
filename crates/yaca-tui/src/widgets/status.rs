@@ -30,17 +30,22 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
         .model_provider_label
         .as_deref()
         .filter(|label| !label.is_empty());
+    let selected_actions = state.selected_message.is_some() && state.input.is_empty();
     let mut spans = vec![
         Span::styled("  ▣ ", Style::default().fg(theme.primary)),
         Span::styled(active_agent_label(state), Style::default().fg(theme.agent)),
-        Span::styled(" · ", Style::default().fg(theme.muted)),
-        Span::styled(model.to_string(), Style::default().fg(theme.text)),
     ];
-    if let Some(provider) = provider {
+    if !selected_actions {
         spans.extend([
-            Span::styled(" ", Style::default().fg(theme.muted)),
-            Span::styled(provider.to_string(), Style::default().fg(theme.muted)),
+            Span::styled(" · ", Style::default().fg(theme.muted)),
+            Span::styled(model.to_string(), Style::default().fg(theme.text)),
         ]);
+        if let Some(provider) = provider {
+            spans.extend([
+                Span::styled(" ", Style::default().fg(theme.muted)),
+                Span::styled(provider.to_string(), Style::default().fg(theme.muted)),
+            ]);
+        }
     }
     if let Some(state_label) = runtime_state_label(state) {
         let state_color = if state.running {
@@ -48,10 +53,12 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
         } else {
             theme.muted
         };
-        spans.extend([
-            Span::styled(" · ", Style::default().fg(theme.muted)),
-            Span::styled(state_label, Style::default().fg(state_color)),
-        ]);
+        if !selected_actions {
+            spans.extend([
+                Span::styled(" · ", Style::default().fg(theme.muted)),
+                Span::styled(state_label, Style::default().fg(state_color)),
+            ]);
+        }
     }
     if state.running {
         spans.extend([
@@ -59,9 +66,12 @@ fn runtime_status_line(state: &AppState, theme: &Theme, width: u16) -> Line<'sta
             Span::styled("ctrl+x down ", Style::default().fg(theme.text)),
             Span::styled("view subagents", Style::default().fg(theme.muted)),
         ]);
-    } else if state.selected_message.is_some() && state.input.is_empty() {
+    } else if selected_actions {
         spans.extend([
             Span::styled("   ", Style::default().fg(theme.muted)),
+            Span::styled("enter ", Style::default().fg(theme.text)),
+            Span::styled("actions", Style::default().fg(theme.muted)),
+            Span::styled(" · ", Style::default().fg(theme.muted)),
             Span::styled("r ", Style::default().fg(theme.text)),
             Span::styled("revert", Style::default().fg(theme.muted)),
             Span::styled(" · ", Style::default().fg(theme.muted)),

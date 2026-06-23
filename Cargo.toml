@@ -53,6 +53,7 @@ toml = "0.8"
 camino = { version = "1", features = ["serde1"] }
 bytes = "1"
 secrecy = "0.8"
+base64 = "0.22"
 
 # Library crates deny panic-paths (parse-don't-validate; typed errors). Bins/tests
 # may relax locally with #![allow(...)]. (Per design.md N3 / implement.md gate.)

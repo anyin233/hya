@@ -211,6 +211,7 @@ impl DummyHarness {
                     .await
                     .expect("system message");
             }
+            TuiEffect::CopyMessage(_) => {}
             TuiEffect::SelectedBlock(action) => {
                 if let Some(forked) = super::session_fork::fork_selected_block(
                     &self.engine,

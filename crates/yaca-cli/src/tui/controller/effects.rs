@@ -23,5 +23,6 @@ pub enum TuiEffect {
     InitProject,
     ExportTranscript,
     SelectedBlock(SelectedBlockAction),
+    CopyMessage(String),
     SystemMessage(String),
 }
