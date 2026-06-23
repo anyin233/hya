@@ -10,6 +10,7 @@ pub(super) struct IgnoreSet {
 struct Rule {
     pattern: String,
     directory: bool,
+    negated: bool,
 }
 
 impl IgnoreSet {
@@ -35,7 +36,13 @@ impl IgnoreSet {
         } else {
             relative
         };
-        self.rules.iter().any(|rule| rule.matches(&path))
+        let mut ignored = false;
+        for rule in &self.rules {
+            if rule.matches(&path) {
+                ignored = !rule.negated;
+            }
+        }
+        ignored
     }
 }
 
@@ -77,10 +84,20 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
 
 fn parse_rule(line: &str) -> Option<Rule> {
     let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let (negated, trimmed) = trimmed
+        .strip_prefix('!')
+        .map_or((false, trimmed), |pattern| (true, pattern.trim()));
+    if trimmed.is_empty() {
         return None;
     }
     let directory = trimmed.ends_with('/');
     let pattern = trimmed.trim_start_matches('/').to_string();
-    Some(Rule { pattern, directory })
+    Some(Rule {
+        pattern,
+        directory,
+        negated,
+    })
 }
