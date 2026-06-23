@@ -117,7 +117,6 @@ impl ToolRegistry {
             Arc::new(GlobTool),
             Arc::new(FindTool),
             Arc::new(GrepTool),
-            Arc::new(ShellTool),
             Arc::new(QuestionTool),
             Arc::new(LspTool),
             Arc::new(SkillTool),
@@ -126,6 +125,9 @@ impl ToolRegistry {
         ] {
             registry.insert_builtin(tool);
         }
+        let shell = Arc::new(ShellTool);
+        registry.insert_builtin(shell.clone());
+        registry.insert_named_builtin("bash", shell);
         registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
         registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
         registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
@@ -158,6 +160,16 @@ impl ToolRegistry {
 
     fn insert_builtin(&mut self, tool: Arc<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    fn insert_named_builtin(&mut self, name: &str, tool: Arc<dyn Tool>) {
+        self.tools.insert(
+            name.to_string(),
+            Arc::new(NamedTool {
+                name: name.to_string(),
+                inner: tool,
+            }),
+        );
     }
 
     fn insert_aliased_builtin(&mut self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {

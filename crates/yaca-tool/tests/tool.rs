@@ -92,6 +92,14 @@ fn builtins_expose_opencode_names_and_keep_short_aliases_hidden() {
         .map(|schema| schema.name.as_str().to_string())
         .collect();
 
+    for canonical in ["bash", "shell"] {
+        assert!(registry.get(canonical).is_some(), "{canonical} missing");
+        assert!(
+            visible.iter().any(|name| name == canonical),
+            "{canonical} schema hidden"
+        );
+    }
+
     for (canonical, alias) in [
         ("webfetch", "fetch"),
         ("websearch", "search"),

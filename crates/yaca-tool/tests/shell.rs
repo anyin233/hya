@@ -51,6 +51,31 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
 }
 
 #[tokio::test]
+async fn bash_alias_is_visible_and_runs_shell_commands() {
+    // Given
+    let dir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = ToolRegistry::builtins().get("bash").unwrap();
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "command": "printf %s open",
+                "timeout": 1000
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(tool.schema().name.as_str(), "bash");
+    assert_eq!(out["exit_code"], 0);
+    assert_eq!(out["stdout"], "open");
+}
+
+#[tokio::test]
 async fn shell_runs_in_open_code_workdir_and_uses_command_metadata() {
     // Given
     let dir = tempdir();
