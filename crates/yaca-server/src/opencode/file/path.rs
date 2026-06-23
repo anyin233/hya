@@ -1,6 +1,22 @@
 use std::path::{Component, Path, PathBuf};
 
+use axum::http::HeaderMap;
+
 use crate::ApiError;
+use crate::ServerState;
+
+pub(super) fn workdir(st: &ServerState, directory: Option<&str>, headers: &HeaderMap) -> PathBuf {
+    let path = directory
+        .map(PathBuf::from)
+        .or_else(|| {
+            headers
+                .get("x-opencode-directory")
+                .and_then(|value| value.to_str().ok())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| st.agent.workdir.clone());
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
 
 pub(super) fn resolve_existing(root: &Path, query_path: &str) -> Result<PathBuf, ApiError> {
     let path = join_under(root, query_path)?;

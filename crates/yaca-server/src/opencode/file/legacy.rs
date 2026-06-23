@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::ignore;
 use super::mime;
 use super::path::{
-    collect_paths, entry_kind, join_under, matches_kind, relative_path, resolve_existing,
+    collect_paths, entry_kind, join_under, matches_kind, relative_path, resolve_existing, workdir,
 };
 use crate::{ApiError, ServerState};
 
@@ -204,19 +204,6 @@ pub(super) async fn find_file(
 
 pub(super) async fn empty_array<T>(Query(_query): Query<T>) -> Json<Vec<Value>> {
     Json(Vec::new())
-}
-
-fn workdir(st: &ServerState, directory: Option<&str>, headers: &HeaderMap) -> PathBuf {
-    let path = directory
-        .map(PathBuf::from)
-        .or_else(|| {
-            headers
-                .get("x-opencode-directory")
-                .and_then(|value| value.to_str().ok())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| st.agent.workdir.clone());
-    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn collect_text_matches(
