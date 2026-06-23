@@ -22,7 +22,7 @@ pub struct WebSearchPlane {
 
 #[derive(Clone)]
 struct WebSearchConfig {
-    provider: WebSearchProvider,
+    provider: WebSearchProviderMode,
     exa_url: String,
     parallel_url: String,
 }
@@ -30,8 +30,9 @@ struct WebSearchConfig {
 impl Default for WebSearchPlane {
     fn default() -> Self {
         let provider = match std::env::var("OPENCODE_WEBSEARCH_PROVIDER").as_deref() {
-            Ok("parallel") => WebSearchProvider::Parallel,
-            _ => WebSearchProvider::Exa,
+            Ok("exa") => WebSearchProviderMode::Fixed(WebSearchProvider::Exa),
+            Ok("parallel") => WebSearchProviderMode::Fixed(WebSearchProvider::Parallel),
+            _ => WebSearchProviderMode::Auto,
         };
         let exa_url = exa_url_from_env();
         Self {
@@ -59,12 +60,36 @@ impl WebSearchPlane {
         };
         Self {
             config: Arc::new(WebSearchConfig {
-                provider,
+                provider: WebSearchProviderMode::Fixed(provider),
                 exa_url,
                 parallel_url,
             }),
         }
     }
+
+    #[must_use]
+    pub fn auto(exa_url: String, parallel_url: String) -> Self {
+        Self {
+            config: Arc::new(WebSearchConfig {
+                provider: WebSearchProviderMode::Auto,
+                exa_url,
+                parallel_url,
+            }),
+        }
+    }
+
+    fn provider_for_session(&self, session: Option<SessionId>) -> WebSearchProvider {
+        match self.config.provider {
+            WebSearchProviderMode::Fixed(provider) => provider,
+            WebSearchProviderMode::Auto => select_provider(session),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WebSearchProviderMode {
+    Auto,
+    Fixed(WebSearchProvider),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,7 +174,7 @@ impl Tool for WebSearchTool {
         ctx.permission
             .assert(Action::WebSearch, Resource::WebSearch(input.query.clone()))
             .await?;
-        let provider = ctx.websearch.config.provider;
+        let provider = ctx.websearch.provider_for_session(ctx.session);
         let result = call_provider(&ctx.websearch.config, provider, &input, ctx.session).await?;
         Ok(json!({
             "title": format!("{}: {}", provider.label(), input.query),
@@ -229,6 +254,26 @@ fn exa_url_from_env() -> String {
     };
     url.query_pairs_mut().append_pair("exaApiKey", &key);
     url.into()
+}
+
+fn select_provider(session: Option<SessionId>) -> WebSearchProvider {
+    let Some(session) = session else {
+        return WebSearchProvider::Exa;
+    };
+    if fnv1a(session.to_string().as_bytes()).is_multiple_of(2) {
+        WebSearchProvider::Exa
+    } else {
+        WebSearchProvider::Parallel
+    }
+}
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
 }
 
 fn exa_arguments(input: &WebSearchInput) -> Value {

@@ -159,6 +159,53 @@ async fn websearch_parallel_includes_session_metadata() {
 }
 
 #[tokio::test]
+async fn websearch_default_auto_splits_provider_by_session_id() {
+    // Given
+    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let exa_session: SessionId = "ses_00000000000000000000000000000001".parse().unwrap();
+    let parallel_session: SessionId = "ses_00000000000000000000000000000000".parse().unwrap();
+
+    let (url, exa_request) =
+        serve_once(r#"{"result":{"content":[{"type":"text","text":"E"}]}}"#).await;
+    let exa_ctx = ctx_with_session(
+        exa_session,
+        vec![allow(Action::WebSearch, "rust")],
+        WebSearchPlane::auto(url.clone(), url),
+    );
+
+    // When
+    let exa_out = tool
+        .execute(&exa_ctx, json!({ "query": "rust" }))
+        .await
+        .unwrap();
+    let exa_sent = exa_request.await.unwrap();
+
+    // Then
+    assert_eq!(exa_out["metadata"]["provider"], "exa");
+    assert_eq!(exa_sent["params"]["name"], "web_search_exa");
+
+    // Given
+    let (url, parallel_request) =
+        serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
+    let parallel_ctx = ctx_with_session(
+        parallel_session,
+        vec![allow(Action::WebSearch, "rust")],
+        WebSearchPlane::auto(url.clone(), url),
+    );
+
+    // When
+    let parallel_out = tool
+        .execute(&parallel_ctx, json!({ "query": "rust" }))
+        .await
+        .unwrap();
+    let parallel_sent = parallel_request.await.unwrap();
+
+    // Then
+    assert_eq!(parallel_out["metadata"]["provider"], "parallel");
+    assert_eq!(parallel_sent["params"]["name"], "web_search");
+}
+
+#[tokio::test]
 async fn websearch_requires_permission_before_calling_provider() {
     // Given
     let (url, _request) =
