@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use super::pty_state::{PtyEvent, PtyRuntime, PtySession};
 
 const BUFFER_LIMIT: usize = 2 * 1024 * 1024;
+const EXITED_LIMIT: usize = 25;
 
 pub(super) fn replay_from(session: &PtySession, from: u64) -> String {
     if session.buffer.is_empty() || from >= session.cursor {
@@ -81,12 +82,24 @@ pub(super) fn spawn_waiter(
             .and_then(|code| u64::try_from(code).ok())
             .unwrap_or(0);
         let mut state = inner.write().await;
-        let Some(session) = state.sessions.get_mut(&id) else {
-            return;
-        };
-        session.info.status = "exited";
-        session.info.exit_code = Some(code);
-        let _ = session.output.send(PtyEvent::End);
+        {
+            let Some(session) = state.sessions.get_mut(&id) else {
+                return;
+            };
+            session.info.status = "exited";
+            session.info.exit_code = Some(code);
+            let _ = session.output.send(PtyEvent::End);
+        }
+        state.exited.push_back(id);
+        while state.exited.len() > EXITED_LIMIT {
+            let Some(oldest) = state.exited.pop_front() else {
+                break;
+            };
+            state.tickets.retain(|_, ticket| ticket.pty_id != oldest);
+            if let Some(session) = state.sessions.remove(&oldest) {
+                let _ = session.output.send(PtyEvent::End);
+            }
+        }
     });
 }
 
