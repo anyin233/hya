@@ -209,6 +209,15 @@ impl PermissionPlane {
         plane
     }
 
+    #[must_use]
+    pub fn with_snapshot_rules(&self, extra: Vec<Rule>) -> Self {
+        let mut plane = self.clone();
+        if !extra.is_empty() {
+            plane.snapshot = Arc::new(self.snapshot.derive_child(extra));
+        }
+        plane
+    }
+
     pub async fn assert(&self, action: Action, resource: Resource) -> Result<(), PermissionError> {
         // Precedence: a snapshot Allow/Deny is authoritative. Only on Ask do we
         // consult the accumulated "allow always" rules, then fall through to the user.

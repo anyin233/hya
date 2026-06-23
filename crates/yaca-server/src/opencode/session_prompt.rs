@@ -110,10 +110,13 @@ async fn prompt(
     if let Some(run) = run {
         let engine = st.engine.clone();
         let agent = super::reference::agent_with_guidance(&st).await;
+        let external_dirs = super::reference::external_directories(&st).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
             let _guard = run;
-            let _ = engine.run_turn(session, &agent, cancel).await;
+            let _ = engine
+                .run_turn_with_external_dirs(session, &agent, cancel, &external_dirs)
+                .await;
         }));
     }
     Ok(Json(PromptAdmittedResponse {
@@ -149,7 +152,11 @@ async fn command(
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
     let agent = super::reference::agent_with_guidance(&st).await;
-    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
+    let external_dirs = super::reference::external_directories(&st).await;
+    let _finish = st
+        .engine
+        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
     Ok(Json(MessageResponse { data }))
 }

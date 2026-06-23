@@ -29,6 +29,19 @@ pub(in crate::opencode) async fn list(st: &ServerState) -> Vec<Value> {
         .collect()
 }
 
+pub(in crate::opencode) async fn external_directories(st: &ServerState) -> Vec<PathBuf> {
+    list(st)
+        .await
+        .into_iter()
+        .filter_map(|reference| {
+            reference
+                .get("path")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+        })
+        .collect()
+}
+
 async fn guidance(st: &ServerState) -> Option<String> {
     let mut references: Vec<_> = list(st)
         .await

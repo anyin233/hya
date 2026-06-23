@@ -215,6 +215,7 @@ async fn prompt_async(
     let runs = st.runs.clone();
     let engine = st.engine.clone();
     let agent = super::reference::agent_with_guidance(&st).await;
+    let external_dirs = super::reference::external_directories(&st).await;
     std::mem::drop(tokio::spawn(async move {
         let Some(run) = runs.start(session) else {
             publish_background_error(&engine, session, "session busy".to_string()).await;
@@ -225,7 +226,9 @@ async fn prompt_async(
         publish_session_status(&engine, session, "busy").await;
         let result = async {
             engine.admit_user_prompt(session, req.text).await?;
-            engine.run_turn(session, &agent, cancel).await?;
+            engine
+                .run_turn_with_external_dirs(session, &agent, cancel, &external_dirs)
+                .await?;
             Ok::<(), yaca_core::CoreError>(())
         }
         .await;
@@ -324,7 +327,11 @@ async fn command(
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
     let agent = super::reference::agent_with_guidance(&st).await;
-    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
+    let external_dirs = super::reference::external_directories(&st).await;
+    let _finish = st
+        .engine
+        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .await?;
     Ok(Json(load_message(&st, session, message).await?).into_response())
 }
 
@@ -402,7 +409,11 @@ pub(in crate::opencode) async fn run_session_init(
             "/init".to_string(),
         )
         .await?;
-    let _finish = st.engine.run_turn(session, &agent, run.token()).await?;
+    let external_dirs = super::reference::external_directories(st).await;
+    let _finish = st
+        .engine
+        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .await?;
     Ok(true)
 }
 
