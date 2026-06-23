@@ -320,8 +320,9 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
     assert_eq!(shell["data"]["info"]["role"], "assistant");
     assert_eq!(shell["data"]["parts"][0]["type"], "tool");
     assert_eq!(shell["data"]["parts"][0]["tool"], "shell");
+    assert_eq!(shell["data"]["parts"][0]["state"]["status"], "completed");
     assert!(
-        shell["data"]["parts"][0]["state"]["output"]["output"]
+        shell["data"]["parts"][0]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-v2-shell-ok"))
     );
