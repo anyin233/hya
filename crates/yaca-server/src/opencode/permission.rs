@@ -79,12 +79,15 @@ async fn list_requests(
 async fn list_session_requests(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<SessionPermissionList>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     Ok(Json(SessionPermissionList {
         data: st.permission_requests.list_session(session).await,
-    }))
+    })
+    .into_response())
 }
 
 async fn reply_request(
@@ -93,7 +96,9 @@ async fn reply_request(
     Json(payload): Json<ReplyPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     if reply_to_pending(&st, session, &request, payload.reply, payload.message).await {
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {

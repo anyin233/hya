@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState, parse_session};
 
-use super::{load_session, location};
+use super::location;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
@@ -53,12 +53,15 @@ async fn list_requests(
 async fn list_session_requests(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-) -> Result<Json<SessionQuestionList>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     Ok(Json(SessionQuestionList {
         data: st.question_requests.list_session(session).await,
-    }))
+    })
+    .into_response())
 }
 
 async fn reply_request(
@@ -67,7 +70,9 @@ async fn reply_request(
     Json(payload): Json<ReplyPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     if st
         .question_requests
         .reply(session, &request, payload.answers)
@@ -84,7 +89,9 @@ async fn reject_request(
     Path((id, request)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    load_session(&st, session, None).await?;
+    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
+        return Ok(response);
+    }
     if st.question_requests.reject(session, &request).await {
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {
