@@ -194,6 +194,25 @@ async fn opencode_legacy_file_content_uses_extension_mime_for_binary_files() {
 }
 
 #[tokio::test]
+async fn opencode_file_list_honors_question_mark_ignore_globs() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join(".gitignore"), "file?.log\n").unwrap();
+    std::fs::write(workdir.join("file1.log"), "ignored\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/file?path=.").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "file1.log" && entry["ignored"] == true)
+    );
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");

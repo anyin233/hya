@@ -71,26 +71,32 @@ impl Rule {
 }
 
 fn pattern_matches(pattern: &str, value: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == value;
-    }
-    let starts_with_wildcard = pattern.starts_with('*');
-    let ends_with_wildcard = pattern.ends_with('*');
-    let mut rest = value;
-    for (index, part) in pattern
-        .split('*')
-        .filter(|part| !part.is_empty())
-        .enumerate()
-    {
-        let Some(offset) = rest.find(part) else {
-            return false;
-        };
-        if index == 0 && !starts_with_wildcard && offset != 0 {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let (mut pattern_index, mut value_index) = (0, 0);
+    let (mut star_index, mut star_value_index) = (None, 0);
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(index) = star_index {
+            pattern_index = index + 1;
+            star_value_index += 1;
+            value_index = star_value_index;
+        } else {
             return false;
         }
-        rest = &rest[offset + part.len()..];
     }
-    ends_with_wildcard || rest.is_empty()
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 fn parse_rule(line: &str) -> Option<Rule> {
