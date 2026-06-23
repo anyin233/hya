@@ -129,3 +129,41 @@ async fn opencode_command_route_exposes_workspace_skills_as_commands() {
     assert_eq!(deploy["hints"], json!([]));
     assert_eq!(deploy["template"], "Run the deployment checklist.\n");
 }
+
+#[tokio::test]
+async fn opencode_command_route_discovers_project_markdown_commands() {
+    // Given: a workspace with OpenCode command markdown files on disk.
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".opencode/commands/nested")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/commands/review.md"),
+        "---\ndescription: File review\nagent: reviewer\nmodel: anthropic/claude\nsubtask: true\n---\nReview $1 and $2 with $ARGUMENTS\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workdir.join(".opencode/commands/nested/docs.md"),
+        "Write docs\n",
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: the OpenCode /command route is listed for that workspace.
+    let (status, commands) =
+        get_json(app, &format!("/command?directory={}", workdir.display())).await;
+
+    // Then: file commands are exposed with OpenCode-compatible names and metadata.
+    assert_eq!(status, StatusCode::OK);
+    let review = find_command(&commands, "review");
+    assert_eq!(review["description"], "File review");
+    assert_eq!(review["source"], "command");
+    assert_eq!(review["agent"], "reviewer");
+    assert_eq!(review["model"], "anthropic/claude");
+    assert_eq!(review["subtask"], true);
+    assert_eq!(review["hints"], json!(["$1", "$2", "$ARGUMENTS"]));
+    assert_eq!(review["template"], "Review $1 and $2 with $ARGUMENTS");
+
+    let docs = find_command(&commands, "nested/docs");
+    assert_eq!(docs["source"], "command");
+    assert!(docs.get("description").is_none());
+    assert_eq!(docs["template"], "Write docs");
+}
