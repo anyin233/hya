@@ -16,6 +16,10 @@ impl Controller {
                 self.open_model_dialog();
                 TuiEffect::None
             }
+            Some(CommandKind::Connect) => {
+                self.open_model_dialog();
+                TuiEffect::None
+            }
             Some(CommandKind::Resume) => {
                 self.open_resume_dialog();
                 TuiEffect::None

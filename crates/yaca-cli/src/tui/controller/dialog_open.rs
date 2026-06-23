@@ -4,7 +4,7 @@ use yaca_tui::{DialogItem, DialogView};
 
 impl Controller {
     pub(super) fn open_model_dialog(&mut self) {
-        let items = self
+        let mut items = self
             .available_models
             .iter()
             .map(|entry| DialogItem {
@@ -16,6 +16,12 @@ impl Controller {
                 },
             })
             .collect::<Vec<_>>();
+        if items.is_empty() {
+            items.push(DialogItem {
+                label: "connect provider".to_string(),
+                detail: "configure a provider or run yaca login, then restart the TUI".to_string(),
+            });
+        }
         let selected = items
             .iter()
             .position(|item| item.label == self.app.model)

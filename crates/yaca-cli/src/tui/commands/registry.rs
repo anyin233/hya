@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandKind {
     Model,
+    Connect,
     Resume,
     NewSession,
     Compact,
@@ -68,6 +69,15 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         kind: CommandKind::Resume,
         category: CommandCategory::Session,
         suggested: false,
+    },
+    CommandSpec {
+        name: "connect",
+        aliases: &[],
+        description: "Connect or configure an AI provider",
+        key_hint: "/connect",
+        kind: CommandKind::Connect,
+        category: CommandCategory::Agent,
+        suggested: true,
     },
     CommandSpec {
         name: "new",

@@ -13,6 +13,15 @@ fn ctrl(code: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(code), KeyModifiers::CONTROL)
 }
 
+fn type_text(controller: &mut Controller, text: &str) {
+    for ch in text.chars() {
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Char(ch))),
+            TuiEffect::None
+        );
+    }
+}
+
 #[test]
 fn ctrl_p_enter_dispatches_selected_command() {
     // Given
@@ -60,6 +69,26 @@ fn ctrl_p_can_dispatch_non_dialog_commands_from_selection() {
     // Then
     assert_eq!(effect, TuiEffect::NewSession);
     assert!(controller.app.dialog.is_none());
+}
+
+#[test]
+fn slash_connect_opens_provider_setup_entry_when_no_models_exist() {
+    // Given: the OpenCode-style empty home advertises /connect before models exist.
+    let mut controller = Controller::new(AppState::default());
+
+    // When: the user runs the advertised slash command.
+    type_text(&mut controller, "/connect");
+    let effect = controller.handle_key(key(KeyCode::Enter));
+
+    // Then: it opens a visible setup entry instead of returning an unknown command.
+    assert_eq!(effect, TuiEffect::None);
+    let dialog = controller.app.dialog.as_ref().expect("connect dialog");
+    assert_eq!(dialog.title, "select model");
+    assert_eq!(dialog.items[0].label, "connect provider");
+    assert!(
+        dialog.items[0].detail.contains("configure"),
+        "connect fallback should tell the user how to add a provider"
+    );
 }
 
 #[test]

@@ -15,6 +15,7 @@ fn resolves_slash_commands_and_aliases() {
     assert_eq!(resolve_slash("compact"), Some(CommandKind::Compact));
     assert_eq!(resolve_slash("init"), Some(CommandKind::Init));
     assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
+    assert_eq!(resolve_slash("connect"), Some(CommandKind::Connect));
     assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("mcps"), Some(CommandKind::Tools));
@@ -38,6 +39,7 @@ fn unknown_slash_command_is_not_resolved() {
 fn help_items_come_from_registered_commands() {
     let items = help_items();
     assert!(items.iter().any(|item| item.label == "/model"));
+    assert!(items.iter().any(|item| item.label == "/connect"));
     assert!(items.iter().any(|item| item.label == "/resume"));
     assert!(items.iter().any(|item| item.label == "/new"));
     assert!(items.iter().any(|item| item.label == "/export"));
@@ -111,6 +113,8 @@ fn completion_items_filter_by_prefix() {
 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].label, "/model");
+    let connect_items = completion_items("/con");
+    assert!(connect_items.iter().any(|item| item.label == "/connect"));
     assert!(
         completion_items("/")
             .iter()
