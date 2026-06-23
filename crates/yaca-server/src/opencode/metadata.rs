@@ -47,13 +47,6 @@ struct RequestInfo {
 }
 
 #[derive(Serialize)]
-struct CommandInfo {
-    name: &'static str,
-    template: &'static str,
-    description: &'static str,
-}
-
-#[derive(Serialize)]
 struct SkillInfo {
     name: String,
     description: String,
@@ -102,19 +95,13 @@ async fn command(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<LocationResponse<Vec<CommandInfo>>> {
+) -> Json<LocationResponse<Vec<super::command_catalog::CommandInfo>>> {
     let location = LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
     Json(super::location::response_at(
         &st,
         &location,
-        vec![
-            command_info("help", "show this help", "/help"),
-            command_info("model", "switch the active model", "/model $ARGUMENTS"),
-            command_info("clear", "start a fresh session", "/clear"),
-            command_info("sessions", "switch to another session", "/sessions"),
-            command_info("yolo", "toggle auto-approval", "/yolo $ARGUMENTS"),
-            command_info("think", "set reasoning effort", "/think $ARGUMENTS"),
-        ],
+        super::command_catalog::list(&workdir),
     ))
 }
 
@@ -129,18 +116,6 @@ async fn skill(
         &location,
         discover_skills(&super::location::workdir_at(&st, &location)),
     ))
-}
-
-fn command_info(
-    name: &'static str,
-    description: &'static str,
-    template: &'static str,
-) -> CommandInfo {
-    CommandInfo {
-        name,
-        description,
-        template,
-    }
 }
 
 fn discover_skills(workdir: &Path) -> Vec<SkillInfo> {

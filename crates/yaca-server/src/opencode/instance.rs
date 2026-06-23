@@ -56,15 +56,6 @@ struct AgentModel {
 }
 
 #[derive(Serialize)]
-struct CommandInfo {
-    name: &'static str,
-    description: &'static str,
-    source: &'static str,
-    template: &'static str,
-    hints: Vec<&'static str>,
-}
-
-#[derive(Serialize)]
 struct SkillInfo {
     name: String,
     description: String,
@@ -108,35 +99,14 @@ async fn agent(
     }])
 }
 
-async fn command() -> Json<Vec<CommandInfo>> {
-    Json(vec![
-        command_info("help", "show this help", "/help", Vec::new()),
-        command_info(
-            "model",
-            "switch the active model",
-            "/model $ARGUMENTS",
-            vec!["$ARGUMENTS"],
-        ),
-        command_info("clear", "start a fresh session", "/clear", Vec::new()),
-        command_info(
-            "sessions",
-            "switch to another session",
-            "/sessions",
-            Vec::new(),
-        ),
-        command_info(
-            "yolo",
-            "toggle auto-approval",
-            "/yolo $ARGUMENTS",
-            vec!["$ARGUMENTS"],
-        ),
-        command_info(
-            "think",
-            "set reasoning effort",
-            "/think $ARGUMENTS",
-            vec!["$ARGUMENTS"],
-        ),
-    ])
+async fn command(
+    axum::extract::State(st): axum::extract::State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<Vec<super::command_catalog::CommandInfo>> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
+    Json(super::command_catalog::list(&workdir))
 }
 
 async fn skill(
@@ -158,21 +128,6 @@ async fn lsp(
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
     Json(st.engine.lsp().status(&workdir).await.unwrap_or_default())
-}
-
-fn command_info(
-    name: &'static str,
-    description: &'static str,
-    template: &'static str,
-    hints: Vec<&'static str>,
-) -> CommandInfo {
-    CommandInfo {
-        name,
-        description,
-        source: "command",
-        template,
-        hints,
-    }
 }
 
 fn model_info(model: &str) -> AgentModel {
