@@ -227,25 +227,11 @@ async fn compact(
     State(st): State<ServerState>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    unavailable_operation(&st, &id, "compact").await
+    super::session_unavailable::unavailable_operation(&st, &id, "compact").await
 }
 
 async fn wait(State(st): State<ServerState>, Path(id): Path<String>) -> Result<Response, ApiError> {
-    unavailable_operation(&st, &id, "wait").await
-}
-
-async fn unavailable_operation(
-    st: &ServerState,
-    id: &str,
-    operation: &str,
-) -> Result<Response, ApiError> {
-    let session = parse_session(id)?;
-    if st.engine.replay(session).await?.is_empty() {
-        return Ok(super::errors::session_not_found(id));
-    }
-    Err(ApiError::service_unavailable(format!(
-        "Session {operation} is not available yet"
-    )))
+    super::session_unavailable::unavailable_operation(&st, &id, "wait").await
 }
 
 async fn load_sessions(st: &ServerState) -> Result<Vec<OpenCodeSessionInfo>, ApiError> {

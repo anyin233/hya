@@ -132,17 +132,19 @@ async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     (status, body_json(resp).await)
 }
 
-async fn post_empty(app: axum::Router, uri: String) -> StatusCode {
-    app.oneshot(
-        Request::builder()
-            .method("POST")
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await
-    .unwrap()
-    .status()
+async fn post_empty(app: axum::Router, uri: String) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
 }
 
 async fn post_prompt(app: axum::Router, session: &str) -> StatusCode {
@@ -407,15 +409,22 @@ async fn opencode_v2_session_compact_and_wait_report_unavailable() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let compact = post_empty(app.clone(), format!("/api/session/{requested}/compact")).await;
-    assert_eq!(compact, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, compact) =
+        post_empty(app.clone(), format!("/api/session/{requested}/compact")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(compact["_tag"], "ServiceUnavailableError");
+    assert_eq!(compact["message"], "Session compact is not available yet");
+    assert_eq!(compact["service"], "session.compact");
 
-    let wait = post_empty(app.clone(), format!("/api/session/{requested}/wait")).await;
-    assert_eq!(wait, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, wait) = post_empty(app.clone(), format!("/api/session/{requested}/wait")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(wait["_tag"], "ServiceUnavailableError");
+    assert_eq!(wait["message"], "Session wait is not available yet");
+    assert_eq!(wait["service"], "session.wait");
 
     let missing = SessionId::new().to_string();
-    let missing_compact = post_empty(app, format!("/api/session/{missing}/compact")).await;
-    assert_eq!(missing_compact, StatusCode::NOT_FOUND);
+    let (status, _) = post_empty(app, format!("/api/session/{missing}/compact")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

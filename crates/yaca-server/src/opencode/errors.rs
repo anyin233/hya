@@ -30,6 +30,18 @@ pub(in crate::opencode) fn session_busy(session: SessionId) -> Response {
         .into_response()
 }
 
+pub(in crate::opencode) fn service_unavailable(operation: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "_tag": "ServiceUnavailableError",
+            "message": format!("Session {operation} is not available yet"),
+            "service": format!("session.{operation}"),
+        })),
+    )
+        .into_response()
+}
+
 pub(in crate::opencode) fn legacy_session_not_found(session: SessionId) -> Response {
     (
         StatusCode::NOT_FOUND,
