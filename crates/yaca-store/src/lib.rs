@@ -6,6 +6,7 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 pub mod error;
+mod sync;
 
 use std::str::FromStr;
 use std::time::Duration;
