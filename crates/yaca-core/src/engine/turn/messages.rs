@@ -1,4 +1,7 @@
-use yaca_proto::{Message, ModelRef, Part, PartProjection, Projection, Role};
+use serde_json::Value;
+use yaca_proto::{
+    Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
+};
 use yaca_provider::CompletionRequest;
 use yaca_tool::ToolRegistry;
 
@@ -14,7 +17,7 @@ pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection)
         .map(|m| match m.role {
             Role::User => Message::User {
                 id: m.id,
-                parts: map_parts(&m.parts),
+                parts: user_parts(m),
             },
             Role::Assistant => Message::Assistant {
                 id: m.id,
@@ -66,6 +69,23 @@ fn collect_text(parts: &[PartProjection]) -> String {
         }
     }
     s
+}
+
+fn user_parts(message: &MessageProjection) -> Vec<Part> {
+    let mut parts = map_parts(&message.parts);
+    parts.extend(message.files.iter().filter_map(media_part));
+    parts
+}
+
+fn media_part(file: &Value) -> Option<Part> {
+    let media_type = file.get("mime").and_then(Value::as_str)?;
+    let data = file.get("uri").and_then(Value::as_str)?;
+    Some(Part::Media {
+        id: PartId::new(),
+        media_type: media_type.to_string(),
+        data: data.to_string(),
+        filename: file.get("name").and_then(Value::as_str).map(str::to_string),
+    })
 }
 
 fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
