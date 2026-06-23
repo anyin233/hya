@@ -49,6 +49,27 @@ fn runtime_status_uses_latest_finished_assistant_duration_when_idle() {
 }
 
 #[test]
+fn runtime_status_includes_provider_label_when_available() {
+    // Given: the active model identity has a provider label like the composer footer.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        model_provider_label: Some("GLM/Kimi".to_string()),
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "▣ Sisyphus");
+
+    // Then: it keeps OpenCode's model/provider identity visible outside the composer too.
+    assert!(
+        status_row.contains("Sisyphus · kimi-k2 GLM/Kimi"),
+        "runtime strip should include the provider label, got {status_row:?}"
+    );
+}
+
+#[test]
 fn runtime_status_omits_idle_placeholder_when_no_duration_exists() {
     // Given: an idle shell before any assistant duration exists.
     let mut state = AppState {
