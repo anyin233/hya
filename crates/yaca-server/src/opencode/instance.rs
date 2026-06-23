@@ -233,13 +233,6 @@ fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-pub(super) fn workdir(st: &ServerState) -> PathBuf {
-    match std::fs::canonicalize(&st.agent.workdir) {
-        Ok(path) => path,
-        Err(_) => st.agent.workdir.clone(),
-    }
-}
-
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
