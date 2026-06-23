@@ -177,6 +177,14 @@ fn permission_allow_always_stage_renders_confirm_prompt() {
         text.contains("Always allow"),
         "confirm title renders:\n{text}"
     );
+    assert!(
+        text.contains("This will allow bash until OpenCode is restarted."),
+        "always stage should mirror OpenCode restart copy:\n{text}"
+    );
+    assert!(
+        !text.contains("until yaca is restarted"),
+        "always stage should not expose legacy app-name copy:\n{text}"
+    );
     assert!(text.contains("Confirm"), "confirm option renders:\n{text}");
     assert!(text.contains("Cancel"), "cancel option renders:\n{text}");
     assert!(

@@ -93,7 +93,10 @@ pub fn render_permission(frame: &mut Frame, prompt: &PermissionPrompt, theme: &T
             Line::from(vec![
                 rail(),
                 Span::styled(
-                    format!("This will allow {} until yaca is restarted.", prompt.title),
+                    format!(
+                        "This will allow {} until OpenCode is restarted.",
+                        prompt.title
+                    ),
                     Style::default().fg(theme.text),
                 ),
             ]),
