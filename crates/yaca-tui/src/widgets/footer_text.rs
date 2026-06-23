@@ -49,8 +49,17 @@ fn default_footer_text(state: &AppState, width: u16) -> String {
     if width <= SIDEBAR_BREAKPOINT && state.projection.session.workdir.is_some() {
         segments.push(project_label(state));
     }
+    let mut has_status_segment = false;
+    if let Some(label) = lsp_label(state) {
+        segments.push(label);
+        has_status_segment = true;
+    }
     if let Some(label) = mcp_label(state) {
         segments.push(label);
+        has_status_segment = true;
+    }
+    if has_status_segment {
+        segments.push("/status".to_string());
     }
     segments.join(" · ")
 }
@@ -72,5 +81,13 @@ fn mcp_label(state: &AppState) -> Option<String> {
         .iter()
         .filter(|connector| matches!(connector.state, ConnectorState::Connected))
         .count();
-    Some(format!("⊙ {connected} MCP /status"))
+    Some(format!("⊙ {connected} MCP"))
+}
+
+fn lsp_label(state: &AppState) -> Option<String> {
+    state
+        .lsp_status
+        .as_deref()
+        .filter(|status| !status.trim().is_empty())?;
+    Some("• 0 LSP".to_string())
 }

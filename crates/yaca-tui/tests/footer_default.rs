@@ -106,6 +106,30 @@ fn footer_renders_project_mcp_without_app_version() {
 }
 
 #[test]
+fn footer_renders_lsp_status_like_opencode() {
+    // Given: a narrow shell where the sidebar is hidden but LSP state is known.
+    let mut state = AppState {
+        lsp_status: Some("LSPs are disabled".to_string()),
+        ..AppState::default()
+    };
+    state.projection.session.workdir = Some("/tmp/yaca-footer".to_string());
+
+    // When: the composer footer renders the OpenCode status strip.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: the footer keeps the LSP counter beside the status command.
+    assert!(
+        bottom_row.contains("0 LSP"),
+        "footer should show the OpenCode LSP counter, got {bottom_row:?}"
+    );
+    assert!(
+        bottom_row.contains("/status"),
+        "footer should expose the OpenCode status command with LSP state, got {bottom_row:?}"
+    );
+}
+
+#[test]
 fn transient_footer_shortcuts_use_opencode_key_style() {
     // Given: transient footer states expose keyboard shortcuts.
     let mut scrolled = AppState {
