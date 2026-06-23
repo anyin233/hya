@@ -32,6 +32,7 @@ mod question;
 mod session_context;
 mod session_context_messages;
 mod session_context_tool_state;
+mod session_context_tool_time;
 mod session_delete;
 mod session_diff;
 mod session_fork;

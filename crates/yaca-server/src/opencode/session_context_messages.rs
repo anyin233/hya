@@ -3,8 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 use yaca_proto::model::{AgentName, ModelRef};
 use yaca_proto::{
-    Envelope, Event, FinishReason, MessageId, MessageProjection, PartProjection, Projection, Role,
+    Envelope, Event, FinishReason, MessageId, MessageProjection, PartId, PartProjection,
+    Projection, Role,
 };
+
+use super::session_context_tool_time::ToolTime;
 
 #[derive(Clone, Copy, Default)]
 struct MessageTime {
@@ -14,6 +17,7 @@ struct MessageTime {
 
 pub(in crate::opencode) fn v2_messages(envs: &[Envelope], projection: &Projection) -> Vec<Value> {
     let times = message_times(envs);
+    let tool_times = super::session_context_tool_time::tool_times(envs);
     let messages = projection
         .session
         .messages
@@ -38,7 +42,7 @@ pub(in crate::opencode) fn v2_messages(envs: &[Envelope], projection: &Projectio
                 if emitted.insert(*message)
                     && let Some(message) = messages.get(message)
                 {
-                    out.push(message_json(message, projection, &times));
+                    out.push(message_json(message, projection, &times, &tool_times));
                 }
             }
             _ => {}
@@ -46,7 +50,7 @@ pub(in crate::opencode) fn v2_messages(envs: &[Envelope], projection: &Projectio
     }
     for message in &projection.session.messages {
         if emitted.insert(message.id) {
-            out.push(message_json(message, projection, &times));
+            out.push(message_json(message, projection, &times, &tool_times));
         }
     }
     out
@@ -74,6 +78,7 @@ fn message_json(
     message: &MessageProjection,
     projection: &Projection,
     times: &BTreeMap<MessageId, MessageTime>,
+    tool_times: &BTreeMap<PartId, ToolTime>,
 ) -> Value {
     let time = times.get(&message.id).copied().unwrap_or_default();
     match message.role {
@@ -85,7 +90,7 @@ fn message_json(
             "agents": message.agents,
             "type": "user",
         }),
-        Role::Assistant => assistant_message(message, projection, time),
+        Role::Assistant => assistant_message(message, projection, time, tool_times),
         Role::System => json!({
             "id": message.id.to_string(),
             "time": { "created": time.created.unwrap_or(0) },
@@ -99,6 +104,7 @@ fn assistant_message(
     message: &MessageProjection,
     projection: &Projection,
     time: MessageTime,
+    tool_times: &BTreeMap<PartId, ToolTime>,
 ) -> Value {
     let mut value = json!({
         "id": message.id.to_string(),
@@ -118,7 +124,11 @@ fn assistant_message(
             .model
             .as_ref()
             .map(super::projection::model_info),
-        "content": message.parts.iter().map(part_json).collect::<Vec<_>>(),
+        "content": message
+            .parts
+            .iter()
+            .map(|part| part_json(part, tool_times))
+            .collect::<Vec<_>>(),
     });
     if let Some(finish) = message.finish {
         value["finish"] = json!(finish_name(finish));
@@ -126,7 +136,7 @@ fn assistant_message(
     value
 }
 
-fn part_json(part: &PartProjection) -> Value {
+fn part_json(part: &PartProjection, tool_times: &BTreeMap<PartId, ToolTime>) -> Value {
     match part {
         PartProjection::Text { id, text } => json!({
             "type": "text",
@@ -146,7 +156,7 @@ fn part_json(part: &PartProjection) -> Value {
                 "id": id.to_string(),
                 "name": name.as_str(),
                 "state": super::session_context_tool_state::tool_state(state),
-                "time": { "created": 0 },
+                "time": super::session_context_tool_time::tool_time(tool_times.get(id).copied()),
             });
             if let Some(provider) = super::session_context_tool_state::tool_provider(state) {
                 value["provider"] = provider;
