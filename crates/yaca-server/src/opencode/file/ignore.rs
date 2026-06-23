@@ -50,7 +50,14 @@ impl IgnoreSet {
 impl Rule {
     fn matches(&self, path: &str) -> bool {
         if self.directory {
-            return path.starts_with(&self.pattern);
+            let pattern = self.pattern.trim_end_matches('/');
+            if self.anchored || pattern.contains('/') {
+                return path.starts_with(&self.pattern);
+            }
+            return path
+                .trim_end_matches('/')
+                .split('/')
+                .any(|part| pattern_matches(pattern, part));
         }
         if self.anchored {
             return pattern_matches(&self.pattern, path);

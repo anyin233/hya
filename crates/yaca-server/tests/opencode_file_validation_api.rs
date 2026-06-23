@@ -162,6 +162,25 @@ async fn opencode_file_list_honors_anchored_gitignore_patterns() {
 }
 
 #[tokio::test]
+async fn opencode_file_list_matches_unanchored_directory_ignores_at_any_depth() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join(".gitignore"), "build/\n").unwrap();
+    std::fs::create_dir_all(workdir.join("src/build")).unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/file?path=src").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "src/build" && entry["ignored"] == true)
+    );
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");
