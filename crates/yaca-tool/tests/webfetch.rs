@@ -77,6 +77,25 @@ async fn webfetch_fetches_text_from_http_url() {
 }
 
 #[tokio::test]
+async fn webfetch_accepts_fractional_timeout_seconds() {
+    let url = serve_once("fractional timeout", "text/plain").await;
+    let tool = ToolRegistry::builtins().get("webfetch").unwrap();
+    let schema = tool.schema().input_schema;
+    assert_eq!(schema["properties"]["timeout"]["type"], "number");
+    let ctx = ctx_with(vec![allow(Action::WebFetch, "http://127.0.0.1:*")]);
+
+    let out = tool
+        .execute(
+            &ctx,
+            json!({ "url": url, "format": "text", "timeout": 0.5 }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(out["output"], "fractional timeout");
+}
+
+#[tokio::test]
 async fn webfetch_converts_html_to_readable_text_for_markdown() {
     let url = serve_once(
         "<html><head><style>.x{}</style></head><body><h1>Title</h1><p>Hello <strong>world</strong>.</p><script>bad()</script></body></html>",

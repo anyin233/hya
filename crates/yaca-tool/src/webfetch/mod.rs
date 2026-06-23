@@ -12,8 +12,8 @@ use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const MAX_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_TIMEOUT_SECS: f64 = 30.0;
+const MAX_TIMEOUT_SECS: f64 = 120.0;
 
 pub(crate) struct WebFetchTool;
 
@@ -31,7 +31,7 @@ struct WebFetchInput {
     url: String,
     #[serde(default)]
     format: WebFetchFormat,
-    timeout: Option<u64>,
+    timeout: Option<f64>,
 }
 
 #[async_trait]
@@ -58,7 +58,7 @@ impl Tool for WebFetchTool {
                         "description": "The output format. Defaults to markdown."
                     },
                     "timeout": {
-                        "type": "integer",
+                        "type": "number",
                         "description": "Optional timeout in seconds, capped at 120."
                     }
                 },
@@ -79,12 +79,11 @@ impl Tool for WebFetchTool {
             .assert(Action::WebFetch, Resource::Url(url.as_str().to_string()))
             .await?;
 
-        let timeout = Duration::from_secs(
-            input
-                .timeout
-                .unwrap_or(DEFAULT_TIMEOUT_SECS)
-                .min(MAX_TIMEOUT_SECS),
-        );
+        let timeout_secs = input
+            .timeout
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .clamp(0.0, MAX_TIMEOUT_SECS);
+        let timeout = Duration::from_secs_f64(timeout_secs);
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .user_agent("yaca")
