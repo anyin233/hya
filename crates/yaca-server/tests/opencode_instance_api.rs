@@ -15,7 +15,7 @@ use yaca_proto::{AgentName, ModelRef};
 use yaca_provider::{FakeProvider, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
-use yaca_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
@@ -36,9 +36,13 @@ fn tempdir() -> PathBuf {
 }
 
 async fn state(workdir: PathBuf) -> AppState {
+    state_with_rules(workdir, PermissionRules::default()).await
+}
+
+async fn state_with_rules(workdir: PathBuf, rules: PermissionRules) -> AppState {
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
-    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let (perm, _rx) = PermissionPlane::new(rules);
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
     AppState::new(
@@ -187,6 +191,35 @@ async fn opencode_instance_routes_return_metadata() {
     let (status, vcs) = get_json(app, "/vcs").await;
     assert_eq!(status, StatusCode::OK);
     assert!(vcs.is_object());
+}
+
+#[tokio::test]
+async fn opencode_agent_routes_expose_permission_rules() {
+    let app = router(
+        state_with_rules(
+            tempdir(),
+            PermissionRules::new(vec![
+                Rule::new(Action::Read, "*", Mode::Allow),
+                Rule::new(Action::Bash, "git *", Mode::Ask),
+                Rule::new(Action::ExternalDirectory, "/tmp/*", Mode::Deny),
+            ]),
+        )
+        .await,
+    );
+
+    let expected = serde_json::json!([
+        {"permission": "read", "pattern": "*", "action": "allow"},
+        {"permission": "bash", "pattern": "git *", "action": "ask"},
+        {"permission": "external_directory", "pattern": "/tmp/*", "action": "deny"},
+    ]);
+
+    let (status, agents) = get_json(app.clone(), "/agent").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(agents[0]["permission"], expected);
+
+    let (status, agents) = get_json(app, "/api/agent").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(agents["data"][0]["permissions"], expected);
 }
 
 #[tokio::test]

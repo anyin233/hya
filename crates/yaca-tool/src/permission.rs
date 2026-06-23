@@ -197,6 +197,11 @@ impl PermissionPlane {
     }
 
     #[must_use]
+    pub fn snapshot_rules(&self) -> PermissionRules {
+        self.snapshot.as_ref().clone()
+    }
+
+    #[must_use]
     pub fn with_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
         self.interceptor = Some(interceptor);
         self

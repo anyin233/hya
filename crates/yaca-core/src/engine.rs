@@ -7,8 +7,8 @@ use yaca_proto::{
 use yaca_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane,
-    TodoPlane, ToolRegistry, WebSearchPlane,
+    FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane,
+    SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane,
 };
 
 use crate::bus::EventBus;
@@ -150,6 +150,11 @@ impl SessionEngine {
     #[must_use]
     pub fn lsp(&self) -> &LspPlane {
         &self.lsp
+    }
+
+    #[must_use]
+    pub fn permission_rules(&self) -> PermissionRules {
+        self.permission.snapshot_rules()
     }
 
     #[must_use]

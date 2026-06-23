@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::ServerState;
 
+use super::agent_permission::PermissionRule;
 use super::location::{LocationInfo, LocationRef, LocationResponse};
 use super::model_ref::model_ref_parts;
 
@@ -29,7 +30,7 @@ struct AgentInfo {
     system: String,
     mode: &'static str,
     hidden: bool,
-    permissions: Vec<Value>,
+    permissions: Vec<PermissionRule>,
 }
 
 #[derive(Serialize)]
@@ -92,7 +93,7 @@ async fn agent(
             system: st.agent.system_prompt.clone(),
             mode: "primary",
             hidden: false,
-            permissions: Vec::new(),
+            permissions: super::agent_permission::from_engine(&st.engine),
         }],
     ))
 }
