@@ -3264,6 +3264,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serde_norway",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
