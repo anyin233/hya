@@ -29,7 +29,7 @@ struct QuestionInput {
 #[derive(Clone, Deserialize)]
 struct QuestionOptionInput {
     label: String,
-    #[serde(default, rename = "description")]
+    #[serde(rename = "description")]
     _description: String,
 }
 

@@ -7,7 +7,8 @@ use tokio_util::sync::CancellationToken;
 use yaca_proto::SessionId;
 use yaca_tool::{
     InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, QuestionAnswer,
-    QuestionKind, Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane,
+    QuestionKind, Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry,
+    WebSearchPlane,
 };
 
 fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
@@ -146,4 +147,33 @@ async fn question_supports_multiple_selected_options() {
         out["output"],
         "User has answered your questions: \"Pick colors\"=\"red, blue\". You can now continue with the user's answers in mind."
     );
+}
+
+#[tokio::test]
+async fn question_rejects_options_without_description() {
+    // Given
+    let session = SessionId::new();
+    let (interaction, rx) = InteractionPlane::new();
+    drop(rx);
+    let ctx = ctx_with(interaction, session);
+    let tool = ToolRegistry::builtins().get("question").unwrap();
+
+    // When
+    let result = tool
+        .execute(
+            &ctx,
+            json!({
+                "questions": [
+                    {
+                        "question": "Pick a color",
+                        "header": "Color",
+                        "options": [{ "label": "red" }]
+                    }
+                ]
+            }),
+        )
+        .await;
+
+    // Then
+    assert!(matches!(result, Err(ToolError::Input(message)) if message.contains("description")));
 }
