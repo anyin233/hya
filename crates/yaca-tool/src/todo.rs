@@ -17,43 +17,25 @@ pub struct TodoItem {
     pub priority: TodoPriority,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Cancelled,
-}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TodoStatus(String);
 
 impl TodoStatus {
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            TodoStatus::Pending => "pending",
-            TodoStatus::InProgress => "in_progress",
-            TodoStatus::Completed => "completed",
-            TodoStatus::Cancelled => "cancelled",
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TodoPriority {
-    High,
-    Medium,
-    Low,
-}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TodoPriority(String);
 
 impl TodoPriority {
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            TodoPriority::High => "high",
-            TodoPriority::Medium => "medium",
-            TodoPriority::Low => "low",
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -103,14 +85,8 @@ impl Tool for TodoWriteTool {
                             "type": "object",
                             "properties": {
                                 "content": { "type": "string" },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["pending", "in_progress", "completed", "cancelled"]
-                                },
-                                "priority": {
-                                    "type": "string",
-                                    "enum": ["high", "medium", "low"]
-                                }
+                                "status": { "type": "string" },
+                                "priority": { "type": "string" }
                             },
                             "required": ["content", "status", "priority"]
                         }
@@ -135,7 +111,7 @@ impl Tool for TodoWriteTool {
         ctx.todo.update(session, todos.clone()).await;
         let open = todos
             .iter()
-            .filter(|todo| todo.status != TodoStatus::Completed)
+            .filter(|todo| todo.status.as_str() != "completed")
             .count();
         let output = serde_json::to_string_pretty(&todos)?;
         Ok(json!({

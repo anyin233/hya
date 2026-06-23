@@ -96,7 +96,7 @@ async fn todowrite_denied_does_not_update_session_todos() {
 }
 
 #[tokio::test]
-async fn todowrite_rejects_unknown_status_without_updating_session_todos() {
+async fn todowrite_rejects_missing_status_without_updating_session_todos() {
     // Given
     let session = SessionId::new();
     let todo = TodoPlane::default();
@@ -109,7 +109,7 @@ async fn todowrite_rejects_unknown_status_without_updating_session_todos() {
             &ctx,
             json!({
                 "todos": [
-                    { "content": "Bad state", "status": "blocked", "priority": "high" }
+                    { "content": "Bad state", "priority": "high" }
                 ]
             }),
         )
@@ -118,4 +118,36 @@ async fn todowrite_rejects_unknown_status_without_updating_session_todos() {
     // Then
     assert!(matches!(result, Err(ToolError::Input(_))));
     assert!(todo.get(session).await.is_empty());
+}
+
+#[tokio::test]
+async fn todowrite_accepts_opencode_string_status_and_priority() {
+    // Given
+    let session = SessionId::new();
+    let todo = TodoPlane::default();
+    let tool = ToolRegistry::builtins().get("todowrite").unwrap();
+    let schema = tool.schema().input_schema;
+    let item_props = &schema["properties"]["todos"]["items"]["properties"];
+    assert!(item_props["status"].get("enum").is_none());
+    assert!(item_props["priority"].get("enum").is_none());
+    let ctx = ctx_with(vec![allow(Action::TodoWrite, "*")], session, todo.clone());
+
+    // When
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "todos": [
+                    { "content": "Future state", "status": "blocked", "priority": "urgent" }
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["title"], "1 todos");
+    let stored = todo.get(session).await;
+    assert_eq!(stored[0].status.as_str(), "blocked");
+    assert_eq!(stored[0].priority.as_str(), "urgent");
 }
