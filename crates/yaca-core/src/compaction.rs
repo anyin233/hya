@@ -130,6 +130,7 @@ impl Summarizer for ModelSummarizer {
             temperature: Some(0.0),
             max_output_tokens: Some(1024),
             reasoning: None,
+            headers: Default::default(),
         };
         let mut stream = self
             .providers

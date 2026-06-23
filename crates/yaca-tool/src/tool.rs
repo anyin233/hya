@@ -3,15 +3,32 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use yaca_proto::{SessionId, ToolName, ToolSchema};
 
+use crate::apply_patch::ApplyPatchTool;
+use crate::edit::EditTool;
+use crate::formatter::FormatterPlane;
 use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
+use crate::invalid::InvalidTool;
+use crate::lsp::{LspPlane, LspTool};
+use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::permission::{Action, PermissionError, PermissionPlane, Resource, glob_match};
-use crate::spawn::{SpawnMember, SpawnerPlane};
+use crate::plan::PlanExitTool;
+use crate::question::QuestionTool;
+use crate::read::ReadTool;
+use crate::shell::ShellTool;
+use crate::skill::{SkillPlane, SkillTool};
+use crate::spawn::SpawnerPlane;
+use crate::task::TaskTool;
+use crate::todo::{TodoPlane, TodoWriteTool};
+use crate::webfetch::WebFetchTool;
+use crate::websearch::{WebSearchPlane, WebSearchTool};
+use crate::write::WriteTool;
 
 #[derive(Error, Debug)]
 pub enum ToolError {
@@ -39,24 +56,18 @@ pub struct ToolCtx {
     pub permission: PermissionPlane,
     pub interaction: InteractionPlane,
     pub spawner: SpawnerPlane,
+    pub session: Option<SessionId>,
     pub parent_session: Option<SessionId>,
+    pub todo: TodoPlane,
+    pub skills: SkillPlane,
+    pub websearch: WebSearchPlane,
+    pub lsp: LspPlane,
+    pub formatter: FormatterPlane,
     pub workdir: PathBuf,
     pub cancel: CancellationToken,
 }
 
-const MAX_OUTPUT_BYTES: usize = 16 * 1024;
-const MAX_LIST_ITEMS: usize = 500;
-
-fn truncate(s: &str) -> String {
-    if s.len() <= MAX_OUTPUT_BYTES {
-        return s.to_string();
-    }
-    let mut end = MAX_OUTPUT_BYTES;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}\n…[truncated {} bytes]", &s[..end], s.len() - end)
-}
+const SEARCH_LIMIT: usize = 100;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -65,14 +76,42 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
 
+struct NamedTool {
+    name: String,
+    inner: Arc<dyn Tool>,
+}
+
+#[async_trait]
+impl Tool for NamedTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut schema = self.inner.schema();
+        schema.name = ToolName::new(self.name.clone());
+        schema
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        self.inner.execute(ctx, input).await
+    }
+}
+
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
+    aliases: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
     #[must_use]
     pub fn builtins() -> Self {
-        let list: Vec<Arc<dyn Tool>> = vec![
+        let mut registry = Self {
+            tools: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+        for tool in [
+            Arc::new(InvalidTool) as Arc<dyn Tool>,
             Arc::new(ReadTool),
             Arc::new(WriteTool),
             Arc::new(EditTool),
@@ -80,20 +119,28 @@ impl ToolRegistry {
             Arc::new(GlobTool),
             Arc::new(FindTool),
             Arc::new(GrepTool),
-            Arc::new(ShellTool),
+            Arc::new(QuestionTool),
+            Arc::new(LspTool),
+            Arc::new(SkillTool),
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
-        ];
-        let mut tools = HashMap::new();
-        for t in list {
-            tools.insert(t.name().to_string(), t);
+        ] {
+            registry.insert_builtin(tool);
         }
-        Self { tools }
+        let shell = Arc::new(ShellTool);
+        registry.insert_builtin(shell.clone());
+        registry.insert_named_builtin("bash", shell);
+        registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
+        registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
+        registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
+        registry.insert_aliased_builtin("todowrite", "todo", Arc::new(TodoWriteTool));
+        registry.insert_aliased_builtin("plan_exit", "plan", Arc::new(PlanExitTool));
+        registry
     }
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
-        if self.tools.contains_key(&name) {
+        if self.tools.contains_key(&name) || self.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
         self.tools.insert(name, tool);
@@ -102,16 +149,49 @@ impl ToolRegistry {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        self.tools
+            .get(name)
+            .or_else(|| self.aliases.get(name))
+            .cloned()
     }
 
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.tools.values().map(|t| t.schema()).collect()
     }
+
+    fn insert_builtin(&mut self, tool: Arc<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    fn insert_named_builtin(&mut self, name: &str, tool: Arc<dyn Tool>) {
+        self.tools.insert(
+            name.to_string(),
+            Arc::new(NamedTool {
+                name: name.to_string(),
+                inner: tool,
+            }),
+        );
+    }
+
+    fn insert_aliased_builtin(&mut self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
+        self.tools.insert(
+            canonical.to_string(),
+            Arc::new(NamedTool {
+                name: canonical.to_string(),
+                inner: tool.clone(),
+            }),
+        );
+        self.aliases.insert(legacy.to_string(), tool);
+    }
 }
 
-fn obj_schema(name: &str, description: &str, props: Value, required: &[&str]) -> ToolSchema {
+pub(crate) fn obj_schema(
+    name: &str,
+    description: &str,
+    props: Value,
+    required: &[&str],
+) -> ToolSchema {
     ToolSchema {
         name: ToolName::new(name),
         description: description.to_string(),
@@ -133,119 +213,57 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[derive(Deserialize)]
-struct ReadInput {
-    path: String,
-}
-pub struct ReadTool;
-#[async_trait]
-impl Tool for ReadTool {
-    fn name(&self) -> &str {
-        "read"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "read",
-            "Read a file's contents.",
-            json!({"path": {"type": "string"}}),
-            &["path"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: ReadInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        ctx.permission
-            .assert(Action::Read, Resource::Path(input.path.clone()))
-            .await?;
-        let content = tokio::fs::read_to_string(&input.path).await?;
-        Ok(json!({ "content": truncate(&content) }))
+fn relative_title(path: &Path, workdir: &Path) -> String {
+    let relative = path.strip_prefix(workdir).unwrap_or(path);
+    let title = relative.to_string_lossy().replace('\\', "/");
+    if title.is_empty() {
+        ".".to_string()
+    } else {
+        title
     }
 }
 
-#[derive(Deserialize)]
-struct WriteInput {
-    path: String,
-    content: String,
-}
-pub struct WriteTool;
-#[async_trait]
-impl Tool for WriteTool {
-    fn name(&self) -> &str {
-        "write"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "write",
-            "Write content to a file (creating parent dirs).",
-            json!({"path": {"type": "string"}, "content": {"type": "string"}}),
-            &["path", "content"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: WriteInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        ctx.permission
-            .assert(Action::Edit, Resource::Path(input.path.clone()))
-            .await?;
-        if let Some(parent) = Path::new(&input.path).parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(&input.path, input.content.as_bytes()).await?;
-        Ok(json!({ "ok": true, "bytes": input.content.len() }))
-    }
+fn matches_include(include: &str, path: &Path, root: &Path) -> bool {
+    let relative = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    glob_match(include, &relative) || glob_match(include, &name)
 }
 
-#[derive(Deserialize)]
-struct EditInput {
-    path: String,
-    old: String,
-    new: String,
-    #[serde(default)]
-    replace_all: bool,
-}
-pub struct EditTool;
-#[async_trait]
-impl Tool for EditTool {
-    fn name(&self) -> &str {
-        "edit"
+async fn assert_external_directory(
+    ctx: &ToolCtx,
+    target: &Path,
+    is_directory: bool,
+) -> Result<(), ToolError> {
+    let target = normalize(&absolutize(target));
+    let workdir = normalize(&absolutize(&ctx.workdir));
+    if target.starts_with(&workdir) {
+        return Ok(());
     }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "edit",
-            "Replace `old` with `new` in a file. Errors if `old` is missing or matches more than once, unless `replace_all` is set.",
-            json!({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}, "replace_all": {"type": "boolean"}}),
-            &["path", "old", "new"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: EditInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        ctx.permission
-            .assert(Action::Edit, Resource::Path(input.path.clone()))
-            .await?;
-        let content = tokio::fs::read_to_string(&input.path).await?;
-        let count = content.matches(&input.old).count();
-        if count == 0 {
-            return Err(ToolError::Other("old string not found".to_string()));
-        }
-        if count > 1 && !input.replace_all {
-            return Err(ToolError::Other(format!(
-                "old string is ambiguous ({count} matches); add surrounding context or set replace_all=true"
-            )));
-        }
-        let updated = if input.replace_all {
-            content.replace(&input.old, &input.new)
-        } else {
-            content.replacen(&input.old, &input.new, 1)
-        };
-        tokio::fs::write(&input.path, updated).await?;
-        Ok(json!({ "replaced": count }))
-    }
+    let parent = if is_directory {
+        target
+    } else {
+        target
+            .parent()
+            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
+    };
+    let pattern = display_path(&parent.join("*"));
+    ctx.permission
+        .assert(Action::ExternalDirectory, Resource::Path(pattern))
+        .await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
 struct GlobInput {
     pattern: String,
+    path: Option<String>,
 }
 pub struct GlobTool;
 #[async_trait]
@@ -256,8 +274,11 @@ impl Tool for GlobTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "glob",
-            "List files under the working dir matching a `*` glob pattern.",
-            json!({"pattern": {"type": "string"}}),
+            "List files under a directory matching a glob pattern.",
+            json!({
+                "pattern": {"type": "string", "description": "The glob pattern to match files against"},
+                "path": {"type": "string", "description": "The directory to search in. If omitted, uses the working directory."}
+            }),
             &["pattern"],
         )
     }
@@ -267,24 +288,71 @@ impl Tool for GlobTool {
         ctx.permission
             .assert(Action::Glob, Resource::Glob(input.pattern.clone()))
             .await?;
+        let search = input.path.as_deref().map_or_else(
+            || ctx.workdir.clone(),
+            |path| resolve_file(&ctx.workdir, path),
+        );
+        let is_file = tokio::fs::metadata(&search)
+            .await
+            .is_ok_and(|meta| meta.is_file());
+        if is_file {
+            return Err(ToolError::Input(format!(
+                "glob path must be a directory: {}",
+                display_path(&search)
+            )));
+        }
+        assert_external_directory(ctx, &search, true).await?;
         let mut files = Vec::new();
-        walk(&ctx.workdir, &mut files);
-        let mut matches = Vec::new();
+        walk(&search, &mut files);
+        let mut rows = Vec::new();
         for f in files {
-            let rel = f.strip_prefix(&ctx.workdir).unwrap_or(f.as_path());
+            let rel = f.strip_prefix(&search).unwrap_or(f.as_path());
             let rel_str = rel.to_string_lossy();
             let name = f
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if glob_match(&input.pattern, &rel_str) || glob_match(&input.pattern, &name) {
-                matches.push(rel_str.into_owned());
+                rows.push(f);
             }
         }
-        matches.sort();
-        let total = matches.len();
-        matches.truncate(MAX_LIST_ITEMS);
-        Ok(json!({ "paths": matches, "total": total }))
+        rows.sort();
+        let total = rows.len();
+        let truncated = total >= SEARCH_LIMIT;
+        rows.truncate(SEARCH_LIMIT);
+        let output_rows = rows
+            .iter()
+            .map(|path| display_path(path))
+            .collect::<Vec<_>>();
+        let mut output = if output_rows.is_empty() {
+            "No files found".to_string()
+        } else {
+            output_rows.join("\n")
+        };
+        if truncated {
+            output.push_str(
+                "\n\n(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)",
+            );
+        }
+        let legacy_paths = rows
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&ctx.workdir)
+                    .unwrap_or(path.as_path())
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "title": relative_title(&search, &ctx.workdir),
+            "metadata": {
+                "count": output_rows.len(),
+                "truncated": truncated,
+            },
+            "output": output,
+            "paths": legacy_paths,
+            "total": total,
+        }))
     }
 }
 
@@ -292,6 +360,7 @@ impl Tool for GlobTool {
 struct GrepInput {
     pattern: String,
     path: Option<String>,
+    include: Option<String>,
 }
 pub struct GrepTool;
 #[async_trait]
@@ -302,84 +371,125 @@ impl Tool for GrepTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "grep",
-            "Find lines containing a substring under a path (default: working dir).",
-            json!({"pattern": {"type": "string"}, "path": {"type": "string"}}),
+            "Search file contents with a regex pattern under a path.",
+            json!({
+                "pattern": {"type": "string", "description": "The regex pattern to search for in file contents"},
+                "path": {"type": "string", "description": "The directory or file to search in. Defaults to the working directory."},
+                "include": {"type": "string", "description": "File glob pattern to include in the search"}
+            }),
             &["pattern"],
         )
     }
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: GrepInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let root = input
-            .path
-            .clone()
-            .map_or_else(|| ctx.workdir.clone(), PathBuf::from);
+        if input.pattern.is_empty() {
+            return Err(ToolError::Input("pattern is required".to_string()));
+        }
+        let regex = Regex::new(&input.pattern).map_err(|e| ToolError::Input(e.to_string()))?;
+        let root = input.path.as_deref().map_or_else(
+            || ctx.workdir.clone(),
+            |path| resolve_file(&ctx.workdir, path),
+        );
         ctx.permission
-            .assert(
-                Action::Grep,
-                Resource::Path(root.to_string_lossy().into_owned()),
-            )
+            .assert(Action::Grep, Resource::Glob(input.pattern.clone()))
             .await?;
-        let mut files = Vec::new();
-        walk(&root, &mut files);
-        let mut matches = Vec::new();
+        let meta = tokio::fs::metadata(&root).await.ok();
+        assert_external_directory(
+            ctx,
+            &root,
+            meta.as_ref().is_some_and(std::fs::Metadata::is_dir),
+        )
+        .await?;
+        let search_root = if meta.as_ref().is_some_and(std::fs::Metadata::is_file) {
+            root.parent()
+                .map_or_else(|| root.clone(), Path::to_path_buf)
+        } else {
+            root.clone()
+        };
+        let mut files = {
+            let mut files = Vec::new();
+            walk(&search_root, &mut files);
+            files
+        };
+        files.sort();
+        let mut rows = Vec::new();
         for f in files {
+            if let Some(include) = &input.include
+                && !matches_include(include, &f, &search_root)
+            {
+                continue;
+            }
             let Ok(content) = tokio::fs::read_to_string(&f).await else {
                 continue;
             };
             for (i, line) in content.lines().enumerate() {
-                if line.contains(&input.pattern) {
-                    matches.push(json!({
-                        "file": f.to_string_lossy().into_owned(),
-                        "line": i + 1,
-                        "text": line,
-                    }));
+                if regex.is_match(line) {
+                    rows.push((f.clone(), i + 1, line.to_string()));
+                    if rows.len() >= SEARCH_LIMIT {
+                        break;
+                    }
                 }
             }
+            if rows.len() >= SEARCH_LIMIT {
+                break;
+            }
         }
-        let total = matches.len();
-        matches.truncate(MAX_LIST_ITEMS);
-        Ok(json!({ "matches": matches, "total": total }))
-    }
-}
-
-#[derive(Deserialize)]
-struct ShellInput {
-    command: String,
-}
-pub struct ShellTool;
-#[async_trait]
-impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        "shell"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "shell",
-            "Run a shell command in the working dir.",
-            json!({"command": {"type": "string"}}),
-            &["command"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        if ctx.cancel.is_cancelled() {
-            return Err(ToolError::Cancelled);
+        let truncated = rows.len() >= SEARCH_LIMIT;
+        if rows.is_empty() {
+            return Ok(json!({
+                "title": input.pattern,
+                "metadata": { "matches": 0, "truncated": false },
+                "output": "No files found",
+                "matches": [],
+                "total": 0,
+            }));
         }
-        let input: ShellInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        ctx.permission
-            .assert(Action::Bash, Resource::Command(input.command.clone()))
-            .await?;
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&input.command)
-            .current_dir(&ctx.workdir)
-            .output()
-            .await?;
+        let mut output = vec![format!(
+            "Found {} matches{}",
+            rows.len(),
+            if truncated {
+                " (more matches available)"
+            } else {
+                ""
+            }
+        )];
+        let mut current = PathBuf::new();
+        for (path, line, text) in &rows {
+            if current != *path {
+                if !current.as_os_str().is_empty() {
+                    output.push(String::new());
+                }
+                current = path.clone();
+                output.push(format!("{}:", display_path(path)));
+            }
+            output.push(format!("  Line {line}: {text}"));
+        }
+        if truncated {
+            output.push(String::new());
+            output.push(
+                "(Results truncated. Consider using a more specific path or pattern.)".to_string(),
+            );
+        }
+        let matches = rows
+            .iter()
+            .map(|(path, line, text)| {
+                json!({
+                    "file": display_path(path),
+                    "line": line,
+                    "text": text,
+                })
+            })
+            .collect::<Vec<_>>();
         Ok(json!({
-            "stdout": truncate(&String::from_utf8_lossy(&output.stdout)),
-            "stderr": truncate(&String::from_utf8_lossy(&output.stderr)),
-            "exit_code": output.status.code(),
+            "title": input.pattern,
+            "metadata": {
+                "matches": rows.len(),
+                "truncated": truncated,
+            },
+            "output": output.join("\n"),
+            "matches": matches,
+            "total": rows.len(),
         }))
     }
 }
@@ -551,118 +661,17 @@ impl Tool for AskUserTool {
                 "answer": input.options.get(i).cloned().unwrap_or_default(),
                 "selected_index": i,
             })),
+            Ok(QuestionAnswer::SelectedMany(indices)) => Ok(json!({
+                "answer": indices
+                    .iter()
+                    .filter_map(|index| input.options.get(*index).cloned())
+                    .collect::<Vec<_>>(),
+                "selected_indices": indices,
+            })),
             Ok(QuestionAnswer::FreeText(text)) => Ok(json!({ "answer": text })),
             Ok(QuestionAnswer::Cancelled) | Err(_) => {
                 Ok(json!({ "answer": "", "cancelled": true }))
             }
         }
-    }
-}
-
-pub struct TaskTool;
-
-#[derive(Deserialize)]
-struct TaskMemberInput {
-    #[serde(default)]
-    description: String,
-    prompt: String,
-    subagent_type: String,
-}
-
-#[derive(Deserialize)]
-struct TaskInput {
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    prompt: String,
-    #[serde(default)]
-    subagent_type: String,
-    #[serde(default)]
-    members: Vec<TaskMemberInput>,
-}
-
-#[async_trait]
-impl Tool for TaskTool {
-    fn name(&self) -> &str {
-        "task"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "task",
-            "Dispatch subagents to work in parallel and return their evidence. Give a single {description, prompt, subagent_type} or a members[] list. subagent_type is one of quick|deep|ultrabrain|writing.",
-            json!({
-                "description": { "type": "string" },
-                "prompt": { "type": "string" },
-                "subagent_type": { "type": "string", "enum": ["quick", "deep", "ultrabrain", "writing"] },
-                "members": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "description": { "type": "string" },
-                            "prompt": { "type": "string" },
-                            "subagent_type": { "type": "string", "enum": ["quick", "deep", "ultrabrain", "writing"] }
-                        },
-                        "required": ["prompt", "subagent_type"]
-                    }
-                }
-            }),
-            &[],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        if ctx.parent_session.is_some() {
-            return Err(ToolError::Other(
-                "the task tool is lead-only; a subagent cannot spawn more subagents".to_string(),
-            ));
-        }
-        let input: TaskInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let mut members: Vec<SpawnMember> = input
-            .members
-            .into_iter()
-            .map(|m| SpawnMember {
-                description: m.description,
-                prompt: m.prompt,
-                subagent_type: m.subagent_type,
-            })
-            .collect();
-        if members.is_empty() {
-            if input.prompt.trim().is_empty() {
-                return Err(ToolError::Input(
-                    "provide a prompt + subagent_type, or a non-empty members list".to_string(),
-                ));
-            }
-            members.push(SpawnMember {
-                description: input.description,
-                prompt: input.prompt,
-                subagent_type: input.subagent_type,
-            });
-        }
-        for member in &members {
-            ctx.permission
-                .assert(
-                    Action::Task,
-                    Resource::Subagent(member.subagent_type.clone()),
-                )
-                .await?;
-        }
-        let outcomes = ctx
-            .spawner
-            .spawn(members, ctx.cancel.clone())
-            .await
-            .map_err(|e| ToolError::Other(e.to_string()))?;
-        let members_json: Vec<Value> = outcomes
-            .into_iter()
-            .map(|o| {
-                json!({
-                    "member": o.member,
-                    "session": o.session,
-                    "status": o.status,
-                    "summary": o.summary,
-                })
-            })
-            .collect();
-        Ok(json!({ "members": members_json }))
     }
 }

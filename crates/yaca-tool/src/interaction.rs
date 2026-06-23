@@ -3,6 +3,54 @@ use tokio::sync::{mpsc, oneshot};
 use yaca_proto::{QuestionRequestId, SessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionInfo {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multiple: bool,
+    pub custom: Option<bool>,
+}
+
+impl QuestionInfo {
+    #[must_use]
+    pub fn from_prompt_kind(prompt: &str, kind: &QuestionKind) -> Self {
+        let trimmed = prompt.trim();
+        let header = if trimmed.is_empty() {
+            "Question".to_string()
+        } else {
+            trimmed.chars().take(30).collect()
+        };
+        let options = match kind {
+            QuestionKind::FreeText { .. } => Vec::new(),
+            QuestionKind::Select { options, .. } => options
+                .iter()
+                .map(|label| QuestionOption {
+                    label: label.clone(),
+                    description: String::new(),
+                })
+                .collect(),
+        };
+        let custom = match kind {
+            QuestionKind::FreeText { .. } => Some(true),
+            QuestionKind::Select { allow_custom, .. } => (*allow_custom).then_some(true),
+        };
+        Self {
+            question: prompt.to_string(),
+            header,
+            options,
+            multiple: false,
+            custom,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionKind {
     FreeText {
         default: Option<String>,
@@ -16,16 +64,61 @@ pub enum QuestionKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QuestionAnswer {
     Selected(usize),
+    SelectedMany(Vec<usize>),
     FreeText(String),
     Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuestionPrompt {
+    pub info: QuestionInfo,
+    pub kind: QuestionKind,
+}
+
+impl QuestionPrompt {
+    #[must_use]
+    pub fn new(info: QuestionInfo, kind: QuestionKind) -> Self {
+        Self { info, kind }
+    }
+}
+
+pub enum QuestionReply {
+    Single(oneshot::Sender<QuestionAnswer>),
+    Many(oneshot::Sender<Vec<QuestionAnswer>>),
+}
+
+impl QuestionReply {
+    pub fn send(self, answer: QuestionAnswer) -> Result<(), QuestionAnswer> {
+        match self {
+            Self::Single(tx) => tx.send(answer),
+            Self::Many(tx) => tx
+                .send(vec![answer])
+                .map_err(|mut answers| answers.pop().unwrap_or(QuestionAnswer::Cancelled)),
+        }
+    }
+
+    pub fn send_many(self, answers: Vec<QuestionAnswer>) -> Result<(), Vec<QuestionAnswer>> {
+        match self {
+            Self::Single(tx) => {
+                let answer = answers
+                    .into_iter()
+                    .next()
+                    .unwrap_or(QuestionAnswer::Cancelled);
+                tx.send(answer).map_err(|answer| vec![answer])
+            }
+            Self::Many(tx) => tx.send(answers),
+        }
+    }
 }
 
 pub struct QuestionRequest {
     pub id: QuestionRequestId,
     pub session: Option<SessionId>,
     pub prompt: String,
+    pub info: QuestionInfo,
     pub kind: QuestionKind,
-    pub reply: oneshot::Sender<QuestionAnswer>,
+    pub questions: Vec<QuestionPrompt>,
+    pub reply: QuestionReply,
 }
 
 #[derive(Error, Debug)]
@@ -65,13 +158,35 @@ impl InteractionPlane {
         prompt: String,
         kind: QuestionKind,
     ) -> Result<QuestionAnswer, InteractionError> {
+        let info = QuestionInfo::from_prompt_kind(&prompt, &kind);
+        self.ask_with_info(info, kind).await
+    }
+
+    pub async fn ask_with_info(
+        &self,
+        info: QuestionInfo,
+        kind: QuestionKind,
+    ) -> Result<QuestionAnswer, InteractionError> {
+        let mut answers = self.ask_many(vec![QuestionPrompt::new(info, kind)]).await?;
+        Ok(answers.pop().unwrap_or(QuestionAnswer::Cancelled))
+    }
+
+    pub async fn ask_many(
+        &self,
+        questions: Vec<QuestionPrompt>,
+    ) -> Result<Vec<QuestionAnswer>, InteractionError> {
+        let Some(first) = questions.first().cloned() else {
+            return Ok(Vec::new());
+        };
         let (tx, rx) = oneshot::channel();
         let req = QuestionRequest {
             id: QuestionRequestId::new(),
             session: self.session,
-            prompt,
-            kind,
-            reply: tx,
+            prompt: first.info.question.clone(),
+            info: first.info,
+            kind: first.kind,
+            questions,
+            reply: QuestionReply::Many(tx),
         };
         self.asks
             .send(req)

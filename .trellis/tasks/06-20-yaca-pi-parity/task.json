@@ -1,0 +1,29 @@
+{
+  "id": "yaca-pi-parity",
+  "name": "yaca-pi-parity",
+  "title": "yaca: broad feature parity with pi",
+  "description": "Bring yaca to broad (Tier 3) functional parity with the pi coding agent: fix the edit/write/shell permission blocker, add project-context loading, missing tools (ls/find), slash commands, compaction, skills, more providers + OAuth, session tree, and RPC/print/JSON modes. Phased parent task; children own each wave.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-06-20",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-21-yaca-w1-agent-can-code",
+    "06-21-agent-core-config"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

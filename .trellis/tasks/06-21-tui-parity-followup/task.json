@@ -1,0 +1,28 @@
+{
+  "id": "tui-parity-followup",
+  "name": "tui-parity-followup",
+  "title": "TUI opencode parity follow-up",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-06-21",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "feat/yaca-pi-parity",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-21-tui-borderless-redesign"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

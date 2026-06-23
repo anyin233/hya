@@ -2,24 +2,23 @@
 //! `Event` stream. One provider per upstream route (OpenAI-compatible or
 //! Anthropic), selected by the model id it serves.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use eventsource_stream::Eventsource as _;
-use futures::StreamExt as _;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret as _, SecretString};
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use yaca_proto::{Event, MessageId, ModelRef, SessionId};
+
+mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
 use crate::google::GoogleProtocol;
 use crate::openai::OpenAiChatProtocol;
 use crate::{
-    Capabilities, CompletionRequest, Decoder, EventStream, Protocol, Provider, ProviderError,
+    Capabilities, CompletionRequest, EventStream, Protocol, Provider, ProviderError, ProviderModel,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +48,13 @@ pub struct HttpProvider {
 fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
     let mut header = HeaderValue::from_str(value)
         .map_err(|_| ProviderError::Http("invalid auth header value".to_string()))?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
+    let mut header = HeaderValue::from_str(value)
+        .map_err(|_| ProviderError::Http("invalid request header value".to_string()))?;
     header.set_sensitive(true);
     Ok(header)
 }
@@ -144,6 +150,19 @@ impl HttpProvider {
         }
         Ok(headers)
     }
+
+    fn request_headers(
+        &self,
+        extra: &BTreeMap<String, String>,
+    ) -> Result<HeaderMap, ProviderError> {
+        let mut headers = self.auth_headers()?;
+        for (name, value) in extra {
+            let header_name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| ProviderError::Http("invalid request header name".to_string()))?;
+            headers.insert(header_name, request_header_value(value)?);
+        }
+        Ok(headers)
+    }
 }
 
 #[async_trait]
@@ -156,6 +175,17 @@ impl Provider for HttpProvider {
         self.models
             .contains(model.as_str())
             .then(|| self.caps.clone())
+    }
+
+    fn catalog(&self) -> Vec<ProviderModel> {
+        self.models
+            .iter()
+            .map(|model| ProviderModel {
+                provider_id: self.id.clone(),
+                model_id: model.clone(),
+                capabilities: self.caps.clone(),
+            })
+            .collect()
     }
 
     async fn stream(
@@ -176,7 +206,7 @@ impl Provider for HttpProvider {
         let resp = self
             .client
             .post(&url)
-            .headers(self.auth_headers()?)
+            .headers(self.request_headers(&req.headers)?)
             .json(&body)
             .send()
             .await
@@ -188,62 +218,7 @@ impl Provider for HttpProvider {
             return Err(ProviderError::Http(format!("{status}: {snippet}")));
         }
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
-        tokio::spawn(pump(resp, decoder, tx));
+        tokio::spawn(stream::pump(resp, decoder, tx));
         Ok(Box::pin(ReceiverStream::new(rx)))
-    }
-}
-
-async fn pump(
-    resp: reqwest::Response,
-    mut decoder: Box<dyn Decoder>,
-    tx: mpsc::Sender<Result<Event, ProviderError>>,
-) {
-    let mut sse = resp.bytes_stream().eventsource();
-    while let Some(frame) = sse.next().await {
-        let frame = match frame {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = tx.send(Err(ProviderError::Http(e.to_string()))).await;
-                return;
-            }
-        };
-        // A gateway can answer 200 then emit `{"error": {...}}` mid-stream; the
-        // canonical decoders ignore unknown shapes, so surface it explicitly.
-        if frame.data.contains("\"error\"")
-            && let Ok(value) = serde_json::from_str::<Value>(&frame.data)
-            && let Some(err) = value.get("error")
-        {
-            let msg = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("provider returned an error");
-            let _ = tx.send(Err(ProviderError::Http(msg.to_string()))).await;
-            return;
-        }
-        match decoder.push(&frame.data) {
-            Ok(events) => {
-                for event in events {
-                    if tx.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        }
-    }
-    match decoder.finish() {
-        Ok(events) => {
-            for event in events {
-                if tx.send(Ok(event)).await.is_err() {
-                    return;
-                }
-            }
-        }
-        Err(e) => {
-            let _ = tx.send(Err(e)).await;
-        }
     }
 }

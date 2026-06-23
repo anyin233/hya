@@ -45,6 +45,7 @@ async fn migration_applies_and_projection_is_correct() {
         Event::MessageFinished {
             session: s,
             message: m,
+            role: Role::Assistant,
             finish: FinishReason::Stop,
         },
     ];

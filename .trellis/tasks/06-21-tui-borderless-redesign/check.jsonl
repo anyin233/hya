@@ -1,0 +1,9 @@
+{"check":"dependency-policy","description":"unicode-width and unicode-segmentation are standard, widely-used crates; pinned via workspace.dependencies"}
+{"check":"unit-tests","description":"InputState tests cover ASCII motion, word deletion, CJK width/graphemes, visible slice scrolling"}
+{"check":"render-tests","description":"tui_render.rs assertions match borderless layout and model-in-input design"}
+{"check":"lint","description":"cargo fmt --all --check passes"}
+{"check":"clippy","description":"cargo clippy --workspace --all-targets -- -D warnings is clean"}
+{"check":"test-suite","description":"cargo test --workspace passes"}
+{"check":"manual-smoke-mock","description":"yaca --mock launches and echoes user input"}
+{"check":"manual-smoke-preview","description":"cargo run --example preview -p yaca-tui renders fixtures"}
+{"check":"cjk-input","description":"Mock TUI handles Chinese input cursor and backspace correctly"}

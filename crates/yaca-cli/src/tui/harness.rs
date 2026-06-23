@@ -74,9 +74,14 @@ impl DummyHarness {
         let router = ProviderRouter::new().with(Arc::new(provider));
         let store = SessionStore::connect_memory().await.expect("memory store");
         let model = models.first().copied().unwrap_or("dummy");
-        let (engine, _asks, _questions, _mcp_manager) =
-            crate::build_session_engine(store, router, model, std::collections::BTreeMap::new())
-                .await;
+        let (engine, _asks, _questions, _mcp_manager, _plugin_host) = crate::build_session_engine(
+            store,
+            router,
+            model,
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        )
+        .await;
         let agent = crate::agent_with_model(model);
         let session = engine
             .create(CreateSession {
@@ -130,10 +135,30 @@ impl DummyHarness {
         match effect {
             TuiEffect::None => {}
             TuiEffect::SelectModel(model) => {
-                self.agent.model = yaca_proto::ModelRef::new(model);
+                let model = yaca_proto::ModelRef::new(model);
+                self.agent.model = model.clone();
+                self.engine
+                    .switch_model(self.session, model)
+                    .await
+                    .expect("switch model");
+                self.controller.app.projection = self
+                    .engine
+                    .read_projection(self.session)
+                    .await
+                    .expect("read projection");
             }
             TuiEffect::SelectAgent(agent) => {
-                self.agent.name = yaca_proto::AgentName::new(agent);
+                let agent = yaca_proto::AgentName::new(agent);
+                self.agent.name = agent.clone();
+                self.engine
+                    .switch_agent(self.session, agent)
+                    .await
+                    .expect("switch agent");
+                self.controller.app.projection = self
+                    .engine
+                    .read_projection(self.session)
+                    .await
+                    .expect("read projection");
             }
             TuiEffect::SelectReasoning(level) => {
                 self.agent.reasoning = if matches!(level.as_str(), "off" | "none") {
@@ -146,6 +171,7 @@ impl DummyHarness {
                 prompt,
                 agent,
                 model,
+                command,
             } => {
                 if let Some(agent) = agent {
                     self.agent.name = yaca_proto::AgentName::new(agent);
@@ -153,10 +179,23 @@ impl DummyHarness {
                 if let Some(model) = model {
                     self.agent.model = yaca_proto::ModelRef::new(model);
                 }
+                self.admit_prompt(prompt, command).await;
                 self.engine
-                    .admit_user_prompt(self.session, prompt)
+                    .run_turn(self.session, &self.agent, CancellationToken::new())
                     .await
-                    .expect("admit prompt");
+                    .expect("run turn");
+                self.controller.app.projection = self
+                    .engine
+                    .read_projection(self.session)
+                    .await
+                    .expect("read projection");
+            }
+            TuiEffect::SubmitCommand {
+                prompt,
+                command,
+                arguments,
+            } => {
+                self.admit_prompt(prompt, Some((command, arguments))).await;
                 self.engine
                     .run_turn(self.session, &self.agent, CancellationToken::new())
                     .await
@@ -168,10 +207,7 @@ impl DummyHarness {
                     .expect("read projection");
             }
             TuiEffect::Submit(prompt) => {
-                self.engine
-                    .admit_user_prompt(self.session, prompt)
-                    .await
-                    .expect("admit prompt");
+                self.admit_prompt(prompt, None).await;
                 self.engine
                     .run_turn(self.session, &self.agent, CancellationToken::new())
                     .await
@@ -196,6 +232,21 @@ impl DummyHarness {
             | TuiEffect::ExportTranscript
             | TuiEffect::NewSession => {}
         }
+    }
+
+    async fn admit_prompt(&self, prompt: String, command: Option<(String, String)>) {
+        match command {
+            Some((name, arguments)) => self
+                .engine
+                .admit_command_prompt(self.session, name, arguments, prompt)
+                .await
+                .expect("admit command prompt"),
+            None => self
+                .engine
+                .admit_user_prompt(self.session, prompt)
+                .await
+                .expect("admit prompt"),
+        };
     }
 }
 

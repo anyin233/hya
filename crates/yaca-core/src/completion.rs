@@ -253,6 +253,7 @@ impl GoalEvaluator for ModelGoalEvaluator {
             temperature: Some(0.0),
             max_output_tokens: Some(256),
             reasoning: None,
+            headers: Default::default(),
         };
         let mut stream = self
             .providers

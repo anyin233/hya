@@ -6,6 +6,8 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 pub mod error;
+mod permission;
+mod sync;
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -15,7 +17,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use yaca_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
 
 pub use error::StoreError;
+pub use permission::SavedPermission;
 
+#[derive(Clone)]
 pub struct SessionStore {
     pool: sqlx::SqlitePool,
 }
@@ -24,6 +28,7 @@ pub struct SessionStore {
 pub struct SessionInfo {
     pub session: SessionId,
     pub started_millis: i64,
+    pub updated_millis: i64,
     pub events: u64,
 }
 
@@ -112,14 +117,29 @@ impl SessionStore {
         Ok(out)
     }
 
+    pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
+        let key = session.as_uuid().as_bytes().to_vec();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM token_ledger WHERE session_id = ?")
+            .bind(key.clone())
+            .execute(&mut *tx)
+            .await?;
+        let result = sqlx::query("DELETE FROM event_log WHERE session_id = ?")
+            .bind(key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
         Ok(Projection::from_events(&self.replay(session).await?))
     }
 
     pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
         let rows = sqlx::query(
-            "SELECT session_id, MIN(ts) AS started, COUNT(*) AS n \
-             FROM event_log GROUP BY session_id ORDER BY started DESC",
+            "SELECT session_id, MIN(ts) AS started, MAX(ts) AS updated, COUNT(*) AS n \
+             FROM event_log GROUP BY session_id ORDER BY updated DESC, session_id DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -127,11 +147,13 @@ impl SessionStore {
         for r in rows {
             let key: Vec<u8> = r.try_get("session_id")?;
             let started: i64 = r.try_get("started")?;
+            let updated: i64 = r.try_get("updated")?;
             let n: i64 = r.try_get("n")?;
             if let Ok(uuid) = uuid::Uuid::from_slice(&key) {
                 out.push(SessionInfo {
                     session: SessionId::from_uuid(uuid),
                     started_millis: started,
+                    updated_millis: updated,
                     events: n.max(0) as u64,
                 });
             }

@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use yaca_proto::{ToolName, ToolSchema};
 use yaca_tool::{
-    Action, Decision, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionAnswer,
-    Resource, Rule, SpawnerPlane, Tool, ToolCtx, ToolRegistry,
+    Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
+    QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx,
+    ToolRegistry, WebSearchPlane,
 };
 
 fn allow(action: Action, pat: &str) -> Rule {
@@ -38,7 +39,13 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         permission,
         interaction,
         spawner,
+        session: None,
         parent_session: None,
+        todo: TodoPlane::default(),
+        skills: SkillPlane::default(),
+        websearch: WebSearchPlane::default(),
+        lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -73,8 +80,45 @@ fn registry_rejects_duplicate_tool_name() {
     assert!(result.is_err());
     assert_eq!(
         registry.get("read").unwrap().schema().description,
-        "Read a file's contents."
+        "Read a file or directory's contents."
     );
+}
+
+#[test]
+fn builtins_expose_opencode_names_and_keep_short_aliases_hidden() {
+    let registry = ToolRegistry::builtins();
+    let visible: Vec<_> = registry
+        .schemas()
+        .into_iter()
+        .map(|schema| schema.name.as_str().to_string())
+        .collect();
+
+    for canonical in ["bash", "shell"] {
+        assert!(registry.get(canonical).is_some(), "{canonical} missing");
+        assert!(
+            visible.iter().any(|name| name == canonical),
+            "{canonical} schema hidden"
+        );
+    }
+
+    for (canonical, alias) in [
+        ("webfetch", "fetch"),
+        ("websearch", "search"),
+        ("todowrite", "todo"),
+        ("apply_patch", "patch"),
+        ("plan_exit", "plan"),
+    ] {
+        assert!(registry.get(canonical).is_some(), "{canonical} missing");
+        assert!(registry.get(alias).is_some(), "{alias} alias missing");
+        assert!(
+            visible.iter().any(|name| name == canonical),
+            "{canonical} schema hidden"
+        );
+        assert!(
+            visible.iter().all(|name| name != alias),
+            "{alias} schema should be hidden"
+        );
+    }
 }
 
 #[test]
@@ -173,7 +217,7 @@ async fn write_then_glob_then_grep() {
         vec![
             allow(Action::Edit, "/**"),
             allow(Action::Glob, "*"),
-            allow(Action::Grep, "/**"),
+            allow(Action::Grep, "*"),
         ],
         dir.clone(),
     );
@@ -223,7 +267,13 @@ async fn shell_happy_and_cancelled() {
         permission: ctx.permission.clone(),
         interaction: ctx.interaction.clone(),
         spawner: ctx.spawner.clone(),
+        session: ctx.session,
         parent_session: None,
+        todo: ctx.todo.clone(),
+        skills: ctx.skills.clone(),
+        websearch: ctx.websearch.clone(),
+        lsp: ctx.lsp.clone(),
+        formatter: ctx.formatter.clone(),
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -248,7 +298,13 @@ async fn task_tool_is_lead_only() {
         permission,
         interaction,
         spawner,
+        session: None,
         parent_session: Some(yaca_proto::SessionId::new()),
+        todo: TodoPlane::default(),
+        skills: SkillPlane::default(),
+        websearch: WebSearchPlane::default(),
+        lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
@@ -270,7 +326,13 @@ async fn ask_user_select_returns_index_and_answer() {
         permission,
         interaction,
         spawner,
+        session: None,
         parent_session: None,
+        todo: TodoPlane::default(),
+        skills: SkillPlane::default(),
+        websearch: WebSearchPlane::default(),
+        lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
@@ -397,6 +459,42 @@ async fn edit_guards_ambiguous_unless_replace_all() {
         .unwrap();
     assert_eq!(uniq["replaced"], 1);
     assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "one three\n");
+}
+
+#[tokio::test]
+async fn edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string() {
+    let dir = tempdir();
+    let file = dir.join("created.txt");
+    let ctx = ctx_with(vec![allow(Action::Edit, "/**")], dir.clone());
+    let edit = ToolRegistry::builtins().get("edit").unwrap();
+
+    let out = edit
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "created.txt",
+                "oldString": "",
+                "newString": "hello\n"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["created"], true);
+    assert_eq!(tokio::fs::read_to_string(&file).await.unwrap(), "hello\n");
+
+    let same = edit
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "created.txt",
+                "oldString": "hello\n",
+                "newString": "hello\n"
+            }),
+        )
+        .await;
+    assert!(
+        matches!(same, Err(yaca_tool::ToolError::Other(message)) if message == "No changes to apply: oldString and newString are identical.")
+    );
 }
 
 #[tokio::test]

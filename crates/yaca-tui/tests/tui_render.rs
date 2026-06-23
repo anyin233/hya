@@ -192,6 +192,7 @@ fn with_tool_error_message(state: &mut AppState, base_seq: u64, path: &str, mess
             message,
             part,
             call,
+            value: None,
             message_text: message_text.to_string(),
         },
     ));

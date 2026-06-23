@@ -6,7 +6,6 @@ use yaca_tool::{Action, AskRequest, Decision, Resource};
 
 #[derive(Clone, Debug)]
 pub enum PermissionPolicy {
-    ReadOnly,
     Scoped { workdir: PathBuf },
     Yolo,
 }
@@ -69,7 +68,6 @@ pub fn path_in_workdir(workdir: &Path, candidate: &str) -> bool {
 pub fn decide(policy: &PermissionPolicy, action: Action, resource: &Resource) -> Decision {
     match policy {
         PermissionPolicy::Yolo => Decision::AllowOnce,
-        PermissionPolicy::ReadOnly => Decision::Reject { feedback: None },
         PermissionPolicy::Scoped { workdir } => match (action, resource) {
             (Action::Mcp, _) => Decision::AllowOnce,
             (Action::Bash, _) => Decision::AllowOnce,
@@ -147,19 +145,6 @@ mod tests {
     }
 
     #[test]
-    fn readonly_rejects_mutations() {
-        let p = PermissionPolicy::ReadOnly;
-        assert_eq!(
-            decide(&p, Action::Edit, &Resource::Path("src/a.rs".into())),
-            Decision::Reject { feedback: None }
-        );
-        assert_eq!(
-            decide(&p, Action::Bash, &Resource::Command("ls".into())),
-            Decision::Reject { feedback: None }
-        );
-    }
-
-    #[test]
     fn yolo_allows_everything() {
         let p = PermissionPolicy::Yolo;
         assert_eq!(
@@ -178,10 +163,6 @@ mod tests {
         assert_eq!(
             decide(&PermissionPolicy::Yolo, Action::Mcp, &resource),
             Decision::AllowOnce
-        );
-        assert_eq!(
-            decide(&PermissionPolicy::ReadOnly, Action::Mcp, &resource),
-            Decision::Reject { feedback: None }
         );
         assert_eq!(
             decide(

@@ -23,6 +23,19 @@ pub struct PromptRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandRequest {
+    pub command: String,
+    pub arguments: String,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShellRequest {
+    pub command: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PromptResponse {
     pub message: MessageId,
     pub finish: FinishReason,

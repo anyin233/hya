@@ -33,6 +33,7 @@ pub struct MemberSpec {
     pub id: MemberId,
     pub agent: AgentSpec,
     pub directive: String,
+    pub session: Option<SessionId>,
 }
 
 fn summarize_member(projection: &Projection) -> String {
@@ -56,14 +57,18 @@ async fn run_member(
     spec: MemberSpec,
     cancel: CancellationToken,
 ) -> Result<(SessionId, String), CoreError> {
-    let child = engine
-        .create(CreateSession {
-            parent: Some(lead),
-            agent: spec.agent.name.clone(),
-            model: spec.agent.model.clone(),
-            workdir: spec.agent.workdir.to_string_lossy().into_owned(),
-        })
-        .await?;
+    let child = if let Some(session) = spec.session {
+        session
+    } else {
+        engine
+            .create(CreateSession {
+                parent: Some(lead),
+                agent: spec.agent.name.clone(),
+                model: spec.agent.model.clone(),
+                workdir: spec.agent.workdir.to_string_lossy().into_owned(),
+            })
+            .await?
+    };
     engine.admit_user_prompt(child, spec.directive).await?;
     engine.run_turn(child, &spec.agent, cancel).await?;
     let projection = engine.read_projection(child).await?;

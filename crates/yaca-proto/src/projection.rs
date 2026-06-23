@@ -2,8 +2,11 @@
 //! store (read path) and the client (SSE reconnect); idempotent by `EventSeq` so
 //! re-delivered events are no-ops.
 
+mod helpers;
+
 use serde::{Deserialize, Serialize};
 
+use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{MessageId, PartId, SessionId, ToolCallId};
 use crate::message::{FinishReason, Role, ToolPartState};
@@ -15,7 +18,12 @@ pub struct SessionProjection {
     pub parent: Option<SessionId>,
     pub agent: Option<AgentName>,
     pub model: Option<ModelRef>,
+    pub workdir: Option<String>,
     pub title: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub permission: Option<Vec<serde_json::Value>>,
+    pub archived: Option<serde_json::Number>,
+    pub share: Option<String>,
     pub messages: Vec<MessageProjection>,
 }
 
@@ -24,6 +32,10 @@ pub struct MessageProjection {
     pub id: MessageId,
     pub role: Role,
     pub finish: Option<FinishReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<serde_json::Value>,
     pub parts: Vec<PartProjection>,
 }
 
@@ -92,15 +104,41 @@ impl Projection {
                 parent,
                 agent,
                 model,
+                workdir,
                 ..
             } => {
                 self.session.id = Some(*session);
                 self.session.parent = *parent;
                 self.session.agent = Some(agent.clone());
                 self.session.model = Some(model.clone());
+                self.session.workdir = Some(workdir.clone());
+            }
+            Event::SessionMoved { workdir, .. } => {
+                self.session.workdir = Some(workdir.clone());
             }
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());
+            }
+            Event::SessionMetadataSet { metadata, .. } => {
+                self.session.metadata = Some(metadata.clone());
+            }
+            Event::SessionPermissionSet { permission, .. } => {
+                self.session.permission = Some(permission.clone());
+            }
+            Event::SessionArchived { archived, .. } => {
+                self.session.archived = Some(archived.clone());
+            }
+            Event::SessionShareSet { url, .. } => {
+                self.session.share = Some(url.clone());
+            }
+            Event::SessionShareCleared { .. } => {
+                self.session.share = None;
+            }
+            Event::AgentSwitched { agent, .. } => {
+                self.session.agent = Some(agent.clone());
+            }
+            Event::ModelSwitched { model, .. } => {
+                self.session.model = Some(model.clone());
             }
             Event::MessageStarted { message, role, .. } => {
                 if self.message_mut(*message).is_none() {
@@ -108,8 +146,21 @@ impl Projection {
                         id: *message,
                         role: *role,
                         finish: None,
+                        files: Vec::new(),
+                        agents: Vec::new(),
                         parts: Vec::new(),
                     });
+                }
+            }
+            Event::UserPromptContextRecorded {
+                message,
+                files,
+                agents,
+                ..
+            } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.files = files.clone();
+                    message.agents = agents.clone();
                 }
             }
             Event::MessageFinished {
@@ -117,6 +168,14 @@ impl Projection {
             } => {
                 if let Some(m) = self.message_mut(*message) {
                     m.finish = Some(*finish);
+                }
+            }
+            Event::MessageDeleted { message, .. } => {
+                self.session.messages.retain(|item| item.id != *message);
+            }
+            Event::PartDeleted { message, part, .. } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.parts.retain(|item| item.id() != *part);
                 }
             }
             Event::TextStart { message, part, .. } => push_part(
@@ -137,6 +196,16 @@ impl Projection {
                     text.push_str(delta);
                 }
             }
+            Event::TextReplace {
+                message,
+                part,
+                text: replacement,
+                ..
+            } => {
+                if let Some(PartProjection::Text { text, .. }) = find_part(self, *message, *part) {
+                    *text = replacement.clone();
+                }
+            }
             Event::ReasoningStart { message, part, .. } => push_part(
                 self,
                 *message,
@@ -155,6 +224,18 @@ impl Projection {
                     find_part(self, *message, *part)
                 {
                     text.push_str(delta);
+                }
+            }
+            Event::ReasoningReplace {
+                message,
+                part,
+                text: replacement,
+                ..
+            } => {
+                if let Some(PartProjection::Reasoning { text, .. }) =
+                    find_part(self, *message, *part)
+                {
+                    *text = replacement.clone();
                 }
             }
             Event::ToolInputStart {
@@ -212,6 +293,7 @@ impl Projection {
                 message,
                 part,
                 message_text,
+                value,
                 ..
             } => {
                 if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
@@ -219,66 +301,28 @@ impl Projection {
                     *state = ToolPartState::Error {
                         input,
                         message: message_text.clone(),
+                        value: value.clone(),
                     };
+                }
+            }
+            Event::ToolPartUpdated {
+                message,
+                part,
+                state: next,
+                ..
+            } => {
+                if let Some(PartProjection::Tool { state, .. }) = find_part(self, *message, *part) {
+                    *state = next.clone();
                 }
             }
             Event::TextEnd { .. }
             | Event::ReasoningEnd { .. }
+            | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
+            | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::Error { .. } => {}
         }
-    }
-}
-
-fn push_part(p: &mut Projection, msg: MessageId, part: PartProjection) {
-    if let Some(m) = p.message_mut(msg)
-        && !m.parts.iter().any(|x| x.id() == part.id())
-    {
-        m.parts.push(part);
-    }
-}
-
-fn find_part(p: &mut Projection, msg: MessageId, part: PartId) -> Option<&mut PartProjection> {
-    p.message_mut(msg)?
-        .parts
-        .iter_mut()
-        .find(|x| x.id() == part)
-}
-
-fn upsert_tool(
-    p: &mut Projection,
-    msg: MessageId,
-    part: PartId,
-    call: ToolCallId,
-    name: ToolName,
-    state: ToolPartState,
-) {
-    if let Some(PartProjection::Tool {
-        state: existing, ..
-    }) = find_part(p, msg, part)
-    {
-        *existing = state;
-    } else {
-        push_part(
-            p,
-            msg,
-            PartProjection::Tool {
-                id: part,
-                call,
-                name,
-                state,
-            },
-        );
-    }
-}
-
-fn tool_input(state: &ToolPartState) -> serde_json::Value {
-    match state {
-        ToolPartState::Pending { input }
-        | ToolPartState::Running { input }
-        | ToolPartState::Completed { input, .. }
-        | ToolPartState::Error { input, .. } => input.clone(),
     }
 }

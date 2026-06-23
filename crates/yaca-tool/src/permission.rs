@@ -15,6 +15,11 @@ pub enum Action {
     Bash,
     Task,
     Mcp,
+    WebFetch,
+    WebSearch,
+    TodoWrite,
+    Skill,
+    Lsp,
     ExternalDirectory,
 }
 
@@ -24,6 +29,9 @@ pub enum Resource {
     Glob(String),
     Command(String),
     Subagent(String),
+    Url(String),
+    WebSearch(String),
+    Skill(String),
     Any,
 }
 
@@ -34,7 +42,10 @@ impl Resource {
             Resource::Path(s)
             | Resource::Glob(s)
             | Resource::Command(s)
-            | Resource::Subagent(s) => s.clone(),
+            | Resource::Subagent(s)
+            | Resource::Url(s)
+            | Resource::WebSearch(s)
+            | Resource::Skill(s) => s.clone(),
             Resource::Any => "*".to_string(),
         }
     }
@@ -152,12 +163,23 @@ pub struct AskRequest {
     pub reply: oneshot::Sender<Decision>,
 }
 
+#[async_trait::async_trait]
+pub trait PermissionInterceptor: Send + Sync {
+    async fn intercept(
+        &self,
+        session: Option<SessionId>,
+        action: Action,
+        resource: &Resource,
+    ) -> Option<Decision>;
+}
+
 #[derive(Clone)]
 pub struct PermissionPlane {
     snapshot: Arc<PermissionRules>,
     persistent: Arc<Mutex<PermissionRules>>,
     asks: mpsc::UnboundedSender<AskRequest>,
     session: Option<SessionId>,
+    interceptor: Option<Arc<dyn PermissionInterceptor>>,
 }
 
 impl PermissionPlane {
@@ -169,14 +191,35 @@ impl PermissionPlane {
             persistent: Arc::new(Mutex::new(rules)),
             asks: tx,
             session: None,
+            interceptor: None,
         };
         (plane, rx)
+    }
+
+    #[must_use]
+    pub fn snapshot_rules(&self) -> PermissionRules {
+        self.snapshot.as_ref().clone()
+    }
+
+    #[must_use]
+    pub fn with_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
+        self.interceptor = Some(interceptor);
+        self
     }
 
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
         let mut plane = self.clone();
         plane.session = Some(session);
+        plane
+    }
+
+    #[must_use]
+    pub fn with_snapshot_rules(&self, extra: Vec<Rule>) -> Self {
+        let mut plane = self.clone();
+        if !extra.is_empty() {
+            plane.snapshot = Arc::new(self.snapshot.derive_child(extra));
+        }
         plane
     }
 
@@ -197,6 +240,11 @@ impl PermissionPlane {
         if self.persistent.lock().await.evaluate(action, &resource) == Mode::Allow {
             return Ok(());
         }
+        if let Some(interceptor) = &self.interceptor
+            && let Some(decision) = interceptor.intercept(self.session, action, &resource).await
+        {
+            return self.apply_decision(action, resource, decision).await;
+        }
         let (tx, rx) = oneshot::channel();
         let req = AskRequest {
             id: PermissionRequestId::new(),
@@ -208,7 +256,17 @@ impl PermissionPlane {
         self.asks
             .send(req)
             .map_err(|_| PermissionError::Unavailable)?;
-        match rx.await.map_err(|_| PermissionError::Unavailable)? {
+        let decision = rx.await.map_err(|_| PermissionError::Unavailable)?;
+        self.apply_decision(action, resource, decision).await
+    }
+
+    async fn apply_decision(
+        &self,
+        action: Action,
+        resource: Resource,
+        decision: Decision,
+    ) -> Result<(), PermissionError> {
+        match decision {
             Decision::AllowOnce => Ok(()),
             Decision::AllowAlways => {
                 // Widen to the whole action (e.g. all bash), not the exact resource.
@@ -270,5 +328,47 @@ mod tests {
         assert_eq!(encoded, "\"mcp\"");
         let decoded: Action = serde_json::from_str(&encoded).expect("deserialize action");
         assert_eq!(decoded, Action::Mcp);
+    }
+
+    struct AlwaysInterceptor(Option<Decision>);
+
+    #[async_trait::async_trait]
+    impl PermissionInterceptor for AlwaysInterceptor {
+        async fn intercept(
+            &self,
+            _session: Option<SessionId>,
+            _action: Action,
+            _resource: &Resource,
+        ) -> Option<Decision> {
+            self.0.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn interceptor_short_circuits_the_ask_channel() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let plane = plane.with_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::AllowOnce))));
+        plane
+            .assert(Action::Bash, Resource::Command("ls".to_string()))
+            .await
+            .expect("interceptor allows");
+        assert!(
+            rx.try_recv().is_err(),
+            "ask channel must receive nothing when the interceptor answers"
+        );
+    }
+
+    #[tokio::test]
+    async fn interceptor_defer_falls_through_to_ask_channel() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let plane = plane.with_interceptor(Arc::new(AlwaysInterceptor(None)));
+        let task = tokio::spawn(async move {
+            plane
+                .assert(Action::Bash, Resource::Command("ls".to_string()))
+                .await
+        });
+        let req = rx.recv().await.expect("ask request after defer");
+        req.reply.send(Decision::AllowOnce).expect("send reply");
+        task.await.expect("join").expect("assert ok");
     }
 }
