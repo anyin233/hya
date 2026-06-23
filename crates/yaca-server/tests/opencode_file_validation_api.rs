@@ -194,10 +194,12 @@ async fn opencode_legacy_file_content_uses_extension_mime_for_binary_files() {
 }
 
 #[tokio::test]
-async fn opencode_file_list_honors_question_mark_ignore_globs() {
+async fn opencode_file_list_honors_wildcard_ignore_globs() {
     let workdir = tempdir();
-    std::fs::write(workdir.join(".gitignore"), "file?.log\n").unwrap();
+    std::fs::write(workdir.join(".gitignore"), "file?.log\nasset[0-9].log\n").unwrap();
     std::fs::write(workdir.join("file1.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("asset7.log"), "ignored\n").unwrap();
+    std::fs::write(workdir.join("assetx.log"), "kept\n").unwrap();
     let app = router(state(workdir).await);
 
     let (status, listing) = get_json(app, "/file?path=.").await;
@@ -209,6 +211,20 @@ async fn opencode_file_list_honors_question_mark_ignore_globs() {
             .unwrap()
             .iter()
             .any(|entry| entry["path"] == "file1.log" && entry["ignored"] == true)
+    );
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "asset7.log" && entry["ignored"] == true)
+    );
+    assert!(
+        listing
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"] == "assetx.log" && entry["ignored"] == false)
     );
 }
 

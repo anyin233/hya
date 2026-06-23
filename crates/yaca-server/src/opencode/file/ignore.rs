@@ -76,10 +76,23 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
     let (mut pattern_index, mut value_index) = (0, 0);
     let (mut star_index, mut star_value_index) = (None, 0);
     while value_index < value.len() {
-        if pattern_index < pattern.len()
-            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
-        {
-            pattern_index += 1;
+        let mut matched = false;
+        let mut next_pattern_index = pattern_index + 1;
+        if pattern_index < pattern.len() {
+            let item = pattern[pattern_index];
+            if item == b'?' {
+                matched = true;
+            } else if let Some((class_matched, next_index)) =
+                bracket_class_matches(pattern, pattern_index, value[value_index])
+            {
+                matched = class_matched;
+                next_pattern_index = next_index;
+            } else if item == value[value_index] {
+                matched = true;
+            }
+        }
+        if matched {
+            pattern_index = next_pattern_index;
             value_index += 1;
         } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
             star_index = Some(pattern_index);
@@ -97,6 +110,32 @@ fn pattern_matches(pattern: &str, value: &str) -> bool {
         pattern_index += 1;
     }
     pattern_index == pattern.len()
+}
+
+fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(bool, usize)> {
+    if pattern.get(start) != Some(&b'[') || pattern.get(start + 1) == Some(&b']') {
+        return None;
+    }
+    let mut index = start + 1;
+    let mut matched = false;
+    while index < pattern.len() {
+        if pattern[index] == b']' {
+            return Some((matched, index + 1));
+        }
+        if index + 2 < pattern.len() && pattern[index + 1] == b'-' && pattern[index + 2] != b']' {
+            let (lower, upper) = if pattern[index] <= pattern[index + 2] {
+                (pattern[index], pattern[index + 2])
+            } else {
+                (pattern[index + 2], pattern[index])
+            };
+            matched |= lower <= value && value <= upper;
+            index += 3;
+        } else {
+            matched |= pattern[index] == value;
+            index += 1;
+        }
+    }
+    None
 }
 
 fn parse_rule(line: &str) -> Option<Rule> {
