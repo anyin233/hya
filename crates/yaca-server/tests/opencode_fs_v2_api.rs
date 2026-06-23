@@ -123,6 +123,44 @@ async fn opencode_v2_fs_list_uses_extension_mime_types() {
 }
 
 #[tokio::test]
+async fn opencode_v2_fs_list_matches_js_mime_types_database_aliases() {
+    let workdir = tempdir();
+    for path in [
+        "app.rs",
+        "config.toml",
+        "data.yaml",
+        "module.ts",
+        "page.tsx",
+        "view.jsx",
+        "audio.m4a",
+        "package.cjs",
+        "notebook.ipynb",
+    ] {
+        std::fs::write(workdir.join(path), b"data").unwrap();
+    }
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/api/fs/list").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let files = listing["data"].as_array().unwrap();
+    for (path, mime) in [
+        ("app.rs", "application/rls-services+xml"),
+        ("config.toml", "application/toml"),
+        ("data.yaml", "text/yaml"),
+        ("module.ts", "video/mp2t"),
+        ("page.tsx", "application/octet-stream"),
+        ("view.jsx", "text/jsx"),
+        ("audio.m4a", "audio/mp4"),
+        ("package.cjs", "application/node"),
+        ("notebook.ipynb", "application/x-ipynb+json"),
+    ] {
+        let entry = files.iter().find(|item| item["path"] == path).unwrap();
+        assert_eq!(entry["mime"], mime);
+    }
+}
+
+#[tokio::test]
 async fn opencode_v2_fs_find_uses_opencode_default_limit() {
     let workdir = tempdir();
     for index in 0..12 {

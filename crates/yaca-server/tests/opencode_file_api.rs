@@ -211,7 +211,7 @@ async fn opencode_v2_fs_routes_return_location_wrapped_entries_and_raw_file() {
     assert_eq!(
         listing["data"],
         serde_json::json!([
-            {"path": "src/main.rs", "type": "file", "mime": "text/plain"}
+            {"path": "src/main.rs", "type": "file", "mime": "application/rls-services+xml"}
         ])
     );
 

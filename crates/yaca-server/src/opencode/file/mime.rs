@@ -36,12 +36,23 @@ fn explicit_extension(path: &Path) -> Option<&'static str> {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("txt" | "rs" | "toml" | "yaml" | "yml" | "ts" | "tsx" | "js" | "jsx" | "css")
-        | Some("html" | "py" | "go" | "java" | "c" | "h" | "cpp" | "hpp" | "sh") => {
-            Some("text/plain")
-        }
+        Some("txt") => Some("text/plain"),
+        Some("rs") => Some("application/rls-services+xml"),
+        Some("toml") => Some("application/toml"),
+        Some("yaml" | "yml") => Some("text/yaml"),
+        Some("ts" | "mts") => Some("video/mp2t"),
+        Some("tsx" | "cts" | "py" | "go" | "hpp") => Some("application/octet-stream"),
+        Some("js" | "mjs") => Some("text/javascript"),
+        Some("jsx") => Some("text/jsx"),
+        Some("cjs") => Some("application/node"),
+        Some("css") => Some("text/css"),
+        Some("html") => Some("text/html"),
+        Some("java") => Some("text/x-java-source"),
+        Some("c" | "h" | "cpp") => Some("text/x-c"),
+        Some("sh") => Some("application/x-sh"),
         Some("csv") => Some("text/csv"),
         Some("md") => Some("text/markdown"),
+        Some("mdx") => Some("text/mdx"),
         Some("json") => Some("application/json"),
         Some("xml") => Some("application/xml"),
         Some("svg") => Some("image/svg+xml"),
@@ -53,10 +64,12 @@ fn explicit_extension(path: &Path) -> Option<&'static str> {
         Some("pdf") => Some("application/pdf"),
         Some("wasm") => Some("application/wasm"),
         Some("mp3") => Some("audio/mpeg"),
+        Some("m4a") => Some("audio/mp4"),
         Some("wav") => Some("audio/wav"),
         Some("ogg") => Some("audio/ogg"),
         Some("mp4") => Some("video/mp4"),
         Some("webm") => Some("video/webm"),
+        Some("ipynb") => Some("application/x-ipynb+json"),
         _ => None,
     }
 }
