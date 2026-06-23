@@ -104,3 +104,28 @@ async fn opencode_command_route_includes_native_init_and_review_commands() {
             .contains("You are a code reviewer.")
     );
 }
+
+#[tokio::test]
+async fn opencode_command_route_exposes_workspace_skills_as_commands() {
+    // Given: a workspace with a yaca skill discovered from disk.
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".yaca/skills/deploy")).unwrap();
+    std::fs::write(
+        workdir.join(".yaca/skills/deploy/SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy the current project\n---\nRun the deployment checklist.\n",
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: the OpenCode /command route is listed for that workspace.
+    let (status, commands) =
+        get_json(app, &format!("/command?directory={}", workdir.display())).await;
+
+    // Then: the skill is also available as a command prompt.
+    assert_eq!(status, StatusCode::OK);
+    let deploy = find_command(&commands, "deploy");
+    assert_eq!(deploy["description"], "Deploy the current project");
+    assert_eq!(deploy["source"], "skill");
+    assert_eq!(deploy["hints"], json!([]));
+    assert_eq!(deploy["template"], "Run the deployment checklist.\n");
+}
