@@ -50,7 +50,10 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
             }
         }
     });
-    super::sse::opencode(Sse::new(initial.chain(live)))
+    super::sse::opencode(Sse::new(initial.chain(stream::select(
+        live,
+        super::event_heartbeat::stream(heartbeat_event),
+    ))))
 }
 
 async fn subscribe_api(
@@ -90,7 +93,10 @@ async fn subscribe_api(
             }
         }
     });
-    super::sse::opencode(Sse::new(initial.chain(live)))
+    super::sse::opencode(Sse::new(initial.chain(stream::select(
+        live,
+        super::event_heartbeat::stream(heartbeat_event),
+    ))))
 }
 
 async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Response {
@@ -115,7 +121,28 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
             }
         }
     });
-    super::sse::opencode(Sse::new(initial.chain(live)))
+    super::sse::opencode(Sse::new(initial.chain(stream::select(
+        live,
+        super::event_heartbeat::stream(global_heartbeat_event),
+    ))))
+}
+
+fn heartbeat_event() -> SseEvent {
+    json_event(&EventPayload {
+        id: event_id(),
+        kind: "server.heartbeat",
+        properties: json!({}),
+    })
+}
+
+fn global_heartbeat_event() -> SseEvent {
+    json_event(&json!({
+        "payload": EventPayload {
+            id: event_id(),
+            kind: "server.heartbeat",
+            properties: json!({}),
+        },
+    }))
 }
 
 async fn envelope_matches_location(

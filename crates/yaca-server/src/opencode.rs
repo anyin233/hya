@@ -6,6 +6,7 @@ mod catalog;
 mod control;
 mod errors;
 mod event;
+mod event_heartbeat;
 mod experimental;
 mod experimental_sync;
 mod experimental_worktree;
