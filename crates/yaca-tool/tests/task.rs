@@ -41,6 +41,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: tempdir(),
         cancel: CancellationToken::new(),
     }

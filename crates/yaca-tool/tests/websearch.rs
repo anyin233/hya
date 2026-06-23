@@ -39,6 +39,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
         skills: SkillPlane::default(),
         websearch,
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),
     }

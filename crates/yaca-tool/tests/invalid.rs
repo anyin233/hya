@@ -22,6 +22,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 skills: yaca_tool::SkillPlane::default(),
                 websearch: yaca_tool::WebSearchPlane::default(),
                 lsp: yaca_tool::LspPlane::default(),
+                formatter: yaca_tool::FormatterPlane::default(),
                 workdir: std::path::PathBuf::from("."),
                 cancel: tokio_util::sync::CancellationToken::new(),
             },

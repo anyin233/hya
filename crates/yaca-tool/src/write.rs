@@ -70,6 +70,10 @@ impl Tool for WriteTool {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, encode_with_bom(content, desired_bom)).await?;
+        ctx.formatter
+            .format_file(&workdir, &path)
+            .await
+            .map_err(|error| ToolError::Other(error.to_string()))?;
 
         Ok(json!({
             "ok": true,

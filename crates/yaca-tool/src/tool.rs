@@ -12,6 +12,7 @@ use yaca_proto::{SessionId, ToolName, ToolSchema};
 
 use crate::apply_patch::ApplyPatchTool;
 use crate::edit::EditTool;
+use crate::formatter::FormatterPlane;
 use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
@@ -61,6 +62,7 @@ pub struct ToolCtx {
     pub skills: SkillPlane,
     pub websearch: WebSearchPlane,
     pub lsp: LspPlane,
+    pub formatter: FormatterPlane,
     pub workdir: PathBuf,
     pub cancel: CancellationToken,
 }

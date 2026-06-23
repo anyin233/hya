@@ -45,6 +45,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -272,6 +273,7 @@ async fn shell_happy_and_cancelled() {
         skills: ctx.skills.clone(),
         websearch: ctx.websearch.clone(),
         lsp: ctx.lsp.clone(),
+        formatter: ctx.formatter.clone(),
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -302,6 +304,7 @@ async fn task_tool_is_lead_only() {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
@@ -329,6 +332,7 @@ async fn ask_user_select_returns_index_and_answer() {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
+        formatter: yaca_tool::FormatterPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
