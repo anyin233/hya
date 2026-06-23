@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -115,6 +117,11 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     assert_eq!(first["data"][0]["type"], "user");
 
     let cursor = first["cursor"]["next"].as_str().expect("next cursor");
+    let decoded: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(cursor).expect("cursor b64")).unwrap();
+    assert_eq!(decoded["id"], first["data"][0]["id"]);
+    assert_eq!(decoded["time"], first["data"][0]["time"]["created"]);
+
     let (status, second) = get_json(
         app.clone(),
         format!("/api/session/{session}/message?limit=1&cursor={cursor}"),

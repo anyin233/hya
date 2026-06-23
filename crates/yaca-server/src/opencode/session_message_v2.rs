@@ -38,6 +38,8 @@ enum CursorDirection {
 #[derive(Deserialize, Serialize)]
 struct MessageCursor {
     id: String,
+    #[serde(default)]
+    time: u64,
     order: MessageOrder,
     direction: CursorDirection,
 }
@@ -118,13 +120,11 @@ fn response_cursor(data: &[Value], order: MessageOrder) -> Result<ResponseCursor
     Ok(ResponseCursor {
         previous: data
             .first()
-            .and_then(message_id)
-            .map(|id| encode_cursor(id, order, CursorDirection::Previous))
+            .and_then(|message| encode_cursor_for(message, order, CursorDirection::Previous))
             .transpose()?,
         next: data
             .last()
-            .and_then(message_id)
-            .map(|id| encode_cursor(id, order, CursorDirection::Next))
+            .and_then(|message| encode_cursor_for(message, order, CursorDirection::Next))
             .transpose()?,
     })
 }
@@ -133,13 +133,36 @@ fn message_id(message: &Value) -> Option<&str> {
     message.get("id")?.as_str()
 }
 
+fn encode_cursor_for(
+    message: &Value,
+    order: MessageOrder,
+    direction: CursorDirection,
+) -> Option<Result<String, ApiError>> {
+    Some(encode_cursor(
+        message_id(message)?,
+        message_time(message),
+        order,
+        direction,
+    ))
+}
+
+fn message_time(message: &Value) -> u64 {
+    message
+        .get("time")
+        .and_then(|time| time.get("created"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
 fn encode_cursor(
     id: &str,
+    time: u64,
     order: MessageOrder,
     direction: CursorDirection,
 ) -> Result<String, ApiError> {
     let bytes = serde_json::to_vec(&MessageCursor {
         id: id.to_string(),
+        time,
         order,
         direction,
     })
