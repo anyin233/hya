@@ -131,6 +131,14 @@ async fn opencode_v2_context_completed_tool_content_matches_opencode_shape() {
         .expect("completed tool content");
     assert_eq!(content["provider"]["executed"], true);
     assert_eq!(content["state"]["outputPaths"], json!([]));
+
+    let time = &content["time"];
+    let created = time["created"].as_u64().expect("created time");
+    let ran = time["ran"].as_u64().expect("ran time");
+    let completed = time["completed"].as_u64().expect("completed time");
+    assert_ne!(created, 0);
+    assert!(ran >= created);
+    assert!(completed >= ran);
 }
 
 #[tokio::test]
