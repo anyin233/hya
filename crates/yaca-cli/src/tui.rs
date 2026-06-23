@@ -38,6 +38,7 @@ use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
 pub use self::mcp_view::connector_views as mcp_connector_views;
 use crate::config::ModelEntry;
+use crate::team_supervisor::TeamStatusUpdate;
 
 mod agent_cycle;
 mod agents;
@@ -62,6 +63,7 @@ mod question_input;
 mod reference;
 mod selection;
 mod session_fork;
+mod team_updates;
 
 use self::permission_input::handle_permission_key;
 use self::question_input::handle_question_key;
@@ -321,6 +323,7 @@ pub struct RunOptions {
     pub models: Vec<ModelEntry>,
     pub asks: mpsc::UnboundedReceiver<AskRequest>,
     pub questions: mpsc::UnboundedReceiver<QuestionRequest>,
+    pub team_updates: mpsc::UnboundedReceiver<TeamStatusUpdate>,
     pub mcp: Vec<ConnectorView>,
     pub initial_session: SessionId,
     pub initial_yolo: bool,
@@ -336,6 +339,7 @@ pub async fn run(
         models,
         mut asks,
         mut questions,
+        mut team_updates,
         mcp,
         initial_session,
         initial_yolo,
@@ -479,6 +483,11 @@ pub async fn run(
                     });
                 }
             }
+            maybe_team = team_updates.recv() => {
+                if let Some(update) = maybe_team {
+                    team_updates::apply(&mut controller.app, session, update);
+                }
+            }
             maybe = events.next() => match maybe {
                 Some(Ok(Event::Key(key))) if key.kind != KeyEventKind::Release => {
                     if controller.app.permission.is_some() {
@@ -567,6 +576,7 @@ pub async fn run(
                                 .await?
                                 {
                                     session = forked.session;
+                                    team_updates::clear(&mut controller.app);
                                     hydrated_sessions.insert(session);
                                     controller.app.projection = forked.projection;
                                     controller.app.session_label =
@@ -590,6 +600,7 @@ pub async fn run(
                                     .await
                                     .context("create new session")?;
                                 session = new_session;
+                                team_updates::clear(&mut controller.app);
                                 hydrated_sessions.insert(session);
                                 let _ = history.create_session(
                                     session,
@@ -621,6 +632,7 @@ pub async fn run(
                                         hydrated_sessions.insert(resume);
                                     }
                                     session = resume;
+                                    team_updates::clear(&mut controller.app);
                                     if let Some(meta) = meta_for(&history, &id) {
                                         agent.model = model_identity::apply_ref(&mut controller.app, &meta.model);
                                         controller.app.agent = meta.agent.clone();

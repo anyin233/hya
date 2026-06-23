@@ -12,6 +12,10 @@ fn ctrl_up() -> KeyEvent {
     KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL)
 }
 
+fn ctrl_n() -> KeyEvent {
+    KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)
+}
+
 #[tokio::test]
 async fn branch_key_forks_to_selected_user_block_when_a_block_is_selected() {
     let mut harness = DummyHarness::new(vec!["dummy"]).await;
@@ -26,6 +30,30 @@ async fn branch_key_forks_to_selected_user_block_when_a_block_is_selected() {
     let transcript = harness.transcript();
     assert!(transcript.contains("hello"));
     assert!(!transcript.contains("dummy response"));
+}
+
+#[tokio::test]
+async fn branch_key_clears_previous_session_team_state() {
+    let mut harness = DummyHarness::new(vec!["dummy"]).await;
+    harness.type_text("hello");
+    harness.press(key(KeyCode::Enter)).await;
+    harness.set_team(vec![("review".to_string(), "running".to_string())]);
+
+    harness.press(ctrl_up()).await;
+    harness.press(ctrl_up()).await;
+    harness.press(key(KeyCode::Char('b'))).await;
+
+    assert!(harness.team().is_empty());
+}
+
+#[tokio::test]
+async fn new_session_key_clears_previous_session_team_state() {
+    let mut harness = DummyHarness::new(vec!["dummy"]).await;
+    harness.set_team(vec![("review".to_string(), "running".to_string())]);
+
+    harness.press(ctrl_n()).await;
+
+    assert!(harness.team().is_empty());
 }
 
 #[tokio::test]

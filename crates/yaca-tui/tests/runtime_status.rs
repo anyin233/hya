@@ -151,11 +151,12 @@ fn runtime_status_compacts_no_model_tip_at_eighty_columns() {
 
 #[test]
 fn runtime_status_shows_subagent_view_hint_while_running() {
-    // Given: a running shell is streaming a turn.
+    // Given: a running shell is streaming a turn with an active subagent.
     let mut state = AppState {
         agent: "sisyphus".to_string(),
         model: "kimi-k2".to_string(),
         running: true,
+        team: vec![("explore".to_string(), "running".to_string())],
         ..AppState::default()
     };
 

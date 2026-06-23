@@ -76,7 +76,7 @@ impl DummyHarness {
         let router = ProviderRouter::new().with(Arc::new(provider));
         let store = SessionStore::connect_memory().await.expect("memory store");
         let model = models.first().copied().unwrap_or("dummy");
-        let (engine, _asks, _questions, _mcp_manager) =
+        let (engine, _asks, _questions, _team_updates, _mcp_manager) =
             crate::build_session_engine(store, router, model, std::collections::BTreeMap::new())
                 .await;
         let agent = crate::agent_with_model(model);
@@ -146,6 +146,14 @@ impl DummyHarness {
 
     pub fn input(&self) -> &str {
         &self.controller.app.input
+    }
+
+    pub fn set_team(&mut self, team: Vec<(String, String)>) {
+        self.controller.app.team = team;
+    }
+
+    pub fn team(&self) -> &[(String, String)] {
+        &self.controller.app.team
     }
 
     async fn apply_effect(&mut self, effect: TuiEffect) {
@@ -225,6 +233,7 @@ impl DummyHarness {
                 .expect("fork selected block")
                 {
                     self.session = forked.session;
+                    super::team_updates::clear(&mut self.controller.app);
                     self.controller.app.projection = forked.projection;
                     self.controller.app.session_label =
                         self.session.to_string().chars().take(12).collect();
@@ -234,13 +243,45 @@ impl DummyHarness {
                     self.controller.app.selected_message = None;
                 }
             }
+            TuiEffect::NewSession => {
+                let new_session = self
+                    .engine
+                    .create(CreateSession {
+                        parent: None,
+                        agent: self.agent.name.clone(),
+                        model: self.agent.model.clone(),
+                        workdir: self.agent.workdir.to_string_lossy().into_owned(),
+                    })
+                    .await
+                    .expect("create new harness session");
+                self.session = new_session;
+                super::team_updates::clear(&mut self.controller.app);
+                self.history
+                    .create_session(
+                        self.session,
+                        self.agent.model.as_str(),
+                        self.agent.name.as_str(),
+                        &self.agent.workdir.to_string_lossy(),
+                    )
+                    .expect("create new harness history");
+                self.controller.app.projection = self
+                    .engine
+                    .read_projection(self.session)
+                    .await
+                    .expect("read new projection");
+                self.controller.app.session_label =
+                    self.session.to_string().chars().take(12).collect();
+                self.controller.app.input.clear();
+                self.controller.app.scroll_back = 0;
+                self.controller.app.running = false;
+                self.controller.app.selected_message = None;
+            }
             TuiEffect::Exit
             | TuiEffect::Interrupt
             | TuiEffect::ResumeSession(_)
             | TuiEffect::CompactTranscript
             | TuiEffect::InitProject
-            | TuiEffect::ExportTranscript
-            | TuiEffect::NewSession => {}
+            | TuiEffect::ExportTranscript => {}
         }
     }
 }

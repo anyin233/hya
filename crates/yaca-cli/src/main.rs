@@ -11,6 +11,7 @@ mod config;
 mod permission;
 mod rpc;
 mod skills;
+mod team_supervisor;
 mod tui;
 
 use std::collections::BTreeMap;
@@ -23,22 +24,23 @@ use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 use yaca_core::completion::render_transcript;
 use yaca_core::{
-    AgentSpec, CompactionConfig, CreateSession, EventBus, GoalEvaluator, MemberSpec, MemberStatus,
-    ModelGoalEvaluator, ModelSummarizer, PromptEnv, SafetyCaps, SessionEngine, Summarizer,
-    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_goal, run_team,
+    AgentSpec, CompactionConfig, CreateSession, EventBus, GoalEvaluator, ModelGoalEvaluator,
+    ModelSummarizer, PromptEnv, SafetyCaps, SessionEngine, Summarizer, build_system_prompt,
+    run_goal,
 };
-use yaca_proto::{AgentName, MemberId, ModelRef, SessionId};
+use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
 use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
+    Action, AskRequest, InteractionPlane, Mode, PermissionPlane, PermissionRules, QuestionRequest,
+    Rule, SpawnerPlane, ToolRegistry,
 };
 
 use yaca_mcp::{McpManager, McpServerConfig};
 
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
+use crate::team_supervisor::{TeamStatusUpdate, spawn_team_supervisor};
 
 #[derive(Parser)]
 #[command(
@@ -190,47 +192,6 @@ fn compaction_config() -> CompactionConfig {
     }
 }
 
-fn spawn_team_supervisor(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<SpawnRequest>,
-    engine: Arc<SessionEngine>,
-    base: AgentSpec,
-) {
-    tokio::spawn(async move {
-        while let Some(req) = rx.recv().await {
-            let engine = engine.clone();
-            let specs: Vec<MemberSpec> = req
-                .members
-                .into_iter()
-                .map(|m| MemberSpec {
-                    id: MemberId::new(),
-                    agent: base.clone(),
-                    directive: m.prompt,
-                })
-                .collect();
-            tokio::spawn(async move {
-                let evidence = run_team(engine.clone(), req.parent, specs, req.cancel).await;
-                let envelope = TeamEvidenceEnvelope {
-                    members: evidence.clone(),
-                };
-                let _ = project_envelope(&engine, req.parent, &envelope).await;
-                let outcomes: Vec<MemberOutcome> = evidence
-                    .into_iter()
-                    .map(|e| MemberOutcome {
-                        member: e.member,
-                        session: e.session,
-                        status: match e.status {
-                            MemberStatus::Done => "done".to_string(),
-                            MemberStatus::Failed => "failed".to_string(),
-                        },
-                        summary: e.summary,
-                    })
-                    .collect();
-                let _ = req.reply.send(outcomes);
-            });
-        }
-    });
-}
-
 async fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
@@ -240,6 +201,7 @@ async fn build_session_engine(
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
+    tokio::sync::mpsc::UnboundedReceiver<TeamStatusUpdate>,
     McpManager,
 ) {
     let router = Arc::new(router);
@@ -259,6 +221,7 @@ async fn build_session_engine(
     let (permission, asks) = PermissionPlane::new(rules);
     let (interaction, questions) = InteractionPlane::new();
     let (spawner, spawn_rx) = SpawnerPlane::new();
+    let (team_tx, team_updates) = tokio::sync::mpsc::unbounded_channel();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let engine = Arc::new(
@@ -267,8 +230,8 @@ async fn build_session_engine(
             .with_interaction(interaction)
             .with_spawner(spawner),
     );
-    spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
-    (engine, asks, questions, mcp_manager)
+    spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model), team_tx);
+    (engine, asks, questions, team_updates, mcp_manager)
 }
 
 fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
@@ -365,7 +328,7 @@ async fn cmd_exec(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
+    let (engine, asks, _, _team_updates, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -409,7 +372,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
+    let (engine, asks, _, _team_updates, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -464,7 +427,7 @@ async fn cmd_goal(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override);
     let evaluator_router = runtime.router.clone();
-    let (engine, asks, _, _mcp_manager) =
+    let (engine, asks, _, _team_updates, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
     let agent = agent_with_model(&runtime.model);
     let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
@@ -520,7 +483,7 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, mcp_manager) =
+    let (engine, asks, questions, team_updates, mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
     let mcp = tui::mcp_connector_views(mcp_manager.statuses());
     let agent = agent_with_model(&runtime.model);
@@ -548,6 +511,7 @@ async fn cmd_tui(
             models: runtime.models,
             asks,
             questions,
+            team_updates,
             mcp,
             initial_session: session,
             initial_yolo: yolo,
@@ -564,7 +528,7 @@ async fn cmd_serve(
 ) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
-    let (engine, asks, _, _mcp_manager) =
+    let (engine, asks, _, _team_updates, _mcp_manager) =
         build_session_engine(store, runtime.router, &runtime.model, runtime.mcp).await;
     let policy = if yolo {
         eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
@@ -593,7 +557,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session = SessionId::from_uuid(uuid);
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _, _mcp_manager) =
+    let (engine, _asks, _, _team_updates, _mcp_manager) =
         build_session_engine(store, router, &model, BTreeMap::new()).await;
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
