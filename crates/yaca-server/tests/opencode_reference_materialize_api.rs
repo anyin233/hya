@@ -86,6 +86,11 @@ fn init_remote(root: &Path) -> PathBuf {
     git(&source, &["add", "README.md"]);
     git(&source, &["commit", "-m", "init"]);
     git(&source, &["branch", "-M", "main"]);
+    git(&source, &["checkout", "-b", "feature"]);
+    std::fs::write(source.join("README.md"), "feature\n").unwrap();
+    git(&source, &["add", "README.md"]);
+    git(&source, &["commit", "-m", "feature"]);
+    git(&source, &["checkout", "main"]);
     let output = Command::new("git")
         .arg("clone")
         .arg("--bare")
@@ -140,6 +145,16 @@ async fn wait_for_file(path: &Path) {
     panic!("reference repository was not materialized");
 }
 
+async fn wait_for_content(path: &Path, expected: &str) {
+    for _ in 0..100 {
+        if std::fs::read_to_string(path).is_ok_and(|content| content == expected) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("reference repository content did not refresh");
+}
+
 #[tokio::test]
 async fn opencode_reference_materializes_git_repository_cache() {
     if !git_available() {
@@ -172,7 +187,7 @@ async fn opencode_reference_materializes_git_repository_cache() {
         }),
     )
     .await;
-    let references = request_json(app, Method::GET, "/api/reference", Value::Null).await;
+    let references = request_json(app.clone(), Method::GET, "/api/reference", Value::Null).await;
     let path = references["data"][0]["path"].as_str().unwrap();
     assert_eq!(
         path,
@@ -181,9 +196,28 @@ async fn opencode_reference_materializes_git_repository_cache() {
             .to_string_lossy()
     );
 
-    wait_for_file(&PathBuf::from(path).join("README.md")).await;
+    let readme = PathBuf::from(path).join("README.md");
+    wait_for_file(&readme).await;
+    assert_eq!(std::fs::read_to_string(&readme).unwrap(), "hello\n");
+
+    request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        json!({
+            "references": {
+                "localrepo": {
+                    "repository": "owner/repo",
+                    "branch": "feature"
+                }
+            }
+        }),
+    )
+    .await;
+    request_json(app, Method::GET, "/api/reference", Value::Null).await;
+    wait_for_content(&readme, "feature\n").await;
     assert_eq!(
         std::fs::read_to_string(PathBuf::from(path).join("README.md")).unwrap(),
-        "hello\n"
+        "feature\n"
     );
 }
