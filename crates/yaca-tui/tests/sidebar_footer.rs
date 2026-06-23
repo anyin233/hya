@@ -109,6 +109,24 @@ fn context_rail_footer_shows_getting_started_until_provider_exists() {
 }
 
 #[test]
+fn context_rail_footer_omits_getting_started_at_threshold_height() {
+    // Given: a compact wide context rail without a configured provider.
+    let mut state = AppState::default();
+    with_session(&mut state, "/tmp/yaca-footer");
+
+    // When: the rail renders at the threshold where onboarding would crowd the footer.
+    let buffer = render_buffer(&mut state, 124, 32);
+
+    // Then: yaca keeps the OpenCode footer anchored and omits the onboarding card.
+    assert!(row_containing(&buffer, 124, 32, "Getting started").is_none());
+    assert_eq!(
+        row_containing(&buffer, 124, 32, "/tmp/yaca-footer"),
+        Some(30)
+    );
+    assert_eq!(row_containing(&buffer, 124, 32, "yaca 0.0.0"), Some(31));
+}
+
+#[test]
 fn context_rail_footer_emphasizes_workdir_name_like_opencode() {
     // Given: a wide context rail with a worktree path and branch.
     let mut state = AppState {

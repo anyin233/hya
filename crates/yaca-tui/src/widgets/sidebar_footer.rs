@@ -7,7 +7,7 @@ use crate::AppState;
 use crate::theme::Theme;
 
 const FOOTER_PADDING_WIDTH: usize = 2;
-const GETTING_STARTED_MIN_HEIGHT: u16 = 32;
+const GETTING_STARTED_MIN_HEIGHT: u16 = 33;
 
 pub fn sidebar_footer_lines(
     state: &AppState,
