@@ -1,13 +1,15 @@
 use std::path::Path;
 
 use crate::apply_patch::parse::{Hunk, UpdateChunk};
+use crate::file_diff;
 use crate::tool::ToolError;
 use crate::utf8_bom;
 
 #[derive(Clone, Copy)]
 pub(crate) enum FileAction {
     Add,
-    Modify,
+    Update,
+    Move,
     Delete,
 }
 
@@ -15,7 +17,16 @@ impl FileAction {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             FileAction::Add => "add",
-            FileAction::Modify => "modify",
+            FileAction::Update | FileAction::Move => "modify",
+            FileAction::Delete => "delete",
+        }
+    }
+
+    pub(crate) fn opencode_type(self) -> &'static str {
+        match self {
+            FileAction::Add => "add",
+            FileAction::Update => "update",
+            FileAction::Move => "move",
             FileAction::Delete => "delete",
         }
     }
@@ -23,15 +34,17 @@ impl FileAction {
     fn marker(self) -> &'static str {
         match self {
             FileAction::Add => "A",
-            FileAction::Modify => "M",
+            FileAction::Update | FileAction::Move => "M",
             FileAction::Delete => "D",
         }
     }
 }
 
 pub(crate) struct FileSummary {
+    pub source_path: String,
     pub path: String,
     pub action: FileAction,
+    pub patch: String,
     pub additions: usize,
     pub deletions: usize,
     pub bom: bool,
@@ -48,24 +61,30 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
         Hunk::Add { path, contents } => {
             let target = workdir.join(&path);
             let (bom, contents) = utf8_bom::split(&contents);
+            let diff = file_diff::create(&target, "", contents);
             write_with_parent(&target, contents, bom).await?;
             Ok(FileSummary {
+                source_path: path.clone(),
                 path,
                 action: FileAction::Add,
-                additions: contents.lines().count(),
-                deletions: 0,
+                patch: diff.patch,
+                additions: diff.additions,
+                deletions: diff.deletions,
                 bom,
             })
         }
         Hunk::Delete { path } => {
             let target = workdir.join(&path);
             let (bom, old) = utf8_bom::read_text(&target).await?;
+            let diff = file_diff::create(&target, &old, "");
             tokio::fs::remove_file(&target).await?;
             Ok(FileSummary {
+                source_path: path.clone(),
                 path,
                 action: FileAction::Delete,
-                additions: 0,
-                deletions: old.lines().count(),
+                patch: diff.patch,
+                additions: diff.additions,
+                deletions: diff.deletions,
                 bom,
             })
         }
@@ -77,8 +96,7 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
             let target = workdir.join(&path);
             let (source_has_bom, old) = utf8_bom::read_text(&target).await?;
             let new = derive_new_contents(&path, &old, source_has_bom, &chunks)?;
-            let additions = count_added_lines(&old, &new.text);
-            let deletions = count_deleted_lines(&old, &new.text);
+            let diff = file_diff::create(&target, &old, &new.text);
             let final_path = move_path.as_deref().unwrap_or(&path);
             let final_target = workdir.join(final_path);
             write_with_parent(&final_target, &new.text, new.bom).await?;
@@ -86,10 +104,16 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
                 tokio::fs::remove_file(&target).await?;
             }
             Ok(FileSummary {
+                source_path: path.clone(),
                 path: final_path.to_string(),
-                action: FileAction::Modify,
-                additions,
-                deletions,
+                action: if move_path.is_some() {
+                    FileAction::Move
+                } else {
+                    FileAction::Update
+                },
+                patch: diff.patch,
+                additions: diff.additions,
+                deletions: diff.deletions,
                 bom: new.bom,
             })
         }
@@ -239,12 +263,4 @@ where
         .iter()
         .enumerate()
         .all(|(offset, expected)| matches(&lines[start + offset], expected))
-}
-
-fn count_added_lines(old: &str, new: &str) -> usize {
-    new.lines().count().saturating_sub(old.lines().count())
-}
-
-fn count_deleted_lines(old: &str, new: &str) -> usize {
-    old.lines().count().saturating_sub(new.lines().count())
 }

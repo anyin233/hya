@@ -103,6 +103,57 @@ async fn apply_patch_adds_updates_moves_and_deletes_files() {
     assert!(out["output"].as_str().unwrap().contains("A notes/todo.txt"));
     assert!(out["output"].as_str().unwrap().contains("M src/main.txt"));
     assert!(out["output"].as_str().unwrap().contains("D remove.txt"));
+    assert_eq!(out["title"], out["output"]);
+    assert!(
+        out["metadata"]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("ship apply_patch")
+    );
+    assert!(
+        out["metadata"]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("obsolete")
+    );
+
+    let files = out["metadata"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 4);
+    let add = files
+        .iter()
+        .find(|file| file["relativePath"] == "notes/todo.txt")
+        .unwrap();
+    assert_eq!(
+        add["filePath"],
+        dir.join("notes/todo.txt").to_string_lossy().as_ref()
+    );
+    assert_eq!(add["type"], "add");
+    assert!(add["patch"].as_str().unwrap().contains("ship apply_patch"));
+
+    let updated = files
+        .iter()
+        .find(|file| file["relativePath"] == "src/app.txt")
+        .unwrap();
+    assert_eq!(updated["type"], "update");
+    assert!(updated["patch"].as_str().unwrap().contains("old"));
+
+    let moved = files
+        .iter()
+        .find(|file| file["relativePath"] == "src/main.txt")
+        .unwrap();
+    assert_eq!(moved["type"], "move");
+    assert_eq!(
+        moved["movePath"],
+        dir.join("src/main.txt").to_string_lossy().as_ref()
+    );
+    assert!(moved["patch"].is_string());
+
+    let deleted = files
+        .iter()
+        .find(|file| file["relativePath"] == "remove.txt")
+        .unwrap();
+    assert_eq!(deleted["type"], "delete");
+    assert!(deleted["patch"].as_str().unwrap().contains("obsolete"));
 }
 
 #[tokio::test]

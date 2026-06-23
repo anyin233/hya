@@ -104,22 +104,46 @@ impl Tool for ApplyPatchTool {
                 &diagnostics,
             );
         }
-        let files: Vec<Value> = summaries
-            .into_iter()
-            .map(|summary| {
-                json!({
-                    "path": summary.path,
-                    "action": summary.action.as_str(),
-                    "additions": summary.additions,
-                    "deletions": summary.deletions,
-                })
-            })
-            .collect();
+        let diff = summaries.iter().fold(String::new(), |mut out, summary| {
+            out.push_str(&summary.patch);
+            if !summary.patch.ends_with('\n') {
+                out.push('\n');
+            }
+            out
+        });
+        let mut files = Vec::with_capacity(summaries.len());
+        let mut metadata_files = Vec::with_capacity(summaries.len());
+        for summary in &summaries {
+            let source = resolve_workdir_path(&ctx.workdir, &summary.source_path)?;
+            let target = resolve_workdir_path(&ctx.workdir, &summary.path)?;
+            let relative = target.strip_prefix(&ctx.workdir).unwrap_or(&target);
+            files.push(json!({
+                "path": summary.path.clone(),
+                "action": summary.action.as_str(),
+                "additions": summary.additions,
+                "deletions": summary.deletions,
+            }));
+            let mut metadata_file = json!({
+                "filePath": display_path(&source),
+                "relativePath": display_path(relative),
+                "type": summary.action.opencode_type(),
+                "patch": summary.patch.clone(),
+                "additions": summary.additions,
+                "deletions": summary.deletions,
+            });
+            if matches!(summary.action, apply::FileAction::Move) {
+                metadata_file["movePath"] = json!(display_path(&target));
+            }
+            metadata_files.push(metadata_file);
+        }
         Ok(json!({
             "ok": true,
+            "title": output,
             "output": output,
             "files": files,
             "metadata": {
+                "diff": diff,
+                "files": metadata_files,
                 "diagnostics": diagnostics,
             },
         }))
