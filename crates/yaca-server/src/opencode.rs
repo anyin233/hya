@@ -17,6 +17,7 @@ mod integration;
 mod location;
 mod mcp;
 mod mcp_state;
+mod message_context_parts;
 mod message_parts;
 mod message_projection;
 mod metadata;

@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use yaca_proto::{AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
 
+use super::message_context_parts::prompt_attachment_parts;
 use super::message_parts::{OpenCodePartContext, opencode_part};
 
 #[derive(Clone, Debug, Serialize)]
@@ -145,14 +146,13 @@ pub(super) fn opencode_message(
         Role::Assistant => assistant_info(session, message, context, parent),
         Role::User | Role::System => user_or_system_info(session, message, context),
     };
-    OpenCodeMessage {
-        info,
-        parts: message
-            .parts
-            .iter()
-            .map(|part| opencode_part(session, message.id, part, context.parts()))
-            .collect(),
-    }
+    let mut parts = message
+        .parts
+        .iter()
+        .map(|part| opencode_part(session, message.id, part, context.parts()))
+        .collect::<Vec<_>>();
+    parts.extend(prompt_attachment_parts(session, message));
+    OpenCodeMessage { info, parts }
 }
 
 fn user_or_system_info(
