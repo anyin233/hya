@@ -31,6 +31,7 @@ mod pty;
 mod pty_payload;
 mod pty_state;
 mod question;
+mod reference;
 mod session_context;
 mod session_context_messages;
 mod session_context_tool_state;

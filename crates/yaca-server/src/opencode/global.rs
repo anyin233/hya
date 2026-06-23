@@ -24,7 +24,7 @@ impl GlobalState {
         }
     }
 
-    async fn config(&self) -> Value {
+    pub(in crate::opencode) async fn config(&self) -> Value {
         self.config.read().await.clone()
     }
 
