@@ -19,14 +19,16 @@ pub(in crate::opencode) async fn list(st: &ServerState) -> Vec<Value> {
         return Vec::new();
     };
     let base = super::location::workdir(st);
-    entries
+    let references = entries
         .iter()
         .filter_map(|(name, entry)| {
             valid_alias(name)
                 .then(|| reference(name, entry, &base))
                 .flatten()
         })
-        .collect()
+        .collect::<Vec<_>>();
+    materialize_git(&references);
+    references
 }
 
 pub(in crate::opencode) async fn external_directories(st: &ServerState) -> Vec<PathBuf> {
@@ -165,6 +167,28 @@ fn git_reference(
         branch.map_or(Value::Null, |branch| json!(branch)),
     );
     reference_value(name, &path, description, hidden, source)
+}
+
+fn materialize_git(references: &[Value]) {
+    for reference in references {
+        let (Some(path), Some(source)) = (
+            reference.get("path").and_then(Value::as_str),
+            reference.get("source").and_then(Value::as_object),
+        ) else {
+            continue;
+        };
+        if source.get("type").and_then(Value::as_str) != Some("git") {
+            continue;
+        }
+        let Some(repository) = source.get("repository").and_then(Value::as_str) else {
+            continue;
+        };
+        super::reference_repository::materialize(
+            repository,
+            source.get("branch").and_then(Value::as_str),
+            PathBuf::from(path),
+        );
+    }
 }
 
 fn reference_value(
