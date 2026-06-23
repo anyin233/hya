@@ -5,6 +5,7 @@ use crate::ServerState;
 mod agent_catalog;
 mod agent_defaults;
 mod agent_disk_sources;
+mod agent_native_prompts;
 mod agent_options;
 mod agent_permission;
 mod agent_permission_config;
