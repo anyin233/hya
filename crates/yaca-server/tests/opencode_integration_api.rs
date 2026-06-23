@@ -150,13 +150,24 @@ async fn opencode_v2_reference_route_lists_configured_local_references() {
     let (status, references) = get_json(app, "/api/reference").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(references["data"].as_array().unwrap().len(), 1);
-    let docs = &references["data"][0];
+    let data = references["data"].as_array().unwrap();
+    assert_eq!(data.len(), 2);
+    let docs = data.iter().find(|item| item["name"] == "docs").unwrap();
     assert_eq!(docs["name"], "docs");
     assert_eq!(docs["description"], "Project docs");
     assert_eq!(docs["hidden"], true);
     assert_eq!(docs["source"]["type"], "local");
     assert!(docs["path"].as_str().unwrap().ends_with("/docs"));
+    let effect = data.iter().find(|item| item["name"] == "effect").unwrap();
+    assert_eq!(effect["source"]["type"], "git");
+    assert_eq!(effect["source"]["repository"], "Effect-TS/effect");
+    assert!(
+        effect["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/Effect-TS/effect")
+    );
+    assert!(data.iter().all(|item| item["name"] != "bad/name"));
 }
 
 #[tokio::test]
