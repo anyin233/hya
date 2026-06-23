@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::sidebar_agents::push_agents;
 use super::sidebar_files::push_files;
@@ -12,6 +13,8 @@ use crate::AppState;
 use crate::theme::Theme;
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
+const CONNECTOR_ROW_WIDTH: usize = 38;
+const CONNECTOR_MIN_NAME_WIDTH: usize = 8;
 
 pub fn sidebar_lines(state: &AppState, theme: &Theme) -> Vec<Line<'static>> {
     let stats = transcript_stats(state);
@@ -186,10 +189,38 @@ pub(super) fn meta(text: impl Into<String>, color: Color) -> Line<'static> {
 }
 
 fn connector_line(name: &str, status: &str, marker: Color, theme: &Theme) -> Line<'static> {
+    let status = fit_cell(
+        status,
+        CONNECTOR_ROW_WIDTH.saturating_sub(CONNECTOR_MIN_NAME_WIDTH + 1),
+    );
+    let status_width = UnicodeWidthStr::width(status.as_str());
+    let name_width = CONNECTOR_ROW_WIDTH.saturating_sub(status_width.saturating_add(1));
+    let name = fit_cell(name, name_width);
     Line::from(vec![
         Span::styled("  • ", Style::default().fg(marker)),
-        Span::styled(name.to_string(), Style::default().fg(theme.text)),
+        Span::styled(name, Style::default().fg(theme.text)),
         Span::raw(" "),
-        Span::styled(status.to_string(), Style::default().fg(theme.muted)),
+        Span::styled(status, Style::default().fg(theme.muted)),
     ])
+}
+
+fn fit_cell(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if width + ch_width > max_width - 1 {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }

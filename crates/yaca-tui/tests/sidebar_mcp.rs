@@ -112,3 +112,29 @@ fn context_rail_renders_opencode_mcp_error_states() {
     assert!(text.contains("broken spawn failed"));
     assert_eq!(buffer[(broken.0, broken.1)].fg, Color::Rgb(224, 108, 117));
 }
+
+#[test]
+fn context_rail_preserves_mcp_status_for_long_connector_names() {
+    // Given: a connector name is longer than the OpenCode context rail width.
+    let mut state = AppState {
+        mcp: vec![ConnectorView {
+            name: "very-long-linear-server-connector-name".to_string(),
+            state: ConnectorState::NeedsAuth,
+        }],
+        ..AppState::default()
+    };
+
+    // When: the connector row renders in the fixed-width sidebar.
+    let buffer = render_buffer(&mut state, 124, 28);
+    let text = buffer_text(&buffer, 124, 28);
+
+    // Then: the name truncates instead of pushing the accessible status label out of view.
+    assert!(
+        text.contains("Needs auth"),
+        "long connector names should preserve the status label:\n{text}"
+    );
+    assert!(
+        text.contains("very-long-linear") && text.contains("…"),
+        "long connector names should show an explicit truncation marker:\n{text}"
+    );
+}
