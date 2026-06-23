@@ -5,6 +5,22 @@ use render_support::{render, with_assistant_message};
 use yaca_tui::{AppState, ConnectorState, ConnectorView, PermissionPrompt, PermissionPromptStage};
 
 #[test]
+fn default_footer_includes_opencode_build_mode_label() {
+    // Given: the default prompt footer is in OpenCode's normal build mode.
+    let mut state = AppState::default();
+
+    // When: the footer statusline renders.
+    let text = render(&mut state, 100, 16);
+    let bottom_row = text.lines().last().unwrap_or_default();
+
+    // Then: the left side starts with OpenCode's mode label instead of raw status.
+    assert!(
+        bottom_row.contains("BUILD · • 0 LSP"),
+        "footer should include the OpenCode BUILD mode label, got {bottom_row:?}"
+    );
+}
+
+#[test]
 fn default_footer_omits_legacy_navigation_hints() {
     // Given: the default OpenCode-style shell is idle.
     let mut state = AppState::default();

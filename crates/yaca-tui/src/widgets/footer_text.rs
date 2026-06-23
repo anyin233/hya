@@ -5,28 +5,39 @@ use super::sidebar_format::workdir_label;
 const SIDEBAR_BREAKPOINT: u16 = 120;
 
 pub(super) fn footer_left_text(state: &AppState, width: u16) -> String {
+    let mode = if state.exit_armed { "EXIT" } else { "BUILD" };
     if state.permission.is_some() {
-        return "△ 1 Permission".to_string();
+        return with_mode(mode, "△ 1 Permission");
     }
     if state.question.is_some() {
-        return default_footer_text(state, width);
+        return with_mode(mode, default_footer_text(state, width));
     }
     if state.scroll_back > 0 {
-        return format!(
-            "scroll {} · end to return · ctrl+c clear/interrupt",
-            state.scroll_back
+        return with_mode(
+            mode,
+            format!(
+                "scroll {} · end to return · ctrl+c clear/interrupt",
+                state.scroll_back
+            ),
         );
     }
     if state.exit_armed {
-        return "ctrl+c again to exit · type to cancel".to_string();
+        return with_mode(mode, "ctrl+c again to exit · type to cancel");
     }
     if state.yolo {
-        return "YOLO mode · /yolo disables auto-allow · / commands · @ references".to_string();
+        return with_mode(
+            mode,
+            "YOLO mode · /yolo disables auto-allow · / commands · @ references",
+        );
     }
     if state.goal.is_some() || state.loop_view.is_some() {
-        return runtime_footer_text(state);
+        return with_mode(mode, runtime_footer_text(state));
     }
-    default_footer_text(state, width)
+    with_mode(mode, default_footer_text(state, width))
+}
+
+fn with_mode(mode: &str, text: impl Into<String>) -> String {
+    format!("{mode} · {}", text.into())
 }
 
 fn runtime_footer_text(state: &AppState) -> String {
