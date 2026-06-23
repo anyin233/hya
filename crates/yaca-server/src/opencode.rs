@@ -47,6 +47,7 @@ mod session_revert;
 mod session_share;
 mod session_summarize;
 mod session_switch;
+mod session_unavailable;
 mod session_update;
 mod session_v2;
 mod session_v2_cursor;
