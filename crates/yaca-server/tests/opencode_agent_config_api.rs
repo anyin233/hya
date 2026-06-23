@@ -99,6 +99,9 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     std::fs::write(
         workdir.join("opencode.jsonc"),
         r##"{
+  "permissions": [
+    { "action": "todowrite", "resource": "*", "effect": "deny" }
+  ],
   "agent": {
     "architect": {
       "description": "Architecture reviewer",
@@ -206,6 +209,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(triage["mode"], "primary");
     assert_eq!(triage["model"]["providerID"], "anthropic");
     assert_eq!(triage["model"]["modelID"], "claude-sonnet");
+    assert_global_permissions(&triage["permission"]);
     assert_eq!(created["data"]["agent"], "triage");
 
     let api_agents = &api_agents["data"];
@@ -222,12 +226,22 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(architect["request"]["body"]["reasoning_effort"], "high");
     assert_agent_permissions(&architect["permissions"]);
     assert_eq!(find_agent(api_agents, "plan")["steps"], 7);
-    assert_eq!(find_agent(api_agents, "triage")["mode"], "primary");
+    let triage = find_agent(api_agents, "triage");
+    assert_eq!(triage["mode"], "primary");
+    assert_global_permissions(&triage["permissions"]);
     assert!(agent_named(api_agents, "summary").is_none());
+}
+
+fn assert_global_permissions(permissions: &Value) {
+    let permissions = permissions.as_array().unwrap();
+    assert!(permissions.contains(
+        &serde_json::json!({"permission": "todowrite", "pattern": "*", "action": "deny"})
+    ));
 }
 
 fn assert_agent_permissions(permissions: &Value) {
     let permissions = permissions.as_array().unwrap();
+    assert_global_permissions(&Value::Array(permissions.clone()));
     assert!(permissions.contains(
         &serde_json::json!({"permission": "read", "pattern": "docs/**", "action": "allow"})
     ));
