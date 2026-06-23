@@ -106,6 +106,7 @@ pub(crate) enum Command {
         token: String,
     },
     /// Inspect or remove saved provider auth tokens.
+    #[command(alias = "providers")]
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -275,6 +276,17 @@ mod tests {
                 assert!(refresh);
             }
             _ => panic!("expected models command"),
+        }
+    }
+
+    #[test]
+    fn parses_opencode_providers_alias_for_auth_list() {
+        let cli = parse(["yaca", "providers", "list"]);
+        match cli.command {
+            Some(super::Command::Auth {
+                command: crate::auth_cmd::AuthCommand::List,
+            }) => {}
+            _ => panic!("expected auth list command"),
         }
     }
 }
