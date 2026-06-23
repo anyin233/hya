@@ -141,7 +141,7 @@ fn model_dialog_ctrl_a_opens_provider_list() {
 
 #[test]
 fn provider_dialog_enter_opens_filtered_model_list() {
-    // Given: OpenCode returns to the selected provider's model list after provider setup.
+    // Given: OpenCode returns to the current provider's model list after provider setup.
     let mut controller = Controller::with_models_and_sessions(
         AppState {
             model: "gpt-5".to_string(),
@@ -169,44 +169,53 @@ fn provider_dialog_enter_opens_filtered_model_list() {
         Vec::new(),
     );
 
-    // When: the user opens /connect and selects the first configured provider.
+    // When: the user opens /connect and confirms the default provider row.
     type_text(&mut controller, "/connect");
     assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+    assert_eq!(
+        controller
+            .app
+            .dialog
+            .as_ref()
+            .expect("provider dialog")
+            .selected,
+        1,
+        "current provider should be selected by default"
+    );
     assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
 
-    // Then: yaca drills into that provider's filtered model list.
+    // Then: yaca drills into the current provider's filtered model list.
     let dialog = controller
         .app
         .dialog
         .as_ref()
         .expect("provider model dialog");
-    assert_eq!(dialog.title, "anthropic");
+    assert_eq!(dialog.title, "openai");
     assert_eq!(dialog.subtitle, "select a model from this provider");
     let labels = dialog
         .items
         .iter()
         .map(|item| item.label.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(labels, vec!["claude-sonnet", "gpt-5"]);
-    assert_eq!(dialog.selected, 0);
-    assert_eq!(dialog.items[1].detail, "anthropic");
+    assert_eq!(labels, vec!["gpt-4o", "gpt-5"]);
+    assert_eq!(dialog.selected, 1);
+    assert_eq!(dialog.items[1].detail, "openai · current");
 
-    // When: the user confirms the second filtered model.
-    assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+    // When: the user confirms the current filtered model.
     let effect = controller.handle_key(key(KeyCode::Enter));
 
-    // Then: the selected model keeps the filtered provider identity.
+    // Then: the selected model keeps the current provider identity.
     assert_eq!(
         effect,
         TuiEffect::SelectModel {
             model: "gpt-5".to_string(),
-            provider: Some("anthropic".to_string()),
+            provider: Some("openai".to_string()),
         }
     );
     assert_eq!(controller.app.model, "gpt-5");
     assert_eq!(
         controller.app.model_provider_label.as_deref(),
-        Some("anthropic")
+        Some("openai")
     );
 }
 

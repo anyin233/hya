@@ -76,11 +76,16 @@ impl Controller {
                 })
                 .collect()
         };
+        let current_provider = self.app.model_provider_label.as_deref();
+        let selected = items
+            .iter()
+            .position(|item| Some(item.label.as_str()) == current_provider)
+            .unwrap_or(0);
         self.app.dialog = Some(DialogView {
             title: "Connect a provider".to_string(),
             subtitle: "select or configure an AI provider".to_string(),
             items,
-            selected: 0,
+            selected,
         });
         self.dialog_mode = Some(DialogMode::Provider);
     }
