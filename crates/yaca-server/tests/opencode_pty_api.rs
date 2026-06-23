@@ -78,6 +78,31 @@ async fn request_with_connect_header(
     (status, value)
 }
 
+async fn request_token_with_origin(
+    app: axum::Router,
+    uri: &str,
+    origin: &str,
+    host: &str,
+) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("x-opencode-ticket", "1")
+                .header("origin", origin)
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, value)
+}
+
 #[tokio::test]
 async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
     let app = router(state().await);
@@ -215,6 +240,33 @@ async fn opencode_v2_pty_routes_wrap_location_and_manage_session_metadata() {
         request(app, "POST", "/api/pty/pty_missing/connect-token", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(forbidden["_tag"], "ForbiddenError");
+}
+
+#[tokio::test]
+async fn opencode_pty_connect_token_rejects_cross_origin_requests() {
+    let app = router(state().await);
+    let (status, created) = request(
+        app.clone(),
+        "POST",
+        "/api/pty",
+        Some(json!({"command": "/bin/sh", "args": ["-c", "sleep 30"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = created["data"]["id"].as_str().unwrap();
+
+    let (status, forbidden) = request_token_with_origin(
+        app.clone(),
+        &format!("/api/pty/{id}/connect-token"),
+        "https://evil.example",
+        "127.0.0.1:3000",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(forbidden["_tag"], "ForbiddenError");
+
+    let (status, _) = request(app, "DELETE", &format!("/api/pty/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]

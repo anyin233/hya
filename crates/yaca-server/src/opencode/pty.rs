@@ -145,6 +145,7 @@ async fn connect_token_response(
 ) -> Response {
     if headers.get(CONNECT_TOKEN_HEADER)
         != Some(&HeaderValue::from_static(CONNECT_TOKEN_HEADER_VALUE))
+        || !allowed_request_origin(headers)
     {
         return forbidden();
     }
@@ -172,6 +173,48 @@ fn running_only(items: Vec<PtyInfo>) -> Vec<PtyInfo> {
 
 fn running(info: Option<PtyInfo>) -> Option<PtyInfo> {
     info.filter(|info| info.status == "running")
+}
+
+fn allowed_request_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = header_str(headers, "origin") else {
+        return true;
+    };
+    if header_str(headers, "host").is_some_and(|host| same_host(origin, host)) {
+        return true;
+    }
+    allowed_cors_origin(origin)
+}
+
+fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn same_host(origin: &str, host: &str) -> bool {
+    origin
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split('/').next())
+        == Some(host)
+}
+
+fn allowed_cors_origin(origin: &str) -> bool {
+    origin.starts_with("http://localhost:")
+        || origin.starts_with("http://127.0.0.1:")
+        || origin.starts_with("oc://renderer")
+        || matches!(
+            origin,
+            "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+        )
+        || opencode_origin(origin)
+}
+
+fn opencode_origin(origin: &str) -> bool {
+    let Some(host) = origin
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return false;
+    };
+    host == "opencode.ai" || host.ends_with(".opencode.ai")
 }
 
 pub(super) fn pty_not_found(id: &str) -> Response {
