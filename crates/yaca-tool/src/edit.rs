@@ -141,11 +141,13 @@ fn success_result(
     let diff = file_diff(path, content_old, content_new);
     let filepath = display_path(path);
     let patch = diff.patch;
+    let mut output = "Edit applied successfully.".to_string();
+    lsp_post_edit::append_edit_diagnostics(&mut output, path, &diagnostics);
     json!({
         "created": created,
         "replaced": replaced,
         "title": relative_title(path, workdir),
-        "output": "Edit applied successfully.",
+        "output": output,
         "metadata": {
             "diagnostics": diagnostics,
             "diff": patch.clone(),

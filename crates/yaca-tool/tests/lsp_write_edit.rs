@@ -112,12 +112,25 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
     }
 }
 
+fn error_diagnostics(path: &Path, message: &str) -> Value {
+    json!({
+        path.to_string_lossy().to_string(): [{
+            "severity": 1,
+            "range": {
+                "start": { "line": 2, "character": 4 },
+                "end": { "line": 2, "character": 7 }
+            },
+            "message": message
+        }]
+    })
+}
+
 #[tokio::test]
 async fn write_touches_lsp_after_formatter_and_returns_diagnostics() {
     // Given: write, a formatter that rewrites content, and an LSP provider.
     let dir = tempdir();
     let target = dir.join("main.rs");
-    let diagnostics = json!({ target.to_string_lossy().to_string(): [{"message": "bad"}] });
+    let diagnostics = error_diagnostics(&target, "bad write");
     let touches = Arc::new(Mutex::new(Vec::new()));
     let lsp = LspPlane::new(Arc::new(RecordingLsp {
         touches: touches.clone(),
@@ -135,6 +148,18 @@ async fn write_touches_lsp_after_formatter_and_returns_diagnostics() {
 
     // Then: LSP sees formatted content and diagnostics are returned.
     assert_eq!(out["metadata"]["diagnostics"], diagnostics);
+    assert!(
+        out["output"]
+            .as_str()
+            .unwrap()
+            .contains("LSP errors detected in this file, please fix:")
+    );
+    assert!(
+        out["output"]
+            .as_str()
+            .unwrap()
+            .contains("ERROR [3:5] bad write")
+    );
     let calls = touches.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].file, target);
@@ -148,7 +173,7 @@ async fn edit_touches_lsp_after_formatter_and_returns_diagnostics() {
     let dir = tempdir();
     let target = dir.join("main.rs");
     tokio::fs::write(&target, "old\n").await.unwrap();
-    let diagnostics = json!({ target.to_string_lossy().to_string(): [{"message": "bad"}] });
+    let diagnostics = error_diagnostics(&target, "bad edit");
     let touches = Arc::new(Mutex::new(Vec::new()));
     let lsp = LspPlane::new(Arc::new(RecordingLsp {
         touches: touches.clone(),
@@ -173,6 +198,18 @@ async fn edit_touches_lsp_after_formatter_and_returns_diagnostics() {
 
     // Then: LSP sees formatted content and diagnostics are returned.
     assert_eq!(out["metadata"]["diagnostics"], diagnostics);
+    assert!(
+        out["output"]
+            .as_str()
+            .unwrap()
+            .contains("LSP errors detected in this file, please fix:")
+    );
+    assert!(
+        out["output"]
+            .as_str()
+            .unwrap()
+            .contains("ERROR [3:5] bad edit")
+    );
     let calls = touches.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].file, target);
