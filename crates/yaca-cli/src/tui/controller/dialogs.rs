@@ -9,6 +9,7 @@ pub(super) enum DialogMode {
     Help,
     Tools,
     Think,
+    Skills,
     CommandPalette,
     CommandCompletion,
     ReferenceCompletion,
@@ -105,6 +106,10 @@ impl Controller {
                     Some(DialogMode::CommandPalette) => {
                         self.dispatch_palette_command(selected_label.as_deref())
                     }
+                    Some(DialogMode::Skills) => {
+                        self.apply_skill_selection(selected_label.as_deref());
+                        TuiEffect::None
+                    }
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
                         TuiEffect::None
@@ -147,5 +152,81 @@ impl Controller {
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::ReferenceCompletion);
+    }
+
+    pub(super) fn open_skills_dialog(&mut self) {
+        let items = commands::skill_items(&self.custom_commands);
+        self.app.dialog = Some(DialogView {
+            title: "Skills".to_string(),
+            subtitle: "Search skills...".to_string(),
+            items: if items.is_empty() {
+                vec![DialogItem {
+                    label: "no skills".to_string(),
+                    detail: "add SKILL.md under .yaca/skills or ~/.config/yaca/skills".to_string(),
+                }]
+            } else {
+                items
+            },
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Skills);
+    }
+
+    fn apply_skill_selection(&mut self, label: Option<&str>) {
+        let Some(label) = label.filter(|label| {
+            self.custom_commands
+                .iter()
+                .any(|command| command.is_skill() && command.name.as_str() == *label)
+        }) else {
+            return;
+        };
+        self.prompt.checkpoint_edit(&self.app);
+        self.app.input = format!("/{label} ");
+        self.app.input_cursor = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::super::*;
+    use crate::tui::commands::CustomCommand;
+    use yaca_tui::AppState;
+
+    fn key(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+    }
+
+    fn type_text(controller: &mut Controller, text: &str) {
+        for ch in text.chars() {
+            assert_eq!(controller.handle_key(key(ch)), TuiEffect::None);
+        }
+    }
+
+    #[test]
+    fn slash_skills_opens_dialog_and_enter_inserts_skill_command() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_custom_commands(vec![CustomCommand::skill(
+            "review".to_string(),
+            "Review the current diff".to_string(),
+        )]);
+
+        type_text(&mut controller, "/skills");
+        assert_eq!(
+            controller.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            TuiEffect::None
+        );
+
+        let dialog = controller.app.dialog.as_ref().expect("skills dialog");
+        assert_eq!(dialog.title, "Skills");
+        assert_eq!(dialog.subtitle, "Search skills...");
+        assert_eq!(dialog.items[0].label, "review");
+
+        assert_eq!(
+            controller.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            TuiEffect::None
+        );
+        assert_eq!(controller.app.input, "/review ");
     }
 }

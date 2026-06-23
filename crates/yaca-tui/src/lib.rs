@@ -5,6 +5,7 @@
 //! terminal I/O and the event loop live in the binary so this stays testable.
 
 use ratatui::Frame;
+use ratatui::layout::Rect;
 use yaca_proto::{Envelope, Projection};
 
 mod ansi;
@@ -219,10 +220,19 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     } else if let Some(question) = &state.question {
         widgets::render_question(frame, question, &theme);
     } else if let Some(picker) = &state.picker {
-        widgets::render_picker(frame, picker, &theme);
+        widgets::render_picker(frame, overlay_area(area, layout.prompt), picker, &theme);
     } else if let Some(dialog) = &state.dialog {
-        widgets::render_dialog(frame, dialog, &theme);
+        widgets::render_dialog(frame, overlay_area(area, layout.prompt), dialog, &theme);
     } else if let Some(cursor) = widgets::prompt_cursor(state, layout.prompt) {
         frame.set_cursor_position(cursor);
+    }
+}
+
+const fn overlay_area(area: Rect, prompt: Rect) -> Rect {
+    Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: prompt.y.saturating_sub(area.y),
     }
 }

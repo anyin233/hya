@@ -1,9 +1,18 @@
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Skill {
     pub name: String,
     pub description: String,
+}
+
+#[must_use]
+pub fn skill_dirs(workdir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![workdir.join(".yaca/skills")];
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(home).join(".config/yaca/skills"));
+    }
+    dirs
 }
 
 #[must_use]

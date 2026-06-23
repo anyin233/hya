@@ -3,23 +3,22 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
+use std::ops::Range;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
 use crate::{DialogItem, DialogView, Picker};
 
-pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
-    let area = frame.area();
+const MAX_VISIBLE_ITEMS: usize = 10;
+
+pub fn render_dialog(frame: &mut Frame, area: Rect, dialog: &DialogView, theme: &Theme) {
     let width = area.width.saturating_sub(8).clamp(24, 76);
-    let item_rows = u16::try_from(dialog.items.len())
-        .unwrap_or(u16::MAX)
-        .min(10);
-    let category_rows = dialog_category_rows(dialog.items.iter().take(usize::from(item_rows)));
-    let height = item_rows
-        .saturating_add(category_rows)
-        .saturating_add(6)
-        .min(area.height)
-        .max(8);
+    let visible_range = dialog_visible_range(dialog, area.height);
+    let visible_start = visible_range.start;
+    let category_rows = dialog_category_rows(dialog.items[visible_range.clone()].iter());
+    let item_rows = u16::try_from(visible_range.len()).unwrap_or(u16::MAX);
+    let content_height = item_rows.saturating_add(category_rows).saturating_add(5);
+    let height = content_height.min(area.height).max(1);
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
@@ -41,7 +40,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
         Line::from(""),
     ];
     let mut last_category: Option<&str> = None;
-    for (idx, item) in dialog.items.iter().enumerate().take(usize::from(item_rows)) {
+    for (idx, item) in dialog.items[visible_range].iter().enumerate() {
         let (category, detail_text) = split_category_detail(&item.detail);
         if category.is_some() && category != last_category {
             lines.push(Line::from(Span::styled(
@@ -52,7 +51,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
             )));
         }
         last_category = category;
-        let selected = idx == dialog.selected;
+        let selected = idx + visible_start == dialog.selected;
         let marker = if selected { "> " } else { "  " };
         let style = if selected {
             Style::default()
@@ -87,6 +86,33 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogView, theme: &Theme) {
     );
 }
 
+fn dialog_visible_range(dialog: &DialogView, available_height: u16) -> Range<usize> {
+    let mut item_limit = dialog.items.len().min(MAX_VISIBLE_ITEMS);
+    loop {
+        let range = visible_item_range(dialog.items.len(), dialog.selected, item_limit);
+        let category_rows = dialog_category_rows(dialog.items[range.clone()].iter());
+        let height = u16::try_from(range.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(category_rows)
+            .saturating_add(5);
+        if height <= available_height || item_limit == 0 {
+            return range;
+        }
+        item_limit -= 1;
+    }
+}
+
+fn visible_item_range(len: usize, selected: usize, limit: usize) -> Range<usize> {
+    if len == 0 || limit == 0 {
+        return 0..0;
+    }
+    let count = len.min(limit);
+    let selected = selected.min(len - 1);
+    let start = selected.saturating_add(1).saturating_sub(count);
+    let start = start.min(len - count);
+    start..start + count
+}
+
 fn dialog_category_rows<'a>(items: impl Iterator<Item = &'a DialogItem>) -> u16 {
     let mut rows = 0_u16;
     let mut last_category: Option<&str> = None;
@@ -114,12 +140,20 @@ fn split_category_detail(detail: &str) -> (Option<&str>, &str) {
 fn is_dialog_category(label: &str) -> bool {
     matches!(
         label,
-        "Agent" | "Context" | "Custom" | "MCP" | "Permissions" | "Session" | "Suggested" | "System"
+        "Agent"
+            | "Context"
+            | "Custom"
+            | "MCP"
+            | "Permissions"
+            | "Prompt"
+            | "Session"
+            | "Skills"
+            | "Suggested"
+            | "System"
     )
 }
 
-pub fn render_picker(frame: &mut Frame, picker: &Picker, theme: &Theme) {
-    let area = frame.area();
+pub fn render_picker(frame: &mut Frame, area: Rect, picker: &Picker, theme: &Theme) {
     let item_rows = u16::try_from(picker.entries.len())
         .unwrap_or(u16::MAX)
         .min(10);

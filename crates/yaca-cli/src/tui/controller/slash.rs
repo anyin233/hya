@@ -27,6 +27,10 @@ impl Controller {
                 self.open_agent_dialog();
                 TuiEffect::None
             }
+            Some(CommandKind::Skills) => {
+                self.open_skills_dialog();
+                TuiEffect::None
+            }
             Some(CommandKind::Tools) => {
                 self.open_tools_dialog();
                 TuiEffect::None

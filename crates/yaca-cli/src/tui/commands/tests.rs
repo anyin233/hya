@@ -19,6 +19,7 @@ fn resolves_slash_commands_and_aliases() {
     assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("mcps"), Some(CommandKind::Tools));
     assert_eq!(resolve_slash("status"), Some(CommandKind::Tools));
+    assert_eq!(resolve_slash("skills"), Some(CommandKind::Skills));
     assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
     assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
     assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
@@ -161,6 +162,7 @@ fn custom_commands_appear_in_completion_items() {
         template: "Run $ARGUMENTS".to_string(),
         agent: None,
         model: None,
+        source: CustomCommandSource::Markdown,
     }];
 
     let items = completion_items_with_custom("/t", &custom);
@@ -170,6 +172,25 @@ fn custom_commands_appear_in_completion_items() {
         .find(|item| item.label == "/test")
         .map(|item| item.detail.as_str());
     assert!(matches!(detail, Some(detail) if detail.contains("Run tests")));
+}
+
+#[test]
+fn skill_commands_expand_and_appear_in_skill_items() {
+    let custom = vec![CustomCommand::skill(
+        "review".to_string(),
+        "Review the current diff".to_string(),
+    )];
+
+    assert_eq!(
+        custom[0].expand("src/main.rs"),
+        "Use the review skill.\n\nsrc/main.rs"
+    );
+
+    let items = skill_items(&custom);
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label, "review");
+    assert!(items[0].detail.contains("Review the current diff"));
 }
 
 fn temp_root() -> std::path::PathBuf {

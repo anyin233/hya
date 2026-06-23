@@ -6,6 +6,7 @@ pub enum CommandKind {
     Compact,
     Init,
     Agent,
+    Skills,
     Tools,
     Yolo,
     Think,
@@ -20,6 +21,7 @@ pub(super) enum CommandCategory {
     Context,
     Mcp,
     Permissions,
+    Prompt,
     Session,
     System,
 }
@@ -31,6 +33,7 @@ impl CommandCategory {
             Self::Context => "Context",
             Self::Mcp => "MCP",
             Self::Permissions => "Permissions",
+            Self::Prompt => "Prompt",
             Self::Session => "Session",
             Self::System => "System",
         }
@@ -109,6 +112,15 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         key_hint: "leader s",
         kind: CommandKind::Tools,
         category: CommandCategory::Mcp,
+        suggested: false,
+    },
+    CommandSpec {
+        name: "skills",
+        aliases: &[],
+        description: "Browse available skills",
+        key_hint: "/skills",
+        kind: CommandKind::Skills,
+        category: CommandCategory::Prompt,
         suggested: false,
     },
     CommandSpec {

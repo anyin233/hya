@@ -156,3 +156,69 @@ fn dialog_clears_underlying_prompt_rail_at_eighty_columns() {
         "dialog footer hint should not leak the composer rail:\n{text}"
     );
 }
+
+#[test]
+fn dialog_window_follows_selected_item_past_first_ten_rows() {
+    // Given: a skill dialog with more rows than the visible OpenCode popup window.
+    let items = (0..12)
+        .map(|idx| DialogItem {
+            label: format!("skill-{idx:02}"),
+            detail: format!("skill detail {idx:02}"),
+        })
+        .collect();
+    let mut state = AppState {
+        dialog: Some(DialogView {
+            title: "Skills".to_string(),
+            subtitle: "Search skills...".to_string(),
+            items,
+            selected: 11,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the selected skill is beyond the first ten rows.
+    let text = render(&mut state, 100, 32);
+
+    // Then: the rendered dialog window follows selection instead of confirming an invisible row.
+    assert!(
+        text.contains("skill-11"),
+        "selected skill row should stay visible:\n{text}"
+    );
+    assert!(
+        !text.contains("skill-00"),
+        "dialog should scroll away from the first row when selection is at the bottom:\n{text}"
+    );
+}
+
+#[test]
+fn dialog_keeps_composer_and_footer_visible_on_short_terminals() {
+    // Given: a tall command dialog on a short terminal.
+    let items = (0..12)
+        .map(|idx| DialogItem {
+            label: format!("/command-{idx:02}"),
+            detail: "Suggested · leader s · Run command".to_string(),
+        })
+        .collect();
+    let mut state = AppState {
+        dialog: Some(DialogView {
+            title: "commands".to_string(),
+            subtitle: "select a command; enter runs".to_string(),
+            items,
+            selected: 11,
+        }),
+        ..AppState::default()
+    };
+
+    // When: the dialog renders where the composer occupies a meaningful share of height.
+    let text = render(&mut state, 100, 12);
+
+    // Then: the overlay is constrained above the composer/footer instead of clearing them.
+    assert!(
+        text.contains("Ask anything"),
+        "composer placeholder should remain visible below dialog:\n{text}"
+    );
+    assert!(
+        text.contains("ctrl+p commands"),
+        "footer shortcuts should remain visible below dialog:\n{text}"
+    );
+}

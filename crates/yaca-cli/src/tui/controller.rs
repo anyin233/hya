@@ -1279,6 +1279,7 @@ mod tests {
             template: "Create $1 in $2. Args: $ARGUMENTS".to_string(),
             agent: None,
             model: None,
+            source: commands::CustomCommandSource::Markdown,
         }]);
 
         type_text(&mut controller, "/component Button src/ui");
@@ -1298,6 +1299,7 @@ mod tests {
             template: "Plan $ARGUMENTS".to_string(),
             agent: Some("plan".to_string()),
             model: Some("anthropic/claude-sonnet".to_string()),
+            source: commands::CustomCommandSource::Markdown,
         }]);
 
         type_text(&mut controller, "/planit checkout flow");

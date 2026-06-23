@@ -8,11 +8,42 @@ pub struct CustomCommand {
     pub template: String,
     pub agent: Option<String>,
     pub model: Option<String>,
+    pub source: CustomCommandSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomCommandSource {
+    Markdown,
+    Skill,
 }
 
 impl CustomCommand {
     #[must_use]
+    pub fn skill(name: String, description: String) -> Self {
+        Self {
+            name,
+            description,
+            template: String::new(),
+            agent: None,
+            model: None,
+            source: CustomCommandSource::Skill,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_skill(&self) -> bool {
+        matches!(self.source, CustomCommandSource::Skill)
+    }
+
+    #[must_use]
     pub fn expand(&self, arguments: &str) -> String {
+        if self.is_skill() {
+            let arguments = arguments.trim();
+            if arguments.is_empty() {
+                return format!("Use the {} skill.", self.name);
+            }
+            return format!("Use the {} skill.\n\n{arguments}", self.name);
+        }
         let mut out = self.template.replace("$ARGUMENTS", arguments);
         let positional = split_arguments(arguments);
         for idx in 1..=9 {
@@ -83,6 +114,7 @@ fn parse_markdown_command(name: &str, text: &str) -> CustomCommand {
         template: body.to_string(),
         agent: frontmatter.get("agent").cloned(),
         model: frontmatter.get("model").cloned(),
+        source: CustomCommandSource::Markdown,
     }
 }
 

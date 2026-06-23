@@ -150,14 +150,6 @@ fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
     files
 }
 
-fn skill_dirs() -> Vec<PathBuf> {
-    let mut v = vec![PathBuf::from(".yaca/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        v.push(PathBuf::from(home).join(".config/yaca/skills"));
-    }
-    v
-}
-
 fn agent_with_model(model: &str) -> AgentSpec {
     let workdir = PathBuf::from(".");
     let env = PromptEnv {
@@ -168,7 +160,7 @@ fn agent_with_model(model: &str) -> AgentSpec {
         date: today(),
     };
     let mut context = discover_context_files(&workdir);
-    let skills = skills::discover_skills(&skill_dirs());
+    let skills = skills::discover_skills(&skills::skill_dirs(&workdir));
     if let Some(section) = skills::skills_section(&skills) {
         context.push(("Available skills".to_string(), section));
     }

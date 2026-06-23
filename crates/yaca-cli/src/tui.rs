@@ -33,6 +33,7 @@ use yaca_tool::{
 use yaca_tui::ConnectorView;
 use yaca_tui::{AppState, PermissionPrompt, PermissionPromptStage, QuestionPrompt};
 
+use self::command_sources::custom_commands;
 use self::controller::{Controller, SessionSummary, TuiEffect};
 use self::history::{HistoryStore, SessionMeta};
 pub use self::mcp_view::connector_views as mcp_connector_views;
@@ -41,6 +42,7 @@ use crate::config::ModelEntry;
 mod agent_cycle;
 mod agents;
 mod block_action;
+mod command_sources;
 mod commands;
 mod controller;
 mod git_context;
@@ -171,10 +173,6 @@ fn all_reference_items(
     let mut items = agents::reference_items(profiles);
     items.extend(reference_items(workdir));
     items
-}
-
-fn custom_commands(workdir: &Path) -> Vec<commands::CustomCommand> {
-    commands::load_markdown_commands(workdir).unwrap_or_default()
 }
 
 fn export_root() -> PathBuf {

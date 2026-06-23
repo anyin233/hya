@@ -3,7 +3,7 @@ use yaca_tui::DialogItem;
 mod custom;
 mod registry;
 
-pub use custom::{CustomCommand, find_custom, load_markdown_commands};
+pub use custom::{CustomCommand, CustomCommandSource, find_custom, load_markdown_commands};
 pub use registry::CommandKind;
 
 use registry::{COMMANDS, CommandSpec};
@@ -77,6 +77,18 @@ pub fn completion_items_with_custom(input: &str, custom: &[CustomCommand]) -> Ve
     items
 }
 
+#[must_use]
+pub fn skill_items(custom: &[CustomCommand]) -> Vec<DialogItem> {
+    custom
+        .iter()
+        .filter(|command| command.is_skill())
+        .map(|command| DialogItem {
+            label: command.name.clone(),
+            detail: command.description.clone(),
+        })
+        .collect()
+}
+
 fn command_item(spec: &CommandSpec) -> DialogItem {
     DialogItem {
         label: format!("/{}", spec.name),
@@ -115,9 +127,13 @@ fn suggested_command_item(spec: &CommandSpec) -> DialogItem {
 }
 
 fn custom_command_item(command: &CustomCommand) -> DialogItem {
+    let category = match command.source {
+        CustomCommandSource::Markdown => "Custom",
+        CustomCommandSource::Skill => "Skills",
+    };
     DialogItem {
         label: format!("/{}", command.name),
-        detail: format!("Custom · {} · custom", command.description),
+        detail: format!("{category} · {} · custom", command.description),
     }
 }
 
