@@ -41,6 +41,7 @@ mod session_fork;
 mod session_legacy;
 mod session_list;
 mod session_message_v2;
+mod session_message_v2_before;
 mod session_part_update;
 mod session_prompt;
 mod session_revert;
