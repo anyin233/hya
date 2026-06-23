@@ -68,8 +68,8 @@ async fn workspace_adapters(
     Json(st.workspace_adapters)
 }
 
-async fn resource() -> Json<Value> {
-    Json(json!({}))
+async fn resource(State(st): State<ServerState>) -> Json<Value> {
+    Json(json!(st.mcp_http.resources(&st.mcp_manager).await))
 }
 
 async fn tool_list(State(st): State<ServerState>) -> Json<Vec<Value>> {

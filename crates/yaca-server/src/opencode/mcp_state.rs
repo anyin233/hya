@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use serde_json::Value;
 use tokio::sync::RwLock;
 use yaca_mcp::{McpManager, McpServerConfig, McpStatus};
 
@@ -64,6 +65,14 @@ impl McpHttpState {
             .await
             .insert(name.to_string(), McpStatus::Disabled);
         true
+    }
+
+    pub(super) async fn resources(&self, manager: &McpManager) -> BTreeMap<String, Value> {
+        let mut resources = manager.resources();
+        for manager in self.managers.read().await.values() {
+            resources.extend(manager.resources());
+        }
+        resources
     }
 }
 
