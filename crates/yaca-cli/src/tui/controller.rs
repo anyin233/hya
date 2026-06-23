@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use yaca_tui::{AppState, DialogItem, DialogView};
+use yaca_tui::{AppState, DialogItem};
 
 use super::agent_cycle::{next_agent_label, previous_agent_label};
 use super::block_action::{SelectedBlockAction, selected_block_action};
@@ -11,6 +11,12 @@ use super::message_scroll::handle_message_scroll_key;
 use super::prompt::{PromptState, cursor_index, mention_trigger_index_at};
 use super::selection::{MessageSelectionStep, next_selected_message};
 use crate::config::ModelEntry;
+
+mod dialog_open;
+mod dialogs;
+mod slash;
+
+use self::dialogs::DialogMode;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TuiEffect {
@@ -40,19 +46,6 @@ pub struct SessionSummary {
     pub id: String,
     pub title: String,
     pub detail: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DialogMode {
-    Model,
-    Agent,
-    Resume,
-    Help,
-    Tools,
-    Think,
-    CommandPalette,
-    CommandCompletion,
-    ReferenceCompletion,
 }
 
 fn provider_label_for_model(models: &[ModelEntry], model: &str) -> Option<String> {
@@ -484,110 +477,6 @@ impl Controller {
         TuiEffect::Exit
     }
 
-    fn handle_dialog_key(&mut self, key: KeyEvent) -> TuiEffect {
-        if matches!(
-            self.dialog_mode,
-            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
-        ) {
-            return self.handle_completion_popup_key(key);
-        }
-        let Some(dialog) = self.app.dialog.as_mut() else {
-            return TuiEffect::None;
-        };
-        match key.code {
-            KeyCode::Esc => {
-                self.app.dialog = None;
-                self.dialog_mode = None;
-                TuiEffect::None
-            }
-            KeyCode::Tab
-                if self.dialog_mode == Some(DialogMode::CommandCompletion)
-                    && key.modifiers != KeyModifiers::SHIFT =>
-            {
-                let selected = dialog.selected;
-                self.app.dialog = None;
-                self.dialog_mode = None;
-                self.apply_command_completion(selected);
-                TuiEffect::None
-            }
-            KeyCode::Up => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                TuiEffect::None
-            }
-            KeyCode::Down | KeyCode::Tab if key.modifiers != KeyModifiers::SHIFT => {
-                dialog.selected = (dialog.selected + 1).min(dialog.items.len().saturating_sub(1));
-                TuiEffect::None
-            }
-            KeyCode::BackTab | KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                TuiEffect::None
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                TuiEffect::None
-            }
-            KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
-                TuiEffect::None
-            }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(5);
-                TuiEffect::None
-            }
-            KeyCode::PageDown => {
-                dialog.selected = (dialog.selected + 5).min(dialog.items.len().saturating_sub(1));
-                TuiEffect::None
-            }
-            KeyCode::Enter => {
-                let selected = dialog.selected;
-                let selected_label = dialog.items.get(selected).map(|item| item.label.clone());
-                self.app.dialog = None;
-                let mode = self.dialog_mode.take();
-                match mode {
-                    Some(DialogMode::Model) => self
-                        .available_models
-                        .get(selected)
-                        .map(|entry| {
-                            let model = entry.id.clone();
-                            self.app
-                                .set_model_identity(model.clone(), Some(entry.provider.clone()));
-                            TuiEffect::SelectModel(model)
-                        })
-                        .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::Resume) => self
-                        .sessions
-                        .get(selected)
-                        .map(|session| TuiEffect::ResumeSession(session.id.clone()))
-                        .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::Agent) => self
-                        .agents
-                        .get(selected)
-                        .map(|agent| {
-                            self.app.agent = agent.label.clone();
-                            TuiEffect::SelectAgent(agent.label.clone())
-                        })
-                        .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::Think) => ["off", "low", "medium", "high"]
-                        .get(selected)
-                        .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
-                        .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::CommandPalette) => {
-                        self.dispatch_palette_command(selected_label.as_deref())
-                    }
-                    Some(DialogMode::CommandCompletion) => {
-                        self.apply_command_completion(selected);
-                        TuiEffect::None
-                    }
-                    Some(
-                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
-                    )
-                    | None => TuiEffect::None,
-                }
-            }
-            _ => TuiEffect::None,
-        }
-    }
-
     fn submit_input(&mut self) -> TuiEffect {
         let input = self
             .prompt
@@ -649,78 +538,6 @@ impl Controller {
         }
     }
 
-    fn dispatch_slash(&mut self, command: &str) -> TuiEffect {
-        let mut pieces = command.splitn(2, char::is_whitespace);
-        let name = pieces.next().unwrap_or_default();
-        let arguments = pieces.next().unwrap_or_default().trim();
-        match commands::resolve_slash(command) {
-            Some(CommandKind::Model) if !arguments.is_empty() => {
-                let model = arguments.to_string();
-                let provider = provider_label_for_model(&self.available_models, &model);
-                self.app.set_model_identity(model.clone(), provider);
-                TuiEffect::SelectModel(model)
-            }
-            Some(CommandKind::Model) => {
-                self.open_model_dialog();
-                TuiEffect::None
-            }
-            Some(CommandKind::Resume) => {
-                self.open_resume_dialog();
-                TuiEffect::None
-            }
-            Some(CommandKind::NewSession) => TuiEffect::NewSession,
-            Some(CommandKind::Compact) => TuiEffect::CompactTranscript,
-            Some(CommandKind::Init) => TuiEffect::InitProject,
-            Some(CommandKind::Agent) => {
-                self.open_agent_dialog();
-                TuiEffect::None
-            }
-            Some(CommandKind::Tools) => {
-                self.open_tools_dialog();
-                TuiEffect::None
-            }
-            Some(CommandKind::Yolo) => {
-                self.app.yolo = match arguments {
-                    "on" | "true" => true,
-                    "off" | "false" => false,
-                    _ => !self.app.yolo,
-                };
-                let state = if self.app.yolo { "enabled" } else { "disabled" };
-                TuiEffect::SystemMessage(format!("yolo mode {state}"))
-            }
-            Some(CommandKind::Think) if !arguments.is_empty() => {
-                TuiEffect::SelectReasoning(arguments.to_string())
-            }
-            Some(CommandKind::Think) => {
-                self.open_think_dialog();
-                TuiEffect::None
-            }
-            Some(CommandKind::Export) => TuiEffect::ExportTranscript,
-            Some(CommandKind::Quit) => TuiEffect::Exit,
-            Some(CommandKind::Help) => {
-                self.open_help_dialog();
-                TuiEffect::None
-            }
-            None if command.trim().is_empty() => TuiEffect::None,
-            None => {
-                if let Some(custom) = commands::find_custom(&self.custom_commands, name) {
-                    let prompt = custom.expand(arguments);
-                    if custom.agent.is_some() || custom.model.is_some() {
-                        TuiEffect::SubmitConfigured {
-                            prompt,
-                            agent: custom.agent.clone(),
-                            model: custom.model.clone(),
-                        }
-                    } else {
-                        TuiEffect::Submit(prompt)
-                    }
-                } else {
-                    TuiEffect::SystemMessage(format!("unknown command /{name}; try /help"))
-                }
-            }
-        }
-    }
-
     fn apply_command_completion(&mut self, selected: usize) {
         let items = commands::completion_items_with_custom(&self.app.input, &self.custom_commands);
         if let Some(item) = items.get(selected) {
@@ -728,43 +545,6 @@ impl Controller {
             self.app.input = format!("{} ", item.label);
             self.app.input_cursor = None;
         }
-    }
-
-    fn dispatch_palette_command(&mut self, label: Option<&str>) -> TuiEffect {
-        let Some(command) = label.and_then(|label| label.strip_prefix('/')) else {
-            return TuiEffect::None;
-        };
-        self.dispatch_slash(command)
-    }
-
-    fn open_command_palette_dialog(&mut self) {
-        self.app.dialog = Some(DialogView {
-            title: "commands".to_string(),
-            subtitle: "select a command; enter runs".to_string(),
-            items: commands::palette_items_with_custom(&self.custom_commands),
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::CommandPalette);
-    }
-
-    fn open_command_completion_dialog(&mut self, items: Vec<DialogItem>) {
-        self.app.dialog = Some(DialogView {
-            title: "commands".to_string(),
-            subtitle: "select a slash command".to_string(),
-            items,
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::CommandCompletion);
-    }
-
-    fn open_reference_completion_dialog(&mut self, items: Vec<DialogItem>) {
-        self.app.dialog = Some(DialogView {
-            title: "references".to_string(),
-            subtitle: "select a file or reference".to_string(),
-            items,
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::ReferenceCompletion);
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
@@ -1006,149 +786,6 @@ impl Controller {
         self.app.exit_armed = true;
         self.last_ctrl_c = Some(now);
         TuiEffect::None
-    }
-
-    fn open_model_dialog(&mut self) {
-        let items = self
-            .available_models
-            .iter()
-            .map(|entry| DialogItem {
-                label: entry.id.clone(),
-                detail: if entry.id == self.app.model {
-                    format!("{} · current", entry.provider)
-                } else {
-                    entry.provider.clone()
-                },
-            })
-            .collect::<Vec<_>>();
-        let selected = items
-            .iter()
-            .position(|item| item.label == self.app.model)
-            .unwrap_or(0);
-        self.app.dialog = Some(DialogView {
-            title: "select model".to_string(),
-            subtitle: "next turn uses the selected model".to_string(),
-            items,
-            selected,
-        });
-        self.dialog_mode = Some(DialogMode::Model);
-    }
-
-    fn open_resume_dialog(&mut self) {
-        let items = if self.sessions.is_empty() {
-            vec![DialogItem {
-                label: "no sessions".to_string(),
-                detail: "start with /new or send a prompt".to_string(),
-            }]
-        } else {
-            self.sessions
-                .iter()
-                .map(|session| DialogItem {
-                    label: session.title.clone(),
-                    detail: session.detail.clone(),
-                })
-                .collect()
-        };
-        self.app.dialog = Some(DialogView {
-            title: "resume session".to_string(),
-            subtitle: "select a previous conversation".to_string(),
-            items,
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::Resume);
-    }
-
-    fn open_agent_dialog(&mut self) {
-        let items = if self.agents.is_empty() {
-            vec![DialogItem {
-                label: "build".to_string(),
-                detail: "default coding agent".to_string(),
-            }]
-        } else {
-            self.agents.clone()
-        };
-        self.app.dialog = Some(DialogView {
-            title: "agents".to_string(),
-            subtitle: "select active agent profile".to_string(),
-            items,
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::Agent);
-    }
-
-    fn open_tools_dialog(&mut self) {
-        self.app.dialog = Some(DialogView {
-            title: "tools".to_string(),
-            subtitle: "builtin tools and MCP status".to_string(),
-            items: vec![
-                DialogItem {
-                    label: "read".to_string(),
-                    detail: "builtin · auto-allowed".to_string(),
-                },
-                DialogItem {
-                    label: "write".to_string(),
-                    detail: "builtin · asks permission".to_string(),
-                },
-                DialogItem {
-                    label: "edit".to_string(),
-                    detail: "builtin · asks permission".to_string(),
-                },
-                DialogItem {
-                    label: "glob".to_string(),
-                    detail: "builtin · auto-allowed".to_string(),
-                },
-                DialogItem {
-                    label: "grep".to_string(),
-                    detail: "builtin · auto-allowed".to_string(),
-                },
-                DialogItem {
-                    label: "shell".to_string(),
-                    detail: "builtin · asks permission".to_string(),
-                },
-                DialogItem {
-                    label: "mcp".to_string(),
-                    detail: "configured MCP tools · permission-gated".to_string(),
-                },
-            ],
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::Tools);
-    }
-
-    fn open_think_dialog(&mut self) {
-        let current = self.app.reasoning_effort.as_deref().unwrap_or("off");
-        let items = ["off", "low", "medium", "high"]
-            .iter()
-            .map(|level| DialogItem {
-                label: (*level).to_string(),
-                detail: if *level == current {
-                    "current".to_string()
-                } else {
-                    "reasoning effort".to_string()
-                },
-            })
-            .collect::<Vec<_>>();
-        let selected = items
-            .iter()
-            .position(|item| item.label == current)
-            .unwrap_or(0);
-        self.app.dialog = Some(DialogView {
-            title: "reasoning effort".to_string(),
-            subtitle: "future turns use the selected thinking level".to_string(),
-            items,
-            selected,
-        });
-        self.dialog_mode = Some(DialogMode::Think);
-    }
-
-    fn open_help_dialog(&mut self) {
-        self.app.dialog = Some(DialogView {
-            title: "commands".to_string(),
-            subtitle: "slash commands and shortcuts".to_string(),
-            items: commands::help_items_with_custom(&self.custom_commands),
-            selected: 0,
-        });
-        self.dialog_mode = Some(DialogMode::Help);
     }
 }
 
