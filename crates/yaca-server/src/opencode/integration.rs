@@ -37,7 +37,8 @@ pub(super) fn router() -> Router<ServerState> {
 }
 
 async fn reference_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<Value>>> {
-    Json(super::location::response(&st, Vec::new()))
+    let references = super::reference::list(&st).await;
+    Json(super::location::response(&st, references))
 }
 
 async fn integration_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<Value>>> {

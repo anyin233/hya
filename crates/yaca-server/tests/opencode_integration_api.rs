@@ -124,6 +124,42 @@ async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
 }
 
 #[tokio::test]
+async fn opencode_v2_reference_route_lists_configured_local_references() {
+    std::fs::create_dir_all(format!("{WORKDIR}/docs")).unwrap();
+    let app = router(state().await);
+
+    let (status, _config) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        serde_json::json!({
+            "references": {
+                "docs": {
+                    "path": "docs",
+                    "description": "Project docs",
+                    "hidden": true
+                },
+                "bad/name": "./ignored",
+                "effect": "Effect-TS/effect"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, references) = get_json(app, "/api/reference").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(references["data"].as_array().unwrap().len(), 1);
+    let docs = &references["data"][0];
+    assert_eq!(docs["name"], "docs");
+    assert_eq!(docs["description"], "Project docs");
+    assert_eq!(docs["hidden"], true);
+    assert_eq!(docs["source"]["type"], "local");
+    assert!(docs["path"].as_str().unwrap().ends_with("/docs"));
+}
+
+#[tokio::test]
 async fn opencode_v2_integration_mutation_routes_match_empty_backend() {
     let app = router(state().await);
 
