@@ -665,7 +665,12 @@ async fn main() -> anyhow::Result<()> {
             json,
         }) => cmd_exec(message.join(" "), model, yolo, json || format == "json").await,
         Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, yolo, json).await,
-        Some(Command::Serve { bind, db }) => serve::cmd_serve(bind, db, model, yolo).await,
+        Some(Command::Serve {
+            bind,
+            hostname,
+            port,
+            db,
+        }) => serve::cmd_serve(cli_args::serve_bind(bind, hostname, port), db, model, yolo).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
