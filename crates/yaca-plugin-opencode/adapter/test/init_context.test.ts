@@ -115,6 +115,9 @@ test("initialize passes OpenCode project and path clients to local plugins", asy
 test("initialize passes an OpenCode vcs client to local plugins", async () => {
   const root = await makeTempDir()
   await runCommand(root, ["git", "init", "--initial-branch", "main"])
+  await runCommand(root, ["git", "config", "user.email", "test@example.com"])
+  await runCommand(root, ["git", "config", "user.name", "Test User"])
+  await runCommand(root, ["git", "commit", "--allow-empty", "-m", "initial"])
   const pluginFile = path.join(root, "vcs-plugin.ts")
   await writeFile(
     pluginFile,
@@ -125,6 +128,7 @@ test("initialize passes an OpenCode vcs client to local plugins", async () => {
       "    const vcs = await input.client.vcs.get()",
       '    if (vcs.response.status !== 200) throw new Error("vcs status mismatch")',
       '    if (vcs.data.branch !== "main") throw new Error("branch mismatch")',
+      '    if (vcs.data.default_branch !== "main") throw new Error("default branch mismatch")',
       "    return { event: async () => {} }",
       "  },",
       "}",
