@@ -73,43 +73,98 @@ impl Rule {
 fn pattern_matches(pattern: &str, value: &str) -> bool {
     let pattern = pattern.as_bytes();
     let value = value.as_bytes();
-    let (mut pattern_index, mut value_index) = (0, 0);
-    let (mut star_index, mut star_value_index) = (None, 0);
-    while value_index < value.len() {
-        let mut matched = false;
-        let mut next_pattern_index = pattern_index + 1;
-        if pattern_index < pattern.len() {
-            let item = pattern[pattern_index];
-            if item == b'?' {
-                matched = true;
-            } else if let Some((class_matched, next_index)) =
-                bracket_class_matches(pattern, pattern_index, value[value_index])
-            {
-                matched = class_matched;
-                next_pattern_index = next_index;
-            } else if item == value[value_index] {
-                matched = true;
-            }
-        }
-        if matched {
-            pattern_index = next_pattern_index;
-            value_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-            star_index = Some(pattern_index);
-            pattern_index += 1;
-            star_value_index = value_index;
-        } else if let Some(index) = star_index {
-            pattern_index = index + 1;
-            star_value_index += 1;
-            value_index = star_value_index;
-        } else {
-            return false;
+    let mut memo = vec![vec![None; value.len() + 1]; pattern.len() + 1];
+    pattern_matches_from(pattern, value, 0, 0, &mut memo)
+}
+
+fn pattern_matches_from(
+    pattern: &[u8],
+    value: &[u8],
+    pattern_index: usize,
+    value_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    if let Some(result) = memo[pattern_index][value_index] {
+        return result;
+    }
+    let result = if pattern_index == pattern.len() {
+        value_index == value.len()
+    } else if pattern.get(pattern_index..pattern_index + 3) == Some(b"**/") {
+        pattern_matches_globstar_directory(pattern, value, pattern_index + 3, value_index, memo)
+    } else if pattern.get(pattern_index..pattern_index + 2) == Some(b"**") {
+        pattern_matches_globstar(pattern, value, pattern_index + 2, value_index, memo)
+    } else if pattern[pattern_index] == b'*' {
+        pattern_matches_star(pattern, value, pattern_index + 1, value_index, memo)
+    } else if value_index == value.len() {
+        false
+    } else if pattern[pattern_index] == b'?' {
+        value[value_index] != b'/'
+            && pattern_matches_from(pattern, value, pattern_index + 1, value_index + 1, memo)
+    } else if let Some((matched, next_index)) =
+        bracket_class_matches(pattern, pattern_index, value[value_index])
+    {
+        matched
+            && value[value_index] != b'/'
+            && pattern_matches_from(pattern, value, next_index, value_index + 1, memo)
+    } else {
+        pattern[pattern_index] == value[value_index]
+            && pattern_matches_from(pattern, value, pattern_index + 1, value_index + 1, memo)
+    };
+    memo[pattern_index][value_index] = Some(result);
+    result
+}
+
+fn pattern_matches_globstar_directory(
+    pattern: &[u8],
+    value: &[u8],
+    next_pattern_index: usize,
+    value_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    if pattern_matches_from(pattern, value, next_pattern_index, value_index, memo) {
+        return true;
+    }
+    for index in value_index..value.len() {
+        if value[index] == b'/'
+            && pattern_matches_from(pattern, value, next_pattern_index, index + 1, memo)
+        {
+            return true;
         }
     }
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-        pattern_index += 1;
+    false
+}
+
+fn pattern_matches_globstar(
+    pattern: &[u8],
+    value: &[u8],
+    next_pattern_index: usize,
+    value_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    for index in value_index..=value.len() {
+        if pattern_matches_from(pattern, value, next_pattern_index, index, memo) {
+            return true;
+        }
     }
-    pattern_index == pattern.len()
+    false
+}
+
+fn pattern_matches_star(
+    pattern: &[u8],
+    value: &[u8],
+    next_pattern_index: usize,
+    value_index: usize,
+    memo: &mut [Vec<Option<bool>>],
+) -> bool {
+    for index in value_index..=value.len() {
+        if pattern_matches_from(pattern, value, next_pattern_index, index, memo) {
+            return true;
+        }
+        if value.get(index) == Some(&b'/') {
+            break;
+        }
+    }
+    false
 }
 
 fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(bool, usize)> {
