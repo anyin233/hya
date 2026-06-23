@@ -147,3 +147,37 @@ async fn legacy_message_parts_include_prompt_attachment_parts() {
         json!({"value": "@build", "start": 11, "end": 17})
     );
 }
+
+#[tokio::test]
+async fn legacy_message_post_records_prompt_attachment_parts() {
+    let app = router(state().await);
+    let (status, created) = post_json(app.clone(), "/session".to_string(), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["id"].as_str().expect("session id");
+
+    let file = json!({
+        "type": "file",
+        "url": "data:image/png;base64,aGVsbG8=",
+        "mime": "image/png",
+        "filename": "pixel.png",
+        "source": {"text": "@pixel.png", "start": 0, "end": 10},
+    });
+    let agent = json!({
+        "type": "agent",
+        "name": "build",
+        "source": {"text": "@build", "start": 11, "end": 17},
+    });
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/session/{session}/message"),
+        json!({"parts": [{"type": "text", "text": "inspect"}, file, agent], "noReply": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, messages) = get_json(app, format!("/session/{session}/message")).await;
+    assert_eq!(status, StatusCode::OK);
+    let parts = messages[0]["parts"].as_array().expect("parts");
+    assert!(parts.iter().any(|part| part["type"] == "file"));
+    assert!(parts.iter().any(|part| part["type"] == "agent"));
+}
