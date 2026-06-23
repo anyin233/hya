@@ -44,6 +44,7 @@ mod session_message_v2;
 mod session_message_v2_before;
 mod session_part_update;
 mod session_prompt;
+mod session_prompt_legacy;
 mod session_revert;
 mod session_share;
 mod session_summarize;
@@ -86,6 +87,7 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(session_context::router())
         .merge(session_message_v2::router())
         .merge(session_prompt::router())
+        .merge(session_prompt_legacy::router())
         .merge(session_revert::router())
         .merge(session_v2::router())
         .merge(session_switch::router())
