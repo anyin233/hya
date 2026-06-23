@@ -10,9 +10,12 @@ pub(super) async fn list(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    if query.get("provider").is_none_or(String::is_empty) {
+    let Some(provider) = query
+        .get("provider")
+        .filter(|provider| !provider.is_empty())
+    else {
         return Err(ApiError::bad_request("tool list missing provider"));
-    }
+    };
     let Some(model) = query.get("model").filter(|model| !model.is_empty()) else {
         return Err(ApiError::bad_request("tool list missing model"));
     };
@@ -21,7 +24,7 @@ pub(super) async fn list(
     Ok(Json(
         schemas
             .into_iter()
-            .filter(|schema| include_tool(schema.name.as_str(), model))
+            .filter(|schema| include_tool(schema.name.as_str(), provider, model))
             .map(|schema| {
                 json!({
                     "id": schema.name.to_string(),
@@ -44,11 +47,12 @@ pub(super) async fn ids(State(st): State<ServerState>) -> Json<Vec<String>> {
     Json(ids)
 }
 
-fn include_tool(id: &str, model: &str) -> bool {
+fn include_tool(id: &str, provider: &str, model: &str) -> bool {
     let use_patch = model.contains("gpt-") && !model.contains("oss") && !model.contains("gpt-4");
     match id {
         "apply_patch" => use_patch,
         "edit" | "write" => !use_patch,
+        "websearch" => provider == "opencode",
         _ => true,
     }
 }

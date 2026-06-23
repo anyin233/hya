@@ -2,7 +2,7 @@ use serde_json::Value;
 use yaca_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
 };
-use yaca_provider::CompletionRequest;
+use yaca_provider::{CompletionRequest, ProviderRouter};
 use yaca_tool::ToolRegistry;
 
 use crate::engine::AgentSpec;
@@ -40,16 +40,45 @@ pub(super) fn request_from_messages(
     projection: &Projection,
     messages: Vec<Message>,
     tools: &ToolRegistry,
+    providers: &ProviderRouter,
 ) -> CompletionRequest {
+    let model = active_model(agent, projection);
+    let provider = providers.resolve(&model);
     CompletionRequest {
-        model: active_model(agent, projection),
+        tools: filtered_tool_schemas(
+            tools,
+            provider.as_deref().map(yaca_provider::Provider::id),
+            &model,
+        ),
+        model,
         system: Some(agent.system_prompt.clone()),
         messages,
-        tools: tools.schemas(),
         temperature: None,
         max_output_tokens: None,
         reasoning: agent.reasoning,
         headers: Default::default(),
+    }
+}
+
+fn filtered_tool_schemas(
+    tools: &ToolRegistry,
+    provider_id: Option<&str>,
+    model: &ModelRef,
+) -> Vec<yaca_proto::ToolSchema> {
+    tools
+        .schemas()
+        .into_iter()
+        .filter(|schema| include_tool(schema.name.as_str(), provider_id, model.as_str()))
+        .collect()
+}
+
+fn include_tool(id: &str, provider_id: Option<&str>, model: &str) -> bool {
+    let use_patch = model.contains("gpt-") && !model.contains("oss") && !model.contains("gpt-4");
+    match id {
+        "apply_patch" => use_patch,
+        "edit" | "write" => !use_patch,
+        "websearch" => provider_id == Some("opencode"),
+        _ => true,
     }
 }
 
