@@ -94,6 +94,26 @@ fn runtime_status_omits_idle_placeholder_when_no_duration_exists() {
 }
 
 #[test]
+fn runtime_status_shows_which_key_home_hint_on_empty_home() {
+    // Given: an idle empty OpenCode-style home screen.
+    let mut state = AppState {
+        agent: "build".to_string(),
+        model: "kimi-k2".to_string(),
+        ..AppState::default()
+    };
+
+    // When: the grounded runtime strip renders above the composer.
+    let buffer = render_buffer(&mut state, 120, 16);
+    let status_row = find_row(&buffer, 120, 16, "Show keyboard shortcuts");
+
+    // Then: it mirrors OpenCode's which-key home hint.
+    assert!(
+        status_row.contains("Show keyboard shortcuts with ctrl+p"),
+        "runtime strip should expose the which-key hint, got {status_row:?}"
+    );
+}
+
+#[test]
 fn runtime_status_shows_subagent_view_hint_while_running() {
     // Given: a running shell is streaming a turn.
     let mut state = AppState {

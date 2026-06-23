@@ -70,8 +70,24 @@ fn runtime_status_line(state: &AppState, theme: &Theme) -> Line<'static> {
             Span::styled("b ", Style::default().fg(theme.text)),
             Span::styled("branch", Style::default().fg(theme.muted)),
         ]);
+    } else if show_home_hint(state) {
+        spans.extend([
+            Span::styled("   ", Style::default().fg(theme.muted)),
+            Span::styled(
+                "Show keyboard shortcuts with ",
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled("ctrl+p", Style::default().fg(theme.text)),
+        ]);
     }
     Line::from(spans)
+}
+
+fn show_home_hint(state: &AppState) -> bool {
+    !state.running
+        && state.input.is_empty()
+        && state.selected_message.is_none()
+        && state.projection.session.messages.is_empty()
 }
 
 fn runtime_state_label(state: &AppState) -> Option<String> {
