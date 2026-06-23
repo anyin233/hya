@@ -63,9 +63,6 @@ async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
-    if limit == 0 {
-        return Err(ApiError::bad_request("limit must be positive"));
-    }
     if query
         .workspace
         .as_deref()

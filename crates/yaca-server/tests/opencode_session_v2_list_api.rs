@@ -150,6 +150,15 @@ async fn opencode_v2_session_list_filters_roots_start_and_limit() {
     let parent = create_session(app.clone(), None).await;
     let child = create_session(app.clone(), Some(&parent)).await;
 
+    let (status, empty) = get_json(app.clone(), "/api/session?limit=0").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        empty["data"]
+            .as_array()
+            .expect("zero-limit list")
+            .is_empty()
+    );
+
     let (status, roots) = get_json(app.clone(), "/api/session?roots=true&limit=10").await;
     assert_eq!(status, StatusCode::OK);
     let root_ids = roots["data"].as_array().expect("root list");
