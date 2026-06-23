@@ -24,7 +24,8 @@ mod websearch;
 mod write;
 
 pub use interaction::{
-    InteractionError, InteractionPlane, QuestionAnswer, QuestionKind, QuestionRequest,
+    InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
+    QuestionRequest,
 };
 pub use lsp::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use permission::{
