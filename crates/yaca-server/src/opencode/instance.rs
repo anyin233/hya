@@ -39,8 +39,8 @@ struct PathInfo {
 struct AgentInfo {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'static str>,
-    mode: &'static str,
+    description: Option<String>,
+    mode: String,
     native: bool,
     #[serde(skip_serializing_if = "is_false")]
     hidden: bool,
@@ -82,24 +82,32 @@ async fn path(
 
 async fn agent(
     axum::extract::State(st): axum::extract::State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
 ) -> Json<Vec<AgentInfo>> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
     Json(
-        super::agent_catalog::native_agents()
-            .iter()
+        super::agent_catalog::list(&workdir)
+            .into_iter()
             .map(|agent| AgentInfo {
-                name: agent.name.to_string(),
+                name: agent.name.clone(),
                 description: agent.description,
                 mode: agent.mode,
-                native: true,
+                native: agent.native,
                 hidden: agent.hidden,
                 permission: if agent.name == "build" {
                     build_permissions.clone()
                 } else {
                     Vec::new()
                 },
-                model: model_info(st.agent.model.as_str()),
-                prompt: (agent.name == "build").then(|| st.agent.system_prompt.clone()),
+                model: model_info(agent.model.as_deref().unwrap_or(st.agent.model.as_str())),
+                prompt: if agent.name == "build" && agent.prompt.is_none() {
+                    Some(st.agent.system_prompt.clone())
+                } else {
+                    agent.prompt
+                },
                 options: json!({}),
             })
             .collect(),
