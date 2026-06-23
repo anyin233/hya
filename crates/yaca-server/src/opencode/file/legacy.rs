@@ -13,6 +13,7 @@ use super::mime;
 use super::path::{
     collect_paths, entry_kind, join_under, matches_kind, relative_path, resolve_existing, workdir,
 };
+use super::search;
 use crate::{ApiError, ServerState};
 
 #[derive(Deserialize)]
@@ -184,20 +185,16 @@ pub(super) async fn find_file(
         .kind
         .as_deref()
         .or_else(|| (query.dirs.as_deref() == Some("false")).then_some("file"));
-    let needle = query.query.to_ascii_lowercase();
     let mut paths = Vec::new();
     collect_paths(&root, &mut paths);
-    let mut found = paths
-        .into_iter()
-        .filter(|path| matches_kind(path, kind))
-        .filter(|path| {
-            relative_path(&root, path)
-                .to_ascii_lowercase()
-                .contains(&needle)
-        })
-        .map(|path| relative_path(&root, &path))
-        .collect::<Vec<_>>();
-    found.sort();
+    let mut found = search::ranked_paths(
+        &root,
+        paths.into_iter().filter(|path| matches_kind(path, kind)),
+        &query.query,
+    )
+    .into_iter()
+    .map(|path| relative_path(&root, &path))
+    .collect::<Vec<_>>();
     found.truncate(limit);
     Ok(Json(found))
 }

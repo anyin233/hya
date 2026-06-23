@@ -97,6 +97,18 @@ async fn opencode_find_file_rejects_invalid_query_params() {
 }
 
 #[tokio::test]
+async fn opencode_find_file_matches_fuzzy_file_queries() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join("src/manifest.rs"), "mod manifest;\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, files) = get_json(app, "/find/file?query=mainrs&type=file").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(files[0], "src/main.rs");
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");

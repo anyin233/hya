@@ -7,6 +7,7 @@ mod ignore;
 mod legacy;
 mod mime;
 mod path;
+mod search;
 mod symbol;
 
 pub(super) fn router() -> Router<ServerState> {
