@@ -25,7 +25,7 @@ mod write;
 
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
-    QuestionRequest,
+    QuestionPrompt, QuestionReply, QuestionRequest,
 };
 pub use lsp::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use permission::{

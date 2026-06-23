@@ -2,9 +2,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc};
 use yaca_proto::SessionId;
-use yaca_tool::{QuestionAnswer, QuestionInfo as ToolQuestionInfo, QuestionKind, QuestionRequest};
+use yaca_tool::{
+    QuestionAnswer, QuestionInfo as ToolQuestionInfo, QuestionKind, QuestionPrompt, QuestionReply,
+    QuestionRequest,
+};
 
 #[derive(Clone, Default)]
 pub(crate) struct QuestionRequests {
@@ -13,9 +16,8 @@ pub(crate) struct QuestionRequests {
 
 struct PendingQuestion {
     session: Option<SessionId>,
-    info: ToolQuestionInfo,
-    kind: QuestionKind,
-    reply: oneshot::Sender<QuestionAnswer>,
+    questions: Vec<QuestionPrompt>,
+    reply: QuestionReply,
 }
 
 #[derive(Clone, Serialize)]
@@ -52,8 +54,7 @@ impl QuestionRequests {
             while let Some(req) = rx.recv().await {
                 let entry = PendingQuestion {
                     session: req.session,
-                    info: req.info,
-                    kind: req.kind,
+                    questions: req.questions,
                     reply: req.reply,
                 };
                 inner.lock().await.insert(req.id.to_string(), entry);
@@ -96,7 +97,7 @@ impl QuestionRequests {
         };
         entry
             .reply
-            .send(answer_from_reply(entry.kind, answers))
+            .send_many(answers_from_reply(entry.questions, answers))
             .is_ok()
     }
 
@@ -105,7 +106,7 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        entry.reply.send(QuestionAnswer::Cancelled).is_ok()
+        reject_entry(entry)
     }
 
     pub(crate) async fn contains(&self, id: &str) -> bool {
@@ -119,7 +120,7 @@ impl QuestionRequests {
         };
         entry
             .reply
-            .send(answer_from_reply(entry.kind, answers))
+            .send_many(answers_from_reply(entry.questions, answers))
             .is_ok()
     }
 
@@ -128,7 +129,7 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        entry.reply.send(QuestionAnswer::Cancelled).is_ok()
+        reject_entry(entry)
     }
 
     async fn take(&self, session: SessionId, id: &str) -> Option<PendingQuestion> {
@@ -149,7 +150,11 @@ fn question_view(id: &str, entry: &PendingQuestion) -> Option<QuestionRequestVie
     Some(QuestionRequestView {
         id: id.to_string(),
         session_id: entry.session?.to_string(),
-        questions: vec![question_info(&entry.info)],
+        questions: entry
+            .questions
+            .iter()
+            .map(|question| question_info(&question.info))
+            .collect(),
     })
 }
 
@@ -170,8 +175,23 @@ fn question_info(info: &ToolQuestionInfo) -> QuestionInfo {
     }
 }
 
-fn answer_from_reply(kind: QuestionKind, answers: Vec<Vec<String>>) -> QuestionAnswer {
-    let answer = answers.into_iter().next().unwrap_or_default();
+fn answers_from_reply(
+    questions: Vec<QuestionPrompt>,
+    answers: Vec<Vec<String>>,
+) -> Vec<QuestionAnswer> {
+    questions
+        .into_iter()
+        .enumerate()
+        .map(|(index, question)| {
+            answer_from_labels(
+                question.kind,
+                answers.get(index).cloned().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+fn answer_from_labels(kind: QuestionKind, answer: Vec<String>) -> QuestionAnswer {
     match kind {
         QuestionKind::FreeText { default } => {
             QuestionAnswer::FreeText(answer.into_iter().next().or(default).unwrap_or_default())
@@ -181,6 +201,13 @@ fn answer_from_reply(kind: QuestionKind, answers: Vec<Vec<String>>) -> QuestionA
             allow_custom,
         } => select_answer(options, allow_custom, answer),
     }
+}
+
+fn reject_entry(entry: PendingQuestion) -> bool {
+    entry
+        .reply
+        .send_many(vec![QuestionAnswer::Cancelled; entry.questions.len()])
+        .is_ok()
 }
 
 fn select_answer(options: Vec<String>, allow_custom: bool, answer: Vec<String>) -> QuestionAnswer {
