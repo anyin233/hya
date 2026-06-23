@@ -71,6 +71,12 @@ pub(crate) enum Command {
         /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: String,
+        /// Hostname to listen on. OpenCode-compatible alias for the host part of `--bind`.
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Port to listen on. OpenCode-compatible alias for the port part of `--bind`.
+        #[arg(long)]
+        port: Option<u16>,
         /// SQLite database path. Empty string uses an in-memory store.
         #[arg(long, default_value = "")]
         db: String,
@@ -103,6 +109,16 @@ pub(crate) enum Command {
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
+}
+
+pub(crate) fn serve_bind(bind: String, hostname: Option<String>, port: Option<u16>) -> String {
+    if hostname.is_none() && port.is_none() {
+        return bind;
+    }
+    let (default_host, default_port) = bind.rsplit_once(':').unwrap_or((&bind, "8080"));
+    let host = hostname.unwrap_or_else(|| default_host.to_string());
+    let port = port.map_or_else(|| default_port.to_string(), |port| port.to_string());
+    format!("{host}:{port}")
 }
 
 #[cfg(test)]
@@ -156,6 +172,25 @@ mod tests {
                 assert_eq!(message, ["hello", "world"]);
             }
             _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_opencode_serve_network_aliases() {
+        let cli = parse(["yaca", "serve", "--hostname", "0.0.0.0", "--port", "4096"]);
+        match cli.command {
+            Some(super::Command::Serve {
+                bind,
+                hostname,
+                port,
+                ..
+            }) => {
+                assert_eq!(bind, "127.0.0.1:8080");
+                assert_eq!(hostname.as_deref(), Some("0.0.0.0"));
+                assert_eq!(port, Some(4096));
+                assert_eq!(super::serve_bind(bind, hostname, port), "0.0.0.0:4096");
+            }
+            _ => panic!("expected serve command"),
         }
     }
 }
