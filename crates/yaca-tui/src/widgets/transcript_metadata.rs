@@ -14,7 +14,12 @@ pub(super) fn assistant_metadata_label(state: &AppState, status: AssistantBlockS
     } else {
         state.model.as_str()
     };
-    let identity = format!("▣ {} · {model}", active_agent_label(state));
+    let provider = state
+        .model_provider_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .map_or(String::new(), |label| format!(" {label}"));
+    let identity = format!("▣ {} · {model}{provider}", active_agent_label(state));
     match status {
         AssistantBlockStatus::Completed { duration_ms } => format!(
             "{identity} · {}",

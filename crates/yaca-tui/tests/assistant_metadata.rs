@@ -77,6 +77,29 @@ fn assistant_metadata_footer_includes_active_agent_role() {
 }
 
 #[test]
+fn assistant_metadata_footer_includes_provider_label() {
+    // Given: the active model has the same provider label shown in the composer.
+    let mut state = AppState {
+        agent: "sisyphus".to_string(),
+        model: "kimi-k2".to_string(),
+        model_provider_label: Some("GLM/Kimi".to_string()),
+        ..AppState::default()
+    };
+    with_text_message(&mut state, 1, Role::Assistant, "metadata with provider");
+
+    // When: the assistant block renders its OpenCode-style metadata footer.
+    let buffer = render_buffer(&mut state, 100, 16);
+    let (_x, text_y) = find_rendered_text(&buffer, 100, 16, "metadata with provider").unwrap();
+    let metadata_row = row_text(&buffer, 100, text_y + 1);
+
+    // Then: assistant block identity matches composer identity by keeping the provider label.
+    assert!(
+        metadata_row.contains("Sisyphus · kimi-k2 GLM/Kimi · completed"),
+        "assistant metadata should include the provider label, got {metadata_row:?}"
+    );
+}
+
+#[test]
 fn assistant_metadata_footer_uses_finished_turn_duration() {
     let mut state = AppState {
         agent: "sisyphus".to_string(),
