@@ -181,6 +181,19 @@ async fn opencode_file_list_matches_unanchored_directory_ignores_at_any_depth() 
 }
 
 #[tokio::test]
+async fn opencode_legacy_file_content_uses_extension_mime_for_binary_files() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join("clip.avif"), b"avif\0data").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, content) = get_json(app, "/file/content?path=clip.avif").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content["type"], "binary");
+    assert_eq!(content["mimeType"], "image/avif");
+}
+
+#[tokio::test]
 async fn opencode_legacy_file_routes_honor_directory_query() {
     let workdir = tempdir();
     let scoped = workdir.join("scoped");
