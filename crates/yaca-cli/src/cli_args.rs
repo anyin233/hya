@@ -110,6 +110,17 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// List configured models.
+    Models {
+        /// Provider id to filter models by.
+        provider: Option<String>,
+        /// Accepted for OpenCode CLI compatibility.
+        #[arg(long)]
+        verbose: bool,
+        /// Accepted for OpenCode CLI compatibility.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// List sessions stored in a database.
     Sessions {
         /// SQLite database path.
@@ -247,6 +258,23 @@ mod tests {
                 );
             }
             _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn parses_opencode_models_command() {
+        let cli = parse(["yaca", "models", "openai", "--verbose", "--refresh"]);
+        match cli.command {
+            Some(super::Command::Models {
+                provider,
+                verbose,
+                refresh,
+            }) => {
+                assert_eq!(provider.as_deref(), Some("openai"));
+                assert!(verbose);
+                assert!(refresh);
+            }
+            _ => panic!("expected models command"),
         }
     }
 }
