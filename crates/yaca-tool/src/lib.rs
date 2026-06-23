@@ -3,6 +3,7 @@
 mod apply_patch;
 mod edit;
 mod edit_replace;
+mod formatter;
 pub mod interaction;
 mod invalid;
 mod lsp;
@@ -24,6 +25,7 @@ mod websearch;
 mod websearch_response;
 mod write;
 
+pub use formatter::{FormatterError, FormatterPlane, FormatterProvider, FormatterStatus};
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,

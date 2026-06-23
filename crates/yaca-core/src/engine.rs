@@ -7,8 +7,8 @@ use yaca_proto::{
 use yaca_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use yaca_store::SessionStore;
 use yaca_tool::{
-    InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane, TodoPlane, ToolRegistry,
-    WebSearchPlane,
+    FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, SkillPlane, SpawnerPlane,
+    TodoPlane, ToolRegistry, WebSearchPlane,
 };
 
 use crate::bus::EventBus;
@@ -53,6 +53,7 @@ pub struct SessionEngine {
     todo: TodoPlane,
     skills: SkillPlane,
     websearch: WebSearchPlane,
+    formatter: FormatterPlane,
     lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
@@ -74,6 +75,7 @@ impl SessionEngine {
         let todo = TodoPlane::default();
         let skills = SkillPlane::default();
         let websearch = WebSearchPlane::default();
+        let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
         Self {
             store,
@@ -85,6 +87,7 @@ impl SessionEngine {
             todo,
             skills,
             websearch,
+            formatter,
             lsp,
             bus,
             summarizer: None,
@@ -118,6 +121,12 @@ impl SessionEngine {
     }
 
     #[must_use]
+    pub fn with_formatter(mut self, formatter: FormatterPlane) -> Self {
+        self.formatter = formatter;
+        self
+    }
+
+    #[must_use]
     pub fn with_compaction(
         mut self,
         summarizer: Arc<dyn Summarizer>,
@@ -141,6 +150,11 @@ impl SessionEngine {
     #[must_use]
     pub fn lsp(&self) -> &LspPlane {
         &self.lsp
+    }
+
+    #[must_use]
+    pub fn formatter(&self) -> &FormatterPlane {
+        &self.formatter
     }
 
     #[must_use]
