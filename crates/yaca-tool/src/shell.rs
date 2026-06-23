@@ -76,13 +76,18 @@ impl Tool for ShellTool {
             workdir,
             env,
         } = input;
+        let timeout_ms = timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
+        if timeout_ms == 0 {
+            return Err(ToolError::Input(
+                "timeout must be greater than 0".to_string(),
+            ));
+        }
         ctx.permission
             .assert(Action::Bash, Resource::Command(command.clone()))
             .await?;
 
         let cwd = cwd(ctx, workdir.as_deref());
         assert_external_workdir(ctx, &cwd).await?;
-        let timeout_ms = timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
         let mut child = {
             let mut proc = tokio::process::Command::new("sh");
             proc.arg("-c")

@@ -148,6 +148,24 @@ async fn shell_times_out_and_reports_shell_metadata() {
 }
 
 #[tokio::test]
+async fn shell_rejects_non_positive_timeout() {
+    // Given
+    let dir = tempdir();
+    let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir);
+    let tool = ToolRegistry::builtins().get("shell").unwrap();
+
+    // When
+    let result = tool
+        .execute(&ctx, json!({ "command": "echo never", "timeout": 0 }))
+        .await;
+
+    // Then
+    assert!(
+        matches!(result, Err(ToolError::Input(message)) if message == "timeout must be greater than 0")
+    );
+}
+
+#[tokio::test]
 async fn shell_checks_bash_permission_before_running() {
     // Given
     let dir = tempdir();
