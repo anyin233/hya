@@ -14,6 +14,7 @@ mod config;
 mod permission;
 mod plugins;
 mod rpc;
+mod serve;
 mod skills;
 mod tui;
 
@@ -33,7 +34,6 @@ use yaca_core::{
 };
 use yaca_proto::{AgentName, MemberId, ModelRef, SessionId};
 use yaca_provider::{DevProvider, ProviderRouter};
-use yaca_server::{AppState, router as server_router};
 use yaca_store::SessionStore;
 use yaca_tool::{
     Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
@@ -607,42 +607,6 @@ async fn cmd_tui(
     .await
 }
 
-async fn cmd_serve(
-    bind: String,
-    db: String,
-    model_override: Option<String>,
-    yolo: bool,
-) -> anyhow::Result<()> {
-    let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override);
-    let (engine, asks, questions, mcp_manager, _plugin_host) = build_session_engine(
-        store,
-        runtime.router,
-        &runtime.model,
-        runtime.mcp,
-        runtime.plugins,
-    );
-    let mut state = AppState::new(engine, Arc::new(agent_with_model(&runtime.model)))
-        .with_question_requests(questions)
-        .with_mcp_manager(mcp_manager);
-    let _responder = if yolo {
-        eprintln!("yaca: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
-        Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))
-    } else {
-        state = state.with_permission_requests(asks);
-        None
-    };
-    let listener = tokio::net::TcpListener::bind(&bind)
-        .await
-        .with_context(|| format!("bind {bind}"))?;
-    let addr = listener.local_addr().context("read local addr")?;
-    println!("yaca server listening on http://{addr}");
-    axum::serve(listener, server_router(state))
-        .await
-        .context("serve http")?;
-    Ok(())
-}
-
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let uuid = uuid::Uuid::parse_str(&id).context("parse session id")?;
     let session = SessionId::from_uuid(uuid);
@@ -696,7 +660,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         None => cmd_tui(model, db, resume, yolo).await,
         Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, yolo, json).await,
-        Some(Command::Serve { bind, db }) => cmd_serve(bind, db, model, yolo).await,
+        Some(Command::Serve { bind, db }) => serve::cmd_serve(bind, db, model, yolo).await,
         Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,

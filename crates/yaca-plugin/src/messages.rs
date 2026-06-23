@@ -9,6 +9,8 @@ use yaca_proto::{
 };
 use yaca_tool::Action;
 
+pub use yaca_proto::WorkspaceAdapterInfo;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 
 pub const METHOD_INITIALIZE: &str = "initialize";
@@ -154,15 +156,6 @@ pub struct ToolInfo {
     #[serde(default)]
     pub description: String,
     pub input_schema: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceAdapterInfo {
-    #[serde(rename = "type")]
-    pub r#type: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

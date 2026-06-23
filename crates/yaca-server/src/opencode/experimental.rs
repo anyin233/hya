@@ -13,7 +13,7 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/experimental/console", get(console))
         .route("/experimental/console/orgs", get(console_orgs))
         .route("/experimental/console/switch", post(unavailable))
-        .route("/experimental/workspace/adapter", get(empty_array))
+        .route("/experimental/workspace/adapter", get(workspace_adapters))
         .route(
             "/experimental/workspace",
             get(empty_array).post(unavailable),
@@ -60,6 +60,12 @@ async fn console_orgs() -> Json<Value> {
 
 async fn empty_array() -> Json<Vec<Value>> {
     Json(Vec::new())
+}
+
+async fn workspace_adapters(
+    State(st): State<ServerState>,
+) -> Json<Vec<crate::WorkspaceAdapterInfo>> {
+    Json(st.workspace_adapters)
 }
 
 async fn resource() -> Json<Value> {
