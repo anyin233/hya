@@ -38,6 +38,13 @@ fn ctrl_x_opens_non_modal_keybindings_preview() {
             .groups
             .iter()
             .flat_map(|group| group.items.iter())
+            .any(|item| item.key == "b" && item.label == "Toggle sidebar")
+    );
+    assert!(
+        preview
+            .groups
+            .iter()
+            .flat_map(|group| group.items.iter())
             .any(|item| item.key == "m" && item.label == "Select model")
     );
     assert!(
@@ -65,6 +72,31 @@ fn ctrl_x_opens_non_modal_keybindings_preview() {
         controller.app.dialog.as_ref().expect("model dialog").title,
         "select model"
     );
+}
+
+#[test]
+fn ctrl_x_then_b_toggles_sidebar_without_typing() {
+    // Given
+    let mut controller = Controller::new(AppState::default());
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('x')), TuiEffect::None);
+    let hide_effect = controller.handle_key(key(KeyCode::Char('b')));
+
+    // Then
+    assert_eq!(hide_effect, TuiEffect::None);
+    assert!(controller.app.sidebar_hidden);
+    assert_eq!(controller.app.input, "");
+    assert!(controller.app.keybindings.is_none());
+
+    // When
+    assert_eq!(controller.handle_key(ctrl('x')), TuiEffect::None);
+    let show_effect = controller.handle_key(key(KeyCode::Char('b')));
+
+    // Then
+    assert_eq!(show_effect, TuiEffect::None);
+    assert!(!controller.app.sidebar_hidden);
+    assert_eq!(controller.app.input, "");
 }
 
 #[test]

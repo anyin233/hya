@@ -85,6 +85,31 @@ fn sidebar_uses_opencode_forty_two_column_width_when_wide() {
 }
 
 #[test]
+fn manual_sidebar_toggle_hides_wide_context_rail() {
+    // Given: the user hid OpenCode's context rail from a wide shell.
+    let width = 121;
+    let input = format!("{}reclaimed-sidebar-columns", "a".repeat(88));
+    let mut state = AppState {
+        session_label: "sess-1".to_string(),
+        input,
+        sidebar_hidden: true,
+        ..AppState::default()
+    };
+
+    // When: the wide shell renders.
+    let buffer = render_buffer(&mut state, width, 18);
+    let marker = find_text(&buffer, width, 18, "reclaimed-sidebar-columns");
+
+    // Then: the context rail stays hidden and the main composer gets the width back.
+    assert_eq!(find_text(&buffer, width, 18, "GUI sess-1"), None);
+    assert_eq!(find_text(&buffer, width, 18, "ContextPilot"), None);
+    assert!(
+        matches!(marker, Some((x, _)) if x > width - 42),
+        "manual sidebar hide should let main content reclaim the sidebar columns, got {marker:?}"
+    );
+}
+
+#[test]
 fn composer_rail_uses_opencode_two_column_main_gutter() {
     // Given: a narrow shell where OpenCode still applies main-column padding.
     let mut state = AppState {

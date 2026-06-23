@@ -55,6 +55,7 @@ pub struct AppState {
     pub changed_files: Vec<ChangedFileView>,
     pub selected_message: Option<usize>,
     pub selected_message_scroll_anchor: Option<usize>,
+    pub sidebar_hidden: bool,
 }
 
 impl AppState {
@@ -229,8 +230,9 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let theme = theme::Theme::yaca_dark();
     let area = frame.area();
     let footer_height = 1;
-    let prompt_height = widgets::prompt_height(state, layout::main_width(area));
-    let layout = layout::app_layout(area, prompt_height, footer_height);
+    let prompt_height =
+        widgets::prompt_height(state, layout::main_width(area, state.sidebar_hidden));
+    let layout = layout::app_layout(area, prompt_height, footer_height, state.sidebar_hidden);
     widgets::render_timeline(frame, layout.timeline, state, &theme);
     if let Some(sidebar) = layout.sidebar {
         widgets::render_sidebar(frame, sidebar, state, &theme);

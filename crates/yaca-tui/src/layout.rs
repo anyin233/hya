@@ -13,8 +13,13 @@ pub struct AppLayout {
 }
 
 #[must_use]
-pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayout {
-    let show_sidebar = area.width > SIDEBAR_BREAKPOINT;
+pub fn app_layout(
+    area: Rect,
+    prompt_height: u16,
+    footer_height: u16,
+    sidebar_hidden: bool,
+) -> AppLayout {
+    let show_sidebar = area.width > SIDEBAR_BREAKPOINT && !sidebar_hidden;
     let columns = if show_sidebar {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -50,8 +55,8 @@ pub fn app_layout(area: Rect, prompt_height: u16, footer_height: u16) -> AppLayo
 }
 
 #[must_use]
-pub const fn main_width(area: Rect) -> u16 {
-    let width = if area.width > SIDEBAR_BREAKPOINT {
+pub const fn main_width(area: Rect, sidebar_hidden: bool) -> u16 {
+    let width = if area.width > SIDEBAR_BREAKPOINT && !sidebar_hidden {
         area.width.saturating_sub(SIDEBAR_WIDTH)
     } else {
         area.width

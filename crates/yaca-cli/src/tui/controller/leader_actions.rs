@@ -37,6 +37,11 @@ impl Controller {
                 self.clear_keybindings();
                 TuiEffect::CompactTranscript
             }
+            LeaderAction::SidebarToggle => {
+                self.clear_keybindings();
+                self.app.sidebar_hidden = !self.app.sidebar_hidden;
+                TuiEffect::None
+            }
             LeaderAction::StatusView => {
                 self.clear_keybindings();
                 self.open_tools_dialog();
@@ -78,7 +83,12 @@ fn leader_keybindings_view(app: &AppState) -> KeyBindingsView {
         groups: vec![
             group(
                 "System",
-                [("s", "Status"), ("↓", down_label), ("q", "Exit")],
+                [
+                    ("b", "Toggle sidebar"),
+                    ("s", "Status"),
+                    ("↓", down_label),
+                    ("q", "Exit"),
+                ],
             ),
             group(
                 "Session",
