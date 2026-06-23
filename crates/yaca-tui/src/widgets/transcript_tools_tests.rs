@@ -76,3 +76,39 @@ fn tool_status_ellipsizes_cjk_input_by_display_width() {
         "truncated CJK input should keep an ellipsis marker"
     );
 }
+
+#[test]
+fn tool_status_ellipsizes_input_to_actual_line_width() {
+    // Given: a long tool label and running status competing with input text.
+    let theme = Theme::yaca_dark();
+    let mut lines = Vec::new();
+
+    // When: the row is rendered with a narrow OpenCode-style transcript budget.
+    push_tool_lines(
+        (
+            "parallel_search",
+            "Parallel Web Search",
+            "opencode tui transcript block selection branch revert narrow viewport",
+            &ToolStatus::Running,
+        ),
+        52,
+        false,
+        &theme,
+        &mut lines,
+    );
+
+    // Then: input truncation uses the actual remaining row width, not a fixed budget.
+    let line = match lines.first() {
+        Some(line) => line,
+        None => panic!("tool row missing"),
+    };
+    assert!(
+        line.width() <= 48,
+        "tool row should fit the visible transcript budget, got width {}",
+        line.width()
+    );
+    assert!(
+        line.spans.iter().any(|span| span.content.contains('…')),
+        "narrow rows should keep an ellipsis marker on the input"
+    );
+}

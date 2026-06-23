@@ -13,6 +13,7 @@ use crate::tool_labels::{action_symbol, status_symbol};
 use crate::view_model::ToolStatus;
 
 const TOOL_INPUT_INLINE_MAX_WIDTH: usize = 48;
+const TOOL_ROW_WIDTH_MARGIN: usize = 4;
 
 pub fn push_tool_lines(
     tool: (&str, &str, &str, &ToolStatus),
@@ -38,22 +39,23 @@ pub fn push_tool_lines(
     } else {
         status_symbol(name, status)
     };
+    let symbol_text = format!("{symbol} ");
+    let label_text = format!("{label} ");
+    let status_text = inline_status_text(status);
+    let input_width = input_width_budget(width, &symbol_text, &label_text, status_text.as_deref());
     let mut spans = vec![
         Span::styled("   ", tool_style(theme.muted, selected, theme, false)),
+        Span::styled(symbol_text, tool_style(color, selected, theme, denied)),
         Span::styled(
-            format!("{symbol} "),
-            tool_style(color, selected, theme, denied),
-        ),
-        Span::styled(
-            format!("{label} "),
+            label_text,
             tool_style(color, selected, theme, denied).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            input_label(input),
+            input_label(input, input_width),
             tool_style(theme.muted, selected, theme, denied),
         ),
     ];
-    if let Some(status) = inline_status_text(status) {
+    if let Some(status) = status_text {
         spans.push(Span::styled(
             "· ",
             tool_style(theme.muted, selected, theme, false),
@@ -154,22 +156,40 @@ fn diff_kind_color(kind: DiffLineKind, theme: &Theme) -> Color {
     }
 }
 
-fn input_label(input: &str) -> String {
-    if input.is_empty() {
+fn input_width_budget(
+    row_width: u16,
+    symbol_text: &str,
+    label_text: &str,
+    status_text: Option<&str>,
+) -> usize {
+    let target_width = usize::from(row_width).saturating_sub(TOOL_ROW_WIDTH_MARGIN);
+    let status_width = status_text
+        .map(|status| UnicodeWidthStr::width("· ") + UnicodeWidthStr::width(status))
+        .unwrap_or(0);
+    let fixed_width = UnicodeWidthStr::width("   ")
+        + UnicodeWidthStr::width(symbol_text)
+        + UnicodeWidthStr::width(label_text)
+        + status_width
+        + UnicodeWidthStr::width(" ");
+    TOOL_INPUT_INLINE_MAX_WIDTH.min(target_width.saturating_sub(fixed_width))
+}
+
+fn input_label(input: &str, max_width: usize) -> String {
+    if input.is_empty() || max_width == 0 {
         String::new()
     } else {
-        format!("{} ", ellipsize_input(input))
+        format!("{} ", ellipsize_input(input, max_width))
     }
 }
 
-fn ellipsize_input(input: &str) -> String {
+fn ellipsize_input(input: &str, max_width: usize) -> String {
     let cleaned = input.replace('\n', " ");
-    if UnicodeWidthStr::width(cleaned.as_str()) <= TOOL_INPUT_INLINE_MAX_WIDTH {
+    if UnicodeWidthStr::width(cleaned.as_str()) <= max_width {
         cleaned
     } else {
         let mut head = String::new();
         let mut width = 0;
-        let limit = TOOL_INPUT_INLINE_MAX_WIDTH.saturating_sub(1);
+        let limit = max_width.saturating_sub(1);
         for ch in cleaned.chars() {
             let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
             if width + ch_width > limit {
