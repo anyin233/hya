@@ -111,9 +111,7 @@ async fn list(
     if let Some(search) = search {
         sessions.retain(|session| session.title().contains(search));
     }
-    if let Some(directory) = directory {
-        sessions.retain(|session| session.directory() == directory);
-    }
+    super::session_v2_workspace::retain(&st, &mut sessions, directory, workspace);
     sessions.retain(|session| !session.archived());
     let start = decoded
         .as_ref()
