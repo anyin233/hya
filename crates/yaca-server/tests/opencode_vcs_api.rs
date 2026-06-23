@@ -174,6 +174,28 @@ async fn opencode_vcs_branch_diff_uses_merge_base_for_committed_changes() {
 }
 
 #[tokio::test]
+async fn opencode_vcs_branch_diff_preserves_special_filenames() {
+    let workdir = tempdir();
+    init_repo_with_head(&workdir);
+    git(&workdir, &["branch", "-M", "main"]);
+    git(&workdir, &["checkout", "-b", "feature"]);
+    let weird = "branch\nfile.txt";
+    std::fs::write(workdir.join(weird), "odd\n").unwrap();
+    git(&workdir, &["add", "."]);
+    git(&workdir, &["commit", "-m", "weird branch file"]);
+    let app = router(state(workdir).await);
+
+    let (status, diff) = get_json(app, "/vcs/diff?mode=branch&context=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        diff.as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["file"] == weird && item["status"] == "added")
+    );
+}
+
+#[tokio::test]
 async fn opencode_vcs_diff_caps_oversized_untracked_patch() {
     let workdir = tempdir();
     init_repo_with_head(&workdir);

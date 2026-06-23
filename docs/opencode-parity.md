@@ -45,6 +45,7 @@ media parts for Gemini image, audio, and video inline data. Provider replay now
 preserves structured JSON tool errors while keeping primitive errors as plain text.
 VCS branch-mode diffs now use the merge-base ref for both patches and
 additions/deletions, matching OpenCode's committed branch-change behavior, and
+branch-mode file discovery preserves OpenCode's NUL-parsed special filenames.
 VCS default-branch discovery follows OpenCode's remote/config/local fallback.
 
 ## Status Summary
