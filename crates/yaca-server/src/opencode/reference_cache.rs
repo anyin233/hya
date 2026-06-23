@@ -10,12 +10,17 @@ pub(super) fn materialize(repository: &str, branch: Option<&str>, path: PathBuf)
     let Some(reference) = super::reference_repository::parse(repository) else {
         return;
     };
-    if !mark_active(&path) {
-        return;
-    }
     let remote = super::reference_repository::remote(&reference).to_string();
     let branch = branch.map(ToString::to_string);
     tokio::spawn(async move {
+        if !wait_for_turn(&path).await {
+            tracing::warn!(
+                repository = %remote,
+                path = %path.display(),
+                "timed out waiting to materialize opencode reference"
+            );
+            return;
+        }
         if let Err(error) = ensure(&remote, branch.as_deref(), &path).await {
             tracing::warn!(
                 %error,
@@ -38,6 +43,16 @@ fn mark_active(path: &Path) -> bool {
         return false;
     };
     active.insert(path.to_path_buf())
+}
+
+async fn wait_for_turn(path: &Path) -> bool {
+    for _ in 0..1500 {
+        if mark_active(path) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
 }
 
 fn unmark_active(path: &Path) {
