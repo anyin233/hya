@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -37,10 +38,10 @@ pub(super) async fn read(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(mime_for_path(&path, Some(&bytes))),
-    );
+    let mime = mime_for_path(&path, Some(&bytes));
+    let content_type =
+        HeaderValue::from_str(mime.as_ref()).map_err(|e| ApiError::internal(e.to_string()))?;
+    headers.insert(header::CONTENT_TYPE, content_type);
     Ok((headers, bytes))
 }
 
@@ -134,7 +135,7 @@ fn fs_entry(root: &Path, path: PathBuf, kind: &'static str) -> Entry {
         mime: if kind == "directory" {
             "application/x-directory".to_string()
         } else {
-            mime_for_path(&path, None).to_string()
+            mime_for_path(&path, None).into_owned()
         },
     }
 }
@@ -144,7 +145,19 @@ fn fs_entry_for_path(root: &Path, path: PathBuf) -> Option<Entry> {
     Some(fs_entry(root, path, kind))
 }
 
-fn mime_for_path(path: &Path, bytes: Option<&[u8]>) -> &'static str {
+fn mime_for_path(path: &Path, bytes: Option<&[u8]>) -> Cow<'static, str> {
+    if let Some(mime) = explicit_extension_mime(path) {
+        return Cow::Borrowed(mime);
+    }
+    if let Some(mime) = mime_guess::from_path(path).first_raw() {
+        return Cow::Borrowed(mime);
+    }
+    bytes.map_or(Cow::Borrowed("application/octet-stream"), |bytes| {
+        Cow::Borrowed(mime::sniff(bytes))
+    })
+}
+
+fn explicit_extension_mime(path: &Path) -> Option<&'static str> {
     match path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -152,24 +165,26 @@ fn mime_for_path(path: &Path, bytes: Option<&[u8]>) -> &'static str {
         .as_deref()
     {
         Some("txt" | "rs" | "toml" | "yaml" | "yml" | "ts" | "tsx" | "js" | "jsx" | "css")
-        | Some("html" | "py" | "go" | "java" | "c" | "h" | "cpp" | "hpp" | "sh") => "text/plain",
-        Some("csv") => "text/csv",
-        Some("md") => "text/markdown",
-        Some("json") => "application/json",
-        Some("xml") => "application/xml",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("ico") => "image/x-icon",
-        Some("pdf") => "application/pdf",
-        Some("wasm") => "application/wasm",
-        Some("mp3") => "audio/mpeg",
-        Some("wav") => "audio/wav",
-        Some("ogg") => "audio/ogg",
-        Some("mp4") => "video/mp4",
-        Some("webm") => "video/webm",
-        _ => bytes.map_or("application/octet-stream", mime::sniff),
+        | Some("html" | "py" | "go" | "java" | "c" | "h" | "cpp" | "hpp" | "sh") => {
+            Some("text/plain")
+        }
+        Some("csv") => Some("text/csv"),
+        Some("md") => Some("text/markdown"),
+        Some("json") => Some("application/json"),
+        Some("xml") => Some("application/xml"),
+        Some("svg") => Some("image/svg+xml"),
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("ico") => Some("image/x-icon"),
+        Some("pdf") => Some("application/pdf"),
+        Some("wasm") => Some("application/wasm"),
+        Some("mp3") => Some("audio/mpeg"),
+        Some("wav") => Some("audio/wav"),
+        Some("ogg") => Some("audio/ogg"),
+        Some("mp4") => Some("video/mp4"),
+        Some("webm") => Some("video/webm"),
+        _ => None,
     }
 }
