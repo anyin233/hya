@@ -10,7 +10,7 @@ pub(super) async fn history(
     State(st): State<ServerState>,
     Json(known): Json<BTreeMap<String, u64>>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let mut out = Vec::new();
+    let mut out = st.sync.history(&known).await;
     for info in st
         .engine
         .store()
@@ -33,11 +33,22 @@ pub(super) async fn history(
             out.push(history_event(&aggregate, &env)?);
         }
     }
-    out.sort_by_key(|event| event["seq"].as_u64().unwrap_or_default());
+    out.sort_by_key(|event| {
+        (
+            event["aggregate_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            event["seq"].as_u64().unwrap_or_default(),
+        )
+    });
     Ok(Json(out))
 }
 
-pub(super) async fn replay(Json(payload): Json<Value>) -> Result<Json<Value>, ApiError> {
+pub(super) async fn replay(
+    State(st): State<ServerState>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     if payload.get("directory").and_then(Value::as_str).is_none() {
         return Err(ApiError::bad_request("sync replay missing directory"));
     }
@@ -69,6 +80,7 @@ pub(super) async fn replay(Json(payload): Json<Value>) -> Result<Json<Value>, Ap
             )));
         }
     }
+    st.sync.replay(events).await;
     Ok(Json(json!({ "sessionID": session_id })))
 }
 

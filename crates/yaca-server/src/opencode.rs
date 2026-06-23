@@ -59,6 +59,7 @@ mod session_update;
 mod session_v2;
 mod session_v2_cursor;
 mod sse;
+mod sync_state;
 mod tui;
 mod worktree_git;
 
@@ -67,6 +68,7 @@ pub(crate) use mcp_state::McpHttpState;
 pub(crate) use project::ProjectState;
 pub(crate) use pty_state::PtyState;
 pub(in crate::opencode) use session_legacy::load_session;
+pub(crate) use sync_state::SyncState;
 pub(crate) use tui::TuiState;
 
 pub(super) fn router() -> Router<ServerState> {
