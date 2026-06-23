@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 use crate::ServerState;
 
+use super::agent_permission::PermissionRule;
+
 mod vcs;
 
 pub(super) fn router() -> Router<ServerState> {
@@ -35,7 +37,7 @@ struct AgentInfo {
     name: String,
     mode: &'static str,
     native: bool,
-    permission: Vec<Value>,
+    permission: Vec<PermissionRule>,
     model: AgentModel,
     prompt: String,
     options: Value,
@@ -89,7 +91,7 @@ async fn agent(
         name: st.agent.name.to_string(),
         mode: "primary",
         native: true,
-        permission: Vec::new(),
+        permission: super::agent_permission::from_engine(&st.engine),
         model: model_info(st.agent.model.as_str()),
         prompt: st.agent.system_prompt.clone(),
         options: json!({}),
