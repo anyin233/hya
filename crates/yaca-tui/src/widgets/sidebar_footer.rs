@@ -7,9 +7,19 @@ use crate::AppState;
 use crate::theme::Theme;
 
 const FOOTER_PADDING_WIDTH: usize = 2;
+const GETTING_STARTED_MIN_HEIGHT: u16 = 32;
 
-pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+pub fn sidebar_footer_lines(
+    state: &AppState,
+    theme: &Theme,
+    width: u16,
+    height: u16,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    if state.model_provider_label.is_none() && height >= GETTING_STARTED_MIN_HEIGHT {
+        lines.extend(getting_started_lines(theme));
+        lines.push(Line::from(""));
+    }
     lines.push(Line::from(""));
     lines.push(workdir_footer_line(state, theme, width));
     lines.push(Line::from(vec![
@@ -24,6 +34,24 @@ pub fn sidebar_footer_lines(state: &AppState, theme: &Theme, width: u16) -> Vec<
         ),
     ]));
     lines
+}
+
+fn getting_started_lines(theme: &Theme) -> Vec<Line<'static>> {
+    let text = Style::default().fg(theme.text).bg(theme.element);
+    let muted = Style::default().fg(theme.muted).bg(theme.element);
+    vec![
+        Line::from(vec![
+            Span::styled("  ⬖ ", text),
+            Span::styled("Getting started", text.add_modifier(Modifier::BOLD)),
+            Span::styled("                 ✕", muted),
+        ]),
+        Line::from(Span::styled("    OpenCode includes free models", muted)),
+        Line::from(Span::styled("    Connect from 75+ providers", muted)),
+        Line::from(vec![
+            Span::styled("    Connect provider", text),
+            Span::styled("        /connect", muted),
+        ]),
+    ]
 }
 
 fn workdir_footer_line(state: &AppState, theme: &Theme, width: u16) -> Line<'static> {

@@ -87,6 +87,28 @@ fn context_rail_footer_stays_anchored_to_bottom() {
 }
 
 #[test]
+fn context_rail_footer_shows_getting_started_until_provider_exists() {
+    // Given: OpenCode shows a getting-started footer card before a real provider is configured.
+    let mut no_provider = AppState::default();
+    with_session(&mut no_provider, "/tmp/yaca-footer");
+    let mut with_provider = AppState {
+        model_provider_label: Some("OpenAI".to_string()),
+        ..AppState::default()
+    };
+    with_session(&mut with_provider, "/tmp/yaca-footer");
+
+    // When: both sidebar footers render.
+    let no_provider_buffer = render_buffer(&mut no_provider, 124, 36);
+    let provider_buffer = render_buffer(&mut with_provider, 124, 36);
+
+    // Then: the onboarding card appears only before the provider-backed model is known.
+    assert!(row_containing(&no_provider_buffer, 124, 36, "Getting started").is_some());
+    assert!(row_containing(&no_provider_buffer, 124, 36, "Connect provider").is_some());
+    assert!(row_containing(&no_provider_buffer, 124, 36, "/connect").is_some());
+    assert!(row_containing(&provider_buffer, 124, 36, "Getting started").is_none());
+}
+
+#[test]
 fn context_rail_footer_emphasizes_workdir_name_like_opencode() {
     // Given: a wide context rail with a worktree path and branch.
     let mut state = AppState {

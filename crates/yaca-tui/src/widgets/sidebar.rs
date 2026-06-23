@@ -13,7 +13,7 @@ pub fn render_sidebar(frame: &mut Frame, area: Rect, state: &AppState, theme: &T
         Block::default().style(Style::default().bg(theme.panel)),
         area,
     );
-    let footer = sidebar_footer_lines(state, theme, area.width);
+    let footer = sidebar_footer_lines(state, theme, area.width, area.height);
     let footer_height = u16::try_from(footer.len())
         .unwrap_or(u16::MAX)
         .min(area.height);
