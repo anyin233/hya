@@ -68,6 +68,13 @@ impl Tool for ApplyPatchTool {
         let mut summaries = Vec::with_capacity(hunks.len());
         for hunk in hunks {
             let summary = apply::apply_hunk(&ctx.workdir, hunk).await?;
+            if !matches!(summary.action, apply::FileAction::Delete) {
+                let path = resolve_workdir_path(&ctx.workdir, &summary.path)?;
+                ctx.formatter
+                    .format_file(&ctx.workdir, &path)
+                    .await
+                    .map_err(|error| ToolError::Other(error.to_string()))?;
+            }
             summaries.push(summary);
         }
 
