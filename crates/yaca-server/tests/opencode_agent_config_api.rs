@@ -63,6 +63,22 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
 fn find_agent<'a>(agents: &'a Value, name: &str) -> &'a Value {
     agent_named(agents, name).unwrap_or_else(|| panic!("missing agent {name}: {agents}"))
 }
@@ -131,6 +147,7 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     std::fs::write(
         workdir.join(".opencode/opencode.json"),
         r#"{
+  "default_agent": "triage",
   "mode": {
     "triage": {
       "description": "Triage mode",
@@ -148,11 +165,19 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     let uri = format!("/agent?directory={}", workdir.display());
     let api_uri = format!("/api/agent?directory={}", workdir.display());
     let (status, agents) = get_json(app.clone(), &uri).await;
-    let (api_status, api_agents) = get_json(app, &api_uri).await;
+    let (api_status, api_agents) = get_json(app.clone(), &api_uri).await;
+    let (create_status, created) = post_json(
+        app,
+        "/api/session",
+        serde_json::json!({ "location": { "directory": workdir.display().to_string() } }),
+    )
+    .await;
 
     // Then: inline agents merge with native agents and inline modes become primary agents.
     assert_eq!(status, StatusCode::OK);
     assert_eq!(api_status, StatusCode::OK);
+    assert_eq!(create_status, StatusCode::OK);
+    assert_eq!(agents[0]["name"], "triage");
     let architect = find_agent(&agents, "architect");
     assert_eq!(architect["description"], "Architecture reviewer");
     assert_eq!(architect["mode"], "subagent");
@@ -181,8 +206,10 @@ async fn opencode_agent_routes_discover_inline_config_agents() {
     assert_eq!(triage["mode"], "primary");
     assert_eq!(triage["model"]["providerID"], "anthropic");
     assert_eq!(triage["model"]["modelID"], "claude-sonnet");
+    assert_eq!(created["data"]["agent"], "triage");
 
     let api_agents = &api_agents["data"];
+    assert_eq!(api_agents[0]["id"], "triage");
     let architect = find_agent(api_agents, "architect");
     assert_eq!(architect["description"], "Architecture reviewer");
     assert_eq!(architect["system"], "Think structurally.");

@@ -109,12 +109,12 @@ async fn opencode_agent_routes_include_native_agent_catalog() {
             .collect::<Vec<_>>(),
         vec![
             "build",
-            "plan",
-            "general",
-            "explore",
             "compaction",
-            "title",
-            "summary"
+            "explore",
+            "general",
+            "plan",
+            "summary",
+            "title"
         ]
     );
 
@@ -135,12 +135,12 @@ async fn opencode_agent_routes_include_native_agent_catalog() {
             .collect::<Vec<_>>(),
         vec![
             "build",
-            "plan",
-            "general",
-            "explore",
             "compaction",
-            "title",
-            "summary"
+            "explore",
+            "general",
+            "plan",
+            "summary",
+            "title"
         ]
     );
     assert_eq!(find_agent(api_agents, "general")["mode"], "subagent");

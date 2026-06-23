@@ -141,29 +141,37 @@ async fn create(
     };
     let requested = req.id.as_deref().map(parse_session).transpose()?;
     let parent = req.parent_id.as_deref().map(parse_session).transpose()?;
+    let workdir = req
+        .location
+        .map(|location| location.directory)
+        .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned());
+    let agent = req
+        .agent
+        .map(AgentName::new)
+        .unwrap_or_else(|| default_agent(&st, &workdir));
     let session = st
         .engine
         .create_with_id(
             requested,
             CreateSession {
                 parent,
-                agent: req
-                    .agent
-                    .map(AgentName::new)
-                    .unwrap_or_else(|| st.agent.name.clone()),
+                agent,
                 model: req
                     .model
                     .map(OpenCodeModelRefRequest::into_model_ref)
                     .unwrap_or_else(|| st.agent.model.clone()),
-                workdir: req
-                    .location
-                    .map(|location| location.directory)
-                    .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned()),
+                workdir,
             },
         )
         .await?;
     let data = super::load_session(&st, session, None).await?.info;
     Ok(Json(DataResponse { data }))
+}
+
+fn default_agent(st: &ServerState, workdir: &str) -> AgentName {
+    super::agent_catalog::default_name(std::path::Path::new(workdir))
+        .map(AgentName::new)
+        .unwrap_or_else(|| st.agent.name.clone())
 }
 
 async fn get_one(
