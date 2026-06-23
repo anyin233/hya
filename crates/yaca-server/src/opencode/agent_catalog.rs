@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::agent_permission::PermissionRule;
 use super::agent_sources::AgentChange;
 
 pub(super) struct AgentEntry {
@@ -15,6 +16,7 @@ pub(super) struct AgentEntry {
     pub(super) variant: Option<String>,
     pub(super) request_headers: BTreeMap<String, String>,
     pub(super) request_body: BTreeMap<String, Value>,
+    pub(super) permissions: Vec<PermissionRule>,
     pub(super) prompt: Option<String>,
 }
 
@@ -98,6 +100,7 @@ fn native_entries() -> Vec<AgentEntry> {
             variant: None,
             request_headers: BTreeMap::new(),
             request_body: BTreeMap::new(),
+            permissions: Vec::new(),
             prompt: None,
         })
         .collect()
@@ -130,6 +133,9 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
         if let Some(body) = change.request_body {
             existing.request_body.extend(body);
         }
+        if let Some(permissions) = change.permissions {
+            existing.permissions.extend(permissions);
+        }
         if let Some(prompt) = change.prompt {
             existing.prompt = Some(prompt);
         }
@@ -144,6 +150,7 @@ fn apply_change(agents: &mut Vec<AgentEntry>, change: AgentChange) {
             variant: change.variant,
             request_headers: change.request_headers.unwrap_or_default(),
             request_body: change.request_body.unwrap_or_default(),
+            permissions: change.permissions.unwrap_or_default(),
             prompt: change.prompt,
         });
     }
