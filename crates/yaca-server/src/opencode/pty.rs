@@ -50,7 +50,7 @@ async fn shells() -> Json<Vec<ShellItem>> {
 }
 
 async fn list_legacy(State(st): State<ServerState>) -> Json<Vec<PtyInfo>> {
-    Json(st.pty.list().await)
+    Json(running_only(st.pty.list().await))
 }
 
 async fn list_api(State(st): State<ServerState>) -> Json<location::LocationResponse<Vec<PtyInfo>>> {
@@ -77,7 +77,7 @@ async fn create_api(
 }
 
 async fn get_legacy(State(st): State<ServerState>, AxumPath(id): AxumPath<String>) -> Response {
-    match st.pty.get(&id).await {
+    match running(st.pty.get(&id).await) {
         Some(info) => Json(info).into_response(),
         None => pty_not_found(&id),
     }
@@ -96,6 +96,9 @@ async fn update_legacy(
     Json(payload): Json<Value>,
 ) -> Result<Response, ApiError> {
     let payload = super::pty_payload::update(payload)?;
+    if running(st.pty.get(&id).await).is_none() {
+        return Ok(pty_not_found(&id));
+    }
     Ok(match st.pty.update(&id, payload).await {
         Some(info) => Json(info).into_response(),
         None => pty_not_found(&id),
@@ -115,6 +118,9 @@ async fn update_api(
 }
 
 async fn remove_legacy(State(st): State<ServerState>, AxumPath(id): AxumPath<String>) -> Response {
+    if running(st.pty.get(&id).await).is_none() {
+        return pty_not_found(&id);
+    }
     if st.pty.remove(&id).await {
         Json(true).into_response()
     } else {
@@ -202,6 +208,17 @@ fn shell_item(path: String) -> ShellItem {
         name,
         acceptable,
     }
+}
+
+fn running_only(items: Vec<PtyInfo>) -> Vec<PtyInfo> {
+    items
+        .into_iter()
+        .filter(|info| info.status == "running")
+        .collect()
+}
+
+fn running(info: Option<PtyInfo>) -> Option<PtyInfo> {
+    info.filter(|info| info.status == "running")
 }
 
 fn is_executable(path: &str) -> bool {
