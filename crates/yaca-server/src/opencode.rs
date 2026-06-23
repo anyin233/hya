@@ -2,6 +2,7 @@ use axum::Router;
 
 use crate::ServerState;
 
+mod agent_catalog;
 mod agent_permission;
 mod catalog;
 mod command_catalog;

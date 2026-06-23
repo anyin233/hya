@@ -38,12 +38,16 @@ struct PathInfo {
 #[derive(Serialize)]
 struct AgentInfo {
     name: String,
-    description: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'static str>,
     mode: &'static str,
     native: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    hidden: bool,
     permission: Vec<PermissionRule>,
     model: AgentModel,
-    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
     options: Value,
 }
 
@@ -79,16 +83,27 @@ async fn path(
 async fn agent(
     axum::extract::State(st): axum::extract::State<ServerState>,
 ) -> Json<Vec<AgentInfo>> {
-    Json(vec![AgentInfo {
-        name: st.agent.name.to_string(),
-        description: "The default agent. Executes tools based on configured permissions.",
-        mode: "primary",
-        native: true,
-        permission: super::agent_permission::from_engine(&st.engine),
-        model: model_info(st.agent.model.as_str()),
-        prompt: st.agent.system_prompt.clone(),
-        options: json!({}),
-    }])
+    let build_permissions = super::agent_permission::from_engine(&st.engine);
+    Json(
+        super::agent_catalog::native_agents()
+            .iter()
+            .map(|agent| AgentInfo {
+                name: agent.name.to_string(),
+                description: agent.description,
+                mode: agent.mode,
+                native: true,
+                hidden: agent.hidden,
+                permission: if agent.name == "build" {
+                    build_permissions.clone()
+                } else {
+                    Vec::new()
+                },
+                model: model_info(st.agent.model.as_str()),
+                prompt: (agent.name == "build").then(|| st.agent.system_prompt.clone()),
+                options: json!({}),
+            })
+            .collect(),
+    )
 }
 
 async fn command(
@@ -132,6 +147,10 @@ fn model_info(model: &str) -> AgentModel {
         model_id: model.to_string(),
         provider_id: "yaca".to_string(),
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn home_dir() -> PathBuf {
