@@ -11,6 +11,7 @@ use crate::{ApiError, ServerState};
 
 use super::mime;
 use super::path::{collect_paths, entry_kind, matches_kind, relative_path, resolve_existing};
+use super::search;
 use crate::opencode::location::{LocationRef, LocationResponse};
 
 #[derive(Serialize)]
@@ -106,20 +107,16 @@ pub(super) async fn find(
     let Some(needle) = query.get("query") else {
         return Err(ApiError::bad_request("missing query"));
     };
-    let needle = needle.to_ascii_lowercase();
     let mut paths = Vec::new();
     collect_paths(&root, &mut paths);
-    let mut entries = paths
-        .into_iter()
-        .filter(|path| matches_kind(path, kind))
-        .filter(|path| {
-            relative_path(&root, path)
-                .to_ascii_lowercase()
-                .contains(&needle)
-        })
-        .filter_map(|path| fs_entry_for_path(&root, path))
-        .collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut entries = search::ranked_paths(
+        &root,
+        paths.into_iter().filter(|path| matches_kind(path, kind)),
+        needle,
+    )
+    .into_iter()
+    .filter_map(|path| fs_entry_for_path(&root, path))
+    .collect::<Vec<_>>();
     entries.truncate(limit.min(200));
     Ok(Json(crate::opencode::location::response_at(
         &st, &location, entries,

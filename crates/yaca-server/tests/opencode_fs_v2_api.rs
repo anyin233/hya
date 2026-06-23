@@ -125,6 +125,20 @@ async fn opencode_v2_fs_find_uses_opencode_default_limit() {
 }
 
 #[tokio::test]
+async fn opencode_v2_fs_find_matches_fuzzy_file_queries() {
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join("src")).unwrap();
+    std::fs::write(workdir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(workdir.join("src/manifest.rs"), "mod manifest;\n").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, found) = get_json(app, "/api/fs/find?query=mainrs&type=file").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found["data"][0]["path"], "src/main.rs");
+}
+
+#[tokio::test]
 async fn opencode_v2_fs_find_preserves_directory_trailing_slash() {
     let workdir = tempdir();
     std::fs::create_dir_all(workdir.join("match-dir")).unwrap();
