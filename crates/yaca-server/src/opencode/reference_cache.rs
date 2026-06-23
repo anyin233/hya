@@ -10,7 +10,7 @@ pub(super) fn materialize(repository: &str, branch: Option<&str>, path: PathBuf)
     let Some(reference) = super::reference_repository::parse(repository) else {
         return;
     };
-    if path.join(".git").is_dir() || !mark_active(&path) {
+    if !mark_active(&path) {
         return;
     }
     let remote = super::reference_repository::remote(&reference).to_string();
@@ -48,7 +48,7 @@ fn unmark_active(path: &Path) {
 
 async fn ensure(remote: &str, branch: Option<&str>, path: &Path) -> Result<(), String> {
     if path.join(".git").is_dir() {
-        return Ok(());
+        return refresh(branch, path).await;
     }
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -58,6 +58,10 @@ async fn ensure(remote: &str, branch: Option<&str>, path: &Path) -> Result<(), S
     if path.exists() {
         remove_existing(path)?;
     }
+    clone_repo(remote, branch, path).await
+}
+
+async fn clone_repo(remote: &str, branch: Option<&str>, path: &Path) -> Result<(), String> {
     let mut command = Command::new("git");
     command.arg("clone").arg("--depth").arg("1");
     if let Some(branch) = branch {
@@ -72,6 +76,41 @@ async fn ensure(remote: &str, branch: Option<&str>, path: &Path) -> Result<(), S
         let stderr = output_text(&output.stderr);
         if stderr.is_empty() {
             "git clone failed".to_string()
+        } else {
+            stderr
+        }
+    })
+}
+
+async fn refresh(branch: Option<&str>, path: &Path) -> Result<(), String> {
+    git(path, &["fetch", "--prune", "origin"]).await?;
+    let Some(branch) = branch else {
+        return Ok(());
+    };
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    let fetch_spec = format!("refs/heads/{branch}:{remote_ref}");
+    git(path, &["fetch", "origin", &fetch_spec]).await?;
+    git(path, &["checkout", "-B", branch, &remote_ref]).await?;
+    git(path, &["reset", "--hard", &remote_ref]).await
+}
+
+async fn git(path: &Path, args: &[&str]) -> Result<(), String> {
+    let output = timeout(
+        Duration::from_secs(30),
+        Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| format!("git {args:?} timed out"))?
+    .map_err(|error| error.to_string())?;
+    output.status.success().then_some(()).ok_or_else(|| {
+        let stderr = output_text(&output.stderr);
+        if stderr.is_empty() {
+            format!("git {args:?} failed")
         } else {
             stderr
         }
