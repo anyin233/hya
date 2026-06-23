@@ -140,12 +140,17 @@ fn branch_items(workdir: &Path) -> Result<(Option<String>, Vec<GitItem>), ApiErr
     if branch(workdir).as_deref() == Some(default.as_str()) {
         return Ok((None, Vec::new()));
     }
-    let ref_name = format!("origin/{default}");
+    let origin_ref = format!("origin/{default}");
+    let ref_name = if ref_exists(workdir, &origin_ref) {
+        origin_ref
+    } else {
+        default
+    };
     let Some(base) = output(workdir, &["merge-base", "HEAD", &ref_name]) else {
         return Ok((None, Vec::new()));
     };
-    let out = text(workdir, &["diff", "--name-status", &base])?;
-    let mut items: Vec<_> = out.lines().filter_map(item_from_name_status).collect();
+    let out = text(workdir, &["diff", "--name-status", "-z", &base])?;
+    let mut items = items_from_name_status(&out);
     items.extend(
         status::items(workdir)?
             .into_iter()
@@ -155,13 +160,22 @@ fn branch_items(workdir: &Path) -> Result<(Option<String>, Vec<GitItem>), ApiErr
     Ok((Some(base), items))
 }
 
-fn item_from_name_status(line: &str) -> Option<GitItem> {
-    let (code, file) = line.split_once('\t')?;
-    Some(GitItem {
-        file: file.to_string(),
-        code: code.to_string(),
-        status: status_name(code),
-    })
+fn items_from_name_status(out: &str) -> Vec<GitItem> {
+    out.split('\0')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .filter_map(|chunk| {
+            let [code, file] = chunk else {
+                return None;
+            };
+            Some(GitItem {
+                file: (*file).to_string(),
+                code: (*code).to_string(),
+                status: status_name(code),
+            })
+        })
+        .collect()
 }
 
 fn status_name(code: &str) -> &'static str {
@@ -207,6 +221,10 @@ fn has_head(workdir: &Path) -> bool {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
+}
+
+fn ref_exists(workdir: &Path, ref_name: &str) -> bool {
+    output(workdir, &["rev-parse", "--verify", ref_name]).is_some()
 }
 
 fn output(workdir: &Path, args: &[&str]) -> Option<String> {
