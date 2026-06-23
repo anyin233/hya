@@ -156,8 +156,23 @@ fn mime_for_path(path: &Path, bytes: Option<&[u8]>) -> &'static str {
     {
         Some("txt" | "rs" | "toml" | "yaml" | "yml" | "ts" | "tsx" | "js" | "jsx" | "css")
         | Some("html" | "py" | "go" | "java" | "c" | "h" | "cpp" | "hpp" | "sh") => "text/plain",
+        Some("csv") => "text/csv",
         Some("md") => "text/markdown",
         Some("json") => "application/json",
+        Some("xml") => "application/xml",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("pdf") => "application/pdf",
+        Some("wasm") => "application/wasm",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
         _ => bytes.map_or("application/octet-stream", mime::sniff),
     }
 }

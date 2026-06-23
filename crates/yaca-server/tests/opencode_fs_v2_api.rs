@@ -88,6 +88,29 @@ async fn opencode_v2_fs_list_orders_directories_first_with_trailing_slash() {
 }
 
 #[tokio::test]
+async fn opencode_v2_fs_list_uses_extension_mime_types() {
+    let workdir = tempdir();
+    std::fs::write(workdir.join("icon.svg"), "<svg></svg>\n").unwrap();
+    std::fs::write(workdir.join("sound.mp3"), b"ID3").unwrap();
+    let app = router(state(workdir).await);
+
+    let (status, listing) = get_json(app, "/api/fs/list").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let files = listing["data"].as_array().unwrap();
+    let icon = files
+        .iter()
+        .find(|item| item["path"] == "icon.svg")
+        .unwrap();
+    let sound = files
+        .iter()
+        .find(|item| item["path"] == "sound.mp3")
+        .unwrap();
+    assert_eq!(icon["mime"], "image/svg+xml");
+    assert_eq!(sound["mime"], "audio/mpeg");
+}
+
+#[tokio::test]
 async fn opencode_v2_fs_find_uses_opencode_default_limit() {
     let workdir = tempdir();
     for index in 0..12 {
