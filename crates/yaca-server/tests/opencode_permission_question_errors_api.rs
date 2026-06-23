@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use yaca_proto::{AgentName, ModelRef};
+use yaca_proto::{AgentName, ModelRef, SessionId};
 use yaca_provider::{FakeProvider, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -120,4 +120,44 @@ async fn opencode_v2_permission_and_question_missing_requests_return_typed_error
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(question["_tag"], "QuestionNotFoundError");
     assert_eq!(question["requestID"], "que_missing");
+}
+
+#[tokio::test]
+async fn opencode_v2_permission_and_question_missing_sessions_return_typed_errors() {
+    let app = router(state().await);
+    let missing = SessionId::new().to_string();
+
+    for (method, uri, body) in [
+        (
+            "GET",
+            format!("/api/session/{missing}/permission"),
+            Value::Null,
+        ),
+        (
+            "POST",
+            format!("/api/session/{missing}/permission/per_missing/reply"),
+            json!({"reply": "once"}),
+        ),
+        (
+            "GET",
+            format!("/api/session/{missing}/question"),
+            Value::Null,
+        ),
+        (
+            "POST",
+            format!("/api/session/{missing}/question/que_missing/reply"),
+            json!({"answers": []}),
+        ),
+        (
+            "POST",
+            format!("/api/session/{missing}/question/que_missing/reject"),
+            Value::Null,
+        ),
+    ] {
+        let (status, body) = request(app.clone(), method, uri, body).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["_tag"], "SessionNotFoundError");
+        assert_eq!(body["sessionID"], missing);
+        assert_eq!(body["message"], format!("Session not found: {missing}"));
+    }
 }
