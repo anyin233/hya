@@ -6,8 +6,9 @@ use sqlx::Row;
 use crate::{SessionStore, StoreError};
 
 impl SessionStore {
-    pub async fn replay_sync_events(&self, events: &[Value]) -> Result<(), StoreError> {
+    pub async fn replay_sync_events(&self, events: &[Value]) -> Result<Vec<Value>, StoreError> {
         let mut tx = self.pool.begin().await?;
+        let mut inserted = Vec::new();
         for event in events {
             let Some(aggregate) = event.get("aggregateID").and_then(Value::as_str) else {
                 continue;
@@ -16,17 +17,20 @@ impl SessionStore {
                 continue;
             };
             let payload = serde_json::to_string(&history_event(event))?;
-            sqlx::query(
-                "INSERT OR REPLACE INTO sync_event (aggregate_id, seq, payload) VALUES (?, ?, ?)",
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO sync_event (aggregate_id, seq, payload) VALUES (?, ?, ?)",
             )
             .bind(aggregate)
             .bind(seq.min(i64::MAX as u64) as i64)
             .bind(payload)
             .execute(&mut *tx)
             .await?;
+            if result.rows_affected() > 0 {
+                inserted.push(event.clone());
+            }
         }
         tx.commit().await?;
-        Ok(())
+        Ok(inserted)
     }
 
     pub async fn sync_history(
