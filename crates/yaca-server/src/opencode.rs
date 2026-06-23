@@ -35,6 +35,7 @@ mod pty_shell;
 mod pty_state;
 mod question;
 mod reference;
+mod reference_cache;
 mod reference_repository;
 mod session_context;
 mod session_context_messages;
