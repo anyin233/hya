@@ -47,6 +47,17 @@ impl Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    /// OpenCode-compatible alias for headless prompt execution.
+    Run {
+        /// Message words to send to the agent.
+        message: Vec<String>,
+        /// Format: default transcript or JSONL event stream.
+        #[arg(long, value_parser = ["default", "json"], default_value = "default")]
+        format: String,
+        /// Emit the event stream as JSONL instead of a rendered transcript.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run a single prompt headlessly and print the resulting transcript.
     Exec {
         /// The user prompt to send to the agent.
@@ -129,5 +140,22 @@ mod tests {
     fn help_exposes_mini_alias() {
         let help = Cli::command().render_help().to_string();
         assert!(help.contains("--mini"));
+    }
+
+    #[test]
+    fn parses_opencode_run_alias() {
+        let cli = parse(["yaca", "run", "--format", "json", "hello", "world"]);
+        match cli.command {
+            Some(super::Command::Run {
+                message,
+                json,
+                format,
+            }) => {
+                assert!(!json);
+                assert_eq!(format, "json");
+                assert_eq!(message, ["hello", "world"]);
+            }
+            _ => panic!("expected run command"),
+        }
     }
 }
