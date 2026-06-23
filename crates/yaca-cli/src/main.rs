@@ -11,6 +11,7 @@ mod auth_cmd;
 mod cli_args;
 mod commands;
 mod config;
+mod formatter_config;
 mod models_cmd;
 mod permission;
 mod plugins;
@@ -286,6 +287,7 @@ fn build_session_engine(
     let mut engine_builder =
         SessionEngine::new(store, router, tools, permission, EventBus::default())
             .with_compaction(summarizer, compaction_config())
+            .with_formatter(formatter_config::load_plane())
             .with_interaction(interaction)
             .with_spawner(spawner);
     if !plugin_host.is_empty() {
