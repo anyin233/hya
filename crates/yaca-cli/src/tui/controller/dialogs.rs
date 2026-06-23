@@ -4,6 +4,7 @@ use yaca_tui::{DialogItem, DialogView};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DialogMode {
     Model,
+    Provider,
     Agent,
     Resume,
     Help,
@@ -22,6 +23,13 @@ impl Controller {
             Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
         ) {
             return self.handle_completion_popup_key(key);
+        }
+        if self.dialog_mode == Some(DialogMode::Model)
+            && key.modifiers == KeyModifiers::CONTROL
+            && matches!(key.code, KeyCode::Char('a'))
+        {
+            self.open_provider_dialog();
+            return TuiEffect::None;
         }
         let Some(dialog) = self.app.dialog.as_mut() else {
             return TuiEffect::None;
@@ -115,7 +123,10 @@ impl Controller {
                         TuiEffect::None
                     }
                     Some(
-                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
+                        DialogMode::Provider
+                        | DialogMode::Help
+                        | DialogMode::Tools
+                        | DialogMode::ReferenceCompletion,
                     )
                     | None => TuiEffect::None,
                 }

@@ -3,6 +3,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use yaca_tui::AppState;
 
+use crate::config::ModelEntry;
+
 use super::{Controller, TuiEffect};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -83,12 +85,54 @@ fn slash_connect_opens_provider_setup_entry_when_no_models_exist() {
     // Then: it opens a visible setup entry instead of returning an unknown command.
     assert_eq!(effect, TuiEffect::None);
     let dialog = controller.app.dialog.as_ref().expect("connect dialog");
-    assert_eq!(dialog.title, "select model");
-    assert_eq!(dialog.items[0].label, "connect provider");
+    assert_eq!(dialog.title, "Connect a provider");
+    assert_eq!(dialog.items[0].label, "configure provider");
     assert!(
         dialog.items[0].detail.contains("configure"),
         "connect fallback should tell the user how to add a provider"
     );
+}
+
+#[test]
+fn model_dialog_ctrl_a_opens_provider_list() {
+    // Given: OpenCode model dialogs expose a ctrl+a action for provider setup.
+    let mut controller = Controller::with_models_and_sessions(
+        AppState::default(),
+        vec![
+            ModelEntry {
+                id: "gpt-5".to_string(),
+                provider: "openai".to_string(),
+            },
+            ModelEntry {
+                id: "claude-sonnet".to_string(),
+                provider: "anthropic".to_string(),
+            },
+            ModelEntry {
+                id: "gpt-4o".to_string(),
+                provider: "openai".to_string(),
+            },
+        ],
+        Vec::new(),
+    );
+
+    // When: the user opens model selection and triggers the provider action.
+    type_text(&mut controller, "/model");
+    assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+    assert_eq!(
+        controller.app.dialog.as_ref().expect("model dialog").title,
+        "select model"
+    );
+    assert_eq!(controller.handle_key(ctrl('a')), TuiEffect::None);
+
+    // Then: yaca shows the OpenCode-style provider list instead of ignoring the action.
+    let dialog = controller.app.dialog.as_ref().expect("provider dialog");
+    assert_eq!(dialog.title, "Connect a provider");
+    let labels = dialog
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["anthropic", "openai"]);
 }
 
 #[test]

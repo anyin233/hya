@@ -35,6 +35,37 @@ impl Controller {
         self.dialog_mode = Some(DialogMode::Model);
     }
 
+    pub(super) fn open_provider_dialog(&mut self) {
+        let mut providers = self
+            .available_models
+            .iter()
+            .map(|entry| entry.provider.clone())
+            .collect::<Vec<_>>();
+        providers.sort();
+        providers.dedup();
+        let items = if providers.is_empty() {
+            vec![DialogItem {
+                label: "configure provider".to_string(),
+                detail: "configure ~/.config/yaca/config.yaml or run yaca login".to_string(),
+            }]
+        } else {
+            providers
+                .into_iter()
+                .map(|provider| DialogItem {
+                    label: provider,
+                    detail: "configured provider".to_string(),
+                })
+                .collect()
+        };
+        self.app.dialog = Some(DialogView {
+            title: "Connect a provider".to_string(),
+            subtitle: "select or configure an AI provider".to_string(),
+            items,
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Provider);
+    }
+
     pub(super) fn open_resume_dialog(&mut self) {
         let items = if self.sessions.is_empty() {
             vec![DialogItem {

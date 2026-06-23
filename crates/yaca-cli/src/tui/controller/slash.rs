@@ -17,7 +17,7 @@ impl Controller {
                 TuiEffect::None
             }
             Some(CommandKind::Connect) => {
-                self.open_model_dialog();
+                self.open_provider_dialog();
                 TuiEffect::None
             }
             Some(CommandKind::Resume) => {
