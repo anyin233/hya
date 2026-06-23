@@ -138,6 +138,11 @@ impl SessionEngine {
     }
 
     #[must_use]
+    pub fn lsp(&self) -> &LspPlane {
+        &self.lsp
+    }
+
+    #[must_use]
     pub fn provider_catalog(&self) -> Vec<ProviderModel> {
         self.providers.catalog()
     }

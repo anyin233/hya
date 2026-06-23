@@ -7,15 +7,13 @@ mod ignore;
 mod legacy;
 mod mime;
 mod path;
+mod symbol;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/find", get(legacy::find_text))
         .route("/find/file", get(legacy::find_file))
-        .route(
-            "/find/symbol",
-            get(legacy::empty_array::<legacy::EmptyQuery>),
-        )
+        .route("/find/symbol", get(symbol::find_symbol))
         .route("/file", get(legacy::list))
         .route("/file/content", get(legacy::content))
         .route(

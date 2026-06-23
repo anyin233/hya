@@ -90,6 +90,29 @@ impl LspPlane {
             )),
         }
     }
+
+    pub async fn workspace_symbols(
+        &self,
+        workdir: &Path,
+        query: String,
+    ) -> Result<Vec<Value>, LspError> {
+        let file = normalize(&absolutize(workdir));
+        match &self.provider {
+            Some(provider) => {
+                provider
+                    .execute(LspRequest {
+                        operation: LspOperation::WorkspaceSymbol,
+                        file: file.clone(),
+                        uri: file_uri(&file),
+                        line: 0,
+                        character: 0,
+                        query: Some(query),
+                    })
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
 }
 
 pub(crate) struct LspTool;
