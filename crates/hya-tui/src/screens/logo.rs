@@ -44,7 +44,14 @@ const PEAK: Rgba = Rgba::rgb(255, 255, 255);
 #[must_use]
 pub fn logo_text(theme: &ResolvedTheme) -> Text {
     let lines = (0..4)
-        .map(|row| Line(render_half(GLYPHS[row], theme.text_muted, false, theme.background)))
+        .map(|row| {
+            Line(render_half(
+                GLYPHS[row],
+                theme.text_muted,
+                false,
+                theme.background,
+            ))
+        })
         .collect();
     Text(lines)
 }

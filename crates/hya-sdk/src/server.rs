@@ -20,8 +20,14 @@ const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const YACA_READY_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// `opencode serve` flags: ephemeral port on loopback, logs to stdout so the URL is parseable.
-const OPENCODE_SERVE_ARGS: &[&str] =
-    &["serve", "--port", "0", "--hostname", "127.0.0.1", "--print-logs"];
+const OPENCODE_SERVE_ARGS: &[&str] = &[
+    "serve",
+    "--port",
+    "0",
+    "--hostname",
+    "127.0.0.1",
+    "--print-logs",
+];
 /// `yaca serve` flags: ephemeral loopback port (`:0`). yaca prints the same `listening on` line.
 const YACA_SERVE_ARGS: &[&str] = &["serve", "--bind", "127.0.0.1:0"];
 

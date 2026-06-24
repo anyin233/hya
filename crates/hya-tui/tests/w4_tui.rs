@@ -4,10 +4,8 @@ use hya_tui::render::text::{Line, Text};
 
 #[test]
 fn draw_color_when_alpha_present_blends_over_theme_background() {
-    let color = hya_tui::render::draw::rgba_to_color(
-        Rgba::new(255, 255, 255, 0x80),
-        Rgba::rgb(0, 0, 0),
-    );
+    let color =
+        hya_tui::render::draw::rgba_to_color(Rgba::new(255, 255, 255, 0x80), Rgba::rgb(0, 0, 0));
 
     assert_eq!(color, ratatui::style::Color::Rgb(128, 128, 128));
 }

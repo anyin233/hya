@@ -65,7 +65,8 @@ const COMMAND_SESSION_QUEUED_PROMPTS: &str = "session.queued_prompts";
 const COMMAND_TIPS_TOGGLE: &str = "tips.toggle";
 const COMMAND_TOGGLE_CONCEAL: &str = "session.toggle.conceal";
 const TOAST_DURATION: Duration = Duration::from_millis(3000);
-const CONNECTING_TIP: &str = "\u{27f3} Starting backend\u{2026} you can type now; prompts send once it is ready";
+const CONNECTING_TIP: &str =
+    "\u{27f3} Starting backend\u{2026} you can type now; prompts send once it is ready";
 const CONNECTING_PLACEHOLDER: &str = "Starting backend\u{2026} type to queue a prompt";
 
 const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
@@ -683,17 +684,18 @@ impl Runtime {
         );
         let on_home = matches!(&route, Route::Home { .. } | Route::Plugin { .. });
         let logo_elapsed = self.started.elapsed();
-        let mut active_permission_data: Option<(serde_json::Value, serde_json::Value)> = match &route {
-            Route::Session { session_id, .. } => {
-                data.permissions(session_id).first().map(|request| {
-                    (
-                        request.clone(),
-                        screens::permission::tool_input(&data, request),
-                    )
-                })
-            }
-            _ => None,
-        };
+        let mut active_permission_data: Option<(serde_json::Value, serde_json::Value)> =
+            match &route {
+                Route::Session { session_id, .. } => {
+                    data.permissions(session_id).first().map(|request| {
+                        (
+                            request.clone(),
+                            screens::permission::tool_input(&data, request),
+                        )
+                    })
+                }
+                _ => None,
+            };
         let permission_identity = active_permission_data.as_ref().and_then(|(request, _)| {
             let session = request
                 .get("sessionID")
@@ -1047,7 +1049,10 @@ impl Runtime {
                 let message = if failures.is_empty() {
                     "Backend ready".to_owned()
                 } else {
-                    format!("Backend ready \u{2014} MCP unavailable: {}", failures.join(", "))
+                    format!(
+                        "Backend ready \u{2014} MCP unavailable: {}",
+                        failures.join(", ")
+                    )
                 };
                 self.toast = Some((message, Instant::now() + TOAST_DURATION));
                 self.drain_pending_prompts();
@@ -1523,11 +1528,12 @@ impl Runtime {
         if self.input.agent_names.is_empty() {
             return;
         }
-        let next = match self
-            .active_agent
-            .as_deref()
-            .and_then(|name| self.input.agent_names.iter().position(|agent| agent == name))
-        {
+        let next = match self.active_agent.as_deref().and_then(|name| {
+            self.input
+                .agent_names
+                .iter()
+                .position(|agent| agent == name)
+        }) {
             Some(index) => (index + 1) % self.input.agent_names.len(),
             None => 0,
         };
@@ -1636,9 +1642,10 @@ impl Runtime {
                     DialogSelectItem::new(format!("{title}  {provider}"), value.clone())
                 })
                 .collect(),
-            DialogKind::VariantList => std::iter::once(
-                DialogSelectItem::new("Default".to_owned(), "default".to_owned()),
-            )
+            DialogKind::VariantList => std::iter::once(DialogSelectItem::new(
+                "Default".to_owned(),
+                "default".to_owned(),
+            ))
             .chain(
                 self.active_model_variants()
                     .into_iter()

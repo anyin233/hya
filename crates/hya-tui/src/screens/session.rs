@@ -92,11 +92,20 @@ pub fn timeline_text(
                 );
             }
             Some("assistant") => {
-                let producer = message.rest.get("agent").and_then(serde_json::Value::as_str);
+                let producer = message
+                    .rest
+                    .get("agent")
+                    .and_then(serde_json::Value::as_str);
                 let msg_color = prompt_box::agent_color(theme, agents, producer);
                 push_assistant(&mut lines, parts, width, spinner, theme);
                 push_assistant_footer(
-                    &mut lines, message, messages, width, msg_color, model_names, theme,
+                    &mut lines,
+                    message,
+                    messages,
+                    width,
+                    msg_color,
+                    model_names,
+                    theme,
                 );
             }
             _ => {}
@@ -940,10 +949,7 @@ fn message_model_name(
     Some(model_id.to_owned())
 }
 
-fn assistant_duration(
-    message: &hya_sdk::Message,
-    messages: &[hya_sdk::Message],
-) -> Option<String> {
+fn assistant_duration(message: &hya_sdk::Message, messages: &[hya_sdk::Message]) -> Option<String> {
     let completed = message.time.completed?;
     let parent_id = message
         .rest
@@ -1073,10 +1079,23 @@ mod tests {
 
         let theme = theme();
         let agents = vec!["build".to_owned(), "general".to_owned()];
-        let model_names = vec![("prov/model-x".to_owned(), "Model X".to_owned(), "Prov".to_owned())];
+        let model_names = vec![(
+            "prov/model-x".to_owned(),
+            "Model X".to_owned(),
+            "Prov".to_owned(),
+        )];
         let selected_color = prompt_box::agent_color(&theme, &agents, Some("build"));
         let render = timeline_text(
-            &store, "ses_1", &[], 80, selected_color, &agents, &model_names, "", false, &theme,
+            &store,
+            "ses_1",
+            &[],
+            80,
+            selected_color,
+            &agents,
+            &model_names,
+            "",
+            false,
+            &theme,
         );
 
         let flat = flatten(&render.text);
@@ -1092,7 +1111,11 @@ mod tests {
             .find(|span| span.text.starts_with('\u{25a3}'))
             .expect("footer marker span");
         let producing = prompt_box::agent_color(&theme, &agents, Some("general"));
-        assert_eq!(marker.fg, Some(producing), "marker uses producing agent color");
+        assert_eq!(
+            marker.fg,
+            Some(producing),
+            "marker uses producing agent color"
+        );
         assert_ne!(
             marker.fg,
             Some(selected_color),
@@ -1220,8 +1243,21 @@ mod tests {
         ));
 
         let theme = theme();
-        let rendered =
-            flatten(&timeline_text(&store, "ses_1", &[], 80, theme.border, &[], &[], "", false, &theme).text);
+        let rendered = flatten(
+            &timeline_text(
+                &store,
+                "ses_1",
+                &[],
+                80,
+                theme.border,
+                &[],
+                &[],
+                "",
+                false,
+                &theme,
+            )
+            .text,
+        );
         assert!(rendered.contains("hi there"), "user line: {rendered}");
         assert!(
             rendered.contains("hello back"),
@@ -1337,7 +1373,18 @@ mod tests {
         ));
 
         let theme = theme();
-        let rendered = timeline_text(&store, "ses_1", &[], 80, theme.border, &[], &[], "", false, &theme);
+        let rendered = timeline_text(
+            &store,
+            "ses_1",
+            &[],
+            80,
+            theme.border,
+            &[],
+            &[],
+            "",
+            false,
+            &theme,
+        );
 
         assert_eq!(
             rendered.message_offsets,
