@@ -940,6 +940,7 @@ dependencies = [
  "hya-tui",
  "hya-yaca",
  "reqwest",
+ "serde_json",
  "tokio",
  "yaca-app",
 ]
