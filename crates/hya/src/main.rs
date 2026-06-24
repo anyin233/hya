@@ -200,12 +200,28 @@ fn forward_events(mut events: mpsc::UnboundedReceiver<GlobalEvent>, tx: mpsc::Un
     });
 }
 
+const COMMAND_FETCH_ATTEMPTS: u32 = 5;
+const COMMAND_FETCH_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 fn spawn_background_fetches(client: &Arc<dyn Client>, tx: &mpsc::UnboundedSender<AppEvent>) {
     let command_client = Arc::clone(client);
     let command_tx = tx.clone();
     tokio::spawn(async move {
-        if let Ok(names) = command_client.commands().await {
-            let _ = command_tx.send(AppEvent::CommandList(names));
+        for attempt in 0..COMMAND_FETCH_ATTEMPTS {
+            match command_client.commands().await {
+                Ok(names) => {
+                    let _ = command_tx.send(AppEvent::CommandList(names));
+                    return;
+                }
+                Err(_) if attempt + 1 < COMMAND_FETCH_ATTEMPTS => {
+                    tokio::time::sleep(COMMAND_FETCH_RETRY_DELAY).await;
+                }
+                Err(error) => {
+                    let _ = command_tx.send(AppEvent::Toast(format!(
+                        "slash commands unavailable: {error}"
+                    )));
+                }
+            }
         }
     });
 

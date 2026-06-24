@@ -285,6 +285,7 @@ pub struct SessionView<'a> {
     pub sidebar_visible: bool,
     pub subagent: Option<SubagentStatus>,
     pub show_cursor: bool,
+    pub yolo: bool,
 }
 
 pub fn draw(
@@ -309,6 +310,7 @@ pub fn draw(
         sidebar_visible,
         subagent,
         show_cursor,
+        yolo,
     } = *view;
     let area = frame.area();
     let background = theme.background;
@@ -378,6 +380,7 @@ pub fn draw(
         palette_shortcut: "ctrl+p",
         cursor: prompt.cursor,
         show_cursor,
+        yolo,
     };
     if let Some(status) = subagent {
         let line = subagent_status_line(status, theme);
