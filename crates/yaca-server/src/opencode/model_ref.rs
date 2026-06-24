@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use yaca_proto::ModelRef;
+
+/// Provider id [`model_ref_parts`] reports for a bare (prefix-less) model ref;
+/// echoing it back must round-trip to a bare id so the router still resolves.
+pub(super) const BARE_PROVIDER: &str = "yaca";
 
 #[derive(Clone)]
 pub(super) struct OpenCodeModelRefParts {
@@ -46,9 +51,41 @@ pub(super) fn model_ref_parts(model: &ModelRef) -> OpenCodeModelRefParts {
         };
     }
     OpenCodeModelRefParts {
-        provider_id: "yaca".to_string(),
+        provider_id: BARE_PROVIDER.to_string(),
         model_id: raw.to_string(),
         variant,
+    }
+}
+
+/// Parse the `model` field a client attaches to a prompt into a [`ModelRef`].
+///
+/// Accepts the OpenCode object form (`{ providerID, modelID | id, variant? }`) or
+/// a bare/`provider/model` string. A `providerID` of [`BARE_PROVIDER`] is dropped
+/// so the agent's default (prefix-less) model round-trips to a router-resolvable id.
+pub(super) fn model_ref_from_value(value: &Value) -> Option<ModelRef> {
+    match value {
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            (!trimmed.is_empty()).then(|| ModelRef::new(trimmed))
+        }
+        Value::Object(map) => {
+            let field = |key: &str| {
+                map.get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            };
+            let model_id = field("modelID").or_else(|| field("id"))?;
+            let base = match field("providerID") {
+                Some(provider) if provider != BARE_PROVIDER => format!("{provider}/{model_id}"),
+                _ => model_id.to_string(),
+            };
+            Some(match field("variant") {
+                Some(variant) => ModelRef::new(format!("{base}#{variant}")),
+                None => ModelRef::new(base),
+            })
+        }
+        _ => None,
     }
 }
 
@@ -68,4 +105,44 @@ fn split_variant(value: &str) -> (&str, Option<String>) {
         return (base, Some(variant.to_string()));
     }
     (value, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn real_provider_is_preserved() {
+        assert_eq!(
+            model_ref_from_value(&json!({ "providerID": "mock", "modelID": "claude-opus-4-8" })),
+            Some(ModelRef::new("mock/claude-opus-4-8"))
+        );
+    }
+
+    #[test]
+    fn bare_provider_sentinel_round_trips_to_bare_id() {
+        assert_eq!(
+            model_ref_from_value(&json!({ "providerID": "yaca", "modelID": "claude-sonnet-4-6" })),
+            Some(ModelRef::new("claude-sonnet-4-6"))
+        );
+    }
+
+    #[test]
+    fn accepts_id_alias_and_variant() {
+        assert_eq!(
+            model_ref_from_value(&json!({ "providerID": "p", "id": "m", "variant": "high" })),
+            Some(ModelRef::new("p/m#high"))
+        );
+    }
+
+    #[test]
+    fn string_and_missing_id_and_other_types() {
+        assert_eq!(
+            model_ref_from_value(&json!("mock/claude-opus-4-8")),
+            Some(ModelRef::new("mock/claude-opus-4-8"))
+        );
+        assert_eq!(model_ref_from_value(&json!({ "providerID": "mock" })), None);
+        assert_eq!(model_ref_from_value(&json!(null)), None);
+    }
 }

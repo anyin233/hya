@@ -20,6 +20,8 @@ struct PromptPayload {
     text: Option<String>,
     #[serde(default)]
     parts: Vec<Value>,
+    #[serde(default)]
+    model: Option<Value>,
 }
 
 async fn prompt(
@@ -44,6 +46,13 @@ async fn prompt(
     st.engine
         .record_user_prompt_context(session, message, files, agents)
         .await?;
+    if let Some(model) = req
+        .model
+        .as_ref()
+        .and_then(super::model_ref::model_ref_from_value)
+    {
+        st.engine.switch_model(session, model).await?;
+    }
     if !no_reply {
         let Some(run) = st.runs.start(session) else {
             return Ok(super::errors::session_busy(session));
