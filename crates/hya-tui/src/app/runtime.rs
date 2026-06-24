@@ -271,6 +271,25 @@ fn slash_command(text: &str, names: &[String]) -> Option<(String, String)> {
     Some((name.to_owned(), arguments.to_owned()))
 }
 
+enum YoloRequest {
+    Toggle,
+    Set(bool),
+}
+
+fn yolo_command(text: &str) -> Option<YoloRequest> {
+    let rest = text.strip_prefix('/')?;
+    let mut parts = rest.split_whitespace();
+    if parts.next()? != "yolo" {
+        return None;
+    }
+    let request = match parts.next() {
+        Some("on" | "true" | "enable" | "enabled") => YoloRequest::Set(true),
+        Some("off" | "false" | "disable" | "disabled") => YoloRequest::Set(false),
+        _ => YoloRequest::Toggle,
+    };
+    Some(request)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct EditorCommand {
     program: String,
@@ -455,6 +474,12 @@ struct Runtime {
     active_question: Option<ActiveQuestion>,
     pending_editor: bool,
     prompt_hits: crate::screens::prompt_box::PromptHits,
+    /// Client-side auto-approve ("yolo"): when on, tool permission requests are
+    /// answered automatically instead of prompting. Toggled by the `/yolo` command.
+    yolo: bool,
+    /// Permission request ids already auto-approved under yolo, so each is replied
+    /// to exactly once and never flashes on screen.
+    yolo_replied: std::collections::HashSet<String>,
 }
 
 impl Runtime {
@@ -521,6 +546,8 @@ impl Runtime {
             active_question: None,
             pending_editor: false,
             prompt_hits: crate::screens::prompt_box::PromptHits::default(),
+            yolo: false,
+            yolo_replied: std::collections::HashSet::new(),
         })
     }
 
@@ -656,7 +683,7 @@ impl Runtime {
         );
         let on_home = matches!(&route, Route::Home { .. } | Route::Plugin { .. });
         let logo_elapsed = self.started.elapsed();
-        let active_permission_data: Option<(serde_json::Value, serde_json::Value)> = match &route {
+        let mut active_permission_data: Option<(serde_json::Value, serde_json::Value)> = match &route {
             Route::Session { session_id, .. } => {
                 data.permissions(session_id).first().map(|request| {
                     (
@@ -693,6 +720,24 @@ impl Runtime {
             self.permission_reject_message.clear();
         }
         self.active_permission = permission_identity;
+        if let Some((_, request_id, _)) = self.active_permission.clone() {
+            if self.yolo && self.yolo_replied.insert(request_id.clone()) {
+                let reply_id = request_id.clone();
+                let client = Arc::clone(&self.input.client);
+                let tx = self.input.tx.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = client.permission_reply(&reply_id, "once", None).await {
+                        let _ = tx.send(AppEvent::Toast(format!(
+                            "yolo auto-approve failed: {error}"
+                        )));
+                    }
+                });
+            }
+            if self.yolo_replied.contains(&request_id) {
+                active_permission_data = None;
+                self.active_permission = None;
+            }
+        }
         let active_question_data: Option<serde_json::Value> = match &route {
             Route::Session { session_id, .. } if active_permission_data.is_none() => {
                 data.questions(session_id).first().cloned()
@@ -729,6 +774,7 @@ impl Runtime {
         let agents = self.input.agent_names.as_slice();
         let model_names = self.model_names.as_slice();
         let status_dialog_open = self.status_dialog_open;
+        let yolo = self.yolo;
         let mcp_snapshot = self.mcp_status.as_slice();
         let lsp_snapshot = self.lsp_status.as_slice();
         let formatter_snapshot = self.formatter_status.as_slice();
@@ -764,6 +810,7 @@ impl Runtime {
                         mcp,
                         logo_elapsed,
                         show_cursor,
+                        yolo,
                     },
                     &self.theme,
                 ),
@@ -784,6 +831,7 @@ impl Runtime {
                         sidebar_visible,
                         subagent,
                         show_cursor,
+                        yolo,
                     };
                     screens::session::draw(frame, &view, &mut self.scroll, &self.theme)
                 }
@@ -808,6 +856,7 @@ impl Runtime {
                         mcp,
                         logo_elapsed,
                         show_cursor,
+                        yolo,
                     },
                     &self.theme,
                 ),
@@ -2489,9 +2538,26 @@ impl Runtime {
         }
     }
 
+    fn toggle_yolo(&mut self, request: YoloRequest) {
+        self.yolo = match request {
+            YoloRequest::Toggle => !self.yolo,
+            YoloRequest::Set(value) => value,
+        };
+        let state = if self.yolo { "enabled" } else { "disabled" };
+        self.toast = Some((
+            format!("yolo mode {state}"),
+            Instant::now() + TOAST_DURATION,
+        ));
+    }
+
     fn submit_prompt(&mut self) {
         let text = self.prompt.text.trim().to_owned();
         if text.is_empty() {
+            return;
+        }
+        if let Some(request) = yolo_command(&text) {
+            self.toggle_yolo(request);
+            self.reset_prompt();
             return;
         }
         if !self.backend_ready {
@@ -2620,7 +2686,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         base64_encode, normalize_editor_content, parse_editor_command, slash_command,
-        trailing_mention,
+        trailing_mention, yolo_command, YoloRequest,
     };
 
     #[test]
@@ -2646,6 +2712,31 @@ mod tests {
         assert_eq!(slash_command("/unknown", &names), None);
         assert_eq!(slash_command("/usr/bin/x", &names), None);
         assert_eq!(slash_command("plain prompt", &names), None);
+    }
+
+    #[test]
+    fn yolo_command_parses_state_and_ignores_non_yolo() {
+        assert!(matches!(yolo_command("/yolo"), Some(YoloRequest::Toggle)));
+        assert!(matches!(
+            yolo_command("/yolo toggle"),
+            Some(YoloRequest::Toggle)
+        ));
+        assert!(matches!(
+            yolo_command("/yolo on"),
+            Some(YoloRequest::Set(true))
+        ));
+        assert!(matches!(
+            yolo_command("/yolo off"),
+            Some(YoloRequest::Set(false))
+        ));
+        assert!(matches!(
+            yolo_command("/yolo disable"),
+            Some(YoloRequest::Set(false))
+        ));
+        assert!(yolo_command("/yolonope").is_none());
+        assert!(yolo_command("/model").is_none());
+        assert!(yolo_command("yolo").is_none());
+        assert!(yolo_command("be /yolo").is_none());
     }
 
     #[test]

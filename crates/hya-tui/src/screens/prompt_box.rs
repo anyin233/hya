@@ -67,6 +67,7 @@ pub struct PromptBoxView<'a> {
     /// Cursor byte offset into `text` (char boundary).
     pub cursor: usize,
     pub show_cursor: bool,
+    pub yolo: bool,
 }
 
 /// Screen rects of the prompt box's clickable affordances, returned by [`draw`] so the runtime
@@ -309,6 +310,13 @@ fn meta_line<'a>(view: &PromptBoxView<'a>, theme: &ResolvedTheme) -> RtLine<'a> 
                 ));
             }
         }
+    }
+    if view.yolo {
+        spans.push(RtSpan::styled("  ", panel));
+        spans.push(RtSpan::styled(
+            "YOLO",
+            panel.fg(rgba_to_color(theme.error, bg_el)),
+        ));
     }
     RtLine::from(spans)
 }

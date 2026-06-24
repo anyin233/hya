@@ -66,6 +66,7 @@ pub struct HomeView<'a> {
     pub mcp: Option<(usize, usize, bool)>,
     pub logo_elapsed: std::time::Duration,
     pub show_cursor: bool,
+    pub yolo: bool,
 }
 
 pub fn draw(
@@ -84,6 +85,7 @@ pub fn draw(
         mcp,
         logo_elapsed,
         show_cursor,
+        yolo,
     } = *view;
     let area = frame.area();
     let background = theme.background;
@@ -131,6 +133,7 @@ pub fn draw(
         palette_shortcut: "ctrl+p",
         cursor: doc.cursor,
         show_cursor,
+        yolo,
     };
     let hits = prompt_box::draw(frame, layout.prompt, &view, theme);
 
