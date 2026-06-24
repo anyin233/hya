@@ -17,9 +17,9 @@ new server path/method; it depends on `GET /api/session/:id` returning session
 `directory` and `parentID`, which yaca's OpenCode session projection already
 provides.
 
-yaca baseline: current `feat/yaca-pi-parity` branch with committed OpenCode
-session, abort, file, instance metadata, VCS, prompt_async, session switching,
-session context, v2 session message listing, session title/metadata/permission/archive update/delete/init,
+yaca baseline: current `main` branch with merged OpenCode session, abort,
+file, instance metadata, VCS, prompt_async, session switching, session context,
+v2 session message listing, session title/metadata/permission/archive update/delete/init,
 legacy/v2 command and shell routes, v2 prompt admission, directory/archived filtering plus timestamp cursors on legacy and experimental lists,
 v2 session list directory filtering plus archived-session default filtering,
 configured provider/model catalog compatibility,
@@ -69,9 +69,10 @@ VCS default-branch discovery follows OpenCode's remote/config/local fallback.
 
 yaca is not yet a complete OpenCode superset. The native coding-agent substrate is
 substantially implemented, especially tools, permissions, sessions, compaction,
-plugins, MCP tools, and headless integration modes. The largest remaining gaps are
-OpenCode-compatible HTTP/API coverage, exact session lifecycle controls,
-provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
+plugins, MCP tools, OpenCode-shaped HTTP compatibility, and headless integration
+modes. The largest remaining gaps are exact OpenCode session lifecycle
+semantics, provider/auth breadth, richer TUI feature parity, deeper
+PTY/workspace/sync behavior, and ACP.
 
 ## Confirmed Implemented Or Native Equivalent
 
@@ -135,5 +136,5 @@ provider/auth breadth, TUI feature parity, PTY/workspace/sync surfaces, and ACP.
    session lifecycle details.
 
 Each candidate should be implemented with a red test first, verified with
-`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
 and `cargo test --workspace`, then committed atomically.

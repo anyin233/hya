@@ -35,16 +35,16 @@ If you want to understand the codebase:
 | Page | Purpose |
 | --- | --- |
 | [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
-| [Configuration](configuration.md) | Explain model/provider discovery through opencode config and environment overrides. |
+| [Configuration](configuration.md) | Explain yaca config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [CLI Reference](cli.md) | Document shipped `yaca` commands and flags. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |
 | [Event Model](architecture/event-model.md) | Explain canonical events, envelopes, messages, parts, ids, and projections. |
-| [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible and Anthropic protocols, SSE decoding, and fallback providers. |
+| [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, and Google protocols, SSE decoding, and fallback providers. |
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
-| [Server and Client](architecture/server-client.md) | Explain the HTTP API, SSE stream, and typed client crate. |
+| [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, OpenCode-compatible route groups, and the typed client crate. |
 | [TUI](architecture/tui.md) | Explain the split between terminal event loop and pure ratatui rendering. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
@@ -57,6 +57,9 @@ If you want to understand the codebase:
 - Protocol types: [`../crates/yaca-proto/src/lib.rs`](../crates/yaca-proto/src/lib.rs)
 - Providers: [`../crates/yaca-provider/src/lib.rs`](../crates/yaca-provider/src/lib.rs)
 - Tools: [`../crates/yaca-tool/src/lib.rs`](../crates/yaca-tool/src/lib.rs)
+- MCP: [`../crates/yaca-mcp/src/lib.rs`](../crates/yaca-mcp/src/lib.rs)
+- Plugin host: [`../crates/yaca-plugin/src/lib.rs`](../crates/yaca-plugin/src/lib.rs)
+- OpenCode adapter: [`../crates/yaca-plugin-opencode/README.md`](../crates/yaca-plugin-opencode/README.md)
 - Store: [`../crates/yaca-store/src/lib.rs`](../crates/yaca-store/src/lib.rs)
 - Server: [`../crates/yaca-server/src/lib.rs`](../crates/yaca-server/src/lib.rs)
 - TUI renderer: [`../crates/yaca-tui/src/lib.rs`](../crates/yaca-tui/src/lib.rs)

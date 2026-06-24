@@ -9,26 +9,38 @@ after permission checks pass.
 [`tool.rs`](../../crates/yaca-tool/src/tool.rs) defines:
 
 - `Tool`: name, schema, async execute.
-- `ToolCtx`: permission plane, workdir, cancellation token.
-- `ToolRegistry`: name-to-tool map plus model-facing schemas.
+- `ToolCtx`: permission plane, interaction/spawner/todo/skill/websearch/LSP/
+  formatter planes, session ids, workdir, cancellation token.
+- `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
 The builtin registry includes:
 
 | Tool | Input | Output |
 | --- | --- | --- |
-| `read` | `{ "path": string }` | `{ "content": string }` |
-| `write` | `{ "path": string, "content": string }` | `{ "ok": true, "bytes": number }` |
-| `edit` | `{ "path": string, "old": string, "new": string }` | `{ "replaced": true }` |
-| `glob` | `{ "pattern": string }` | `{ "paths": string[], "total": number }` |
-| `grep` | `{ "pattern": string, "path"?: string }` | `{ "matches": object[], "total": number }` |
-| `shell` | `{ "command": string }` | `{ "stdout": string, "stderr": string, "exit_code": number? }` |
+| `invalid` | unknown call payload | Structured invalid-tool response. |
+| `read` | `{ "path": string }` | File text/media or directory listing. |
+| `write` | `{ "path": string, "content": string }` | Write result plus formatter/LSP diagnostics when available. |
+| `edit` | `{ "path": string, "old": string, "new": string }` | Replacement result plus diff/formatter/LSP data. |
+| `apply_patch` (`patch`) | patch text | Aggregate diff and per-file metadata. |
+| `ls` | `{ "path"?: string }` | Immediate directory entries. |
+| `glob`, `find` | pattern/path inputs | Path matches and counts. |
+| `grep` | `{ "pattern": string, "path"?: string, "include"?: string }` | Regex matches and counts. |
+| `shell`, `bash` | `{ "command": string }` | Command title, stdout/stderr, exit status. |
+| `webfetch` (`fetch`) | URL input | Fetched web content via the web-fetch tool. |
+| `websearch` (`search`) | query input | Search results from the configured `WebSearchPlane`. |
+| `question`, `ask_user` | prompt/options input | Human answer or cancellation. |
+| `lsp` | operation input | LSP provider response. |
+| `skill` | skill path/name input | Skill content. |
+| `task` | member prompts | Foreground/background subagent outcomes. |
+| `todowrite` (`todo`) | todo items | Latest todo snapshot for the session. |
+| `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 
 ## Output Limits
 
 Large string outputs are truncated at 16 KiB and include a truncation marker.
-`glob` and `grep` return at most 500 items while preserving the total match
-count. These limits keep provider context from being flooded by accidental large
-outputs.
+Search-style tools cap returned entries while preserving counts and truncation
+metadata. These limits keep provider context from being flooded by accidental
+large outputs.
 
 ## Permission Model
 
@@ -71,7 +83,9 @@ The binary builds a `PermissionPlane` that auto-allows:
 - `Glob`
 - `Grep`
 
-Mutating or process-spawning actions such as `Edit` and `Bash` default to `Ask`.
+Mutating, external-directory, subagent, and process-spawning actions such as
+`Edit` and `Bash` default to `Ask`. `--yolo` installs a headless/TUI policy that
+auto-approves all actions.
 
 ## Engine Integration
 
@@ -82,3 +96,10 @@ tool, builds a `ToolCtx`, executes it, measures elapsed time, and appends either
 - `Event::ToolError`
 
 The next provider round then sees the tool result in the projected transcript.
+
+## External Tool Sources
+
+`yaca-cli` registers MCP tools from `yaca-mcp` after connecting configured
+servers. Those tools are named `mcp__<server>__<tool>`. It then registers plugin
+tools from `yaca-plugin`. Both sources use the same registry, permission plane,
+tool result events, and projection replay as builtin tools.

@@ -12,7 +12,10 @@ central type is `SessionEngine` in
 - `ProviderRouter` for model streaming.
 - `ToolRegistry` for model-requested tool execution.
 - `PermissionPlane` for allow/ask/deny decisions.
+- `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `SkillPlane`, `WebSearchPlane`,
+  `LspPlane`, and `FormatterPlane` for cross-cutting tool services.
 - `EventBus` for live subscribers.
+- optional hook dispatcher for plugins.
 
 All runtime events pass through `SessionEngine::emit`, which appends to the
 store and publishes the same envelope to the bus.
@@ -40,6 +43,9 @@ runs connected to a lead session.
 5. `MessageFinished`
 
 The same shape is used by `inject_system_message` for system messages.
+`admit_command_prompt` records command metadata while admitting a user message.
+OpenCode-compatible v2 prompt admission can attach file and agent metadata that
+is replayed through the projection and provider request builder.
 
 ## Assistant Turn Loop
 
@@ -50,8 +56,10 @@ The same shape is used by `inject_system_message` for system messages.
 3. Streams provider events.
 4. Appends text, reasoning, and tool-input events.
 5. Collects `ToolCallRequested` events.
-6. Executes requested tools through the registry.
-7. Appends `ToolResult` or `ToolError`.
+6. Executes requested tools through the registry with permission checks and
+   plugin/MCP bridges.
+7. Runs formatter/LSP post-edit work for file mutations when configured.
+8. Appends `ToolResult` or `ToolError`.
 
 If a provider round produces tool calls, the engine starts another round with
 the updated projection. `MAX_TOOL_ROUNDS` is currently `25`; hitting it emits a
@@ -63,7 +71,26 @@ text notice and finishes the message with `FinishReason::Error`.
 provider round starts, the engine emits `MessageFinished` with
 `FinishReason::Cancelled`.
 
-The shell tool also checks the token before spawning a command.
+The shell tool also checks the token before spawning a command and kills the
+spawned Unix process group on cancellation.
+
+## Compaction and Summaries
+
+Compaction lives in [`compaction.rs`](../../crates/yaca-core/src/compaction.rs)
+and [`engine/summary.rs`](../../crates/yaca-core/src/engine/summary.rs).
+`ModelSummarizer` asks the configured provider for a summary when token
+thresholds are exceeded. `compact_context` records a yaca-native system summary
+and prunes older provider context for future requests. The CLI exposes this via
+`/compact`; legacy OpenCode summarize routes persist the same native summary
+shape.
+
+## Hooks
+
+[`hooks.rs`](../../crates/yaca-core/src/hooks.rs) defines the runtime hook
+boundary used by `yaca-plugin`. Hookable surfaces include events, command/user
+message admission, chat params/messages, text completion, permission asks, and
+tool before/after hooks. The CLI installs a `PluginHost` when `plugins:` are
+configured.
 
 ## Goal Mode
 
@@ -122,5 +149,6 @@ lead session.
 board state. `WorktreeManager` allocates git worktrees under `.yaca/worktrees`
 and only cleans up paths it recorded as owned.
 
-These primitives are present in `yaca-core`; the shipped CLI currently exposes
-the main TUI, single-turn, goal, server, and replay surfaces.
+These primitives are present in `yaca-core`; the shipped CLI exposes the main
+TUI, single-turn/run aliases, goal, server, replay, sessions, catalog/auth, and
+JSONL RPC surfaces.
