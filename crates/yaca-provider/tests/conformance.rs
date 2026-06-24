@@ -362,14 +362,14 @@ fn encoders_emit_reasoning_only_when_set() {
     };
     let a = AnthropicMessagesProtocol.encode(&req).unwrap();
     assert_eq!(a["thinking"]["type"], "enabled");
-    assert_eq!(a["thinking"]["budget_tokens"], 16384);
+    assert_eq!(a["thinking"]["budget_tokens"], 16000);
     assert!(a["max_tokens"].as_u64().unwrap() > 16384);
     let o = OpenAiChatProtocol.encode(&req).unwrap();
     assert_eq!(o["reasoning_effort"], "high");
     let g = GoogleProtocol.encode(&req).unwrap();
     assert_eq!(
         g["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-        24576
+        16000
     );
 
     req.reasoning = None;
