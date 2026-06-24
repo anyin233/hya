@@ -68,6 +68,7 @@ pub struct ProviderModel {
     pub provider_id: String,
     pub model_id: String,
     pub capabilities: Capabilities,
+    pub reasoning_variants: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
