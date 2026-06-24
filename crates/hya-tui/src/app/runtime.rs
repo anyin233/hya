@@ -272,6 +272,19 @@ fn slash_command(text: &str, names: &[String]) -> Option<(String, String)> {
     Some((name.to_owned(), arguments.to_owned()))
 }
 
+/// The command name in `/name ...` input that has command syntax (one leading `/`-prefixed
+/// token with no further `/`), whether or not the command is registered. Distinguishes an
+/// unknown command (`/bogus`) from a path (`/usr/bin`) or a plain prompt, so the former can
+/// be rejected instead of silently sent to the model.
+fn command_like_name(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix('/')?;
+    let name = match rest.split_once(char::is_whitespace) {
+        Some((name, _)) => name,
+        None => rest,
+    };
+    (!name.is_empty() && !name.contains('/')).then_some(name)
+}
+
 enum YoloRequest {
     Toggle,
     Set(bool),
@@ -722,19 +735,36 @@ impl Runtime {
             self.permission_reject_message.clear();
         }
         self.active_permission = permission_identity;
-        if let Some((_, request_id, _)) = self.active_permission.clone() {
-            if self.yolo && self.yolo_replied.insert(request_id.clone()) {
-                let reply_id = request_id.clone();
-                let client = Arc::clone(&self.input.client);
-                let tx = self.input.tx.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = client.permission_reply(&reply_id, "once", None).await {
-                        let _ = tx.send(AppEvent::Toast(format!(
-                            "yolo auto-approve failed: {error}"
-                        )));
-                    }
-                });
+        if self.yolo {
+            // Auto-approve EVERY pending permission, not just the active session's: a subagent
+            // runs in a child session whose requests are never the active permission, so without
+            // this the subagent blocks forever on an approval the TUI would never surface.
+            let pending_ids: Vec<String> = data
+                .permissions
+                .values()
+                .flatten()
+                .filter_map(|request| {
+                    request
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect();
+            for id in pending_ids {
+                if self.yolo_replied.insert(id.clone()) {
+                    let client = Arc::clone(&self.input.client);
+                    let tx = self.input.tx.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = client.permission_reply(&id, "once", None).await {
+                            let _ = tx.send(AppEvent::Toast(format!(
+                                "yolo auto-approve failed: {error}"
+                            )));
+                        }
+                    });
+                }
             }
+        }
+        if let Some((_, request_id, _)) = self.active_permission.clone() {
             if self.yolo_replied.contains(&request_id) {
                 active_permission_data = None;
                 self.active_permission = None;
@@ -2584,6 +2614,13 @@ impl Runtime {
             Submit::Shell(command.trim().to_owned())
         } else if let Some((name, arguments)) = slash_command(&text, &self.command_names) {
             Submit::Command { name, arguments }
+        } else if let Some(name) = command_like_name(&text) {
+            self.toast = Some((
+                format!("Unknown command /{name} \u{2014} press / then Tab to list commands"),
+                Instant::now() + TOAST_DURATION,
+            ));
+            self.reset_prompt();
+            return;
         } else {
             self.submitted_prompts.push(text.clone());
             Submit::Prompt(prompt_request_body(&self.prompt))
@@ -2692,8 +2729,8 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        base64_encode, normalize_editor_content, parse_editor_command, slash_command,
-        trailing_mention, yolo_command, YoloRequest,
+        base64_encode, command_like_name, normalize_editor_content, parse_editor_command,
+        slash_command, trailing_mention, yolo_command, YoloRequest,
     };
 
     #[test]
@@ -2770,5 +2807,18 @@ mod tests {
     #[test]
     fn normalize_editor_content_when_crlf_and_trailing_newlines_returns_prompt_text() {
         assert_eq!(normalize_editor_content("one\r\ntwo\r\n\r\n"), "one\ntwo");
+    }
+
+    #[test]
+    fn command_like_name_detects_command_syntax_not_paths() {
+        assert_eq!(command_like_name("/yolo on"), Some("yolo"));
+        assert_eq!(command_like_name("/review the code"), Some("review"));
+        assert_eq!(command_like_name("/bogus"), Some("bogus"));
+        assert_eq!(command_like_name("/usr/bin/x"), None);
+        assert_eq!(command_like_name("plain prompt"), None);
+        assert_eq!(command_like_name("/"), None);
+        let names = vec!["review".to_owned()];
+        assert_eq!(slash_command("/bogus", &names), None);
+        assert_eq!(command_like_name("/bogus"), Some("bogus"));
     }
 }
