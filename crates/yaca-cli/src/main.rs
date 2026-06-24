@@ -325,6 +325,7 @@ struct RuntimeConfig {
     models: Vec<config::ModelEntry>,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
+    default_agent: Option<String>,
 }
 
 /// Resolve a provider router + active model from yaca's config, falling back
@@ -351,6 +352,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 models: cfg.models,
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
+                default_agent: cfg.default_agent,
             }
         }
         Ok(None) => {
@@ -361,6 +363,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
+                default_agent: None,
             }
         }
         Err(e) => {
@@ -372,6 +375,7 @@ fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
+                default_agent: None,
             }
         }
     }
@@ -663,7 +667,8 @@ async fn main() -> anyhow::Result<()> {
         return cmd_goal(goal, cli.max_iterations, model, yolo).await;
     }
     match cli.command {
-        None => cmd_tui(model, db, resume, yolo).await,
+        None if cli.mini => cmd_tui(model, db, resume, yolo).await,
+        None => serve::cmd_tui_hya(model, db, yolo).await,
         Some(Command::Run {
             message,
             format,

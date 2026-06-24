@@ -1,0 +1,527 @@
+[
+  {
+    "input": "",
+    "offset": 0,
+    "width": 0,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "hello",
+    "offset": 0,
+    "width": 5,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "hello",
+    "offset": 1,
+    "width": 5,
+    "slice": "h",
+    "mention": null
+  },
+  {
+    "input": "hello",
+    "offset": 2,
+    "width": 5,
+    "slice": "he",
+    "mention": null
+  },
+  {
+    "input": "hello",
+    "offset": 5,
+    "width": 5,
+    "slice": "hello",
+    "mention": null
+  },
+  {
+    "input": "hello world",
+    "offset": 0,
+    "width": 11,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "hello world",
+    "offset": 1,
+    "width": 11,
+    "slice": "h",
+    "mention": null
+  },
+  {
+    "input": "hello world",
+    "offset": 5,
+    "width": 11,
+    "slice": "hello",
+    "mention": null
+  },
+  {
+    "input": "hello world",
+    "offset": 11,
+    "width": 11,
+    "slice": "hello world",
+    "mention": null
+  },
+  {
+    "input": "@",
+    "offset": 0,
+    "width": 1,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "@",
+    "offset": 1,
+    "width": 1,
+    "slice": "@",
+    "mention": 0
+  },
+  {
+    "input": "@file",
+    "offset": 0,
+    "width": 5,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "@file",
+    "offset": 1,
+    "width": 5,
+    "slice": "@",
+    "mention": 0
+  },
+  {
+    "input": "@file",
+    "offset": 2,
+    "width": 5,
+    "slice": "@f",
+    "mention": 0
+  },
+  {
+    "input": "@file",
+    "offset": 5,
+    "width": 5,
+    "slice": "@file",
+    "mention": 0
+  },
+  {
+    "input": "look @src/main.rs here",
+    "offset": 0,
+    "width": 22,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "look @src/main.rs here",
+    "offset": 1,
+    "width": 22,
+    "slice": "l",
+    "mention": null
+  },
+  {
+    "input": "look @src/main.rs here",
+    "offset": 11,
+    "width": 22,
+    "slice": "look @src/m",
+    "mention": 5
+  },
+  {
+    "input": "look @src/main.rs here",
+    "offset": 22,
+    "width": 22,
+    "slice": "look @src/main.rs here",
+    "mention": null
+  },
+  {
+    "input": "email a@b.com",
+    "offset": 0,
+    "width": 13,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "email a@b.com",
+    "offset": 1,
+    "width": 13,
+    "slice": "e",
+    "mention": null
+  },
+  {
+    "input": "email a@b.com",
+    "offset": 6,
+    "width": 13,
+    "slice": "email ",
+    "mention": null
+  },
+  {
+    "input": "email a@b.com",
+    "offset": 13,
+    "width": 13,
+    "slice": "email a@b.com",
+    "mention": null
+  },
+  {
+    "input": "multi\nline",
+    "offset": 0,
+    "width": 10,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "multi\nline",
+    "offset": 1,
+    "width": 10,
+    "slice": "m",
+    "mention": null
+  },
+  {
+    "input": "multi\nline",
+    "offset": 5,
+    "width": 10,
+    "slice": "multi",
+    "mention": null
+  },
+  {
+    "input": "multi\nline",
+    "offset": 10,
+    "width": 10,
+    "slice": "multi\nline",
+    "mention": null
+  },
+  {
+    "input": "@a\n@b",
+    "offset": 0,
+    "width": 5,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "@a\n@b",
+    "offset": 1,
+    "width": 5,
+    "slice": "@",
+    "mention": 0
+  },
+  {
+    "input": "@a\n@b",
+    "offset": 2,
+    "width": 5,
+    "slice": "@a",
+    "mention": 0
+  },
+  {
+    "input": "@a\n@b",
+    "offset": 5,
+    "width": 5,
+    "slice": "@a\n@b",
+    "mention": 3
+  },
+  {
+    "input": "cafe",
+    "offset": 0,
+    "width": 4,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "cafe",
+    "offset": 1,
+    "width": 4,
+    "slice": "c",
+    "mention": null
+  },
+  {
+    "input": "cafe",
+    "offset": 2,
+    "width": 4,
+    "slice": "ca",
+    "mention": null
+  },
+  {
+    "input": "cafe",
+    "offset": 4,
+    "width": 4,
+    "slice": "cafe",
+    "mention": null
+  },
+  {
+    "input": "café",
+    "offset": 0,
+    "width": 4,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "café",
+    "offset": 1,
+    "width": 4,
+    "slice": "c",
+    "mention": null
+  },
+  {
+    "input": "café",
+    "offset": 2,
+    "width": 4,
+    "slice": "ca",
+    "mention": null
+  },
+  {
+    "input": "café",
+    "offset": 4,
+    "width": 4,
+    "slice": "café",
+    "mention": null
+  },
+  {
+    "input": "naïve @café",
+    "offset": 0,
+    "width": 11,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "naïve @café",
+    "offset": 1,
+    "width": 11,
+    "slice": "n",
+    "mention": null
+  },
+  {
+    "input": "naïve @café",
+    "offset": 5,
+    "width": 11,
+    "slice": "naïve",
+    "mention": null
+  },
+  {
+    "input": "naïve @café",
+    "offset": 11,
+    "width": 11,
+    "slice": "naïve @café",
+    "mention": 6
+  },
+  {
+    "input": "日本語テスト",
+    "offset": 0,
+    "width": 12,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "日本語テスト",
+    "offset": 1,
+    "width": 12,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "日本語テスト",
+    "offset": 6,
+    "width": 12,
+    "slice": "日本語",
+    "mention": null
+  },
+  {
+    "input": "日本語テスト",
+    "offset": 12,
+    "width": 12,
+    "slice": "日本語テスト",
+    "mention": null
+  },
+  {
+    "input": "中文@路径/x",
+    "offset": 0,
+    "width": 11,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "中文@路径/x",
+    "offset": 1,
+    "width": 11,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "中文@路径/x",
+    "offset": 5,
+    "width": 11,
+    "slice": "中文@",
+    "mention": null
+  },
+  {
+    "input": "中文@路径/x",
+    "offset": 11,
+    "width": 11,
+    "slice": "中文@路径/x",
+    "mention": null
+  },
+  {
+    "input": "tab\there",
+    "offset": 0,
+    "width": 7,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "tab\there",
+    "offset": 1,
+    "width": 7,
+    "slice": "t",
+    "mention": null
+  },
+  {
+    "input": "tab\there",
+    "offset": 3,
+    "width": 7,
+    "slice": "tab\t",
+    "mention": null
+  },
+  {
+    "input": "tab\there",
+    "offset": 7,
+    "width": 7,
+    "slice": "tab\there",
+    "mention": null
+  },
+  {
+    "input": "  @lead",
+    "offset": 0,
+    "width": 7,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "  @lead",
+    "offset": 1,
+    "width": 7,
+    "slice": " ",
+    "mention": null
+  },
+  {
+    "input": "  @lead",
+    "offset": 3,
+    "width": 7,
+    "slice": "  @",
+    "mention": 2
+  },
+  {
+    "input": "  @lead",
+    "offset": 7,
+    "width": 7,
+    "slice": "  @lead",
+    "mention": 2
+  },
+  {
+    "input": "a @b @c",
+    "offset": 0,
+    "width": 7,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "a @b @c",
+    "offset": 1,
+    "width": 7,
+    "slice": "a",
+    "mention": null
+  },
+  {
+    "input": "a @b @c",
+    "offset": 3,
+    "width": 7,
+    "slice": "a @",
+    "mention": 2
+  },
+  {
+    "input": "a @b @c",
+    "offset": 7,
+    "width": 7,
+    "slice": "a @b @c",
+    "mention": 5
+  },
+  {
+    "input": "trailing @ ",
+    "offset": 0,
+    "width": 11,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "trailing @ ",
+    "offset": 1,
+    "width": 11,
+    "slice": "t",
+    "mention": null
+  },
+  {
+    "input": "trailing @ ",
+    "offset": 5,
+    "width": 11,
+    "slice": "trail",
+    "mention": null
+  },
+  {
+    "input": "trailing @ ",
+    "offset": 11,
+    "width": 11,
+    "slice": "trailing @ ",
+    "mention": null
+  },
+  {
+    "input": "@dir/sub/file.rs",
+    "offset": 0,
+    "width": 16,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "@dir/sub/file.rs",
+    "offset": 1,
+    "width": 16,
+    "slice": "@",
+    "mention": 0
+  },
+  {
+    "input": "@dir/sub/file.rs",
+    "offset": 8,
+    "width": 16,
+    "slice": "@dir/sub",
+    "mention": 0
+  },
+  {
+    "input": "@dir/sub/file.rs",
+    "offset": 16,
+    "width": 16,
+    "slice": "@dir/sub/file.rs",
+    "mention": 0
+  },
+  {
+    "input": "line1\nline2\n@ref",
+    "offset": 0,
+    "width": 16,
+    "slice": "",
+    "mention": null
+  },
+  {
+    "input": "line1\nline2\n@ref",
+    "offset": 1,
+    "width": 16,
+    "slice": "l",
+    "mention": null
+  },
+  {
+    "input": "line1\nline2\n@ref",
+    "offset": 8,
+    "width": 16,
+    "slice": "line1\nli",
+    "mention": null
+  },
+  {
+    "input": "line1\nline2\n@ref",
+    "offset": 16,
+    "width": 16,
+    "slice": "line1\nline2\n@ref",
+    "mention": 12
+  }
+]

@@ -70,7 +70,7 @@ async fn create(
 }
 
 fn default_agent(st: &ServerState, workdir: &str) -> AgentName {
-    super::agent_catalog::default_name(std::path::Path::new(workdir))
+    super::agent_catalog::default_name(std::path::Path::new(workdir), st)
         .map(AgentName::new)
         .unwrap_or_else(|| st.agent.name.clone())
 }

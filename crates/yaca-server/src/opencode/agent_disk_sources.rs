@@ -6,9 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::agent_options::{AgentOptions, from_config as agent_options};
-use super::agent_permission_config::{
-    ConfigPermissionRule, LegacyPermissions, LegacyTools, rules as permission_rules,
-};
+use super::agent_permission::PermissionRule;
 use super::agent_sources::AgentChange;
 
 type RequestBody = BTreeMap<String, Value>;
@@ -16,6 +14,7 @@ type RequestHeaders = BTreeMap<String, String>;
 
 #[derive(Default, Deserialize)]
 struct AgentFrontmatter {
+    name: Option<String>,
     description: Option<String>,
     mode: Option<String>,
     hidden: Option<bool>,
@@ -29,9 +28,7 @@ struct AgentFrontmatter {
     max_steps: Option<NonZeroU64>,
     options: Option<AgentOptions>,
     request: Option<InlineRequest>,
-    permission: Option<LegacyPermissions>,
-    permissions: Option<Vec<ConfigPermissionRule>>,
-    tools: Option<LegacyTools>,
+    readonly: Option<bool>,
     disable: Option<bool>,
     disabled: Option<bool>,
     #[serde(flatten)]
@@ -68,6 +65,44 @@ pub(super) fn disk_agents(workdir: &Path) -> Vec<AgentChange> {
     files.into_iter().filter_map(disk_agent).collect()
 }
 
+/// Agents from the user's global config dirs (`~/.config/yaca/agents`, plus the OpenCode
+/// `~/.config/opencode/agent` location for superset parity). Mode comes from each file's
+/// frontmatter; workdir agents are applied afterwards so a project can still override these.
+pub(super) fn global_disk_agents() -> Vec<AgentChange> {
+    let mut files = Vec::new();
+    for root in global_agent_dirs() {
+        collect_markdown_files(&root, &root, false, &mut files);
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files.into_iter().filter_map(disk_agent).collect()
+}
+
+fn global_agent_dirs() -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME")
+        && !dir.is_empty()
+    {
+        bases.push(PathBuf::from(dir));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let xdg_default = PathBuf::from(home).join(".config");
+        if !bases.contains(&xdg_default) {
+            bases.push(xdg_default);
+        }
+    }
+    bases
+        .iter()
+        .flat_map(|base| {
+            [
+                base.join("yaca/agents"),
+                base.join("yaca/agent"),
+                base.join("opencode/agent"),
+                base.join("opencode/agents"),
+            ]
+        })
+        .collect()
+}
+
 fn collect_markdown_files(base: &Path, dir: &Path, primary: bool, files: &mut Vec<AgentFile>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -99,7 +134,7 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
     let steps = frontmatter.steps.or(frontmatter.max_steps);
     let (request_headers, request_body) = request_parts(frontmatter.request);
     Some(AgentChange {
-        name: file.name,
+        name: frontmatter.name.unwrap_or(file.name),
         description: frontmatter.description,
         mode,
         hidden: frontmatter.hidden,
@@ -112,13 +147,21 @@ fn disk_agent(file: AgentFile) -> Option<AgentChange> {
         options: agent_options(frontmatter.options, frontmatter.extra),
         request_headers,
         request_body,
-        permissions: permission_rules(
-            frontmatter.permissions,
-            frontmatter.permission,
-            frontmatter.tools,
-        ),
+        permissions: readonly_permissions(frontmatter.readonly),
         prompt: Some(prompt),
         remove: frontmatter.disable.unwrap_or(false) || frontmatter.disabled.unwrap_or(false),
+    })
+}
+
+fn readonly_permissions(readonly: Option<bool>) -> Option<Vec<PermissionRule>> {
+    // ponytail: `readonly` is sugar for a deny-edit rule; absence emits no rule so the agent
+    // inherits the main agent's permission plane rather than getting an empty (deny-all) set.
+    readonly.unwrap_or(false).then(|| {
+        vec![PermissionRule::new(
+            "edit".to_string(),
+            "*".to_string(),
+            "deny".to_string(),
+        )]
     })
 }
 
