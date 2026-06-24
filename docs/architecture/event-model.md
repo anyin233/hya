@@ -27,10 +27,16 @@ compile time.
 canonical runtime stream. Major event groups are:
 
 - session lifecycle
+- session metadata, title, archive/share, agent/model switch, and status
 - message lifecycle
+- prompt context metadata
+- message and part deletion
+- step markers
 - text streaming
 - reasoning streaming
+- text/reasoning replacement
 - tool input and tool result lifecycle
+- tool-part state updates
 - runtime errors
 
 An `Envelope` wraps an event with:
@@ -53,6 +59,7 @@ message shape:
 | `Message::System` | System content. |
 | `Part::Text` | Text content. |
 | `Part::Reasoning` | Reasoning text when a provider exposes it. |
+| `Part::Media` | Canonical media attachment with MIME type, data, and optional filename. |
 | `Part::Tool` | Tool call state, including input, output, and errors. |
 
 Tool parts use `ToolPartState`:
@@ -68,11 +75,15 @@ Pending -> Running -> Completed
 envelopes into a `Projection`:
 
 - `SessionCreated` sets session metadata.
+- session metadata/title/archive/share/move/switch events update session state.
 - `MessageStarted` creates a message row in memory.
+- `UserPromptContextRecorded` preserves prompt attachment metadata.
 - text and reasoning starts create parts.
 - deltas append to existing parts.
+- replacements overwrite existing text or reasoning part content.
 - tool call requests upsert running tool parts.
-- tool results and errors finalize tool state.
+- tool results, errors, and `ToolPartUpdated` finalize or replace tool state.
+- delete events remove messages or parts from the projected view.
 - `MessageFinished` records finish reason.
 
 The reducer is idempotent by sequence number:
@@ -89,7 +100,7 @@ after an SSE reconnect.
 ## Provider Boundary
 
 Provider decoders produce canonical events, not provider-specific objects. For
-example, OpenAI and Anthropic tool-call streams both become
+example, OpenAI-compatible, Anthropic, and Google tool-call streams all become
 `Event::ToolCallRequested`, even though their wire formats differ.
 
 The engine is responsible for executing tool calls and appending

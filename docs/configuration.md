@@ -1,58 +1,70 @@
 # Configuration
 
-yaca does not currently define its own provider configuration file. The CLI
-builds model routes from opencode's config and falls back to an offline
-development provider when no usable config is found.
+yaca reads its own YAML config from:
 
-## Config Discovery
+1. `$XDG_CONFIG_HOME/yaca/config.yaml`
+2. `$HOME/.config/yaca/config.yaml`
 
-The loader in [`../crates/yaca-cli/src/config.rs`](../crates/yaca-cli/src/config.rs)
-checks:
+If no usable provider route is configured, yaca falls back to `DevProvider`, the
+offline echo provider from [`../crates/yaca-provider/src/dev.rs`](../crates/yaca-provider/src/dev.rs).
+The same config file also drives MCP servers, plugins, and formatter status.
 
-1. `$XDG_CONFIG_HOME/opencode/opencode.json`
-2. `$HOME/.config/opencode/opencode.json`
+## Providers
 
-If neither file exists, or no supported providers are present, yaca uses
-`DevProvider` from [`../crates/yaca-provider/src/dev.rs`](../crates/yaca-provider/src/dev.rs).
+Each entry under `providers` builds one HTTP route:
 
-## Supported Provider Shapes
+```yaml
+default_model: claude-sonnet-4-6
+providers:
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key: "{env:ANTHROPIC_API_KEY}"
+    models: [claude-sonnet-4-6]
+  gateway:
+    kind: openai-compatible
+    base_url: https://gateway.example/v1
+    api_key: "{file:/run/secrets/gateway-key}"
+    models: [gpt-5.5, gpt-5.4]
+  google:
+    kind: google
+    base_url: https://generativelanguage.googleapis.com
+    api_key: literal-secret
+    models: [gemini-2.0-flash]
+```
 
-For each `provider.<id>` entry, yaca reads:
+Supported `kind` values:
 
-- `npm` to infer the provider protocol.
-- `options.baseURL` as the upstream base URL.
-- `options.apiKey` as a literal secret or a template.
-- `models` keys as the model ids this route can serve.
-
-Supported `npm` families:
-
-| `npm` contains | yaca route |
+| `kind` | Route |
 | --- | --- |
-| `openai` | OpenAI Chat Completions compatible route at `<baseURL>/chat/completions`. |
-| `anthropic` | Anthropic Messages route at `<baseURL>/messages`. |
+| `openai` or `openai-compatible` | OpenAI Chat Completions compatible route. |
+| `anthropic` | Anthropic Messages route. |
+| `google` | Gemini route. |
 
-Providers without models, a base URL, or an API key are skipped.
+Providers without models are skipped. Providers without an inline `api_key` are
+still valid if a saved token exists for that provider id.
 
-## API Key Templates
+## Auth Tokens
 
-`options.apiKey` supports:
+`api_key` accepts:
 
-```json
-{ "apiKey": "literal-secret" }
+```yaml
+api_key: literal-secret
+api_key: "{env:MY_PROVIDER_API_KEY}"
+api_key: "{file:/absolute/path/to/key.txt}"
 ```
 
-```json
-{ "apiKey": "{env:MY_PROVIDER_API_KEY}" }
+Saved tokens take precedence over inline `api_key` values:
+
+```sh
+yaca login anthropic "$ANTHROPIC_API_KEY"
+yaca auth list
+yaca auth logout anthropic
 ```
 
-```json
-{ "apiKey": "{file:/absolute/path/to/key.txt}" }
-```
-
-Environment and file templates are resolved before building the provider router.
-HTTP auth headers are marked sensitive and redirects are disabled in
-[`HttpProvider`](../crates/yaca-provider/src/http.rs) so an auth header is not
-forwarded across a redirect.
+Tokens are stored under `~/.config/yaca/auth/<provider>.yaml`. HTTP auth headers
+are marked sensitive and redirects are disabled so a secret is not forwarded to
+another host.
 
 ## Model Selection
 
@@ -60,36 +72,115 @@ The active model is selected in this order:
 
 1. `--model <id>` CLI flag.
 2. `YACA_MODEL` environment variable.
-3. A configured model whose id contains `sonnet`.
-4. The first configured model id.
-5. `offline` when using the development provider.
+3. `default_model` from `config.yaml`.
+4. A configured model whose id contains `sonnet`.
+5. The first configured model id.
+6. `offline` when using the development provider.
 
 Examples:
 
 ```sh
 YACA_MODEL=claude-sonnet-4-6 yaca
 yaca --model gpt-5.5 exec "summarize the architecture"
+yaca models
+yaca models gateway --verbose
 ```
 
-The selected model must be served by one of the configured provider routes. If
-no provider reports capabilities for the model, the router returns an
-`unknown provider for model` error.
+The selected model must be served by one configured route. If no route reports
+capabilities for the model, the router returns `unknown provider for model`.
 
-## Offline Provider
+## MCP Servers
 
-When no usable live config exists, yaca creates a router with `DevProvider`. The
-offline provider responds on every turn with a message that includes the latest
-user prompt and says no live model is configured. This keeps the CLI, TUI, store,
-server, and projection path testable without API keys.
+MCP servers are configured under `mcp`:
+
+```yaml
+mcp:
+  filesystem:
+    command: [node, /path/to/server.js]
+    env:
+      TOKEN: "{env:MCP_TOKEN}"
+    timeout_ms: 1000
+  disabled-example:
+    enabled: false
+    command: [node, server.js]
+```
+
+Enabled servers are started during runtime composition. Their tools are
+registered as `mcp__<server>__<tool>` and use the normal permission plane.
+`GET /mcp` reports connected, disabled, and failed servers in an
+OpenCode-shaped status response. Dynamic HTTP MCP add/connect/disconnect routes
+exist for compatibility, but they do not durably rewrite `config.yaml` or hot-plug
+new tools into an already running engine.
+
+## Plugins
+
+Plugins may be declared directly in config or discovered from
+`<workdir>/.yaca/plugins/**/plugin.toml`:
+
+```yaml
+plugins:
+  memory:
+    command: [python3, memory.py]
+    timeout_ms: 500
+    env:
+      TOKEN: literal-token
+  opencode:
+    kind: opencode
+```
+
+Config entries support:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `rust`, `opencode`, or `other`; default is `rust`. |
+| `command` | Process command for stdio JSON-RPC. |
+| `enabled` | Defaults to `true`; disabled entries are skipped. |
+| `timeout_ms` | Optional request timeout. |
+| `env` | Environment variables passed to the plugin process as configured. |
+
+For `kind: opencode` entries without `command`, yaca uses the bundled Bun
+adapter from `crates/yaca-plugin-opencode/adapter`. Set `BUN` to choose a Bun
+binary or `YACA_OPENCODE_ADAPTER_DIR` to point at an alternate adapter checkout.
+If Bun is not available, that plugin is skipped.
+
+The plugin host supports registered tools, command/message/text/chat hooks,
+event notifications, permission hooks, shell/tool hooks, and workspace adapter
+metadata.
+
+## Formatter
+
+The `formatter` key controls the formatter plane exposed through tools and the
+OpenCode-compatible `/formatter` route:
+
+```yaml
+formatter: true
+```
+
+enables built-in formatters. A map configures custom commands:
+
+```yaml
+formatter:
+  treefmt:
+    command: [treefmt, "$FILE"]
+    extensions: [.nix]
+  gofmt:
+    disabled: true
+```
+
+Custom entries support `disabled`, `command`, `environment`, and `extensions`.
+The formatter runs after successful `write`, `edit`, and `apply_patch` tool
+operations when a matching provider entry is available.
 
 ## Custom Commands
 
-yaca also reads opencode-style markdown commands for the TUI:
+The TUI loads markdown prompt commands from:
 
 1. `$HOME/.config/opencode/commands/*.md`
 2. `$HOME/.config/opencode/command/*.md`
-3. `<workdir>/.opencode/commands/*.md`
-4. `<workdir>/.opencode/command/*.md`
+3. `$HOME/.config/yaca/prompts/*.md`
+4. `<workdir>/.opencode/commands/*.md`
+5. `<workdir>/.opencode/command/*.md`
+6. `<workdir>/.yaca/prompts/*.md`
 
 Project commands override user commands with the same file stem. The file stem
 becomes the slash command name. Optional frontmatter fields are parsed:
@@ -98,7 +189,7 @@ becomes the slash command name. Optional frontmatter fields are parsed:
 ---
 description: Create a component
 agent: build
-model: anthropic/claude-sonnet
+model: claude-sonnet-4-6
 ---
 Create $1 in $2.
 

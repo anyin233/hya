@@ -13,7 +13,7 @@ It converts upstream LLM APIs into yaca's canonical event stream.
 | `Protocol` | Encoder/decoder pair for one upstream API shape. |
 | `Decoder` | Incrementally converts SSE frame data into `Event`s. |
 | `Capabilities` | Route features such as streaming tool call support. |
-| `CompletionRequest` | Normalized request containing model, system prompt, messages, tools, and sampling options. |
+| `CompletionRequest` | Normalized request containing model, system prompt, messages, tools, sampling options, reasoning effort, and request headers. |
 
 `preflight` rejects tool-using requests if the chosen route does not support
 streaming tool calls.
@@ -45,6 +45,9 @@ Security details:
 - auth headers are marked sensitive
 - Anthropic keys use `x-api-key` and `anthropic-version`
 - OpenAI-compatible keys use `Authorization: Bearer`
+- Google keys use `x-goog-api-key`; the provider appends
+  `/v1beta/models/<model>:streamGenerateContent?alt=sse` to the configured base
+  URL
 
 The response body is read as SSE. Each frame is sent into the protocol decoder,
 and decoded events are forwarded through a channel as an `EventStream`.
@@ -80,6 +83,21 @@ for Anthropic Messages:
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
 stream events into the same yaca event variants.
 
+## Google Protocol
+
+[`google.rs`](../../crates/yaca-provider/src/google.rs) encodes requests for
+Gemini:
+
+- system prompts become `systemInstruction`
+- user text and canonical media parts become `contents[].parts`
+- image, video, and audio data are passed as validated base64 `inlineData`
+- tools become Gemini function declarations
+- tool results become `functionResponse` parts
+- reasoning effort maps to Gemini thinking-budget settings
+
+The decoder maps streamed text, function calls, and finish reasons into yaca's
+canonical event variants.
+
 ## Fake and Dev Providers
 
 Two non-live providers support development and tests:
@@ -91,3 +109,10 @@ Two non-live providers support development and tests:
 
 The dev provider intentionally responds on every turn so multi-turn flows remain
 usable without API keys.
+
+## CLI Configuration
+
+`yaca-cli` builds routes from `~/.config/yaca/config.yaml`. Provider ids and
+models are surfaced through `yaca models`, OpenCode-compatible provider/model
+HTTP routes, and saved-token auth commands. See
+[`../configuration.md`](../configuration.md) for the YAML shape.

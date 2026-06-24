@@ -7,7 +7,7 @@ This guide runs yaca from the workspace. The same commands apply to an installed
 
 - Rust toolchain compatible with the workspace manifest in [`../Cargo.toml`](../Cargo.toml).
 - A terminal that supports alternate-screen TUI programs.
-- Optional: an opencode provider config if you want live model calls. Without
+- Optional: a yaca provider config if you want live model calls. Without
   one, yaca uses an offline development provider that echoes prompts.
 
 ## Build
@@ -45,7 +45,10 @@ Key controls:
 | `Enter` | Send the current input when no turn is running. |
 | `PgUp` / `PgDn` | Scroll the conversation. |
 | `Up` / `Down` | Scroll one line. |
-| `Esc`, `Ctrl-C`, `Ctrl-D` | Quit. |
+| `Tab` on `/` input | Complete slash commands or open the command picker. |
+| `F2` | Open the model selector. |
+| `Ctrl-P` | Open command/help. |
+| `Ctrl-C` | Close dialogs, clear input, interrupt a running turn, or exit when idle. |
 
 ## Run One Headless Turn
 
@@ -54,7 +57,13 @@ cargo run -p yaca-cli -- exec "summarize this repository"
 ```
 
 `exec` creates an in-memory session, admits one user prompt, runs one assistant
-turn, and prints the transcript.
+turn, and prints the transcript. Add `--json` to emit canonical event JSONL.
+
+OpenCode-compatible prompt execution is also accepted:
+
+```sh
+cargo run -p yaca-cli -- run --format json "summarize this repository"
+```
 
 ## Run Goal Mode
 
@@ -81,6 +90,10 @@ The server prints the address it bound to:
 yaca server listening on http://127.0.0.1:8080
 ```
 
+The same server exposes native `/sessions/*` routes and OpenCode-compatible
+legacy/v2 route groups for sessions, events, files, providers/models,
+permissions/questions, MCP, PTY, VCS, projects/worktrees, TUI control, and sync.
+
 ## Replay a Session
 
 ```sh
@@ -90,3 +103,20 @@ cargo run -p yaca-cli -- tail-session <session-uuid> --db yaca.db
 `tail-session` reads the persisted event log and prints one JSON `Envelope` per
 line. It is useful for debugging because it shows the same canonical events that
 the server streams over SSE.
+
+## Configure Live Providers
+
+Create `~/.config/yaca/config.yaml` or `$XDG_CONFIG_HOME/yaca/config.yaml`:
+
+```yaml
+default_model: claude-sonnet-4-6
+providers:
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com/v1
+    api_key: "{env:ANTHROPIC_API_KEY}"
+    models: [claude-sonnet-4-6]
+```
+
+Run `yaca models` to inspect the resolved catalog. `yaca login <provider>
+<token>` stores an auth token that takes precedence over inline `api_key`.

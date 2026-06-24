@@ -14,12 +14,12 @@ yaca exec "summarize this repo"
 If the response starts with `(yaca dev provider)`, yaca did not find a usable
 live provider route. Check:
 
-- `$XDG_CONFIG_HOME/opencode/opencode.json`
-- `$HOME/.config/opencode/opencode.json`
-- each provider has `options.baseURL`
-- each provider has `options.apiKey`
-- each provider has at least one model under `models`
-- the `npm` field contains `openai` or `anthropic`
+- `$XDG_CONFIG_HOME/yaca/config.yaml`
+- `$HOME/.config/yaca/config.yaml`
+- each provider has `kind`, `base_url`, and at least one model under `models`
+- each provider has either an inline `api_key` or a saved token from
+  `yaca login <provider> <token>`
+- `kind` is `openai`, `openai-compatible`, `anthropic`, or `google`
 
 See [Configuration](configuration.md).
 
@@ -49,13 +49,13 @@ or acceptable trailing whitespace.
 
 ## Mutating Tools Fail in Headless Mode
 
-The default permission rules allow read-only actions but ask for mutating
-actions. The TUI services ask requests through a permission panel. A headless
-flow that does not answer the ask channel can fail with a permission-channel
-error.
+Headless `exec`, `run`, goal mode, `rpc`, and `serve` install an automatic
+permission responder. By default it allows reads, globs, grep, shell, MCP, and
+edits that stay inside the active workdir after symlink-aware resolution. Edits
+outside the workdir are rejected.
 
-Use the TUI for interactive permission decisions, or adjust the permission rules
-in the binary composition code before running headless mutating tasks.
+Use `--yolo` only when you intentionally want to auto-approve all tool actions,
+including edits outside the workdir.
 
 ## Shell Output Is Truncated
 

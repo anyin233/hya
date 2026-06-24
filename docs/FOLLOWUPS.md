@@ -13,12 +13,6 @@ Reference for work intentionally left for a future pass. The pi-parity waves
   OpenAI-class, Google). Keep it as its own task (it is large on its own). Until
   then, paste a token via `yaca login`.
 
-- **TUI typed-deny feedback.** The permission plane carries an optional rejection
-  reason (`Decision::Reject { feedback }`) end-to-end, but the interactive overlay
-  currently exposes fixed choices (Allow once / Allow all / Deny) without a free-text
-  reason box. Re-add a typed-reply field to the overlay to let a user explain a
-  denial back to the model.
-
 ## Implemented (merged)
 
 - Wave 1 — permission responder (Scoped / ReadOnly / Yolo) + interactive TUI
@@ -33,6 +27,8 @@ Reference for work intentionally left for a future pass. The pi-parity waves
   `--db` / `--resume`, TUI session picker).
 - Wave 7 — `exec --json` and `yaca rpc` (stdin/stdout JSONL) integration modes.
 - Hardening — path-containment resolves symlinks on existing ancestors.
+- TUI typed-deny feedback — the permission overlay captures optional rejection
+  text and sends it through `Decision::Reject { feedback }`.
 
 ## Notes
 

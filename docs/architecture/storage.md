@@ -15,7 +15,9 @@ and persists canonical events in SQLite.
 - up to eight pooled connections
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
-connection. The CLI uses in-memory stores for the TUI, `exec`, and goal mode.
+connection. The CLI uses in-memory stores for `exec`, `run`, goal mode, and the
+TUI default; `yaca --db <PATH>` and `yaca serve --db <PATH>` use file-backed
+SQLite.
 
 ## Migrations
 
