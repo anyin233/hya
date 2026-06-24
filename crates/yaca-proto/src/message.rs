@@ -24,10 +24,33 @@ pub enum FinishReason {
     Error,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
-    pub prompt: u64,
-    pub completion: u64,
+    #[serde(default, alias = "prompt")]
+    pub input: u64,
+    #[serde(default, alias = "completion")]
+    pub output: u64,
+    #[serde(default)]
+    pub reasoning: u64,
+    #[serde(default)]
+    pub cache_read: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+}
+
+impl TokenUsage {
+    #[must_use]
+    pub fn is_zero(self) -> bool {
+        self == Self::default()
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.input = self.input.max(other.input);
+        self.output = self.output.max(other.output);
+        self.reasoning = self.reasoning.max(other.reasoning);
+        self.cache_read = self.cache_read.max(other.cache_read);
+        self.cache_write = self.cache_write.max(other.cache_write);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

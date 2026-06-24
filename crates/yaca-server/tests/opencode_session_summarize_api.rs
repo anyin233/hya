@@ -73,9 +73,25 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
-async fn opencode_session_summarize_persists_summary_message() {
+async fn opencode_session_summarize_persists_summary_message_and_compaction_metadata() {
     let (state, session) = state_with_session().await;
     let app = router(state);
+
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/session/{session}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"metadata": {"owner": "opencode"}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
 
     let response = app
         .clone()
@@ -85,7 +101,7 @@ async fn opencode_session_summarize_persists_summary_message() {
                 .uri(format!("/session/{session}/summarize"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"providerID": "yaca", "modelID": "fake", "auto": false}).to_string(),
+                    json!({"providerID": "yaca", "modelID": "fake", "auto": true}).to_string(),
                 ))
                 .unwrap(),
         )
@@ -95,6 +111,7 @@ async fn opencode_session_summarize_persists_summary_message() {
     assert_eq!(body_json(response).await, json!(true));
 
     let messages = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -115,6 +132,41 @@ async fn opencode_session_summarize_persists_summary_message() {
     assert_eq!(summary["parts"][0]["type"], "text");
     let summary_text = summary["parts"][0]["text"].as_str().expect("summary text");
     assert!(summary_text.contains("CONDENSED summary"), "{summary_text}");
+
+    let session_info = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{session}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session_info.status(), StatusCode::OK);
+    let body = body_json(session_info).await;
+    assert_eq!(body["metadata"]["owner"], "opencode");
+    assert_eq!(
+        body["metadata"]["_yacaOpenCodeCompaction"]["type"],
+        "compaction"
+    );
+    assert_eq!(body["metadata"]["_yacaOpenCodeCompaction"]["auto"], true);
+    assert_eq!(
+        body["metadata"]["_yacaOpenCodeCompaction"]["providerID"],
+        "yaca"
+    );
+    assert_eq!(
+        body["metadata"]["_yacaOpenCodeCompaction"]["modelID"],
+        "fake"
+    );
+    assert_eq!(
+        body["metadata"]["_yacaOpenCodeCompaction"]["messageID"],
+        summary["info"]["id"]
+    );
+    assert_eq!(
+        body["metadata"]["_yacaOpenCodeCompaction"]["partID"],
+        summary["parts"][0]["id"]
+    );
 }
 
 #[tokio::test]

@@ -105,11 +105,12 @@ async fn prompt(
             prompt.agents.clone(),
         )
         .await?;
+    set_auto_title(&st, session, &prompt.text).await;
     let envelopes = st.engine.replay(session).await?;
     let (admitted_seq, time_created) = admission_info(&envelopes, admitted)?;
     if let Some(run) = run {
         let engine = st.engine.clone();
-        let agent = super::reference::agent_with_guidance(&st).await;
+        let agent = super::reference::session_agent_with_guidance(&st, session).await;
         let external_dirs = super::reference::external_directories(&st).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
@@ -151,7 +152,7 @@ async fn command(
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
-    let agent = super::reference::agent_with_guidance(&st).await;
+    let agent = super::reference::session_agent_with_guidance(&st, session).await;
     let external_dirs = super::reference::external_directories(&st).await;
     let _finish = st
         .engine
@@ -178,6 +179,30 @@ async fn shell(
         .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
     Ok(Json(MessageResponse { data }))
+}
+
+async fn set_auto_title(st: &ServerState, session: SessionId, text: &str) {
+    let Ok(snapshot) = super::load_session(st, session, None).await else {
+        return;
+    };
+    let current = snapshot.info.title();
+    if !current.is_empty() && current != "Untitled" {
+        return;
+    }
+    let title = auto_title(text);
+    if !title.is_empty() {
+        let _set = st.engine.set_title(session, title).await;
+    }
+}
+
+fn auto_title(text: &str) -> String {
+    let trimmed = text.trim();
+    let truncated: String = trimmed.chars().take(50).collect();
+    if trimmed.chars().count() > 50 {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
 }
 
 async fn message_exists(
@@ -247,4 +272,27 @@ fn parse_message(id: &str) -> Result<MessageId, ApiError> {
 
 fn millis(ts: i64) -> u64 {
     u64::try_from(ts).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_title;
+
+    #[test]
+    fn auto_title_trims_and_truncates() {
+        assert_eq!(auto_title("  hello world  "), "hello world");
+        assert_eq!(auto_title("   "), "");
+        let long = "x".repeat(80);
+        let title = auto_title(&long);
+        assert!(title.ends_with("..."));
+        assert_eq!(title.chars().count(), 53);
+    }
+
+    #[test]
+    fn auto_title_counts_unicode_by_char() {
+        let cjk = "日本語".repeat(30);
+        let title = auto_title(&cjk);
+        assert!(title.ends_with("..."));
+        assert_eq!(title.chars().count(), 53);
+    }
 }

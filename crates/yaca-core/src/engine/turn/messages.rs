@@ -25,7 +25,7 @@ pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection)
                 model: model.clone(),
                 parts: map_parts(&m.parts),
                 finish: m.finish,
-                tokens: None,
+                tokens: m.tokens,
             },
             Role::System => Message::System {
                 id: m.id,

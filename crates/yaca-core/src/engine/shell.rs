@@ -77,6 +77,7 @@ impl SessionEngine {
                 message,
                 role: Role::Assistant,
                 finish,
+                tokens: None,
             },
         )
         .await?;

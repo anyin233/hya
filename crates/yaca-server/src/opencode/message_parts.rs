@@ -1,7 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
-use yaca_proto::{Envelope, Event, MessageId, PartId, PartProjection, SessionId, ToolPartState};
+use uuid::Uuid;
+use yaca_proto::{
+    Envelope, Event, FinishReason, MessageId, PartId, PartProjection, SessionId, ToolPartState,
+};
 
 use super::message_context_parts::tool_attachment_parts;
 
@@ -13,12 +16,23 @@ struct OpenCodePartTime {
 
 pub(super) struct OpenCodePartContext {
     times: BTreeMap<PartId, OpenCodePartTime>,
+    timeline: BTreeMap<MessageId, Vec<OpenCodePartCursor>>,
+    deleted: BTreeMap<MessageId, BTreeSet<PartId>>,
+}
+
+#[derive(Clone, Copy)]
+enum OpenCodePartCursor {
+    Part(PartId),
+    StepStart { step: u32 },
+    StepFinish { step: u32, finish: FinishReason },
 }
 
 impl OpenCodePartContext {
     pub(super) fn new(envs: &[Envelope]) -> Self {
         Self {
             times: part_times(envs),
+            timeline: part_timeline(envs),
+            deleted: deleted_parts(envs),
         }
     }
 
@@ -26,13 +40,62 @@ impl OpenCodePartContext {
         self.times.get(&part).copied().map(time_value)
     }
 
-    fn required_time(&self, part: PartId) -> Value {
+    pub(super) fn required_time(&self, part: PartId) -> Value {
         time_value(self.times.get(&part).copied().unwrap_or_default())
     }
 
     fn time(&self, part: PartId) -> OpenCodePartTime {
         self.times.get(&part).copied().unwrap_or_default()
     }
+
+    fn deleted(&self, message: MessageId, part: PartId) -> bool {
+        deleted_part(&self.deleted, message, part)
+    }
+}
+
+pub(super) fn opencode_parts(
+    session: SessionId,
+    message: MessageId,
+    parts: &[PartProjection],
+    context: &OpenCodePartContext,
+) -> Vec<Value> {
+    let parts_by_id = parts
+        .iter()
+        .map(|part| (part.id(), part))
+        .collect::<BTreeMap<_, _>>();
+    let mut emitted = BTreeSet::new();
+    let mut out = Vec::new();
+    if let Some(timeline) = context.timeline.get(&message) {
+        for item in timeline {
+            match *item {
+                OpenCodePartCursor::Part(part_id) => {
+                    if emitted.insert(part_id)
+                        && let Some(part) = parts_by_id.get(&part_id)
+                    {
+                        out.push(opencode_part(session, message, part, context));
+                    }
+                }
+                OpenCodePartCursor::StepStart { step } => {
+                    let part = step_start_part_id(message, step);
+                    if !context.deleted(message, part) {
+                        out.push(step_start_part(session, message, step));
+                    }
+                }
+                OpenCodePartCursor::StepFinish { step, finish } => {
+                    let part = step_finish_part_id(message, step);
+                    if !context.deleted(message, part) {
+                        out.push(step_finish_part(session, message, step, finish));
+                    }
+                }
+            }
+        }
+    }
+    for part in parts {
+        if emitted.insert(part.id()) {
+            out.push(opencode_part(session, message, part, context));
+        }
+    }
+    out
 }
 
 pub(super) fn opencode_part(
@@ -80,6 +143,161 @@ pub(super) fn opencode_part(
     }
 }
 
+fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<OpenCodePartCursor>> {
+    let mut out: BTreeMap<MessageId, Vec<OpenCodePartCursor>> = BTreeMap::new();
+    for env in envs {
+        match &env.event {
+            Event::StepStarted { message, step, .. } => {
+                out.entry(*message)
+                    .or_default()
+                    .push(OpenCodePartCursor::StepStart { step: *step });
+            }
+            Event::StepFinished {
+                message,
+                step,
+                finish,
+                ..
+            } => {
+                out.entry(*message)
+                    .or_default()
+                    .push(OpenCodePartCursor::StepFinish {
+                        step: *step,
+                        finish: *finish,
+                    });
+            }
+            Event::TextStart { message, part, .. }
+            | Event::ReasoningStart { message, part, .. }
+            | Event::ToolInputStart { message, part, .. }
+            | Event::ToolCallRequested { message, part, .. }
+            | Event::ToolPartUpdated { message, part, .. } => {
+                out.entry(*message)
+                    .or_default()
+                    .push(OpenCodePartCursor::Part(*part));
+            }
+            Event::SessionCreated { .. }
+            | Event::SessionMoved { .. }
+            | Event::SessionTitled { .. }
+            | Event::SessionMetadataSet { .. }
+            | Event::SessionPermissionSet { .. }
+            | Event::SessionArchived { .. }
+            | Event::SessionShareSet { .. }
+            | Event::SessionShareCleared { .. }
+            | Event::AgentSwitched { .. }
+            | Event::ModelSwitched { .. }
+            | Event::SessionStatus { .. }
+            | Event::UserPromptContextRecorded { .. }
+            | Event::CommandExecuted { .. }
+            | Event::MessageStarted { .. }
+            | Event::MessageFinished { .. }
+            | Event::MessageDeleted { .. }
+            | Event::PartDeleted { .. }
+            | Event::TextDelta { .. }
+            | Event::TextReplace { .. }
+            | Event::TextEnd { .. }
+            | Event::ReasoningDelta { .. }
+            | Event::ReasoningEnd { .. }
+            | Event::ReasoningReplace { .. }
+            | Event::ToolInputDelta { .. }
+            | Event::ToolResult { .. }
+            | Event::ToolError { .. }
+            | Event::Error { .. } => {}
+        }
+    }
+    out
+}
+
+pub(super) fn step_start_part(session: SessionId, message: MessageId, step: u32) -> Value {
+    json!({
+        "id": step_start_part_id(message, step).to_string(),
+        "sessionID": session.to_string(),
+        "messageID": message.to_string(),
+        "type": "step-start",
+    })
+}
+
+pub(super) fn step_finish_part(
+    session: SessionId,
+    message: MessageId,
+    step: u32,
+    finish: FinishReason,
+) -> Value {
+    json!({
+        "id": step_finish_part_id(message, step).to_string(),
+        "sessionID": session.to_string(),
+        "messageID": message.to_string(),
+        "type": "step-finish",
+        "reason": step_finish_name(finish),
+        "cost": 0,
+        "tokens": empty_tokens(),
+    })
+}
+
+pub(super) fn step_finish_name(finish: FinishReason) -> &'static str {
+    match finish {
+        FinishReason::Stop => "stop",
+        FinishReason::ToolCalls => "tool-calls",
+        FinishReason::Length => "length",
+        FinishReason::Cancelled => "error",
+        FinishReason::Error => "error",
+    }
+}
+
+pub(super) fn empty_tokens() -> Value {
+    json!({
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0},
+    })
+}
+
+#[derive(Clone, Copy)]
+enum StepBoundary {
+    Start,
+    Finish,
+}
+
+pub(super) fn step_start_part_id(message: MessageId, step: u32) -> PartId {
+    step_part_id(message, step, StepBoundary::Start)
+}
+
+pub(super) fn step_finish_part_id(message: MessageId, step: u32) -> PartId {
+    step_part_id(message, step, StepBoundary::Finish)
+}
+
+fn step_part_id(message: MessageId, step: u32, boundary: StepBoundary) -> PartId {
+    const STEP_PART_NAMESPACE: u128 = 0x5a71_aa5d_9e6d_4b81_8b66_2a2d_55e7_1000;
+    let boundary_value = match boundary {
+        StepBoundary::Start => 0x0101_u128,
+        StepBoundary::Finish => 0x0202_u128,
+    };
+    let raw = message.as_uuid().as_u128()
+        ^ STEP_PART_NAMESPACE
+        ^ (u128::from(step) << 48)
+        ^ boundary_value;
+    PartId::from_uuid(Uuid::from_u128(raw))
+}
+
+pub(super) fn deleted_parts(envs: &[Envelope]) -> BTreeMap<MessageId, BTreeSet<PartId>> {
+    let mut out: BTreeMap<MessageId, BTreeSet<PartId>> = BTreeMap::new();
+    for env in envs {
+        if let Event::PartDeleted { message, part, .. } = env.event {
+            out.entry(message).or_default().insert(part);
+        }
+    }
+    out
+}
+
+pub(super) fn deleted_part(
+    deleted: &BTreeMap<MessageId, BTreeSet<PartId>>,
+    message: MessageId,
+    part: PartId,
+) -> bool {
+    deleted
+        .get(&message)
+        .is_some_and(|parts| parts.contains(&part))
+}
+
 fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, OpenCodePartTime> {
     let mut out = BTreeMap::new();
     for env in envs {
@@ -91,10 +309,14 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, OpenCodePartTime> {
             Event::TextEnd { part, .. } | Event::ReasoningEnd { part, .. } => {
                 mark_end(&mut out, *part, time);
             }
-            Event::ToolInputStart { part, .. } | Event::ToolCallRequested { part, .. } => {
+            Event::ToolInputStart { .. } => {}
+            Event::ToolCallRequested { part, .. } => {
                 mark_start(&mut out, *part, time);
             }
-            Event::ToolResult { part, .. } | Event::ToolError { part, .. } => {
+            Event::ToolResult { part, .. } => {
+                mark_completion_end(&mut out, *part, time);
+            }
+            Event::ToolError { part, .. } => {
                 mark_end(&mut out, *part, time);
             }
             Event::ToolPartUpdated { part, state, .. } => {
@@ -140,6 +362,10 @@ fn mark_end(out: &mut BTreeMap<PartId, OpenCodePartTime>, part: PartId, time: u6
     entry.end = Some(time);
 }
 
+fn mark_completion_end(out: &mut BTreeMap<PartId, OpenCodePartTime>, part: PartId, time: u64) {
+    out.entry(part).or_default().end = Some(time);
+}
+
 fn update_tool_time(
     out: &mut BTreeMap<PartId, OpenCodePartTime>,
     part: PartId,
@@ -147,7 +373,8 @@ fn update_tool_time(
     time: u64,
 ) {
     match state {
-        ToolPartState::Pending { .. } | ToolPartState::Running { .. } => {
+        ToolPartState::Pending { .. } => {}
+        ToolPartState::Running { .. } => {
             mark_start(out, part, time);
         }
         ToolPartState::Completed { time_ms, .. } => {
@@ -170,13 +397,11 @@ fn tool_state_value(
 ) -> Value {
     match state {
         ToolPartState::Pending { input } => json!({
-            "phase": "pending",
             "status": "pending",
             "input": object_or_empty(input),
             "raw": pending_raw(input),
         }),
         ToolPartState::Running { input } => json!({
-            "phase": "running",
             "status": "running",
             "input": object_or_empty(input),
             "time": running_time(time),
@@ -187,14 +412,12 @@ fn tool_state_value(
             time_ms,
         } => {
             let mut out = json!({
-                "phase": "completed",
                 "status": "completed",
                 "input": object_or_empty(input),
                 "output": tool_output_text(output),
-                "title": "",
-                "metadata": {},
+                "title": tool_output_title(output),
+                "metadata": tool_output_metadata(output),
                 "time": completed_time(time, *time_ms),
-                "time_ms": time_ms,
             });
             if let Some(attachments) = tool_attachment_parts(session, message, part, output) {
                 out["attachments"] = json!(attachments);
@@ -207,7 +430,6 @@ fn tool_state_value(
             value,
         } => {
             let mut out = json!({
-                "phase": "error",
                 "status": "error",
                 "input": object_or_empty(input),
                 "message": message,
@@ -264,6 +486,21 @@ fn tool_output_text(output: &Value) -> String {
         return text.to_string();
     }
     output.to_string()
+}
+
+fn tool_output_title(output: &Value) -> String {
+    output
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn tool_output_metadata(output: &Value) -> Value {
+    match output.get("metadata") {
+        Some(metadata) if metadata.is_object() => metadata.clone(),
+        _ => json!({}),
+    }
 }
 
 fn millis(ts: i64) -> u64 {

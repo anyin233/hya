@@ -179,6 +179,12 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     assert_eq!(created["data"]["model"]["providerID"], "anthropic");
     assert_eq!(created["data"]["model"]["id"], "claude-sonnet");
     assert_eq!(created["data"]["directory"], WORKDIR);
+    assert_eq!(created["data"]["path"], "");
+    assert_eq!(created["data"]["cost"], 0);
+    assert_eq!(
+        created["data"]["tokens"],
+        json!({"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}})
+    );
 
     let (status, existing) = post_json(
         app.clone(),
@@ -448,8 +454,8 @@ async fn opencode_v2_session_context_returns_v2_messages() {
     assert_eq!(context["data"][1]["type"], "assistant");
     assert_eq!(context["data"][1]["agent"], "build");
     assert_eq!(context["data"][1]["model"]["id"], "fake");
-    assert_eq!(context["data"][1]["content"][0]["type"], "text");
-    assert_eq!(context["data"][1]["content"][0]["text"], "assistant answer");
+    assert_eq!(context["data"][1]["content"][1]["type"], "text");
+    assert_eq!(context["data"][1]["content"][1]["text"], "assistant answer");
     assert_eq!(context["data"][1]["finish"], "stop");
 }
 

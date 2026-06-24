@@ -6,7 +6,7 @@ use futures::StreamExt;
 use serde_json::json;
 use yaca_proto::{
     AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
-    ToolCallId, ToolName, ToolPartState, ToolSchema,
+    TokenUsage, ToolCallId, ToolName, ToolPartState, ToolSchema,
 };
 use yaca_provider::{
     AnthropicMessagesProtocol, CompletionRequest, FakeProvider, FakeStep, GoogleProtocol,
@@ -39,6 +39,16 @@ fn decode_all(protocol: &OpenAiChatProtocol, lines: &[&str]) -> Vec<Event> {
     }
     out.extend(decoder.finish().unwrap());
     out
+}
+
+fn finished_tokens(events: &[Event]) -> Option<TokenUsage> {
+    events.iter().find_map(|event| {
+        if let Event::MessageFinished { tokens, .. } = event {
+            *tokens
+        } else {
+            None
+        }
+    })
 }
 
 #[tokio::test]
@@ -94,6 +104,30 @@ async fn openai_decodes_streamed_text() {
             "text_end",
             "finish:Stop"
         ]
+    );
+}
+
+#[tokio::test]
+async fn openai_decodes_usage_when_usage_arrives_after_finish_reason() {
+    let protocol = OpenAiChatProtocol;
+    let fixture = [
+        r#"{"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        r#"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":5},"completion_tokens_details":{"reasoning_tokens":2}}}"#,
+        "[DONE]",
+    ];
+
+    let events = decode_all(&protocol, &fixture);
+
+    assert_eq!(
+        finished_tokens(&events),
+        Some(TokenUsage {
+            input: 11,
+            output: 3,
+            reasoning: 2,
+            cache_read: 5,
+            cache_write: 0,
+        })
     );
 }
 
@@ -218,6 +252,43 @@ fn decode_all_google(protocol: &GoogleProtocol, lines: &[&str]) -> Vec<Event> {
     out
 }
 
+fn decode_all_anthropic(protocol: &AnthropicMessagesProtocol, lines: &[&str]) -> Vec<Event> {
+    let s = SessionId::new();
+    let m = MessageId::new();
+    let mut decoder = protocol.decoder(s, m);
+    let mut out = Vec::new();
+    for line in lines {
+        out.extend(decoder.push(line).unwrap());
+    }
+    out.extend(decoder.finish().unwrap());
+    out
+}
+
+#[test]
+fn anthropic_decodes_message_usage() {
+    let fixture = [
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":13,"cache_creation_input_tokens":7,"cache_read_input_tokens":5}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+
+    let events = decode_all_anthropic(&AnthropicMessagesProtocol, &fixture);
+
+    assert_eq!(
+        finished_tokens(&events),
+        Some(TokenUsage {
+            input: 13,
+            output: 4,
+            reasoning: 0,
+            cache_read: 5,
+            cache_write: 7,
+        })
+    );
+}
+
 #[tokio::test]
 async fn google_decodes_streamed_text() {
     let protocol = GoogleProtocol;
@@ -236,6 +307,27 @@ async fn google_decodes_streamed_text() {
             "text_end",
             "finish:Stop"
         ]
+    );
+}
+
+#[tokio::test]
+async fn google_decodes_usage_metadata() {
+    let protocol = GoogleProtocol;
+    let fixture = [
+        r#"{"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":17,"candidatesTokenCount":6,"thoughtsTokenCount":4,"cachedContentTokenCount":9}}"#,
+    ];
+
+    let events = decode_all_google(&protocol, &fixture);
+
+    assert_eq!(
+        finished_tokens(&events),
+        Some(TokenUsage {
+            input: 17,
+            output: 6,
+            reasoning: 4,
+            cache_read: 9,
+            cache_write: 0,
+        })
     );
 }
 

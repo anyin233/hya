@@ -57,7 +57,7 @@ async fn prompt(
         let Some(run) = st.runs.start(session) else {
             return Ok(super::errors::session_busy(session));
         };
-        let agent = super::reference::agent_with_guidance(&st).await;
+        let agent = super::reference::session_agent_with_guidance(&st, session).await;
         let external_dirs = super::reference::external_directories(&st).await;
         let _finish = st
             .engine

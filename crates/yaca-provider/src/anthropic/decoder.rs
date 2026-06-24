@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId, ToolName};
+use yaca_proto::{
+    Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
+};
 
 use crate::{Decoder, ProviderError};
 
@@ -23,6 +25,7 @@ pub struct AnthropicDecoder {
     message: MessageId,
     blocks: BTreeMap<u64, Block>,
     stop_reason: Option<String>,
+    usage: TokenUsage,
     finished: bool,
 }
 
@@ -34,6 +37,7 @@ impl AnthropicDecoder {
             message,
             blocks: BTreeMap::new(),
             stop_reason: None,
+            usage: TokenUsage::default(),
             finished: false,
         }
     }
@@ -68,8 +72,13 @@ impl AnthropicDecoder {
             message,
             role: Role::Assistant,
             finish,
+            tokens: (!self.usage.is_zero()).then_some(self.usage),
         });
         out
+    }
+
+    fn record_usage(&mut self, usage: &Value) {
+        self.usage.merge(anthropic_usage(usage));
     }
 }
 
@@ -84,6 +93,11 @@ impl Decoder for AnthropicDecoder {
         let mut out = Vec::new();
 
         match value.get("type").and_then(Value::as_str) {
+            Some("message_start") => {
+                if let Some(usage) = value.pointer("/message/usage") {
+                    self.record_usage(usage);
+                }
+            }
             Some("content_block_start") => {
                 let index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let cb = value.get("content_block");
@@ -188,6 +202,9 @@ impl Decoder for AnthropicDecoder {
                 if let Some(stop) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
                     self.stop_reason = Some(stop.to_string());
                 }
+                if let Some(usage) = value.get("usage") {
+                    self.record_usage(usage);
+                }
             }
             Some("message_stop") => {
                 out.extend(self.close());
@@ -199,5 +216,27 @@ impl Decoder for AnthropicDecoder {
 
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
         Ok(self.close())
+    }
+}
+
+fn anthropic_usage(usage: &Value) -> TokenUsage {
+    TokenUsage {
+        input: usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output: usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning: 0,
+        cache_read: usage
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_write: usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     }
 }

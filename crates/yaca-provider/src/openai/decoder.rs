@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId, ToolName};
+use yaca_proto::{
+    Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
+};
 
 use crate::{Decoder, ProviderError};
 
@@ -30,6 +32,8 @@ pub struct OpenAiChatDecoder {
     message: MessageId,
     text_part: Option<PartId>,
     tools: BTreeMap<usize, ToolAsm>,
+    finish_reason: Option<String>,
+    usage: TokenUsage,
     finished: bool,
 }
 
@@ -41,11 +45,13 @@ impl OpenAiChatDecoder {
             message,
             text_part: None,
             tools: BTreeMap::new(),
+            finish_reason: None,
+            usage: TokenUsage::default(),
             finished: false,
         }
     }
 
-    fn close(&mut self, finish_reason: &str) -> Vec<Event> {
+    fn close(&mut self) -> Vec<Event> {
         if self.finished {
             return Vec::new();
         }
@@ -70,7 +76,7 @@ impl OpenAiChatDecoder {
                 input,
             });
         }
-        let finish = match finish_reason {
+        let finish = match self.finish_reason.as_deref().unwrap_or("stop") {
             "tool_calls" => FinishReason::ToolCalls,
             "length" => FinishReason::Length,
             "content_filter" => FinishReason::Error,
@@ -81,18 +87,29 @@ impl OpenAiChatDecoder {
             message,
             role: Role::Assistant,
             finish,
+            tokens: (!self.usage.is_zero()).then_some(self.usage),
         });
         out
+    }
+
+    fn record_usage(&mut self, chunk: &Value) {
+        if let Some(usage) = openai_usage(chunk) {
+            self.usage.merge(usage);
+        }
     }
 }
 
 impl Decoder for OpenAiChatDecoder {
     fn push(&mut self, data: &str) -> Result<Vec<Event>, ProviderError> {
         let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
+        if data.is_empty() {
             return Ok(Vec::new());
         }
+        if data == "[DONE]" {
+            return Ok(self.close());
+        }
         let chunk: Value = serde_json::from_str(data)?;
+        self.record_usage(&chunk);
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
 
@@ -166,13 +183,39 @@ impl Decoder for OpenAiChatDecoder {
         }
 
         if let Some(finish_reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            out.extend(self.close(finish_reason));
+            self.finish_reason = Some(finish_reason.to_string());
         }
 
         Ok(out)
     }
 
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
-        Ok(self.close("stop"))
+        Ok(self.close())
     }
+}
+
+fn openai_usage(chunk: &Value) -> Option<TokenUsage> {
+    let usage = chunk.get("usage")?;
+    Some(TokenUsage {
+        input: usage
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output: usage
+            .get("completion_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning: usage
+            .pointer("/completion_tokens_details/reasoning_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_read: usage
+            .pointer("/prompt_tokens_details/cached_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_write: usage
+            .pointer("/prompt_tokens_details/cache_creation_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
 }

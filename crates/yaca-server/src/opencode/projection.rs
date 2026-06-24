@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::{Number, Value};
-use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId};
+use yaca_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, TokenUsage};
 
 pub(super) use super::message_projection::OpenCodeMessage;
 use super::message_projection::opencode_message;
@@ -14,13 +14,18 @@ pub(super) struct OpenCodeSessionInfo {
     slug: String,
     #[serde(rename = "projectID")]
     project_id: String,
+    #[serde(rename = "workspaceID", skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<String>,
     directory: String,
+    path: String,
     #[serde(rename = "parentID", skip_serializing_if = "Option::is_none")]
     parent_id: Option<String>,
     title: String,
     agent: String,
     model: OpenCodeModel,
     version: String,
+    cost: u64,
+    tokens: OpenCodeSessionTokens,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,12 +50,30 @@ struct OpenCodeSessionShare {
     url: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+struct OpenCodeSessionTokens {
+    input: u64,
+    output: u64,
+    reasoning: u64,
+    cache: OpenCodeSessionTokenCache,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct OpenCodeSessionTokenCache {
+    read: u64,
+    write: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct OpenCodeSessionRevert {
     #[serde(rename = "messageID")]
     message_id: String,
     #[serde(rename = "partID", skip_serializing_if = "Option::is_none")]
     part_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff: Option<String>,
 }
 
 impl OpenCodeSessionInfo {
@@ -180,11 +203,13 @@ fn session_info(
         id: id.clone(),
         slug: id,
         project_id: "local".to_string(),
+        workspace_id: None,
         directory: projection
             .session
             .workdir
             .clone()
             .unwrap_or_else(|| meta.workdir.clone()),
+        path: String::new(),
         parent_id: meta.parent.map(|parent| parent.to_string()),
         title: projection
             .session
@@ -199,6 +224,8 @@ fn session_info(
             .to_string(),
         model: model_info(projection.session.model.as_ref().unwrap_or(&meta.model)),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        cost: 0,
+        tokens: session_tokens(projection),
         metadata,
         share: projection
             .session
@@ -238,9 +265,36 @@ fn revert_from_value(value: Value) -> Option<OpenCodeSessionRevert> {
     Some(OpenCodeSessionRevert {
         message_id,
         part_id,
+        snapshot: None,
+        diff: None,
     })
 }
 
 fn millis(ts: i64) -> u64 {
     u64::try_from(ts).unwrap_or(0)
+}
+
+fn session_tokens(projection: &Projection) -> OpenCodeSessionTokens {
+    let mut total = TokenUsage::default();
+    for tokens in projection
+        .session
+        .messages
+        .iter()
+        .filter_map(|message| message.tokens)
+    {
+        total.input = total.input.saturating_add(tokens.input);
+        total.output = total.output.saturating_add(tokens.output);
+        total.reasoning = total.reasoning.saturating_add(tokens.reasoning);
+        total.cache_read = total.cache_read.saturating_add(tokens.cache_read);
+        total.cache_write = total.cache_write.saturating_add(tokens.cache_write);
+    }
+    OpenCodeSessionTokens {
+        input: total.input,
+        output: total.output,
+        reasoning: total.reasoning,
+        cache: OpenCodeSessionTokenCache {
+            read: total.cache_read,
+            write: total.cache_write,
+        },
+    }
 }

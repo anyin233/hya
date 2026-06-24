@@ -135,7 +135,8 @@ async fn provider_get(
     Path(provider_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if !provider_ids(&catalog_models(&st)).contains(&provider_id) {
+    let models = catalog_models(&st);
+    if !provider_ids(&models).contains(&provider_id) {
         let message = format!("Provider not found: {provider_id}");
         return Ok((
             StatusCode::NOT_FOUND,
@@ -151,7 +152,7 @@ async fn provider_get(
         &st,
         &query,
         &headers,
-        provider_info(&provider_id),
+        provider_info(&provider_id, &models),
     ))
     .into_response())
 }
@@ -211,7 +212,7 @@ fn provider_ids(models: &[CatalogModel]) -> Vec<String> {
 fn provider_infos(models: &[CatalogModel]) -> Vec<ProviderInfo> {
     provider_ids(models)
         .into_iter()
-        .map(|provider_id| provider_info(&provider_id))
+        .map(|provider_id| provider_info(&provider_id, models))
         .collect()
 }
 

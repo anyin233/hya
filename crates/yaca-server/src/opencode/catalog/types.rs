@@ -3,12 +3,15 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use super::CatalogModel;
+
 #[derive(Clone, Serialize)]
 pub(super) struct ProviderInfo {
     id: String,
     name: String,
     api: NativeProviderApi,
     request: RequestInfo,
+    models: BTreeMap<String, ModelInfo>,
 }
 
 #[derive(Clone, Serialize)]
@@ -44,7 +47,7 @@ pub(super) struct ProviderAuthMethod {
     pub(super) label: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct ModelInfo {
     id: String,
     #[serde(rename = "providerID")]
@@ -61,7 +64,7 @@ pub(super) struct ModelInfo {
     limit: ModelLimit,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelApi {
     id: String,
     #[serde(rename = "type")]
@@ -69,14 +72,14 @@ struct ModelApi {
     settings: Value,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelCapabilities {
     tools: bool,
     input: Vec<String>,
     output: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelRequest {
     headers: BTreeMap<String, String>,
     body: Value,
@@ -84,38 +87,53 @@ struct ModelRequest {
     options: Value,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelVariant {
     id: String,
     headers: BTreeMap<String, String>,
     body: Value,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelTime {
     released: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelCost {
     input: f64,
     output: f64,
     cache: ModelCacheCost,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelCacheCost {
     read: f64,
     write: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ModelLimit {
     context: u32,
     output: u32,
 }
 
-pub(super) fn provider_info(provider_id: &str) -> ProviderInfo {
+pub(super) fn provider_info(provider_id: &str, catalog: &[CatalogModel]) -> ProviderInfo {
+    let models = catalog
+        .iter()
+        .filter(|model| model.provider_id == provider_id)
+        .map(|model| {
+            (
+                model.model_id.clone(),
+                model_info(
+                    &model.provider_id,
+                    &model.model_id,
+                    model.tools,
+                    model.context,
+                ),
+            )
+        })
+        .collect();
     ProviderInfo {
         id: provider_id.to_string(),
         name: provider_id.to_string(),
@@ -127,6 +145,7 @@ pub(super) fn provider_info(provider_id: &str) -> ProviderInfo {
             headers: BTreeMap::new(),
             body: json!({}),
         },
+        models,
     }
 }
 

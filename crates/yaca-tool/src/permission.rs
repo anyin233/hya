@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+// allow: SIZE_OK - permission rules, async asks, and tests already share one module.
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use yaca_proto::{PermissionRequestId, SessionId};
+use yaca_proto::{MessageId, PermissionRequestId, SessionId, ToolCallId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -158,6 +159,8 @@ pub enum PermissionError {
 pub struct AskRequest {
     pub id: PermissionRequestId,
     pub session: Option<SessionId>,
+    pub message_id: Option<MessageId>,
+    pub call_id: Option<ToolCallId>,
     pub action: Action,
     pub resource: Resource,
     pub reply: oneshot::Sender<Decision>,
@@ -179,6 +182,8 @@ pub struct PermissionPlane {
     persistent: Arc<Mutex<PermissionRules>>,
     asks: mpsc::UnboundedSender<AskRequest>,
     session: Option<SessionId>,
+    message_id: Option<MessageId>,
+    call_id: Option<ToolCallId>,
     interceptor: Option<Arc<dyn PermissionInterceptor>>,
 }
 
@@ -191,6 +196,8 @@ impl PermissionPlane {
             persistent: Arc::new(Mutex::new(rules)),
             asks: tx,
             session: None,
+            message_id: None,
+            call_id: None,
             interceptor: None,
         };
         (plane, rx)
@@ -211,6 +218,14 @@ impl PermissionPlane {
     pub fn for_session(&self, session: SessionId) -> Self {
         let mut plane = self.clone();
         plane.session = Some(session);
+        plane
+    }
+
+    #[must_use]
+    pub fn for_tool_call(&self, message_id: MessageId, call_id: ToolCallId) -> Self {
+        let mut plane = self.clone();
+        plane.message_id = Some(message_id);
+        plane.call_id = Some(call_id);
         plane
     }
 
@@ -249,6 +264,8 @@ impl PermissionPlane {
         let req = AskRequest {
             id: PermissionRequestId::new(),
             session: self.session,
+            message_id: self.message_id,
+            call_id: self.call_id,
             action,
             resource: resource.clone(),
             reply: tx,
@@ -304,6 +321,26 @@ mod tests {
         });
         let req = rx.recv().await.expect("ask request");
         assert_eq!(req.session, Some(session));
+        req.reply.send(Decision::AllowOnce).expect("send reply");
+        task.await.expect("join").expect("assert ok");
+    }
+
+    #[tokio::test]
+    async fn ask_request_carries_tool_correlation() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let message = MessageId::new();
+        let call = ToolCallId::new();
+        let scoped = plane.for_tool_call(message, call);
+        let task = tokio::spawn(async move {
+            scoped
+                .assert(Action::Bash, Resource::Command("ls".to_string()))
+                .await
+        });
+
+        let req = rx.recv().await.expect("ask request");
+
+        assert_eq!(req.message_id, Some(message));
+        assert_eq!(req.call_id, Some(call));
         req.reply.send(Decision::AllowOnce).expect("send reply");
         task.await.expect("join").expect("assert ok");
     }

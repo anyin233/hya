@@ -133,7 +133,16 @@ async fn opencode_mcp_status_reports_configured_servers() {
 
 #[tokio::test]
 async fn opencode_mcp_add_accepts_disabled_local_server() {
-    let app = router(state().await);
+    let mut configs = BTreeMap::new();
+    configs.insert(
+        "preexisting".to_string(),
+        McpServerConfig {
+            enabled: Some(false),
+            ..McpServerConfig::default()
+        },
+    );
+    let mcp = McpManager::connect_all(configs).await;
+    let app = router(state().await.with_mcp_manager(mcp));
 
     let response = request(
         app.clone(),
@@ -151,9 +160,15 @@ async fn opencode_mcp_add_accepts_disabled_local_server() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
-    assert_eq!(body["httpapi-disabled"], json!({"status": "disabled"}));
+    assert_eq!(
+        body,
+        json!({
+            "httpapi-disabled": {"status": "disabled"},
+            "preexisting": {"status": "disabled"}
+        })
+    );
 
-    let response = request(app, Method::GET, "/mcp", None).await;
+    let response = request(app.clone(), Method::GET, "/mcp", None).await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["httpapi-disabled"], json!({"status": "disabled"}));

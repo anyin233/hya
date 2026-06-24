@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{MessageId, PartId, SessionId, ToolCallId};
-use crate::message::{FinishReason, Role, ToolPartState};
+use crate::message::{FinishReason, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -32,6 +32,8 @@ pub struct MessageProjection {
     pub id: MessageId,
     pub role: Role,
     pub finish: Option<FinishReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<TokenUsage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -146,6 +148,7 @@ impl Projection {
                         id: *message,
                         role: *role,
                         finish: None,
+                        tokens: None,
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
@@ -164,10 +167,14 @@ impl Projection {
                 }
             }
             Event::MessageFinished {
-                message, finish, ..
+                message,
+                finish,
+                tokens,
+                ..
             } => {
                 if let Some(m) = self.message_mut(*message) {
                     m.finish = Some(*finish);
+                    m.tokens = *tokens;
                 }
             }
             Event::MessageDeleted { message, .. } => {

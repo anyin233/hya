@@ -214,7 +214,7 @@ async fn prompt_async(
     }
     let runs = st.runs.clone();
     let engine = st.engine.clone();
-    let agent = super::reference::agent_with_guidance(&st).await;
+    let agent = super::reference::session_agent_with_guidance(&st, session).await;
     let external_dirs = super::reference::external_directories(&st).await;
     std::mem::drop(tokio::spawn(async move {
         let Some(run) = runs.start(session) else {
@@ -326,7 +326,7 @@ async fn command(
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
         .await?;
-    let agent = super::reference::agent_with_guidance(&st).await;
+    let agent = super::reference::session_agent_with_guidance(&st, session).await;
     let external_dirs = super::reference::external_directories(&st).await;
     let _finish = st
         .engine

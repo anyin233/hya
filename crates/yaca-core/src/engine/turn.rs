@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
-use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId};
+use yaca_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage};
 use yaca_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
@@ -47,6 +47,7 @@ impl SessionEngine {
 
         const MAX_TOOL_ROUNDS: u32 = 25;
         let mut rounds: u32 = 0;
+        let mut total_tokens = None;
         loop {
             if cancel.is_cancelled() {
                 self.emit(
@@ -56,6 +57,7 @@ impl SessionEngine {
                         message,
                         role: Role::Assistant,
                         finish: FinishReason::Cancelled,
+                        tokens: None,
                     },
                 )
                 .await?;
@@ -95,7 +97,28 @@ impl SessionEngine {
                 request
             };
             let stream = self.providers.stream(request, session, message).await?;
+            let step = rounds;
+            self.emit(
+                session,
+                Event::StepStarted {
+                    session,
+                    message,
+                    step,
+                },
+            )
+            .await?;
             let stream_round = self.collect_stream_round(session, message, stream).await?;
+            add_tokens(&mut total_tokens, stream_round.tokens);
+            self.emit(
+                session,
+                Event::StepFinished {
+                    session,
+                    message,
+                    step,
+                    finish: stream_round.finish,
+                },
+            )
+            .await?;
 
             if stream_round.tool_calls.is_empty() {
                 self.emit(
@@ -105,6 +128,7 @@ impl SessionEngine {
                         message,
                         role: Role::Assistant,
                         finish: stream_round.finish,
+                        tokens: total_tokens,
                     },
                 )
                 .await?;
@@ -228,6 +252,15 @@ impl SessionEngine {
                 let part = PartId::new();
                 self.emit(
                     session,
+                    Event::StepStarted {
+                        session,
+                        message,
+                        step: rounds,
+                    },
+                )
+                .await?;
+                self.emit(
+                    session,
                     Event::TextStart {
                         session,
                         message,
@@ -256,17 +289,39 @@ impl SessionEngine {
                 .await?;
                 self.emit(
                     session,
+                    Event::StepFinished {
+                        session,
+                        message,
+                        step: rounds,
+                        finish: FinishReason::Error,
+                    },
+                )
+                .await?;
+                self.emit(
+                    session,
                     Event::MessageFinished {
                         session,
                         message,
                         role: Role::Assistant,
                         finish: FinishReason::Error,
+                        tokens: total_tokens,
                     },
                 )
                 .await?;
                 return Ok(FinishReason::Error);
             }
         }
+    }
+}
+
+fn add_tokens(target: &mut Option<TokenUsage>, update: Option<TokenUsage>) {
+    if let Some(update) = update {
+        let current = target.get_or_insert_with(TokenUsage::default);
+        current.input = current.input.saturating_add(update.input);
+        current.output = current.output.saturating_add(update.output);
+        current.reasoning = current.reasoning.saturating_add(update.reasoning);
+        current.cache_read = current.cache_read.saturating_add(update.cache_read);
+        current.cache_write = current.cache_write.saturating_add(update.cache_write);
     }
 }
 

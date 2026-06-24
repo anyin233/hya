@@ -12,9 +12,7 @@ use futures::stream;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
-use yaca_proto::{
-    Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId, ToolPartState,
-};
+use yaca_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
 
 use crate::ServerState;
 
@@ -50,8 +48,15 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
             }
         }
     });
+    let permissions =
+        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(|result| async move {
+            match result {
+                Ok(value) => Some(Ok(json_event(&value))),
+                Err(_lagged) => None,
+            }
+        });
     super::sse::opencode(Sse::new(initial.chain(stream::select(
-        live,
+        stream::select(live, permissions),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
@@ -73,6 +78,7 @@ async fn subscribe_api(
     });
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
+    let perm_location = location_info.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
         let st = live_st.clone();
         let location_info = location_info.clone();
@@ -83,7 +89,7 @@ async fn subscribe_api(
                     if !envelope_matches_location(&st, &requested_directory, &envelope).await {
                         return None;
                     }
-                    let payload = envelope_payload(&st, envelope).await;
+                    let payload = api_envelope_payload(&st, envelope).await;
                     Some(Ok(json_event(&native_event_payload(
                         &location_info,
                         payload,
@@ -93,8 +99,18 @@ async fn subscribe_api(
             }
         }
     });
+    let permissions =
+        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
+            let location_info = perm_location.clone();
+            async move {
+                match result {
+                    Ok(value) => Some(Ok(json_event(&native_event_payload(&location_info, value)))),
+                    Err(_lagged) => None,
+                }
+            }
+        });
     super::sse::opencode(Sse::new(initial.chain(stream::select(
-        live,
+        stream::select(live, permissions),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
@@ -114,15 +130,22 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
         async move {
             match result {
                 Ok(envelope) => {
-                    let payload = envelope_payload(&st, envelope).await;
+                    let payload = api_envelope_payload(&st, envelope).await;
                     Some(Ok(json_event(&json!({ "payload": payload }))))
                 }
                 Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
             }
         }
     });
+    let permissions =
+        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(|result| async move {
+            match result {
+                Ok(value) => Some(Ok(json_event(&json!({ "payload": value })))),
+                Err(_lagged) => None,
+            }
+        });
     super::sse::opencode(Sse::new(initial.chain(stream::select(
-        live,
+        stream::select(live, permissions),
         super::event_heartbeat::stream(global_heartbeat_event),
     ))))
 }
@@ -198,18 +221,39 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             arguments,
             message,
         } => command_executed_payload(&envelope, *session, command, arguments, *message),
+        Event::StepStarted {
+            session,
+            message,
+            step,
+        } => step_part_updated_payload(
+            &envelope,
+            *session,
+            super::message_parts::step_start_part(*session, *message, *step),
+        ),
+        Event::StepFinished {
+            session,
+            message,
+            step,
+            finish,
+        } => step_part_updated_payload(
+            &envelope,
+            *session,
+            super::message_parts::step_finish_part(*session, *message, *step, *finish),
+        ),
         Event::MessageStarted {
             session,
             message,
             role,
-        } => message_payload(&envelope, *session, *message, *role, None)
+        } => message_payload(st, &envelope, *session, *message, *role, false)
+            .await
             .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::MessageFinished {
             session,
             message,
             role,
-            finish,
-        } => message_payload(&envelope, *session, *message, *role, Some(*finish))
+            ..
+        } => message_payload(st, &envelope, *session, *message, *role, true)
+            .await
             .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::TextStart {
             session,
@@ -314,61 +358,24 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
-            call,
-            output,
-            time_ms,
-        } => {
-            let elapsed = i64::try_from(*time_ms).unwrap_or(i64::MAX);
-            tool_part_updated_payload(
-                &envelope,
-                *session,
-                *message,
-                *part,
-                call.to_string(),
-                "unknown",
-                json!({
-                    "status": "completed",
-                    "input": {},
-                    "output": tool_output_text(output),
-                    "title": "",
-                    "metadata": {},
-                    "time": {
-                        "start": envelope.ts_millis.saturating_sub(elapsed),
-                        "end": envelope.ts_millis,
-                    },
-                }),
-            )
-        }
+            ..
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "tool")
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::ToolError {
             session,
             message,
             part,
-            call,
-            message_text,
             ..
-        } => tool_part_updated_payload(
-            &envelope,
-            *session,
-            *message,
-            *part,
-            call.to_string(),
-            "unknown",
-            json!({
-                "status": "error",
-                "input": {},
-                "error": message_text,
-                "time": {
-                    "start": envelope.ts_millis,
-                    "end": envelope.ts_millis,
-                },
-            }),
-        ),
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "tool")
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::ToolPartUpdated {
             session,
             message,
             part,
-            state,
-        } => tool_part_snapshot_payload(st, &envelope, *session, *message, *part, state)
+            ..
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "tool")
             .await
             .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::PartDeleted {
@@ -380,6 +387,113 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             message_removed_payload(&envelope, *session, *message)
         }
         _ => fallback_payload(&envelope),
+    }
+}
+
+async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
+    match &envelope.event {
+        Event::StepStarted {
+            session, message, ..
+        } => step_started_event_payload(st, &envelope, *session, *message).await,
+        Event::StepFinished {
+            session,
+            message,
+            finish,
+            ..
+        } => step_ended_event_payload(&envelope, *session, *message, *finish),
+        Event::Error { .. }
+        | Event::SessionStatus { .. }
+        | Event::SessionCreated { .. }
+        | Event::SessionTitled { .. }
+        | Event::SessionMoved { .. }
+        | Event::SessionMetadataSet { .. }
+        | Event::SessionPermissionSet { .. }
+        | Event::SessionArchived { .. }
+        | Event::SessionShareSet { .. }
+        | Event::SessionShareCleared { .. }
+        | Event::AgentSwitched { .. }
+        | Event::ModelSwitched { .. }
+        | Event::CommandExecuted { .. }
+        | Event::MessageStarted { .. }
+        | Event::MessageFinished { .. }
+        | Event::TextStart { .. }
+        | Event::TextDelta { .. }
+        | Event::TextReplace { .. }
+        | Event::TextEnd { .. }
+        | Event::ReasoningStart { .. }
+        | Event::ReasoningDelta { .. }
+        | Event::ReasoningReplace { .. }
+        | Event::ReasoningEnd { .. }
+        | Event::ToolInputStart { .. }
+        | Event::ToolInputDelta { .. }
+        | Event::ToolCallRequested { .. }
+        | Event::ToolResult { .. }
+        | Event::ToolError { .. }
+        | Event::ToolPartUpdated { .. }
+        | Event::PartDeleted { .. }
+        | Event::MessageDeleted { .. }
+        | Event::UserPromptContextRecorded { .. } => envelope_payload(st, envelope).await,
+    }
+}
+
+async fn step_started_event_payload(
+    st: &ServerState,
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+) -> Value {
+    let (agent, model) = step_agent_model(st, session).await;
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "session.next.step.started",
+        "properties": {
+            "timestamp": envelope.ts_millis,
+            "sessionID": session.to_string(),
+            "assistantMessageID": message.to_string(),
+            "agent": agent,
+            "model": model,
+        },
+    })
+}
+
+fn step_ended_event_payload(
+    envelope: &Envelope,
+    session: SessionId,
+    message: MessageId,
+    finish: FinishReason,
+) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "session.next.step.ended",
+        "properties": {
+            "timestamp": envelope.ts_millis,
+            "sessionID": session.to_string(),
+            "assistantMessageID": message.to_string(),
+            "finish": super::message_parts::step_finish_name(finish),
+            "cost": 0,
+            "tokens": super::message_parts::empty_tokens(),
+        },
+    })
+}
+
+async fn step_agent_model(st: &ServerState, session: SessionId) -> (String, Value) {
+    match st.engine.store().read_projection(session).await {
+        Ok(projection) => {
+            let agent = projection
+                .session
+                .agent
+                .unwrap_or_else(|| st.agent.name.clone())
+                .to_string();
+            let model = projection
+                .session
+                .model
+                .unwrap_or_else(|| st.agent.model.clone());
+            (agent, json!(super::projection::model_info(&model)))
+        }
+        Err(_) => (
+            st.agent.name.to_string(),
+            json!(super::projection::model_info(&st.agent.model)),
+        ),
     }
 }
 
@@ -400,6 +514,18 @@ async fn session_payload(
         "id": format!("evt_yaca_{}", envelope.seq.0),
         "type": kind,
         "properties": properties,
+    })
+}
+
+fn step_part_updated_payload(envelope: &Envelope, session: SessionId, part: Value) -> Value {
+    json!({
+        "id": format!("evt_yaca_{}", envelope.seq.0),
+        "type": "message.part.updated",
+        "properties": {
+            "sessionID": session.to_string(),
+            "part": part,
+            "time": envelope.ts_millis,
+        },
     })
 }
 
@@ -433,88 +559,32 @@ async fn part_snapshot_payload(
     }))
 }
 
-async fn tool_part_snapshot_payload(
+// Reuse the projected REST info so events carry the real agent/model. `finish`/
+// `completed` are point-in-time: strip them until the finished event so a late
+// snapshot read can't leak a completion into the started event.
+async fn message_payload(
     st: &ServerState,
     envelope: &Envelope,
     session: SessionId,
     message: MessageId,
-    part: PartId,
-    state: &ToolPartState,
+    role: Role,
+    finished: bool,
 ) -> Option<Value> {
-    let snapshot = super::load_session(st, session, None).await.ok()?;
-    let part_id = part.to_string();
+    if matches!(role, Role::System) {
+        return None;
+    }
     let message_id = message.to_string();
-    let part_value = snapshot
+    let mut info = super::load_session(st, session, None)
+        .await
+        .ok()?
         .messages
         .iter()
         .find(|item| item.id() == message_id)
-        .and_then(|item| item.part(&part_id))?;
-    if part_value["type"].as_str() != Some("tool") {
-        return None;
-    }
-    let call = part_value["callID"].as_str()?.to_string();
-    let tool = part_value["tool"].as_str()?;
-    Some(tool_part_updated_payload(
-        envelope,
-        session,
-        message,
-        part,
-        call,
-        tool,
-        tool_state_payload(envelope, state),
-    ))
-}
-
-fn message_payload(
-    envelope: &Envelope,
-    session: SessionId,
-    message: MessageId,
-    role: Role,
-    finish: Option<FinishReason>,
-) -> Option<Value> {
-    let session_id = session.to_string();
-    let message_id = message.to_string();
-    let role = match role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::System => return None,
-    };
-    let mut info = match role {
-        "user" => json!({
-            "id": message_id,
-            "sessionID": session_id,
-            "role": role,
-            "time": { "created": envelope.ts_millis },
-            "agent": "yaca",
-            "model": { "providerID": "yaca", "modelID": "unknown" },
-        }),
-        _ => json!({
-            "id": message_id,
-            "sessionID": session_id,
-            "role": role,
-            "time": { "created": envelope.ts_millis },
-            "parentID": "",
-            "modelID": "unknown",
-            "providerID": "yaca",
-            "mode": "build",
-            "agent": "yaca",
-            "path": { "cwd": "", "root": "" },
-            "cost": 0,
-            "tokens": {
-                "input": 0,
-                "output": 0,
-                "reasoning": 0,
-                "cache": { "read": 0, "write": 0 },
-            },
-        }),
-    };
-    if let Some(finish) = finish
-        && role == "assistant"
-        && let Some(object) = info.as_object_mut()
-    {
-        object.insert("finish".to_string(), json!(finish_name(finish)));
+        .map(|item| item.info())?;
+    if !finished && let Some(object) = info.as_object_mut() {
+        object.remove("finish");
         if let Some(time) = object.get_mut("time").and_then(Value::as_object_mut) {
-            time.insert("completed".to_string(), json!(envelope.ts_millis));
+            time.remove("completed");
         }
     }
     Some(json!({
@@ -607,63 +677,12 @@ fn tool_part_updated_payload(
     })
 }
 
-fn tool_state_payload(envelope: &Envelope, state: &ToolPartState) -> Value {
-    match state {
-        ToolPartState::Pending { input } => json!({
-            "status": "pending",
-            "input": object_or_empty(input),
-        }),
-        ToolPartState::Running { input } => json!({
-            "status": "running",
-            "input": object_or_empty(input),
-            "time": { "start": envelope.ts_millis },
-        }),
-        ToolPartState::Completed {
-            input,
-            output,
-            time_ms,
-        } => {
-            let elapsed = i64::try_from(*time_ms).unwrap_or(i64::MAX);
-            json!({
-                "status": "completed",
-                "input": object_or_empty(input),
-                "output": tool_output_text(output),
-                "title": "",
-                "metadata": {},
-                "time": {
-                    "start": envelope.ts_millis.saturating_sub(elapsed),
-                    "end": envelope.ts_millis,
-                },
-            })
-        }
-        ToolPartState::Error { input, message, .. } => json!({
-            "status": "error",
-            "input": object_or_empty(input),
-            "error": message,
-            "time": {
-                "start": envelope.ts_millis,
-                "end": envelope.ts_millis,
-            },
-        }),
-    }
-}
-
 fn object_or_empty(value: &Value) -> Value {
     if value.is_object() {
         value.clone()
     } else {
         json!({})
     }
-}
-
-fn tool_output_text(output: &Value) -> String {
-    if let Some(text) = output.as_str() {
-        return text.to_string();
-    }
-    if let Some(text) = output.get("output").and_then(Value::as_str) {
-        return text.to_string();
-    }
-    output.to_string()
 }
 
 fn part_removed_payload(
@@ -720,16 +739,6 @@ fn fallback_payload(envelope: &Envelope) -> Value {
         properties: envelope,
     })
     .unwrap_or_else(|_| json!({}))
-}
-
-fn finish_name(finish: FinishReason) -> &'static str {
-    match finish {
-        FinishReason::Stop => "stop",
-        FinishReason::ToolCalls => "tool-calls",
-        FinishReason::Length => "length",
-        FinishReason::Cancelled => "cancelled",
-        FinishReason::Error => "error",
-    }
 }
 
 fn session_error_payload(

@@ -2,11 +2,37 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use yaca_core::AgentSpec;
+use yaca_proto::SessionId;
 
 use crate::ServerState;
 
 pub(in crate::opencode) async fn agent_with_guidance(st: &ServerState) -> AgentSpec {
     let mut agent = (*st.agent).clone();
+    if let Some(guidance) = guidance(st).await {
+        agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
+    }
+    agent
+}
+
+// Run a turn under the session's switched agent, not the server default (the
+// engine already resolves the model per session; this overrides agent identity).
+pub(in crate::opencode) async fn session_agent_with_guidance(
+    st: &ServerState,
+    session: SessionId,
+) -> AgentSpec {
+    let mut agent = (*st.agent).clone();
+    if let Ok(projection) = st.engine.store().read_projection(session).await
+        && let Some(name) = projection.session.agent
+        && name.as_str() != agent.name.as_str()
+        && let Some(entry) = super::agent_catalog::list(&super::location::workdir(st), st)
+            .into_iter()
+            .find(|entry| entry.name.as_str() == name.as_str())
+    {
+        if let Some(prompt) = entry.prompt {
+            agent.system_prompt = prompt;
+        }
+        agent.name = name;
+    }
     if let Some(guidance) = guidance(st).await {
         agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
     }

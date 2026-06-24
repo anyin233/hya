@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use yaca_proto::SessionId;
 
 use crate::{ApiError, ServerState, parse_session};
 
@@ -18,7 +19,7 @@ pub(super) fn router() -> Router<ServerState> {
 #[derive(Deserialize)]
 struct RevertPayload {
     #[serde(rename = "messageID")]
-    message_id: String,
+    message_id: Option<String>,
     #[serde(rename = "partID")]
     part_id: Option<String>,
 }
@@ -36,17 +37,12 @@ async fn revert(
         Ok(snapshot) => snapshot,
         Err(response) => return Ok(response),
     };
-    if !target_exists(&snapshot, &payload) {
-        return Ok(Json(snapshot.info).into_response());
-    }
+    let Some(target) = revert_target(&snapshot, &payload) else {
+        return Ok(session_response(snapshot, None));
+    };
+    let diffs = super::session_diff::diffs_for_target(&st, session, Some(target)).await?;
     let mut metadata = metadata_map(snapshot.info.metadata());
-    metadata.insert(
-        REVERT_METADATA_KEY.to_string(),
-        json!({
-            "messageID": payload.message_id,
-            "partID": payload.part_id,
-        }),
-    );
+    metadata.insert(REVERT_METADATA_KEY.to_string(), revert_metadata(target));
     st.engine
         .set_metadata(session, Value::Object(metadata))
         .await?;
@@ -54,7 +50,7 @@ async fn revert(
         Ok(snapshot) => snapshot,
         Err(response) => return Ok(response),
     };
-    Ok(Json(snapshot.info).into_response())
+    Ok(session_response(snapshot, Some(&diffs)))
 }
 
 async fn unrevert(
@@ -70,7 +66,7 @@ async fn unrevert(
         Err(response) => return Ok(response),
     };
     if !snapshot.info.revert() {
-        return Ok(Json(snapshot.info).into_response());
+        return Ok(session_response(snapshot, None));
     }
     st.engine
         .set_metadata(
@@ -82,12 +78,12 @@ async fn unrevert(
         Ok(snapshot) => snapshot,
         Err(response) => return Ok(response),
     };
-    Ok(Json(snapshot.info).into_response())
+    Ok(session_response(snapshot, None))
 }
 
 async fn load_session(
     st: &ServerState,
-    session: yaca_proto::SessionId,
+    session: SessionId,
 ) -> Result<Result<OpenCodeSessionSnapshot, Response>, ApiError> {
     match super::load_session(st, session, None).await {
         Ok(snapshot) => Ok(Ok(snapshot)),
@@ -107,17 +103,74 @@ fn not_found_response(session: yaca_proto::SessionId) -> Response {
         .into_response()
 }
 
-fn target_exists(snapshot: &OpenCodeSessionSnapshot, payload: &RevertPayload) -> bool {
-    if let Some(part) = &payload.part_id {
-        return snapshot
-            .messages
-            .iter()
-            .any(|message| message.has_part(part));
-    }
-    snapshot
+fn revert_target(
+    snapshot: &OpenCodeSessionSnapshot,
+    payload: &RevertPayload,
+) -> Option<super::session_diff::DiffTarget> {
+    let message_id = payload.message_id.as_deref()?;
+    let message = snapshot
         .messages
         .iter()
-        .any(|message| message.id() == payload.message_id)
+        .find(|message| message.id() == message_id)?;
+    let message_id = message_id.parse().ok()?;
+    let part = match payload.part_id.as_deref() {
+        Some(part) if message.has_part(part) => Some(part.parse().ok()?),
+        Some(_) => return None,
+        None => None,
+    };
+    Some(super::session_diff::DiffTarget {
+        message: message_id,
+        part,
+    })
+}
+
+fn revert_metadata(target: super::session_diff::DiffTarget) -> Value {
+    let mut value = Map::from_iter([("messageID".to_string(), json!(target.message.to_string()))]);
+    if let Some(part) = target.part {
+        value.insert("partID".to_string(), json!(part.to_string()));
+    }
+    Value::Object(value)
+}
+
+fn session_response(
+    snapshot: OpenCodeSessionSnapshot,
+    diffs: Option<&[super::session_diff::SessionFileDiff]>,
+) -> Response {
+    let mut body = serde_json::to_value(snapshot.info).unwrap_or(Value::Null);
+    if let Some(diffs) = diffs
+        && let Some(object) = body.as_object_mut()
+    {
+        object.insert("summary".to_string(), summary_value(diffs));
+        if let Some(revert) = object.get_mut("revert").and_then(Value::as_object_mut) {
+            let patch = combined_patch(diffs);
+            if !patch.is_empty() {
+                revert.insert("diff".to_string(), json!(patch));
+            }
+        }
+    }
+    Json(body).into_response()
+}
+
+fn summary_value(diffs: &[super::session_diff::SessionFileDiff]) -> Value {
+    json!({
+        "additions": diffs.iter().map(super::session_diff::SessionFileDiff::additions).sum::<usize>(),
+        "deletions": diffs.iter().map(super::session_diff::SessionFileDiff::deletions).sum::<usize>(),
+        "files": diffs.len(),
+    })
+}
+
+fn combined_patch(diffs: &[super::session_diff::SessionFileDiff]) -> String {
+    let mut patch = String::new();
+    for diff in diffs {
+        if diff.patch().is_empty() {
+            continue;
+        }
+        if !patch.is_empty() && !patch.ends_with('\n') {
+            patch.push('\n');
+        }
+        patch.push_str(diff.patch());
+    }
+    patch
 }
 
 fn metadata_map(metadata: Option<&Value>) -> Map<String, Value> {

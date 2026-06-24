@@ -46,7 +46,11 @@ async fn create(
         .location
         .map(|location| location.directory)
         .or(req.workdir)
-        .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned());
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| st.agent.workdir.clone());
+    let workdir = super::location::canonical_workdir(workdir)
+        .to_string_lossy()
+        .into_owned();
     let agent = req
         .agent
         .map(AgentName::new)

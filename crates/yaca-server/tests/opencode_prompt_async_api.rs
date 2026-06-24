@@ -151,7 +151,7 @@ async fn opencode_prompt_async_returns_no_content_and_records_messages() {
     let messages = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let body = get_messages(app.clone(), &session).await;
-            if body[1]["parts"][0]["text"] == "async answer" {
+            if body[1]["parts"][1]["text"] == "async answer" {
                 break body;
             }
             tokio::task::yield_now().await;
@@ -160,7 +160,7 @@ async fn opencode_prompt_async_returns_no_content_and_records_messages() {
     .await
     .expect("async prompt completed");
     assert_eq!(messages[0]["parts"][0]["text"], "hello async");
-    assert_eq!(messages[1]["parts"][0]["text"], "async answer");
+    assert_eq!(messages[1]["parts"][1]["text"], "async answer");
 }
 
 #[tokio::test]
