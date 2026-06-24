@@ -227,7 +227,13 @@ pub fn draw(
     prompt_hits(view, area, text_x, rows, hints_y)
 }
 
-fn prompt_hits(view: &PromptBoxView<'_>, area: Rect, text_x: u16, rows: u16, hints_y: u16) -> PromptHits {
+fn prompt_hits(
+    view: &PromptBoxView<'_>,
+    area: Rect,
+    text_x: u16,
+    rows: u16,
+    hints_y: u16,
+) -> PromptHits {
     if view.shell_mode {
         return PromptHits::default();
     }
@@ -236,15 +242,18 @@ fn prompt_hits(view: &PromptBoxView<'_>, area: Rect, text_x: u16, rows: u16, hin
     let gap: u16 = 2;
     let right_edge = area.x + area.width.saturating_sub(PAD);
     let start_x = right_edge.saturating_sub(agent_seg_w + gap + cmd_seg_w);
-    let model = view.agent_label.zip(view.model_label).map(|(agent, model)| {
-        let agent_w = UnicodeWidthStr::width(agent) as u16;
-        Rect {
-            x: text_x + agent_w + 3,
-            y: area.y + rows + 2,
-            width: UnicodeWidthStr::width(model) as u16,
-            height: 1,
-        }
-    });
+    let model = view
+        .agent_label
+        .zip(view.model_label)
+        .map(|(agent, model)| {
+            let agent_w = UnicodeWidthStr::width(agent) as u16;
+            Rect {
+                x: text_x + agent_w + 3,
+                y: area.y + rows + 2,
+                width: UnicodeWidthStr::width(model) as u16,
+                height: 1,
+            }
+        });
     PromptHits {
         agents: Some(Rect {
             x: start_x,

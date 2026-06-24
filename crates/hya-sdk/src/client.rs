@@ -300,8 +300,11 @@ impl<T: Transport> Client for ApiClient<T> {
     }
 
     async fn find_files(&self, query: &str) -> Result<Vec<String>> {
-        self.get(&format!("/find/file?query={}", encode_query_component(query)))
-            .await
+        self.get(&format!(
+            "/find/file?query={}",
+            encode_query_component(query)
+        ))
+        .await
     }
 
     async fn commands(&self) -> Result<Vec<String>> {
