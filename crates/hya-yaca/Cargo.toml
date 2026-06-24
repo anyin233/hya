@@ -1,0 +1,8 @@
+[package]
+name = "hya-yaca"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+# Filled in Phase 2a.
