@@ -25,3 +25,7 @@ jobs:
         run: cargo build --workspace
       - name: test
         run: cargo test --workspace
+      - name: install strace
+        run: sudo apt-get update && sudo apt-get install -y strace
+      - name: verify-no-http (native transport opens zero inet sockets)
+        run: bash scripts/verify-no-http.sh
