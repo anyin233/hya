@@ -128,7 +128,7 @@ pub(super) fn global_permissions(workdir: &Path) -> Vec<PermissionRule> {
     rules
 }
 
-fn config_paths(workdir: &Path) -> [PathBuf; 4] {
+pub(super) fn config_paths(workdir: &Path) -> [PathBuf; 4] {
     [
         workdir.join("opencode.json"),
         workdir.join("opencode.jsonc"),
