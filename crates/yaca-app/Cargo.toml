@@ -9,4 +9,17 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-# Filled in Phase 1a.
+yaca-core = { workspace = true }
+yaca-provider = { workspace = true }
+yaca-tool = { workspace = true }
+yaca-store = { workspace = true }
+yaca-server = { workspace = true }
+yaca-proto = { workspace = true }
+yaca-mcp = { workspace = true }
+yaca-plugin = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_norway = { workspace = true }
+anyhow = { workspace = true }
+time = { workspace = true }
