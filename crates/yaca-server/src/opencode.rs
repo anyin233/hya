@@ -28,6 +28,7 @@ mod global;
 mod health;
 mod instance;
 mod integration;
+mod json_merge;
 mod jsonc;
 mod location;
 mod mcp;
@@ -49,9 +50,15 @@ mod pty_runtime;
 mod pty_shell;
 mod pty_state;
 mod question;
+mod reasoning_options;
+#[cfg(test)]
+mod reasoning_options_tests;
 mod reference;
 mod reference_cache;
+mod reference_entries;
 mod reference_repository;
+#[cfg(test)]
+mod reference_tests;
 mod session_context;
 mod session_context_messages;
 mod session_context_tool_state;

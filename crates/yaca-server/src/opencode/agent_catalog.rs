@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::agent_permission::PermissionRule;
 use super::agent_sources::AgentChange;
+use super::json_merge::merge_json_map;
 
 pub(super) struct AgentEntry {
     pub(super) name: String,
@@ -220,22 +221,5 @@ fn apply_change(
             },
             prompt: change.prompt,
         });
-    }
-}
-
-fn merge_json_map(target: &mut BTreeMap<String, Value>, patch: BTreeMap<String, Value>) {
-    for (key, value) in patch {
-        merge_json_value(target.entry(key).or_insert(Value::Null), value);
-    }
-}
-
-fn merge_json_value(target: &mut Value, patch: Value) {
-    match (target, patch) {
-        (Value::Object(target), Value::Object(patch)) => {
-            for (key, value) in patch {
-                merge_json_value(target.entry(key).or_insert(Value::Null), value);
-            }
-        }
-        (target, patch) => *target = patch,
     }
 }
