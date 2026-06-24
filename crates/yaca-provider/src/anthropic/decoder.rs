@@ -9,6 +9,7 @@ use crate::{Decoder, ProviderError};
 
 enum BlockKind {
     Text,
+    Reasoning,
     Tool,
 }
 
@@ -120,6 +121,24 @@ impl Decoder for AnthropicDecoder {
                             part,
                         });
                     }
+                    Some("thinking") => {
+                        let part = PartId::new();
+                        self.blocks.insert(
+                            index,
+                            Block {
+                                kind: BlockKind::Reasoning,
+                                part,
+                                call: ToolCallId::new(),
+                                name: String::new(),
+                                args: String::new(),
+                            },
+                        );
+                        out.push(Event::ReasoningStart {
+                            session,
+                            message,
+                            part,
+                        });
+                    }
                     Some("tool_use") => {
                         let part = PartId::new();
                         let call = ToolCallId::new();
@@ -166,6 +185,19 @@ impl Decoder for AnthropicDecoder {
                                 });
                             }
                         }
+                        Some("thinking_delta") => {
+                            if let Some(text) = delta
+                                .and_then(|d| d.get("thinking"))
+                                .and_then(Value::as_str)
+                            {
+                                out.push(Event::ReasoningDelta {
+                                    session,
+                                    message,
+                                    part: block.part,
+                                    delta: text.to_string(),
+                                });
+                            }
+                        }
                         Some("input_json_delta") => {
                             if let Some(pj) = delta
                                 .and_then(|d| d.get("partial_json"))
@@ -188,14 +220,20 @@ impl Decoder for AnthropicDecoder {
             }
             Some("content_block_stop") => {
                 let index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
-                if let Some(block) = self.blocks.get(&index)
-                    && matches!(block.kind, BlockKind::Text)
-                {
-                    out.push(Event::TextEnd {
-                        session,
-                        message,
-                        part: block.part,
-                    });
+                if let Some(block) = self.blocks.get(&index) {
+                    match block.kind {
+                        BlockKind::Text => out.push(Event::TextEnd {
+                            session,
+                            message,
+                            part: block.part,
+                        }),
+                        BlockKind::Reasoning => out.push(Event::ReasoningEnd {
+                            session,
+                            message,
+                            part: block.part,
+                        }),
+                        BlockKind::Tool => {}
+                    }
                 }
             }
             Some("message_delta") => {
