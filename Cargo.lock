@@ -938,8 +938,10 @@ version = "0.28.0"
 dependencies = [
  "hya-sdk",
  "hya-tui",
+ "hya-yaca",
  "reqwest",
  "tokio",
+ "yaca-app",
 ]
 
 [[package]]
