@@ -48,6 +48,7 @@ struct CatalogModel {
     model_id: String,
     tools: bool,
     context: u32,
+    variants: Vec<String>,
 }
 
 async fn legacy_config_get(State(st): State<ServerState>) -> Json<Value> {
@@ -170,6 +171,7 @@ async fn model_list(
                 &model.model_id,
                 model.tools,
                 model.context,
+                &model.variants,
             )
         })
         .collect();
@@ -186,6 +188,7 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
             model_id: model.model_id,
             tools: model.capabilities.streaming_tool_calls,
             context: model.capabilities.max_context,
+            variants: model.reasoning_variants,
         })
         .collect();
     if !models.is_empty() {
@@ -197,6 +200,7 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
         model_id: active.model_id,
         tools: false,
         context: 0,
+        variants: Vec::new(),
     }]
 }
 
