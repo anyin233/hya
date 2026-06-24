@@ -28,6 +28,18 @@ pub enum ProviderKind {
     Google,
 }
 
+impl ProviderKind {
+    #[must_use]
+    pub fn reasoning_variants(self) -> Vec<String> {
+        let levels: &[&str] = match self {
+            ProviderKind::Anthropic => &["low", "medium", "high", "max"],
+            ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
+            ProviderKind::Google => &["high", "max"],
+        };
+        levels.iter().map(|level| (*level).to_string()).collect()
+    }
+}
+
 enum AuthStyle {
     Bearer(SecretString),
     Anthropic { key: SecretString, version: String },
@@ -43,6 +55,7 @@ pub struct HttpProvider {
     auth: AuthStyle,
     models: HashSet<String>,
     caps: Capabilities,
+    kind: ProviderKind,
 }
 
 fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
@@ -110,6 +123,7 @@ impl HttpProvider {
             google_base,
             auth,
             models: models.into_iter().collect(),
+            kind,
             caps: Capabilities {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
@@ -195,12 +209,18 @@ impl Provider for HttpProvider {
     }
 
     fn catalog(&self) -> Vec<ProviderModel> {
+        let variants = if self.caps.reasoning_request {
+            self.kind.reasoning_variants()
+        } else {
+            Vec::new()
+        };
         self.models
             .iter()
             .map(|model| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
                 capabilities: self.caps.clone(),
+                reasoning_variants: variants.clone(),
             })
             .collect()
     }
@@ -295,5 +315,18 @@ mod tests {
                 .is_none()
         );
         Ok(())
+    }
+
+    #[test]
+    fn reasoning_variants_are_family_specific() {
+        assert_eq!(
+            ProviderKind::Anthropic.reasoning_variants(),
+            ["low", "medium", "high", "max"]
+        );
+        assert_eq!(
+            ProviderKind::OpenAiCompatible.reasoning_variants(),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(ProviderKind::Google.reasoning_variants(), ["high", "max"]);
     }
 }
