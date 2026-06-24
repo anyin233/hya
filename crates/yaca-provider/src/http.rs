@@ -163,6 +163,19 @@ impl HttpProvider {
         }
         Ok(headers)
     }
+
+    /// Bare model id this provider serves for `model`: accepts the bare id or this
+    /// provider's own `<id>/<model>` namespaced form. `None` if not served.
+    fn served_model_id<'a>(&self, model: &'a ModelRef) -> Option<&'a str> {
+        let raw = model.as_str();
+        if self.models.contains(raw) {
+            return Some(raw);
+        }
+        let bare = raw
+            .strip_prefix(self.id.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))?;
+        self.models.contains(bare).then_some(bare)
+    }
 }
 
 #[async_trait]
@@ -172,9 +185,7 @@ impl Provider for HttpProvider {
     }
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
-        self.models
-            .contains(model.as_str())
-            .then(|| self.caps.clone())
+        self.served_model_id(model).map(|_| self.caps.clone())
     }
 
     fn catalog(&self) -> Vec<ProviderModel> {
@@ -190,10 +201,13 @@ impl Provider for HttpProvider {
 
     async fn stream(
         &self,
-        req: CompletionRequest,
+        mut req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        if let Some(bare) = self.served_model_id(&req.model).map(str::to_string) {
+            req.model = ModelRef::new(bare);
+        }
         let body = self.protocol.encode(&req)?;
         let decoder = self.protocol.decoder(session, message);
         let url = match &self.google_base {
@@ -220,5 +234,81 @@ impl Provider for HttpProvider {
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
         tokio::spawn(stream::pump(resp, decoder, tx));
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use yaca_proto::ModelRef;
+
+    fn provider() -> HttpProvider {
+        HttpProvider::new(
+            "12th-anth",
+            ProviderKind::Anthropic,
+            "https://example.invalid/v1",
+            "test-key".to_string(),
+            [
+                "claude-sonnet-4-6".to_string(),
+                "claude-opus-4-8".to_string(),
+            ],
+        )
+        .expect("provider builds")
+    }
+
+    #[test]
+    fn capabilities_match_bare_model_id() {
+        assert!(
+            provider()
+                .capabilities(&ModelRef::new("claude-sonnet-4-6"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn capabilities_match_provider_prefixed_model_id() {
+        // Regression: a `<provider>/<model>` ref must resolve, else the turn hangs on UnknownModel.
+        assert!(
+            provider()
+                .capabilities(&ModelRef::new("12th-anth/claude-sonnet-4-6"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn capabilities_reject_wrong_provider_prefix() {
+        assert!(
+            provider()
+                .capabilities(&ModelRef::new("other-prov/claude-sonnet-4-6"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn capabilities_reject_unknown_model_under_correct_provider() {
+        assert!(
+            provider()
+                .capabilities(&ModelRef::new("12th-anth/gpt-5"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn served_model_id_strips_own_prefix_to_bare_upstream_id() {
+        let p = provider();
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("claude-sonnet-4-6")),
+            Some("claude-sonnet-4-6")
+        );
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("12th-anth/claude-sonnet-4-6")),
+            Some("claude-sonnet-4-6")
+        );
+        assert_eq!(p.served_model_id(&ModelRef::new("12th-anth/unknown")), None);
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("nope/claude-sonnet-4-6")),
+            None
+        );
     }
 }
