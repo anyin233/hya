@@ -45,6 +45,36 @@ impl SessionEngine {
         )
         .await?;
 
+        let outcome = self
+            .run_turn_rounds(session, message, agent, &cancel, external_dirs)
+            .await;
+        if outcome.is_err() {
+            // A provider/tool error after MessageStarted must still close the assistant
+            // message, else UI clients (e.g. the hya TUI) wait forever for a finish event.
+            let _ = self
+                .emit(
+                    session,
+                    Event::MessageFinished {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        finish: FinishReason::Error,
+                        tokens: None,
+                    },
+                )
+                .await;
+        }
+        outcome
+    }
+
+    async fn run_turn_rounds(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        agent: &AgentSpec,
+        cancel: &CancellationToken,
+        external_dirs: &[PathBuf],
+    ) -> Result<FinishReason, CoreError> {
         const MAX_TOOL_ROUNDS: u32 = 25;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;

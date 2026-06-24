@@ -63,7 +63,7 @@ impl From<RawFormatterEntry> for FormatterEntry {
     }
 }
 
-pub(crate) fn load_plane() -> FormatterPlane {
+pub fn load_plane() -> FormatterPlane {
     FormatterPlane::new(Arc::new(BuiltinFormatterProvider::new(load_config())))
 }
 

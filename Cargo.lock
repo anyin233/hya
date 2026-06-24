@@ -938,8 +938,11 @@ version = "0.28.0"
 dependencies = [
  "hya-sdk",
  "hya-tui",
+ "hya-yaca",
  "reqwest",
+ "serde_json",
  "tokio",
+ "yaca-app",
 ]
 
 [[package]]
@@ -986,6 +989,24 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "hya-yaca"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "eventsource-stream",
+ "futures-util",
+ "http-body-util",
+ "hya-sdk",
+ "serde_json",
+ "tokio",
+ "tower",
+ "yaca-app",
+ "yaca-server",
 ]
 
 [[package]]
@@ -3445,6 +3466,26 @@ name = "xtask"
 version = "0.28.0"
 
 [[package]]
+name = "yaca-app"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "serde",
+ "serde_norway",
+ "time",
+ "tokio",
+ "yaca-core",
+ "yaca-mcp",
+ "yaca-plugin",
+ "yaca-proto",
+ "yaca-provider",
+ "yaca-server",
+ "yaca-store",
+ "yaca-tool",
+]
+
+[[package]]
 name = "yaca-cli"
 version = "0.28.0"
 dependencies = [
@@ -3462,6 +3503,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "yaca-app",
  "yaca-core",
  "yaca-mcp",
  "yaca-plugin",

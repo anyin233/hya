@@ -3,7 +3,7 @@
 /// HTTP header that scopes each request to a working directory. This is the single wire-protocol
 /// string coupled to the current backend; change it here (or translate it in the native bridge)
 /// when porting to a different backend.
-pub(crate) const DIRECTORY_HEADER: &str = "x-opencode-directory";
+pub const DIRECTORY_HEADER: &str = "x-opencode-directory";
 
 pub mod error;
 pub mod events;

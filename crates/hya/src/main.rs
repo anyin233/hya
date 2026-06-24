@@ -7,13 +7,15 @@ use std::sync::{
 use std::time::Duration;
 
 use hya_sdk::{
-    stream_global_events, Client, GlobalEvent, HttpClient, NativeBridge, PendingClient, PendingSlot,
-    ServerHandle,
+    stream_global_events, ApiClient, Client, GlobalEvent, HttpClient, NativeBridge, PendingClient,
+    PendingSlot, ServerHandle,
 };
 use hya_tui::app::{run_tui, AppEvent, RunTuiInput};
 use hya_tui::state::AppState;
 use hya_tui::tui::{install_panic_hook, spawn_input_task, Tui};
+use hya_yaca::{spawn_event_bridge, YacaNativeTransport};
 use tokio::sync::mpsc;
+use yaca_app::{RuntimeOptions, YacaRuntime};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -75,7 +77,10 @@ fn spawn_connect(
         let start = std::time::Instant::now();
         let log = |label: &str| {
             if profile {
-                eprintln!("[hya-profile +{:.3}s] {label}", start.elapsed().as_secs_f64());
+                eprintln!(
+                    "[hya-profile +{:.3}s] {label}",
+                    start.elapsed().as_secs_f64()
+                );
             }
         };
         log("connect start");
@@ -120,6 +125,10 @@ fn spawn_connect(
 
 /// Keeps the active backend connection alive for the lifetime of the TUI and tears it down on exit.
 enum Transport {
+    Yaca {
+        runtime: Arc<YacaRuntime>,
+        bridge: tokio::task::JoinHandle<()>,
+    },
     Native(NativeBridge),
     Http {
         server: ServerMode,
@@ -129,16 +138,37 @@ enum Transport {
 }
 
 impl Transport {
-    /// Connect using the mode implied by `args`: by default spawn `yaca serve` and talk HTTP/SSE
-    /// (the full hya + yaca system). `--server <url>` attaches to an already-running
-    /// opencode-compatible server; `--opencode` switches to the opencode backend (native bun
-    /// bridge, or `opencode serve` over HTTP with `--http`). Returns the shared client plus the
-    /// guard that owns the connection.
+    /// Connect using the mode implied by `args`: by default run the `yaca` backend IN-PROCESS and
+    /// talk to it natively (no TCP, no reqwest). `--http` spawns `yaca serve` and talks HTTP/SSE;
+    /// `--server <url>` attaches to an already-running opencode-compatible server; `--opencode`
+    /// switches to the opencode backend (native bun bridge, or `opencode serve` over HTTP with
+    /// `--http`). Returns the shared client plus the guard that owns the connection.
     async fn connect(
         args: &Args,
         directory: &str,
         tx: &mpsc::UnboundedSender<AppEvent>,
     ) -> Result<(Arc<dyn Client>, Transport), Box<dyn Error + Send + Sync>> {
+        if args.server.is_none() && !args.http && !args.opencode {
+            let runtime = Arc::new(
+                YacaRuntime::start(RuntimeOptions {
+                    model: None,
+                    db: String::new(),
+                    yolo: false,
+                    default_agent: None,
+                    include_global_agents: true,
+                    force_offline: false,
+                })
+                .await?,
+            );
+            let transport = YacaNativeTransport::new(runtime.router().clone(), directory);
+            let client: Arc<dyn Client> = Arc::new(ApiClient::with_transport(transport));
+            let (event_tx, event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
+            forward_events(event_rx, tx.clone());
+            let bridge =
+                spawn_event_bridge(runtime.router().clone(), directory.to_owned(), event_tx);
+            return Ok((client, Transport::Yaca { runtime, bridge }));
+        }
+
         if args.opencode && !args.http && args.server.is_none() {
             let (event_tx, event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
             let bridge = NativeBridge::spawn(&resolve_backend_dir()?, event_tx).await?;
@@ -174,6 +204,10 @@ impl Transport {
 
     fn shutdown(self) {
         match self {
+            Transport::Yaca { runtime, bridge } => {
+                bridge.abort();
+                drop(runtime);
+            }
             Transport::Native(bridge) => drop(bridge),
             Transport::Http {
                 server,
@@ -190,7 +224,10 @@ impl Transport {
 
 /// Forward `GlobalEvent`s from the native bridge into the TUI event loop as `AppEvent::Sse`,
 /// matching the shape the HTTP SSE path delivers.
-fn forward_events(mut events: mpsc::UnboundedReceiver<GlobalEvent>, tx: mpsc::UnboundedSender<AppEvent>) {
+fn forward_events(
+    mut events: mpsc::UnboundedReceiver<GlobalEvent>,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             if tx.send(AppEvent::Sse(event)).is_err() {
@@ -427,11 +464,15 @@ impl Args {
 
 fn print_usage() {
     println!("usage: hya [OPTIONS]");
-    println!("  (default)          spawn `yaca serve` and connect over HTTP/SSE (full system)");
-    println!("  --server <url>     attach to a running opencode-compatible server (yaca or opencode)");
-    println!("  --yaca-bin <path>  yaca binary to spawn (else $HYA_YACA_BIN, sibling build, or PATH)");
+    println!(
+        "  (default)          run the `yaca` backend in-process and talk to it natively (no HTTP)"
+    );
+    println!("  --http             spawn `yaca serve` and connect over HTTP/SSE (with --opencode: `opencode serve`)");
+    println!(
+        "  --server <url>     attach to a running opencode-compatible server (yaca or opencode)"
+    );
+    println!("  --yaca-bin <path>  yaca binary to spawn for --http (else $HYA_YACA_BIN, sibling build, or PATH)");
     println!("  --opencode         use the opencode backend (native bun bridge) instead of yaca");
-    println!("  --http             with --opencode: spawn `opencode serve` over HTTP, not the bridge");
     println!("  --version, -v      print version");
     println!("  --help, -h         print this help");
 }
