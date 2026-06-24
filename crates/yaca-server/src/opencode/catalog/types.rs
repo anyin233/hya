@@ -56,7 +56,7 @@ pub(super) struct ModelInfo {
     api: ModelApi,
     capabilities: ModelCapabilities,
     request: ModelRequest,
-    variants: Vec<ModelVariant>,
+    variants: BTreeMap<String, Value>,
     time: ModelTime,
     cost: Vec<ModelCost>,
     status: &'static str,
@@ -85,13 +85,6 @@ struct ModelRequest {
     body: Value,
     generation: Value,
     options: Value,
-}
-
-#[derive(Clone, Serialize)]
-struct ModelVariant {
-    id: String,
-    headers: BTreeMap<String, String>,
-    body: Value,
 }
 
 #[derive(Clone, Serialize)]
@@ -130,6 +123,7 @@ pub(super) fn provider_info(provider_id: &str, catalog: &[CatalogModel]) -> Prov
                     &model.model_id,
                     model.tools,
                     model.context,
+                    &model.variants,
                 ),
             )
         })
@@ -154,6 +148,7 @@ pub(super) fn model_info(
     model_id: &str,
     tools: bool,
     context: u32,
+    variants: &[String],
 ) -> ModelInfo {
     ModelInfo {
         id: model_id.to_string(),
@@ -175,11 +170,41 @@ pub(super) fn model_info(
             generation: json!({}),
             options: json!({}),
         },
-        variants: Vec::new(),
+        variants: variants
+            .iter()
+            .map(|name| (name.clone(), json!({})))
+            .collect(),
         time: ModelTime { released: 0 },
         cost: Vec::new(),
         status: "active",
         enabled: true,
         limit: ModelLimit { context, output: 0 },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn model_info_serializes_variants_as_keyed_object() {
+        let info = model_info(
+            "anthropic",
+            "claude-opus-4-8",
+            true,
+            200_000,
+            &["low".to_string(), "high".to_string()],
+        );
+        let value = serde_json::to_value(&info).expect("serialize model info");
+        let variants = value
+            .get("variants")
+            .and_then(Value::as_object)
+            .expect("variants must serialize as a JSON object");
+        let mut keys: Vec<&String> = variants.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["high", "low"]);
+        assert!(variants["low"].is_object());
     }
 }
