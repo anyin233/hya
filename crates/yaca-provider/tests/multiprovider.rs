@@ -18,6 +18,9 @@ fn summarize(events: &[Event]) -> Vec<String> {
             Event::ToolInputDelta { .. } => "tool_input_delta".to_string(),
             Event::ToolCallRequested { name, input, .. } => format!("tool_call:{name}:{input}"),
             Event::MessageFinished { finish, .. } => format!("finish:{finish:?}"),
+            Event::ReasoningStart { .. } => "reasoning_start".to_string(),
+            Event::ReasoningDelta { delta, .. } => format!("reasoning_delta:{delta}"),
+            Event::ReasoningEnd { .. } => "reasoning_end".to_string(),
             other => format!("other:{other:?}"),
         })
         .collect()
@@ -51,6 +54,37 @@ fn anthropic_decodes_text() {
         vec![
             "text_start",
             "text_delta:Hello world",
+            "text_end",
+            "finish:Stop"
+        ]
+    );
+}
+
+#[test]
+fn anthropic_decodes_thinking() {
+    let events = decode_all(
+        &AnthropicMessagesProtocol,
+        &[
+            r#"{"type":"message_start","message":{}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"text"}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"42"}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            r#"{"type":"message_stop"}"#,
+        ],
+    );
+    assert_eq!(
+        summarize(&events),
+        vec![
+            "reasoning_start",
+            "reasoning_delta:Let me reason",
+            "reasoning_end",
+            "text_start",
+            "text_delta:42",
             "text_end",
             "finish:Stop"
         ]
