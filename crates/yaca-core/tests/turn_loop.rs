@@ -206,3 +206,52 @@ async fn compaction_auto_triggers_when_over_threshold() {
         "summarizer must be invoked when over threshold"
     );
 }
+
+#[tokio::test]
+async fn provider_error_still_finishes_the_assistant_message() {
+    let dir = tempdir();
+    let router = Arc::new(ProviderRouter::new());
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("no-such-model"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "hello".to_string())
+        .await
+        .unwrap();
+
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("no-such-model"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    let result = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await;
+    assert!(result.is_err(), "an unresolved model must surface an error");
+
+    let projection = engine.store().read_projection(session).await.unwrap();
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|m| m.role == Role::Assistant)
+        .expect("assistant message exists");
+    assert_eq!(
+        assistant.finish,
+        Some(FinishReason::Error),
+        "the assistant message must be terminally finished on provider error so UI clients never hang"
+    );
+}
