@@ -70,20 +70,28 @@ pub struct ProviderModel {
     pub capabilities: Capabilities,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReasoningEffort {
+    Off,
+    Minimal,
     Low,
     Medium,
     High,
+    XHigh,
+    Max,
 }
 
 impl ReasoningEffort {
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "minimal" => Some(Self::Minimal),
             "low" => Some(Self::Low),
             "medium" | "med" => Some(Self::Medium),
             "high" => Some(Self::High),
+            "xhigh" => Some(Self::XHigh),
+            "max" => Some(Self::Max),
             _ => None,
         }
     }
@@ -91,28 +99,95 @@ impl ReasoningEffort {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Off => "none",
+            Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
     #[must_use]
-    pub fn anthropic_budget(self) -> u32 {
+    pub fn openai_label(self, _model_id: &str) -> Option<&'static str> {
         match self {
-            Self::Low => 1024,
-            Self::Medium => 4096,
-            Self::High => 16384,
+            Self::Off => None,
+            Self::Minimal => Some("minimal"),
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::XHigh | Self::Max => Some("xhigh"),
         }
     }
 
     #[must_use]
-    pub fn google_budget(self) -> u32 {
+    pub fn anthropic_budget(self) -> Option<u32> {
         match self {
-            Self::Low => 1024,
-            Self::Medium => 8192,
-            Self::High => 24576,
+            Self::Off | Self::Minimal => None,
+            Self::Low => Some(1024),
+            Self::Medium => Some(4096),
+            Self::High => Some(16000),
+            Self::XHigh => Some(24000),
+            Self::Max => Some(31999),
         }
+    }
+
+    #[must_use]
+    pub fn google_budget(self, model_id: &str) -> Option<u32> {
+        match self {
+            Self::Off | Self::Minimal | Self::Low | Self::Medium => None,
+            Self::High => Some(16000),
+            Self::XHigh => Some(20000),
+            Self::Max => {
+                let id = model_id.to_ascii_lowercase();
+                if id.contains("2.5") && id.contains("pro") {
+                    Some(32768)
+                } else {
+                    Some(24576)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::ReasoningEffort as R;
+
+    #[test]
+    fn parses_opencode_vocab() {
+        assert_eq!(R::parse("none"), Some(R::Off));
+        assert_eq!(R::parse("off"), Some(R::Off));
+        assert_eq!(R::parse("minimal"), Some(R::Minimal));
+        assert_eq!(R::parse("med"), Some(R::Medium));
+        assert_eq!(R::parse("xhigh"), Some(R::XHigh));
+        assert_eq!(R::parse("MAX"), Some(R::Max));
+        assert_eq!(R::parse("bogus"), None);
+    }
+
+    #[test]
+    fn openai_never_emits_max() {
+        assert_eq!(R::Max.openai_label("gpt-5.5"), Some("xhigh"));
+        assert_eq!(R::XHigh.openai_label("gpt-5.5"), Some("xhigh"));
+        assert_eq!(R::High.openai_label("gpt-5.5"), Some("high"));
+        assert_eq!(R::Off.openai_label("gpt-5.5"), None);
+    }
+
+    #[test]
+    fn anthropic_budgets_match_opencode() {
+        assert_eq!(R::High.anthropic_budget(), Some(16000));
+        assert_eq!(R::Max.anthropic_budget(), Some(31999));
+        assert_eq!(R::Minimal.anthropic_budget(), None);
+        assert_eq!(R::Off.anthropic_budget(), None);
+    }
+
+    #[test]
+    fn google_budgets_by_model() {
+        assert_eq!(R::Max.google_budget("gemini-2.5-pro"), Some(32768));
+        assert_eq!(R::Max.google_budget("gemini-2.5-flash"), Some(24576));
+        assert_eq!(R::High.google_budget("gemini-2.5-flash"), Some(16000));
+        assert_eq!(R::Low.google_budget("gemini-2.5-flash"), None);
     }
 }
 

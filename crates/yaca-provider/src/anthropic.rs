@@ -39,8 +39,7 @@ impl Protocol for AnthropicMessagesProtocol {
             "messages": messages,
             "stream": true,
         });
-        if let Some(effort) = req.reasoning {
-            let budget = effort.anthropic_budget();
+        if let Some(budget) = req.reasoning.and_then(|e| e.anthropic_budget()) {
             if max_tokens <= budget {
                 max_tokens = budget + 4096;
             }

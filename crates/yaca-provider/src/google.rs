@@ -177,10 +177,13 @@ impl Protocol for GoogleProtocol {
         if let Some(m) = req.max_output_tokens {
             gen_config.insert("maxOutputTokens".to_string(), json!(m));
         }
-        if let Some(effort) = req.reasoning {
+        if let Some(budget) = req
+            .reasoning
+            .and_then(|e| e.google_budget(req.model.as_str()))
+        {
             gen_config.insert(
                 "thinkingConfig".to_string(),
-                json!({ "thinkingBudget": effort.google_budget() }),
+                json!({ "thinkingBudget": budget }),
             );
         }
         if !gen_config.is_empty() {
