@@ -76,7 +76,7 @@ async fn agent(
     Json(super::location::response_at(
         &st,
         &location,
-        super::agent_catalog::list(&workdir)
+        super::agent_catalog::list(&workdir, &st)
             .into_iter()
             .map(|agent| AgentInfo {
                 id: agent.name.clone(),

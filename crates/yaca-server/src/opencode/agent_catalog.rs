@@ -82,24 +82,35 @@ const NATIVE_AGENTS: &[NativeAgent] = &[
     },
 ];
 
-pub(super) fn list(workdir: &Path) -> Vec<AgentEntry> {
-    let configured_default = super::agent_sources::default_agent(workdir);
-    let mut agents = merged_entries(workdir);
-    super::agent_defaults::sort(&mut agents, configured_default.as_deref());
+pub(super) fn list(workdir: &Path, st: &crate::ServerState) -> Vec<AgentEntry> {
+    let configured = configured_default(workdir, st.default_agent.as_deref());
+    let mut agents = merged_entries(workdir, st.include_global_agents);
+    super::agent_defaults::sort(&mut agents, configured.as_deref());
     agents
 }
 
-pub(super) fn default_name(workdir: &Path) -> Option<String> {
-    let configured_default = super::agent_sources::default_agent(workdir);
-    let agents = merged_entries(workdir);
-    super::agent_defaults::selected_name(&agents, configured_default.as_deref())
+pub(super) fn default_name(workdir: &Path, st: &crate::ServerState) -> Option<String> {
+    let configured = configured_default(workdir, st.default_agent.as_deref());
+    let agents = merged_entries(workdir, st.include_global_agents);
+    super::agent_defaults::selected_name(&agents, configured.as_deref())
 }
 
-fn merged_entries(workdir: &Path) -> Vec<AgentEntry> {
+/// The configured default agent: a workdir `opencode.json` `default_agent` wins, otherwise the
+/// server config-file default (`~/.config/yaca/config.yaml`). `None` falls back to `build`.
+fn configured_default(workdir: &Path, config_default: Option<&str>) -> Option<String> {
+    super::agent_sources::default_agent(workdir).or_else(|| config_default.map(str::to_owned))
+}
+
+fn merged_entries(workdir: &Path, include_global: bool) -> Vec<AgentEntry> {
     let mut agents = native_entries();
     let global_permissions = super::agent_sources::global_permissions(workdir);
     for agent in &mut agents {
         agent.permissions.extend(global_permissions.clone());
+    }
+    if include_global {
+        for change in super::agent_disk_sources::global_disk_agents() {
+            apply_change(&mut agents, change, &global_permissions);
+        }
     }
     for change in super::agent_sources::config_agents(workdir) {
         apply_change(&mut agents, change, &global_permissions);

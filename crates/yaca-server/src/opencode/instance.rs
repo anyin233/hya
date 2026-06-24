@@ -98,7 +98,7 @@ async fn agent(
     let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
     Json(
-        super::agent_catalog::list(&workdir)
+        super::agent_catalog::list(&workdir, &st)
             .into_iter()
             .map(|agent| AgentInfo {
                 name: agent.name.clone(),

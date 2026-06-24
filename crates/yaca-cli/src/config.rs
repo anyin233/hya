@@ -22,6 +22,7 @@ pub struct ResolvedConfig {
     pub has_providers: bool,
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub plugins: BTreeMap<String, PluginEntry>,
+    pub default_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +37,9 @@ struct FileConfig {
     /// Model used when neither `--model` nor `YACA_MODEL` is set.
     #[serde(default)]
     default_model: Option<String>,
+    /// Agent selected by default when a workdir does not specify one. Falls back to `build`.
+    #[serde(default)]
+    default_agent: Option<String>,
     #[serde(default)]
     providers: BTreeMap<String, ProviderConfig>,
     #[serde(default)]
@@ -226,6 +230,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         has_providers: !models.is_empty(),
         models,
         mcp,
+        default_agent: file.default_agent,
         plugins: file.plugins,
     }))
 }

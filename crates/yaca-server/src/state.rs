@@ -17,6 +17,8 @@ pub struct AppState {
     mcp_manager: Arc<McpManager>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
+    default_agent: Option<String>,
+    include_global_agents: bool,
 }
 
 impl AppState {
@@ -31,7 +33,24 @@ impl AppState {
             mcp_manager: Default::default(),
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
+            default_agent: None,
+            include_global_agents: false,
         }
+    }
+
+    /// Set the agent selected by default when a workdir does not configure one.
+    #[must_use]
+    pub fn with_default_agent(mut self, agent: Option<String>) -> Self {
+        self.default_agent = agent;
+        self
+    }
+
+    /// Include agents from the user's global config dirs (`~/.config/yaca/agents`). Off by default
+    /// so tests see only the native catalog; the `serve` command turns it on.
+    #[must_use]
+    pub fn with_global_agents(mut self, include: bool) -> Self {
+        self.include_global_agents = include;
+        self
     }
 
     #[must_use]
@@ -81,6 +100,8 @@ pub(crate) struct ServerState {
     pub(crate) tui: opencode::TuiState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
+    pub(crate) default_agent: Option<String>,
+    pub(crate) include_global_agents: bool,
 }
 
 impl ServerState {
@@ -99,6 +120,8 @@ impl ServerState {
             tui: opencode::TuiState::new(),
             workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
+            default_agent: app.default_agent,
+            include_global_agents: app.include_global_agents,
         }
     }
 }
