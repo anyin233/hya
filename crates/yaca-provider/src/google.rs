@@ -1,7 +1,8 @@
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use yaca_proto::{
-    Event, FinishReason, Message, MessageId, Part, PartId, Role, SessionId, ToolCallId, ToolName,
+    Event, FinishReason, Message, MessageId, Part, PartId, Role, SessionId, TokenUsage, ToolCallId,
+    ToolName,
 };
 
 use crate::wire::{tool_input, tool_result};
@@ -198,6 +199,7 @@ pub struct GoogleDecoder {
     message: MessageId,
     text_part: Option<PartId>,
     saw_tool: bool,
+    usage: TokenUsage,
     finished: bool,
 }
 
@@ -209,6 +211,7 @@ impl GoogleDecoder {
             message,
             text_part: None,
             saw_tool: false,
+            usage: TokenUsage::default(),
             finished: false,
         }
     }
@@ -241,8 +244,15 @@ impl GoogleDecoder {
             message,
             role: Role::Assistant,
             finish,
+            tokens: (!self.usage.is_zero()).then_some(self.usage),
         });
         out
+    }
+
+    fn record_usage(&mut self, chunk: &Value) {
+        if let Some(usage) = google_usage(chunk) {
+            self.usage.merge(usage);
+        }
     }
 }
 
@@ -253,6 +263,7 @@ impl Decoder for GoogleDecoder {
             return Ok(Vec::new());
         }
         let chunk: Value = serde_json::from_str(data)?;
+        self.record_usage(&chunk);
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
         let Some(cand) = chunk
@@ -319,4 +330,27 @@ impl Decoder for GoogleDecoder {
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
         Ok(self.close("STOP"))
     }
+}
+
+fn google_usage(chunk: &Value) -> Option<TokenUsage> {
+    let usage = chunk.get("usageMetadata")?;
+    Some(TokenUsage {
+        input: usage
+            .get("promptTokenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        output: usage
+            .get("candidatesTokenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        reasoning: usage
+            .get("thoughtsTokenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_read: usage
+            .get("cachedContentTokenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        cache_write: 0,
+    })
 }

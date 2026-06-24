@@ -56,6 +56,7 @@ impl Provider for SelectedModelProvider {
                 message,
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
+                tokens: None,
             },
         )])))
     }

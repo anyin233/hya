@@ -45,6 +45,7 @@ impl Protocol for OpenAiChatProtocol {
             "model": req.model.as_str(),
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools);

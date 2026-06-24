@@ -9,7 +9,7 @@ use futures::StreamExt;
 use serde_json::json;
 use tower::ServiceExt;
 use yaca_core::{AgentSpec, EventBus, SessionEngine};
-use yaca_proto::{AgentName, FinishReason, ModelRef};
+use yaca_proto::{AgentName, FinishReason, ModelRef, TokenUsage};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_server::{AppState, router};
 use yaca_store::SessionStore;
@@ -19,6 +19,29 @@ const WORKDIR: &str = "/tmp/yaca-opencode-event-api";
 
 async fn state() -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn usage_state() -> AppState {
+    let providers = Arc::new(
+        ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![
+            FakeStep::Usage(token_usage()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]))),
+    );
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
@@ -81,6 +104,48 @@ async fn shell_state() -> AppState {
     )
 }
 
+async fn text_state() -> AppState {
+    let providers = Arc::new(
+        ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![
+            FakeStep::Text("assistant answer".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ]))),
+    );
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+fn token_usage() -> TokenUsage {
+    TokenUsage {
+        input: 11,
+        output: 3,
+        reasoning: 2,
+        cache_read: 5,
+        cache_write: 0,
+    }
+}
+
+fn usage_tokens_json() -> serde_json::Value {
+    json!({
+        "input": 11,
+        "output": 3,
+        "reasoning": 2,
+        "cache": {"read": 5, "write": 0}
+    })
+}
+
 #[tokio::test]
 async fn opencode_v2_event_route_streams_connected_event() {
     let app = router(state().await);
@@ -141,6 +206,139 @@ async fn opencode_global_event_route_streams_connected_event() {
     assert_eq!(event["payload"]["type"], "server.connected");
     assert!(event["payload"].get("location").is_none());
     assert_eq!(event["payload"]["properties"], json!({}));
+}
+
+#[tokio::test]
+async fn opencode_legacy_event_route_streams_step_parts() {
+    let app = router(text_state().await);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    assert_eq!(read_sse_json(&mut stream).await["type"], "server.connected");
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_event = read_sse_json(&mut stream).await;
+    let session = created_event["properties"]["sessionID"].as_str().unwrap();
+
+    let prompt = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/{session}/prompt"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "hello"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), StatusCode::OK);
+
+    let step_start = read_next_part_updated(&mut stream, "step-start").await;
+    assert_eq!(step_start["properties"]["sessionID"], session);
+    assert_eq!(step_start["properties"]["part"]["type"], "step-start");
+    assert_eq!(step_start["properties"]["part"]["sessionID"], session);
+    let message = step_start["properties"]["part"]["messageID"]
+        .as_str()
+        .unwrap();
+    assert!(
+        step_start["properties"]["part"]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("part_"))
+    );
+
+    let step_finish = read_next_part_updated(&mut stream, "step-finish").await;
+    assert_eq!(step_finish["properties"]["sessionID"], session);
+    assert_eq!(step_finish["properties"]["part"]["messageID"], message);
+    assert_eq!(step_finish["properties"]["part"]["reason"], "stop");
+    assert_eq!(step_finish["properties"]["part"]["cost"], 0);
+    assert_eq!(
+        step_finish["properties"]["part"]["tokens"],
+        empty_tokens_json()
+    );
+}
+
+#[tokio::test]
+async fn opencode_v2_event_route_streams_next_step_events() {
+    let app = router(text_state().await);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/event?location%5Bdirectory%5D=/tmp/yaca-opencode-event-api")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    assert_eq!(read_sse_json(&mut stream).await["type"], "server.connected");
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_event = read_sse_json(&mut stream).await;
+    let session = created_event["data"]["sessionID"].as_str().unwrap();
+
+    let prompt = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/{session}/prompt"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "hello"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), StatusCode::OK);
+
+    let started = read_next_event_type(&mut stream, "session.next.step.started").await;
+    assert_eq!(started["data"]["sessionID"], session);
+    assert_eq!(started["data"]["agent"], "build");
+    assert_eq!(started["data"]["model"]["id"], "fake");
+    assert_eq!(started["data"]["model"]["providerID"], "yaca");
+    let assistant_message = started["data"]["assistantMessageID"].as_str().unwrap();
+
+    let ended = read_next_event_type(&mut stream, "session.next.step.ended").await;
+    assert_eq!(ended["data"]["sessionID"], session);
+    assert_eq!(ended["data"]["assistantMessageID"], assistant_message);
+    assert_eq!(ended["data"]["finish"], "stop");
+    assert_eq!(ended["data"]["cost"], 0);
+    assert_eq!(ended["data"]["tokens"], empty_tokens_json());
 }
 
 #[tokio::test]
@@ -342,7 +540,7 @@ async fn opencode_legacy_event_route_streams_session_updated_properties() {
 
 #[tokio::test]
 async fn opencode_legacy_event_route_streams_message_updated_properties() {
-    let app = router(state().await);
+    let app = router(usage_state().await);
     let resp = app
         .clone()
         .oneshot(
@@ -441,6 +639,10 @@ async fn opencode_legacy_event_route_streams_message_updated_properties() {
         "assistant"
     );
     assert_eq!(assistant_finished["properties"]["info"]["finish"], "stop");
+    assert_eq!(
+        assistant_finished["properties"]["info"]["tokens"],
+        usage_tokens_json()
+    );
 
     let delete_part = app
         .clone()
@@ -745,6 +947,28 @@ async fn read_next_tool_state(
         }
     }
     panic!("tool state {status} not found");
+}
+
+async fn read_next_event_type(
+    stream: &mut axum::body::BodyDataStream,
+    event_type: &str,
+) -> serde_json::Value {
+    for _ in 0..48 {
+        let event = read_sse_json(stream).await;
+        if event["type"] == event_type {
+            return event;
+        }
+    }
+    panic!("event {event_type} not found");
+}
+
+fn empty_tokens_json() -> serde_json::Value {
+    json!({
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0}
+    })
 }
 
 async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> serde_json::Value {

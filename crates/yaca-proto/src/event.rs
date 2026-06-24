@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{EventSeq, MessageId, PartId, SessionId, ToolCallId};
-use crate::message::{FinishReason, Role, ToolPartState};
+use crate::message::{FinishReason, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,6 +88,8 @@ pub enum Event {
         message: MessageId,
         role: Role,
         finish: FinishReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<TokenUsage>,
     },
     MessageDeleted {
         session: SessionId,
@@ -109,6 +111,8 @@ pub enum Event {
         session: SessionId,
         message: MessageId,
         step: u32,
+        #[serde(default = "default_step_finish_reason")]
+        finish: FinishReason,
     },
     TextStart {
         session: SessionId,
@@ -209,6 +213,10 @@ pub enum Event {
         code: String,
         message: String,
     },
+}
+
+fn default_step_finish_reason() -> FinishReason {
+    FinishReason::Stop
 }
 
 impl Event {

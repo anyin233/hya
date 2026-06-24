@@ -34,11 +34,9 @@ async fn add(
         .ok_or_else(|| ApiError::bad_request("missing MCP config"))?;
     let config = parse_config(config)?;
 
-    let status = st.mcp_http.add_config(name.clone(), config).await;
+    st.mcp_http.add_config(name, config).await;
 
-    let mut out = BTreeMap::new();
-    out.insert(name, status);
-    Ok(Json(out))
+    Ok(Json(st.mcp_http.status(&st.mcp_manager).await))
 }
 
 async fn auth_start(State(st): State<ServerState>, AxumPath(name): AxumPath<String>) -> Response {

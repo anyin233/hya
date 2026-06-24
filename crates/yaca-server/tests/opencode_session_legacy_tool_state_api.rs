@@ -77,8 +77,9 @@ async fn legacy_tool_parts_include_opencode_state_shape() {
     assert_eq!(state["status"], "completed");
     assert_eq!(state["input"]["command"], "printf hello");
     assert_eq!(state["output"], "hello");
-    assert_eq!(state["title"], "");
-    assert_eq!(state["metadata"], json!({}));
+    assert_eq!(state["title"], "printf hello");
+    assert_eq!(state["metadata"]["exit"], 0);
+    assert_eq!(state["metadata"]["output"], "hello");
     assert!(state["time"]["start"].as_u64().is_some());
     assert!(state["time"]["end"].as_u64() >= state["time"]["start"].as_u64());
 }

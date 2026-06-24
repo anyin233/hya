@@ -104,6 +104,97 @@ async fn shell_state() -> AppState {
     )
 }
 
+async fn edit_state() -> AppState {
+    std::fs::create_dir_all(WORKDIR).unwrap();
+    std::fs::write(format!("{WORKDIR}/diff-target.txt"), "old\n").unwrap();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "edit".to_string(),
+                input: json!({
+                    "filePath": "diff-target.txt",
+                    "oldString": "old\n",
+                    "newString": "new\n",
+                }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("edit complete".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Edit,
+        "**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
+async fn two_edit_state() -> AppState {
+    std::fs::create_dir_all(WORKDIR).unwrap();
+    std::fs::write(format!("{WORKDIR}/first-target.txt"), "first old\n").unwrap();
+    std::fs::write(format!("{WORKDIR}/second-target.txt"), "second old\n").unwrap();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "edit".to_string(),
+                input: json!({
+                    "filePath": "first-target.txt",
+                    "oldString": "first old\n",
+                    "newString": "first new\n",
+                }),
+            },
+            FakeStep::ToolCall {
+                name: "edit".to_string(),
+                input: json!({
+                    "filePath": "second-target.txt",
+                    "oldString": "second old\n",
+                    "newString": "second new\n",
+                }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("edits complete".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Edit,
+        "**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: WORKDIR.into(),
+            reasoning: None,
+        }),
+    )
+}
+
 async fn body_json(resp: axum::response::Response) -> Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
@@ -332,7 +423,8 @@ async fn opencode_session_routes_list_get_and_messages() {
         message_body[0]["info"]["id"]
     );
     assert_eq!(message_body[1]["info"]["role"], "assistant");
-    assert_eq!(message_body[1]["parts"][0]["text"], "assistant answer");
+    assert_eq!(message_body[1]["parts"][0]["type"], "step-start");
+    assert_eq!(message_body[1]["parts"][1]["text"], "assistant answer");
 }
 
 #[tokio::test]
@@ -982,7 +1074,7 @@ async fn opencode_session_deletes_messages_and_parts() {
             .as_array()
             .expect("parts")
             .len(),
-        0
+        2
     );
 
     let delete_message = app
@@ -1216,8 +1308,8 @@ async fn opencode_session_updates_tool_parts_from_opencode_state() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(updated["state"]["phase"], "error");
-    assert_eq!(updated["state"]["message"], "shell failed");
+    assert_eq!(updated["state"]["status"], "error");
+    assert_eq!(updated["state"]["error"], "shell failed");
 
     let message_after = app
         .oneshot(
@@ -1231,13 +1323,13 @@ async fn opencode_session_updates_tool_parts_from_opencode_state() {
         .unwrap();
     assert_eq!(message_after.status(), StatusCode::OK);
     let body = body_json(message_after).await;
-    assert_eq!(body["parts"][0]["state"]["phase"], "error");
-    assert_eq!(body["parts"][0]["state"]["message"], "shell failed");
+    assert_eq!(body["parts"][0]["state"]["status"], "error");
+    assert_eq!(body["parts"][0]["state"]["error"], "shell failed");
 }
 
 #[tokio::test]
-async fn opencode_session_diff_returns_empty_message_summary() {
-    let app = router(state().await);
+async fn opencode_session_diff_returns_recorded_edit_file_diff() {
+    let app = router(edit_state().await);
     let session = create_session(app.clone(), None).await;
     post_prompt(app.clone(), &session).await;
 
@@ -1267,7 +1359,68 @@ async fn opencode_session_diff_returns_empty_message_summary() {
         .await
         .unwrap();
     assert_eq!(diff.status(), StatusCode::OK);
-    assert_eq!(body_json(diff).await, json!([]));
+    let body = body_json(diff).await;
+    assert_eq!(body.as_array().expect("diff items").len(), 1);
+    assert_eq!(body[0]["file"], "diff-target.txt");
+    assert_eq!(body[0]["additions"], 1);
+    assert_eq!(body[0]["deletions"], 1);
+    assert_eq!(body[0]["status"], "modified");
+    let patch = body[0]["patch"].as_str().expect("patch");
+    assert!(patch.contains("-old"));
+    assert!(patch.contains("+new"));
+}
+
+#[tokio::test]
+async fn opencode_session_diff_filters_recorded_edit_by_part_id() {
+    let app = router(two_edit_state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let (status, messages) = get_json(app.clone(), format!("/session/{session}/message")).await;
+    assert_eq!(status, StatusCode::OK);
+    let tool_message = messages
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| {
+            message["parts"].as_array().is_some_and(|parts| {
+                parts.iter().filter(|part| part["type"] == "tool").count() == 2
+            })
+        })
+        .expect("tool message");
+    let message = tool_message["info"]["id"].as_str().expect("message id");
+    let part = tool_message["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .find(|part| part["tool"] == "edit")
+        .and_then(|part| part["id"].as_str())
+        .expect("tool part");
+
+    let (status, body) = get_json(
+        app,
+        format!("/session/{session}/diff?messageID={message}&partID={part}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().expect("diff items").len(), 1);
+    assert_eq!(body[0]["file"], "first-target.txt");
+    let patch = body[0]["patch"].as_str().expect("patch");
+    assert!(patch.contains("first new"));
+    assert!(!patch.contains("second new"));
+}
+
+#[tokio::test]
+async fn opencode_session_diff_invalid_message_id_returns_bad_request() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, body) = get_json(app, format!("/session/{session}/diff?messageID=bad")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"name": "BadRequest", "data": {"message": "invalid message id"}})
+    );
 }
 
 #[tokio::test]

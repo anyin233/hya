@@ -113,7 +113,7 @@ impl HttpProvider {
             caps: Capabilities {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
-                usage_reporting: false,
+                usage_reporting: true,
                 reasoning_request: true,
                 max_context: 200_000,
                 ..Capabilities::default()
@@ -163,6 +163,25 @@ impl HttpProvider {
         }
         Ok(headers)
     }
+
+    // OpenCode addresses models as `providerID/modelID` (+ optional `#variant`);
+    // the upstream route wants the bare `modelID`. Maps a served ref to that id.
+    fn served_model_id(&self, model: &ModelRef) -> Option<String> {
+        let base = match model.as_str().rsplit_once('#') {
+            Some((head, variant)) if !variant.is_empty() => head,
+            _ => model.as_str(),
+        };
+        if self.models.contains(base) {
+            return Some(base.to_string());
+        }
+        if let Some((provider_id, model_id)) = base.split_once('/')
+            && provider_id == self.id
+            && self.models.contains(model_id)
+        {
+            return Some(model_id.to_string());
+        }
+        None
+    }
 }
 
 #[async_trait]
@@ -172,9 +191,7 @@ impl Provider for HttpProvider {
     }
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
-        self.models
-            .contains(model.as_str())
-            .then(|| self.caps.clone())
+        self.served_model_id(model).map(|_| self.caps.clone())
     }
 
     fn catalog(&self) -> Vec<ProviderModel> {
@@ -190,10 +207,13 @@ impl Provider for HttpProvider {
 
     async fn stream(
         &self,
-        req: CompletionRequest,
+        mut req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        if let Some(model_id) = self.served_model_id(&req.model) {
+            req.model = ModelRef::new(model_id);
+        }
         let body = self.protocol.encode(&req)?;
         let decoder = self.protocol.decoder(session, message);
         let url = match &self.google_base {
@@ -220,5 +240,60 @@ impl Provider for HttpProvider {
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
         tokio::spawn(stream::pump(resp, decoder, tx));
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider() -> Result<HttpProvider, ProviderError> {
+        HttpProvider::new(
+            "12th",
+            ProviderKind::OpenAiCompatible,
+            "https://example/v1",
+            "key".to_string(),
+            ["claude-opus-4-8".to_string(), "gpt-5.5".to_string()],
+        )
+    }
+
+    #[test]
+    fn resolves_bare_prefixed_and_variant_model_refs() -> Result<(), ProviderError> {
+        let p = provider()?;
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("claude-opus-4-8"))
+                .as_deref(),
+            Some("claude-opus-4-8"),
+        );
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("12th/claude-opus-4-8"))
+                .as_deref(),
+            Some("claude-opus-4-8"),
+        );
+        assert_eq!(
+            p.served_model_id(&ModelRef::new("12th/claude-opus-4-8#high"))
+                .as_deref(),
+            Some("claude-opus-4-8"),
+        );
+        assert!(p.capabilities(&ModelRef::new("12th/gpt-5.5")).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unknown_and_foreign_provider_refs() -> Result<(), ProviderError> {
+        let p = provider()?;
+        assert!(
+            p.served_model_id(&ModelRef::new("other/claude-opus-4-8"))
+                .is_none()
+        );
+        assert!(
+            p.served_model_id(&ModelRef::new("claude-sonnet-4-6"))
+                .is_none()
+        );
+        assert!(
+            p.capabilities(&ModelRef::new("12th/unknown-model"))
+                .is_none()
+        );
+        Ok(())
     }
 }

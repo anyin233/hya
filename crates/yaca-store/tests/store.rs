@@ -47,6 +47,7 @@ async fn migration_applies_and_projection_is_correct() {
             message: m,
             role: Role::Assistant,
             finish: FinishReason::Stop,
+            tokens: None,
         },
     ];
     for e in &events {

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::http::HeaderMap;
 use serde::Serialize;
@@ -94,10 +94,25 @@ pub(super) fn workdir_at(st: &ServerState, location: &LocationRef) -> PathBuf {
                 .and_then(|id| super::worktree_git_lookup::directory_for_id(&st.agent.workdir, id))
         })
         .unwrap_or_else(|| st.agent.workdir.clone());
+    canonical_workdir(path)
+}
+
+pub(super) fn canonical_workdir(path: impl Into<PathBuf>) -> PathBuf {
+    let path = path.into();
     match std::fs::canonicalize(&path) {
         Ok(path) => path,
-        Err(_) => path.clone(),
+        Err(_) => absolute_path(&path),
     }
+}
+
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir().map_or_else(
+        |_| PathBuf::from(std::path::MAIN_SEPARATOR.to_string()).join(path),
+        |cwd| cwd.join(path),
+    )
 }
 
 fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -132,5 +147,30 @@ fn hex(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_workdir_returns_absolute_path_for_existing_relative_directory() {
+        let path = canonical_workdir(".");
+        let expected = match std::fs::canonicalize(".") {
+            Ok(path) => path,
+            Err(error) => panic!("failed to canonicalize current directory: {error}"),
+        };
+
+        assert!(path.is_absolute());
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn canonical_workdir_absolutizes_missing_relative_directory() {
+        let path = canonical_workdir("target/yaca-missing-workdir-test-fixture");
+
+        assert!(path.is_absolute());
+        assert!(path.ends_with("target/yaca-missing-workdir-test-fixture"));
     }
 }

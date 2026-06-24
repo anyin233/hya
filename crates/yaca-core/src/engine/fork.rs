@@ -54,6 +54,7 @@ impl SessionEngine {
                     message,
                     role: source.role,
                     finish,
+                    tokens: source.tokens,
                 },
             )
             .await?;

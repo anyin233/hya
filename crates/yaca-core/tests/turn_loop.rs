@@ -10,7 +10,9 @@ use tokio_util::sync::CancellationToken;
 use yaca_core::{
     AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, SessionEngine, Summarizer,
 };
-use yaca_proto::{AgentName, FinishReason, Message, ModelRef, PartProjection, Role, ToolPartState};
+use yaca_proto::{
+    AgentName, FinishReason, Message, ModelRef, PartProjection, Role, TokenUsage, ToolPartState,
+};
 use yaca_provider::{FakeProvider, FakeStep, ProviderRouter};
 use yaca_store::SessionStore;
 use yaca_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
@@ -143,6 +145,61 @@ async fn cancelled_turn_finishes_cancelled() {
     cancel.cancel();
     let finish = engine.run_turn(session, &agent, cancel).await.unwrap();
     assert_eq!(finish, FinishReason::Cancelled);
+}
+
+#[tokio::test]
+async fn provider_usage_is_recorded_on_assistant_message_projection() {
+    let dir = tempdir();
+    let usage = TokenUsage {
+        input: 11,
+        output: 3,
+        reasoning: 2,
+        cache_read: 5,
+        cache_write: 0,
+    };
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("hi".to_string()),
+        FakeStep::Usage(usage),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let projection = engine.store().read_projection(session).await.unwrap();
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Assistant)
+        .expect("assistant message");
+
+    assert_eq!(assistant.tokens, Some(usage));
 }
 
 struct Recording(Arc<AtomicBool>);

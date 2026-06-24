@@ -3,8 +3,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use yaca_core::CoreError;
-use yaca_proto::ModelRef;
+use yaca_proto::{MessageId, PartProjection, Projection};
 
 use crate::{ApiError, ServerState, parse_session};
 
@@ -16,6 +17,8 @@ pub(super) struct SummarizePayload {
     model_id: String,
     auto: Option<bool>,
 }
+
+const COMPACTION_METADATA_KEY: &str = "_yacaOpenCodeCompaction";
 
 pub(super) async fn summarize(
     State(st): State<ServerState>,
@@ -30,13 +33,61 @@ pub(super) async fn summarize(
         }
         Err(error) => return Err(error),
     }
-    let _requested_model = ModelRef::new(format!("{}/{}", payload.provider_id, payload.model_id));
-    let _auto = payload.auto.unwrap_or(false);
-    st.engine
+    let SummarizePayload {
+        provider_id,
+        model_id,
+        auto,
+    } = payload;
+    let auto = auto.unwrap_or(false);
+    let summary_message = st
+        .engine
         .summarize_session(session)
         .await
         .map_err(summarize_error)?;
+    let projection = st.engine.read_projection(session).await?;
+    let summary_part = summary_part_id(&projection, summary_message);
+    let mut metadata = metadata_map(projection.session.metadata.as_ref());
+    metadata.insert(
+        COMPACTION_METADATA_KEY.to_string(),
+        json!({
+            "type": "compaction",
+            "auto": auto,
+            "providerID": provider_id,
+            "modelID": model_id,
+            "messageID": summary_message.to_string(),
+            "partID": summary_part,
+        }),
+    );
+    st.engine
+        .set_metadata(session, Value::Object(metadata))
+        .await?;
     Ok(Json(true).into_response())
+}
+
+fn summary_part_id(projection: &Projection, summary_message: MessageId) -> Option<String> {
+    projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.id == summary_message)
+        .and_then(|message| {
+            message.parts.iter().find_map(|part| match part {
+                PartProjection::Text { id, .. } => Some(id.to_string()),
+                PartProjection::Reasoning { .. } | PartProjection::Tool { .. } => None,
+            })
+        })
+}
+
+fn metadata_map(metadata: Option<&Value>) -> Map<String, Value> {
+    match metadata {
+        Some(Value::Object(object)) => object.clone(),
+        Some(Value::Null)
+        | Some(Value::Bool(_))
+        | Some(Value::Number(_))
+        | Some(Value::String(_))
+        | Some(Value::Array(_))
+        | None => Map::new(),
+    }
 }
 
 fn summarize_error(error: CoreError) -> ApiError {

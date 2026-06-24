@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use futures::stream;
 use yaca_proto::{
-    Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, ToolCallId, ToolName,
+    Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, TokenUsage, ToolCallId,
+    ToolName,
 };
 
 use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
@@ -16,6 +17,7 @@ pub enum FakeStep {
         name: String,
         input: serde_json::Value,
     },
+    Usage(TokenUsage),
     Finish(FinishReason),
 }
 
@@ -46,6 +48,7 @@ impl FakeProvider {
     #[must_use]
     pub fn materialize(script: &[FakeStep], session: SessionId, message: MessageId) -> Vec<Event> {
         let mut out = Vec::new();
+        let mut tokens = None;
         for step in script {
             match step {
                 FakeStep::Text(t) => {
@@ -114,16 +117,22 @@ impl FakeProvider {
                         input: input.clone(),
                     });
                 }
+                FakeStep::Usage(usage) => merge_tokens(&mut tokens, *usage),
                 FakeStep::Finish(reason) => out.push(Event::MessageFinished {
                     session,
                     message,
                     role: Role::Assistant,
                     finish: *reason,
+                    tokens,
                 }),
             }
         }
         out
     }
+}
+
+fn merge_tokens(target: &mut Option<TokenUsage>, update: TokenUsage) {
+    target.get_or_insert_with(TokenUsage::default).merge(update);
 }
 
 #[async_trait]

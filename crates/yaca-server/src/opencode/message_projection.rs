@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::Value;
-use yaca_proto::{AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, Role, SessionId};
+use yaca_proto::{
+    AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, Role, SessionId, TokenUsage,
+};
 
 use super::message_context_parts::prompt_attachment_parts;
-use super::message_parts::{OpenCodePartContext, opencode_part};
+use super::message_parts::{OpenCodePartContext, opencode_parts};
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct OpenCodeMessage {
@@ -29,6 +31,10 @@ impl OpenCodeMessage {
             .iter()
             .find(|item| item["id"].as_str() == Some(part))
             .cloned()
+    }
+
+    pub(super) fn info(&self) -> Value {
+        serde_json::to_value(&self.info).unwrap_or(Value::Null)
     }
 }
 
@@ -146,11 +152,7 @@ pub(super) fn opencode_message(
         Role::Assistant => assistant_info(session, message, context, parent),
         Role::User | Role::System => user_or_system_info(session, message, context),
     };
-    let mut parts = message
-        .parts
-        .iter()
-        .map(|part| opencode_part(session, message.id, part, context.parts()))
-        .collect::<Vec<_>>();
+    let mut parts = opencode_parts(session, message.id, &message.parts, context.parts());
     parts.extend(prompt_attachment_parts(session, message));
     OpenCodeMessage { info, parts }
 }
@@ -204,17 +206,21 @@ fn assistant_info(
             root: context.workdir.clone(),
         }),
         cost: Some(0),
-        tokens: Some(empty_tokens()),
+        tokens: Some(message_tokens(message.tokens)),
         finish: message.finish,
     }
 }
 
-fn empty_tokens() -> OpenCodeMessageTokens {
+fn message_tokens(tokens: Option<TokenUsage>) -> OpenCodeMessageTokens {
+    let tokens = tokens.unwrap_or_default();
     OpenCodeMessageTokens {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cache: OpenCodeMessageTokenCache { read: 0, write: 0 },
+        input: tokens.input,
+        output: tokens.output,
+        reasoning: tokens.reasoning,
+        cache: OpenCodeMessageTokenCache {
+            read: tokens.cache_read,
+            write: tokens.cache_write,
+        },
     }
 }
 

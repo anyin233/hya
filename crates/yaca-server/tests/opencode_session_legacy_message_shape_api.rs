@@ -169,5 +169,5 @@ async fn legacy_session_message_post_accepts_opencode_prompt_parts() {
     let (status, messages) = get_json(app, format!("/session/{session}/message")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(messages[0]["parts"][0]["text"], "hello from parts");
-    assert_eq!(messages[1]["parts"][0]["text"], "assistant answer");
+    assert_eq!(messages[1]["parts"][1]["text"], "assistant answer");
 }

@@ -45,6 +45,15 @@ async fn body_json(resp: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
+fn empty_tokens_json() -> Value {
+    json!({
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {"read": 0, "write": 0}
+    })
+}
+
 async fn get_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     let resp = get_response(app, uri).await;
     let status = resp.status();
@@ -107,9 +116,17 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(default_page["data"][0]["type"], "assistant");
     let assistant = default_page["data"][0]["id"].as_str().expect("message id");
+    assert_eq!(default_page["data"][0]["content"][0]["type"], "step-start");
     assert_eq!(
-        default_page["data"][0]["content"][0]["text"],
+        default_page["data"][0]["content"][1]["text"],
         "assistant answer"
+    );
+    assert_eq!(default_page["data"][0]["content"][2]["type"], "step-finish");
+    assert_eq!(default_page["data"][0]["content"][2]["reason"], "stop");
+    assert_eq!(default_page["data"][0]["content"][2]["cost"], 0);
+    assert_eq!(
+        default_page["data"][0]["content"][2]["tokens"],
+        empty_tokens_json()
     );
     assert_eq!(default_page["data"][1]["type"], "user");
     assert!(default_page["cursor"]["previous"].as_str().is_some());
@@ -122,7 +139,37 @@ async fn opencode_v2_session_message_route_paginates_projected_messages() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["id"], assistant);
+    assert_eq!(detail["content"][0]["type"], "step-start");
+    assert_eq!(detail["content"][1]["text"], "assistant answer");
+    assert_eq!(detail["content"][2]["type"], "step-finish");
+
+    let step_start = detail["content"][0]["id"].as_str().expect("step-start id");
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/session/{session}/message/{assistant}/part/{step_start}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert_eq!(body_json(deleted).await, json!(true));
+
+    let (status, detail) = get_json(
+        app.clone(),
+        format!("/api/session/{session}/message/{assistant}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["content"].as_array().expect("content").len(), 2);
+    assert_eq!(detail["content"][0]["type"], "text");
     assert_eq!(detail["content"][0]["text"], "assistant answer");
+    assert_eq!(detail["content"][1]["type"], "step-finish");
 
     let (status, first) = get_json(
         app.clone(),
