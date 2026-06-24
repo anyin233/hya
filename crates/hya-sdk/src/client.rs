@@ -429,11 +429,24 @@ impl<T: Transport> Client for ApiClient<T> {
                     .and_then(|limit| limit.get("context"))
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
-                let variants = info
+                let mut variants: Vec<String> = info
                     .get("variants")
                     .and_then(serde_json::Value::as_object)
                     .map(|map| map.keys().cloned().collect())
                     .unwrap_or_default();
+                variants.sort_by_key(|name| {
+                    let rank = match name.as_str() {
+                        "none" | "off" => 0u8,
+                        "minimal" => 1,
+                        "low" => 2,
+                        "medium" => 3,
+                        "high" => 4,
+                        "xhigh" => 5,
+                        "max" => 6,
+                        _ => 7,
+                    };
+                    (rank, name.clone())
+                });
                 out.push((
                     format!("{provider_id}/{model_id}"),
                     title,
