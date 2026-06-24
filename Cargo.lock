@@ -989,6 +989,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-yaca"
+version = "0.28.0"
+
+[[package]]
 name = "hyper"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3445,6 +3449,26 @@ name = "xtask"
 version = "0.28.0"
 
 [[package]]
+name = "yaca-app"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "serde",
+ "serde_norway",
+ "time",
+ "tokio",
+ "yaca-core",
+ "yaca-mcp",
+ "yaca-plugin",
+ "yaca-proto",
+ "yaca-provider",
+ "yaca-server",
+ "yaca-store",
+ "yaca-tool",
+]
+
+[[package]]
 name = "yaca-cli"
 version = "0.28.0"
 dependencies = [
@@ -3462,6 +3486,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "yaca-app",
  "yaca-core",
  "yaca-mcp",
  "yaca-plugin",
