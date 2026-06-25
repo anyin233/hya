@@ -29,6 +29,29 @@ pub struct ResolvedConfig {
 pub struct ModelEntry {
     pub id: String,
     pub provider: String,
+    pub reasoning_variants: Vec<String>,
+}
+
+impl ModelEntry {
+    #[must_use]
+    pub fn model_ref(&self) -> String {
+        if self.provider.is_empty() {
+            self.id.clone()
+        } else {
+            format!("{}/{}", self.provider, self.id)
+        }
+    }
+
+    #[must_use]
+    pub fn matches_model_ref(&self, model: &str) -> bool {
+        if self.id == model {
+            return true;
+        }
+        let Some((provider, model_id)) = model.split_once('/') else {
+            return false;
+        };
+        self.provider == provider && self.id == model_id
+    }
 }
 
 /// Top-level shape of `~/.config/yaca/config.yaml`.
@@ -170,6 +193,20 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
     Ok(out)
 }
 
+fn model_entries(providers: &[ParsedProvider]) -> Vec<ModelEntry> {
+    providers
+        .iter()
+        .flat_map(|provider| {
+            let variants = provider.kind.reasoning_variants();
+            provider.models.iter().map(move |model| ModelEntry {
+                id: model.clone(),
+                provider: provider.id.clone(),
+                reasoning_variants: variants.clone(),
+            })
+        })
+        .collect()
+}
+
 fn choose_default(file_default: Option<String>, models: &[ModelEntry]) -> String {
     if let Some(model) = file_default {
         return model;
@@ -203,23 +240,20 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
-    let mut models = Vec::new();
+    let mut authorized = Vec::new();
     for p in parsed {
-        let Some(api_key) = crate::auth::load_token(&p.id).or(p.api_key) else {
+        let Some(api_key) = crate::auth::load_token(&p.id).or(p.api_key.clone()) else {
             continue;
         };
         if api_key.trim().is_empty() {
             continue;
         }
-        for m in &p.models {
-            models.push(ModelEntry {
-                id: m.clone(),
-                provider: p.id.clone(),
-            });
-        }
-        let provider = HttpProvider::new(p.id, p.kind, &p.base_url, api_key, p.models)?;
+        let provider =
+            HttpProvider::new(p.id.clone(), p.kind, &p.base_url, api_key, p.models.clone())?;
         router = router.with(Arc::new(provider));
+        authorized.push(p);
     }
+    let models = model_entries(&authorized);
     if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
         return Ok(None);
     }
@@ -287,6 +321,35 @@ providers:
     #[test]
     fn empty_config_yields_no_providers() {
         assert!(parse_providers("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn model_entries_include_provider_reasoning_variants() {
+        let parsed = parse_providers(FIXTURE).unwrap();
+
+        let entries = model_entries(&parsed);
+
+        let openai = entries
+            .iter()
+            .find(|entry| entry.provider == "gw-oai")
+            .unwrap();
+        assert_eq!(
+            openai.reasoning_variants,
+            vec!["minimal", "low", "medium", "high", "xhigh"]
+        );
+        let anthropic = entries
+            .iter()
+            .find(|entry| entry.provider == "gw-anth")
+            .unwrap();
+        assert_eq!(
+            anthropic.reasoning_variants,
+            vec!["low", "medium", "high", "max"]
+        );
+        let google = entries
+            .iter()
+            .find(|entry| entry.provider == "gw-google")
+            .unwrap();
+        assert_eq!(google.reasoning_variants, vec!["high", "max"]);
     }
 
     #[test]

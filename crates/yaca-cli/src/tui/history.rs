@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -5,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use yaca_proto::{Envelope, Event, SessionId, now_millis};
+use yaca_provider::ReasoningEffort;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionMeta {
@@ -12,12 +14,22 @@ pub struct SessionMeta {
     pub title: String,
     pub summary: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
     pub agent: String,
     pub workdir: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub message_count: u64,
     pub last_user_message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+pub struct SessionModelSnapshot<'a> {
+    pub provider: Option<&'a str>,
+    pub model: &'a str,
+    pub reasoning: Option<ReasoningEffort>,
 }
 
 pub struct HistoryStore {
@@ -53,12 +65,14 @@ impl HistoryStore {
             title: "Untitled session".to_string(),
             summary: String::new(),
             model: model.to_string(),
+            model_provider: None,
             agent: agent.to_string(),
             workdir: workdir.to_string(),
             created_at: now,
             updated_at: now,
             message_count: 0,
             last_user_message: String::new(),
+            reasoning_effort: None,
         };
         let dir = self.session_dir(session);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -202,6 +216,72 @@ impl HistoryStore {
         self.rebuild_index()?;
         Ok(())
     }
+
+    pub fn update_session_model_snapshot(
+        &self,
+        session: SessionId,
+        snapshot: SessionModelSnapshot<'_>,
+    ) -> anyhow::Result<()> {
+        let Some(mut meta) = self.read_meta(session)? else {
+            return Ok(());
+        };
+        meta.model = snapshot.model.to_string();
+        meta.model_provider = snapshot.provider.map(str::to_string);
+        meta.reasoning_effort = snapshot.reasoning.map(|effort| effort.as_str().to_string());
+        self.write_meta(&meta)?;
+        self.rebuild_index()?;
+        Ok(())
+    }
+
+    fn model_reasoning_path(&self) -> PathBuf {
+        self.root.join("model_reasoning.json")
+    }
+
+    fn read_model_reasoning_map(&self) -> BTreeMap<String, String> {
+        let Ok(text) = fs::read_to_string(self.model_reasoning_path()) else {
+            return BTreeMap::new();
+        };
+        serde_json::from_str(&text).unwrap_or_default()
+    }
+
+    pub fn record_model_reasoning(
+        &self,
+        provider: &str,
+        model: &str,
+        effort: ReasoningEffort,
+    ) -> anyhow::Result<()> {
+        let mut map = self.read_model_reasoning_map();
+        map.insert(
+            model_reasoning_key(provider, model),
+            effort.as_str().to_string(),
+        );
+        fs::create_dir_all(&self.root)
+            .with_context(|| format!("create {}", self.root.display()))?;
+        let path = self.model_reasoning_path();
+        let tmp = path.with_extension("json.tmp");
+        fs::write(
+            &tmp,
+            serde_json::to_string_pretty(&map).context("serialize model reasoning")?,
+        )
+        .with_context(|| format!("write {}", tmp.display()))?;
+        fs::rename(&tmp, &path).with_context(|| format!("rename {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn last_model_reasoning(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> anyhow::Result<Option<ReasoningEffort>> {
+        Ok(self
+            .read_model_reasoning_map()
+            .get(&model_reasoning_key(provider, model))
+            .and_then(|level| ReasoningEffort::parse(level)))
+    }
+}
+
+fn model_reasoning_key(provider: &str, model: &str) -> String {
+    format!("{provider}\u{0}{model}")
 }
 
 #[cfg(test)]
@@ -233,6 +313,113 @@ mod tests {
             ts_millis: 0,
             event,
         }
+    }
+
+    #[test]
+    fn model_reasoning_is_keyed_by_provider_and_model() {
+        let root = temp_root();
+        let store = HistoryStore::new(root.clone());
+
+        store
+            .record_model_reasoning("openai", "gpt-5.5", yaca_provider::ReasoningEffort::XHigh)
+            .expect("record openai reasoning");
+        store
+            .record_model_reasoning("anthropic", "gpt-5.5", yaca_provider::ReasoningEffort::Max)
+            .expect("record anthropic reasoning");
+
+        let reopened = HistoryStore::new(root);
+        assert_eq!(
+            reopened
+                .last_model_reasoning("openai", "gpt-5.5")
+                .expect("read openai"),
+            Some(yaca_provider::ReasoningEffort::XHigh)
+        );
+        assert_eq!(
+            reopened
+                .last_model_reasoning("anthropic", "gpt-5.5")
+                .expect("read anthropic"),
+            Some(yaca_provider::ReasoningEffort::Max)
+        );
+    }
+
+    #[test]
+    fn model_reasoning_preserves_explicit_off() {
+        let root = temp_root();
+        let store = HistoryStore::new(root);
+
+        store
+            .record_model_reasoning("openai", "gpt-5.5", yaca_provider::ReasoningEffort::Off)
+            .expect("record off");
+
+        assert_eq!(
+            store
+                .last_model_reasoning("openai", "gpt-5.5")
+                .expect("read off"),
+            Some(yaca_provider::ReasoningEffort::Off)
+        );
+    }
+
+    #[test]
+    fn model_reasoning_missing_returns_none() {
+        let root = temp_root();
+        let store = HistoryStore::new(root);
+
+        assert_eq!(
+            store
+                .last_model_reasoning("openai", "absent")
+                .expect("read absent"),
+            None
+        );
+    }
+
+    #[test]
+    fn model_reasoning_ignores_corrupt_file() {
+        let root = temp_root();
+        std::fs::create_dir_all(&root).expect("root dir");
+        std::fs::write(root.join("model_reasoning.json"), "{not-json").expect("corrupt file");
+        let store = HistoryStore::new(root);
+
+        assert_eq!(
+            store
+                .last_model_reasoning("openai", "gpt-5.5")
+                .expect("read corrupt"),
+            None
+        );
+        store
+            .record_model_reasoning("openai", "gpt-5.5", yaca_provider::ReasoningEffort::High)
+            .expect("overwrite corrupt");
+        assert_eq!(
+            store
+                .last_model_reasoning("openai", "gpt-5.5")
+                .expect("read after overwrite"),
+            Some(yaca_provider::ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn session_model_snapshot_records_provider_and_reasoning() {
+        let root = temp_root();
+        let store = HistoryStore::new(root);
+        let session = SessionId::new();
+        store
+            .create_session(session, "gpt-5.5", "build", "/tmp")
+            .expect("create session bundle");
+
+        store
+            .update_session_model_snapshot(
+                session,
+                SessionModelSnapshot {
+                    provider: Some("openai"),
+                    model: "gpt-5.5",
+                    reasoning: Some(yaca_provider::ReasoningEffort::Off),
+                },
+            )
+            .expect("update model snapshot");
+
+        let meta = store.read_meta(session).expect("read meta").expect("meta");
+        assert_eq!(meta.model, "gpt-5.5");
+        assert_eq!(meta.model_provider.as_deref(), Some("openai"));
+        assert_eq!(meta.reasoning_effort.as_deref(), Some("none"));
     }
 
     #[test]
