@@ -152,6 +152,33 @@ impl ReasoningEffort {
     }
 }
 
+/// Precedence: explicit config, then last-used (kept if `Off` or supported),
+/// then highest supported. `None` means the model has no reasoning support and
+/// must not show a default.
+#[must_use]
+pub fn resolve_default_reasoning(
+    explicit: Option<ReasoningEffort>,
+    last_used: Option<ReasoningEffort>,
+    supported: &[String],
+) -> Option<ReasoningEffort> {
+    if explicit.is_some() {
+        return explicit;
+    }
+
+    let supported_efforts = supported
+        .iter()
+        .filter_map(|level| ReasoningEffort::parse(level))
+        .collect::<Vec<_>>();
+
+    if let Some(effort) = last_used
+        && (effort == ReasoningEffort::Off || supported_efforts.contains(&effort))
+    {
+        return Some(effort);
+    }
+
+    supported_efforts.into_iter().max()
+}
+
 #[cfg(test)]
 mod reasoning_effort_tests {
     use super::ReasoningEffort as R;
@@ -189,6 +216,55 @@ mod reasoning_effort_tests {
         assert_eq!(R::Max.google_budget("gemini-2.5-flash"), Some(24576));
         assert_eq!(R::High.google_budget("gemini-2.5-flash"), Some(16000));
         assert_eq!(R::Low.google_budget("gemini-2.5-flash"), None);
+    }
+
+    #[test]
+    fn default_reasoning_keeps_explicit_off() {
+        let supported = vec!["low".to_string(), "high".to_string()];
+
+        let resolved = super::resolve_default_reasoning(Some(R::Off), Some(R::High), &supported);
+
+        assert_eq!(resolved, Some(R::Off));
+    }
+
+    #[test]
+    fn default_reasoning_uses_supported_last_used_before_highest() {
+        let supported = vec![
+            "minimal".to_string(),
+            "low".to_string(),
+            "xhigh".to_string(),
+        ];
+
+        let resolved = super::resolve_default_reasoning(None, Some(R::Low), &supported);
+
+        assert_eq!(resolved, Some(R::Low));
+    }
+
+    #[test]
+    fn default_reasoning_ignores_unsupported_last_used_and_picks_highest() {
+        let supported = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
+
+        let resolved = super::resolve_default_reasoning(None, Some(R::XHigh), &supported);
+
+        assert_eq!(resolved, Some(R::High));
+    }
+
+    #[test]
+    fn default_reasoning_picks_max_for_google_or_anthropic_variants() {
+        let supported = vec!["high".to_string(), "max".to_string()];
+
+        let resolved = super::resolve_default_reasoning(None, None, &supported);
+
+        assert_eq!(resolved, Some(R::Max));
+    }
+
+    #[test]
+    fn default_reasoning_stays_unset_without_reasoning_support() {
+        let supported = Vec::new();
+
+        let resolved = super::resolve_default_reasoning(None, None, &supported);
+
+        assert_eq!(resolved, None);
     }
 }
 
