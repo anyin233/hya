@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check cross-layer consistency across catalog, TUI, resolver, and provider request encoding"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check reuse and avoid duplicate reasoning effort constants/resolvers"}
+{"file": ".trellis/tasks/06-24-model-default-reasoning-effort/findings.md", "reason": "Check implementation against task-local code-backed reasoning effort findings"}
