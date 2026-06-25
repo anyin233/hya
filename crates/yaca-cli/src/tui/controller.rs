@@ -24,7 +24,7 @@ pub enum TuiEffect {
         model: Option<String>,
         command: Option<(String, String)>,
     },
-    SelectModel(String),
+    SelectModel(ModelEntry),
     SelectAgent(String),
     SelectReasoning(String),
     ResumeSession(String),
@@ -57,6 +57,7 @@ enum DialogMode {
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<ModelEntry>,
+    active_model: Option<ModelEntry>,
     sessions: Vec<SessionSummary>,
     references: Vec<DialogItem>,
     agents: Vec<DialogItem>,
@@ -83,6 +84,7 @@ impl Controller {
             .map(|id| ModelEntry {
                 id,
                 provider: "test".to_string(),
+                reasoning_variants: Vec::new(),
             })
             .collect();
         Self::with_models_and_sessions(app, entries, Vec::new())
@@ -102,9 +104,14 @@ impl Controller {
     ) -> Self {
         available_models.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.provider.cmp(&b.provider)));
         available_models.dedup();
+        let active_model = available_models
+            .iter()
+            .find(|entry| entry.matches_model_ref(&app.model))
+            .cloned();
         Self {
             app,
             available_models,
+            active_model,
             sessions,
             references: Vec::new(),
             agents: Vec::new(),
@@ -218,6 +225,33 @@ impl Controller {
         self.custom_commands = custom_commands;
     }
 
+    pub fn active_model(&self) -> Option<ModelEntry> {
+        self.active_model.clone()
+    }
+
+    pub fn set_active_model_by_identity(
+        &mut self,
+        provider: Option<&str>,
+        model: &str,
+    ) -> Option<ModelEntry> {
+        let selected = self
+            .available_models
+            .iter()
+            .find(|entry| {
+                entry.matches_model_ref(model)
+                    && provider.is_none_or(|provider| entry.provider == provider)
+            })
+            .cloned()
+            .or_else(|| {
+                self.available_models
+                    .iter()
+                    .find(|entry| entry.matches_model_ref(model))
+                    .cloned()
+            });
+        self.active_model = selected.clone();
+        selected
+    }
+
     pub fn handle_paste(&mut self, text: &str) -> TuiEffect {
         self.disarm_exit();
         let outcome = self.prompt.handle_paste(&mut self.app, text);
@@ -318,9 +352,11 @@ impl Controller {
                     Some(DialogMode::Model) => self
                         .available_models
                         .get(selected)
+                        .cloned()
                         .map(|entry| {
                             self.app.model = entry.id.clone();
-                            TuiEffect::SelectModel(entry.id.clone())
+                            self.active_model = Some(entry.clone());
+                            TuiEffect::SelectModel(entry)
                         })
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::Resume) => self
@@ -333,9 +369,10 @@ impl Controller {
                         .get(selected)
                         .map(|agent| TuiEffect::SelectAgent(agent.label.clone()))
                         .unwrap_or(TuiEffect::None),
-                    Some(DialogMode::Think) => ["off", "low", "medium", "high"]
+                    Some(DialogMode::Think) => self
+                        .active_reasoning_levels()
                         .get(selected)
-                        .map(|level| TuiEffect::SelectReasoning((*level).to_string()))
+                        .map(|level| TuiEffect::SelectReasoning(level.clone()))
                         .unwrap_or(TuiEffect::None),
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
@@ -416,7 +453,18 @@ impl Controller {
         match commands::resolve_slash(command) {
             Some(CommandKind::Model) if !arguments.is_empty() => {
                 self.app.model = arguments.to_string();
-                TuiEffect::SelectModel(arguments.to_string())
+                let entry = self
+                    .available_models
+                    .iter()
+                    .find(|entry| entry.matches_model_ref(arguments))
+                    .cloned()
+                    .unwrap_or_else(|| ModelEntry {
+                        id: arguments.to_string(),
+                        provider: String::new(),
+                        reasoning_variants: Vec::new(),
+                    });
+                self.active_model = Some(entry.clone());
+                TuiEffect::SelectModel(entry)
             }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
@@ -778,17 +826,29 @@ impl Controller {
         self.dialog_mode = Some(DialogMode::Tools);
     }
 
+    fn active_reasoning_levels(&self) -> Vec<String> {
+        let mut levels = vec!["off".to_string()];
+        if let Some(entry) = self.active_model.as_ref() {
+            levels.extend(entry.reasoning_variants.iter().cloned());
+        }
+        levels
+    }
+
     fn open_think_dialog(&mut self) {
-        let current = self.app.reasoning_effort.as_deref().unwrap_or("off");
-        let items = ["off", "low", "medium", "high"]
-            .iter()
+        let current = match self.app.reasoning_effort.as_deref().unwrap_or("off") {
+            "none" => "off",
+            current => current,
+        };
+        let items = self
+            .active_reasoning_levels()
+            .into_iter()
             .map(|level| DialogItem {
-                label: (*level).to_string(),
-                detail: if *level == current {
+                detail: if level == current {
                     "current".to_string()
                 } else {
                     "reasoning effort".to_string()
                 },
+                label: level,
             })
             .collect::<Vec<_>>();
         let selected = items
@@ -847,6 +907,232 @@ mod tests {
                 TuiEffect::None
             );
         }
+    }
+
+    fn model_entry(id: &str, provider: &str, variants: &[&str]) -> ModelEntry {
+        ModelEntry {
+            id: id.to_string(),
+            provider: provider.to_string(),
+            reasoning_variants: variants.iter().map(|level| (*level).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn think_dialog_uses_active_model_reasoning_variants() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "gpt-5.5".to_string(),
+                ..AppState::default()
+            },
+            vec![model_entry(
+                "gpt-5.5",
+                "openai",
+                &["minimal", "low", "medium", "high", "xhigh"],
+            )],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/think");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let labels = controller
+            .app
+            .dialog
+            .as_ref()
+            .expect("think dialog")
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["off", "minimal", "low", "medium", "high", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn think_dialog_marks_off_current_when_state_stores_none() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "gpt-5.5".to_string(),
+                reasoning_effort: Some("none".to_string()),
+                ..AppState::default()
+            },
+            vec![model_entry(
+                "gpt-5.5",
+                "openai",
+                &["minimal", "low", "medium", "high", "xhigh"],
+            )],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/think");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let dialog = controller.app.dialog.as_ref().expect("think dialog");
+        assert_eq!(dialog.items[0].label, "off");
+        assert_eq!(dialog.items[0].detail, "current");
+        assert_eq!(dialog.selected, 0);
+    }
+
+    #[test]
+    fn think_dialog_selection_returns_selected_dynamic_level() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "claude".to_string(),
+                ..AppState::default()
+            },
+            vec![model_entry(
+                "claude",
+                "anthropic",
+                &["low", "medium", "high", "max"],
+            )],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/think");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        for _ in 0..4 {
+            assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+        }
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectReasoning("max".to_string())
+        );
+    }
+
+    #[test]
+    fn model_dialog_enter_returns_selected_entry() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "alpha".to_string(),
+                ..AppState::default()
+            },
+            vec![
+                model_entry("alpha", "openai", &["low", "high"]),
+                model_entry("beta", "anthropic", &["low", "medium", "high", "max"]),
+            ],
+            Vec::new(),
+        );
+        type_text(&mut controller, "/model");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectModel(model_entry(
+                "beta",
+                "anthropic",
+                &["low", "medium", "high", "max"]
+            ))
+        );
+        assert_eq!(controller.app.model, "beta");
+    }
+
+    #[test]
+    fn think_dialog_uses_selected_provider_when_model_ids_collide() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "shared".to_string(),
+                ..AppState::default()
+            },
+            vec![
+                model_entry("shared", "anthropic", &["low", "medium", "high", "max"]),
+                model_entry(
+                    "shared",
+                    "openai",
+                    &["minimal", "low", "medium", "high", "xhigh"],
+                ),
+            ],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectModel(model_entry(
+                "shared",
+                "openai",
+                &["minimal", "low", "medium", "high", "xhigh"]
+            ))
+        );
+
+        type_text(&mut controller, "/think");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        let labels = controller
+            .app
+            .dialog
+            .as_ref()
+            .expect("think dialog")
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["off", "minimal", "low", "medium", "high", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn slash_model_provider_prefixed_selects_matching_provider_entry() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "shared".to_string(),
+                ..AppState::default()
+            },
+            vec![
+                model_entry("shared", "anthropic", &["low", "medium", "high", "max"]),
+                model_entry(
+                    "shared",
+                    "openai",
+                    &["minimal", "low", "medium", "high", "xhigh"],
+                ),
+            ],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model openai/shared");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectModel(model_entry(
+                "shared",
+                "openai",
+                &["minimal", "low", "medium", "high", "xhigh"]
+            ))
+        );
+        assert_eq!(controller.app.model, "openai/shared");
+    }
+
+    #[test]
+    fn set_active_model_by_identity_matches_provider_prefixed_model() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState::default(),
+            vec![
+                model_entry("shared", "anthropic", &["low", "medium", "high", "max"]),
+                model_entry(
+                    "shared",
+                    "openai",
+                    &["minimal", "low", "medium", "high", "xhigh"],
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let selected = controller.set_active_model_by_identity(Some("openai"), "openai/shared");
+
+        assert_eq!(
+            selected,
+            Some(model_entry(
+                "shared",
+                "openai",
+                &["minimal", "low", "medium", "high", "xhigh"]
+            ))
+        );
     }
 
     #[test]
@@ -1098,7 +1384,7 @@ mod tests {
         assert_eq!(controller.handle_key(key(KeyCode::Tab)), TuiEffect::None);
         assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
-            TuiEffect::SelectModel("gamma".to_string())
+            TuiEffect::SelectModel(model_entry("gamma", "test", &[]))
         );
         assert_eq!(controller.app.model, "gamma");
         assert!(controller.app.dialog.is_none());

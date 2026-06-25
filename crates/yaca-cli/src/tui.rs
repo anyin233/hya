@@ -33,7 +33,7 @@ use yaca_tool::{
 use yaca_tui::{AppState, PermissionPrompt, QuestionPrompt};
 
 use self::controller::{Controller, SessionSummary, TuiEffect};
-use self::history::{HistoryStore, SessionMeta};
+use self::history::{HistoryStore, SessionMeta, SessionModelSnapshot};
 use crate::config::ModelEntry;
 
 mod agents;
@@ -107,6 +107,23 @@ fn meta_for(history: &HistoryStore, id: &str) -> Option<SessionMeta> {
         .ok()?
         .into_iter()
         .find(|meta| meta.id == id)
+}
+
+fn update_session_model_snapshot(
+    history: &HistoryStore,
+    session: SessionId,
+    entry: Option<&ModelEntry>,
+    model: &str,
+    reasoning: Option<ReasoningEffort>,
+) {
+    let _ = history.update_session_model_snapshot(
+        session,
+        SessionModelSnapshot {
+            provider: entry.map(|entry| entry.provider.as_str()),
+            model,
+            reasoning,
+        },
+    );
 }
 
 fn reference_items(workdir: &Path) -> Vec<yaca_tui::DialogItem> {
@@ -342,19 +359,71 @@ fn handle_question_key(key: KeyEvent, app: &mut AppState) -> Option<QuestionAnsw
     }
 }
 
-fn apply_reasoning(agent: &mut AgentSpec, app: &mut AppState, level: &str) -> String {
+fn resolve_runtime_reasoning(
+    explicit: Option<ReasoningEffort>,
+    last_used: Option<ReasoningEffort>,
+    model: Option<&ModelEntry>,
+) -> Option<ReasoningEffort> {
+    let supported = model.map(|entry| entry.reasoning_variants.as_slice());
+    yaca_provider::resolve_default_reasoning(explicit, last_used, supported.unwrap_or(&[]))
+}
+
+fn resolve_model_reasoning(
+    history: &HistoryStore,
+    model: &ModelEntry,
+    explicit: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    let last_used = history
+        .last_model_reasoning(&model.provider, &model.id)
+        .ok()
+        .flatten();
+    resolve_runtime_reasoning(explicit, last_used, Some(model))
+}
+
+fn model_ref_for_entry(entry: &ModelEntry) -> ModelRef {
+    ModelRef::new(entry.model_ref())
+}
+
+fn apply_reasoning(
+    agent: &mut AgentSpec,
+    app: &mut AppState,
+    history: &HistoryStore,
+    model: &ModelEntry,
+    level: &str,
+) -> String {
     let trimmed = level.trim().to_ascii_lowercase();
+    let supported = || {
+        let mut levels = vec!["off".to_string()];
+        levels.extend(model.reasoning_variants.iter().cloned());
+        levels.join("|")
+    };
     if matches!(trimmed.as_str(), "off" | "none") {
-        agent.reasoning = None;
-        app.reasoning_effort = None;
+        agent.reasoning = Some(ReasoningEffort::Off);
+        app.reasoning_effort = Some(ReasoningEffort::Off.as_str().to_string());
+        let _ = history.record_model_reasoning(&model.provider, &model.id, ReasoningEffort::Off);
         return "thinking effort disabled".to_string();
     }
-    if let Some(effort) = ReasoningEffort::parse(&trimmed) {
-        agent.reasoning = Some(effort);
-        app.reasoning_effort = Some(effort.as_str().to_string());
-        return format!("thinking effort: {}", effort.as_str());
+    let Some(effort) = ReasoningEffort::parse(&trimmed) else {
+        return format!(
+            "unknown thinking effort '{level}' (available: {})",
+            supported()
+        );
+    };
+    if !model
+        .reasoning_variants
+        .iter()
+        .any(|variant| variant == effort.as_str())
+    {
+        return format!(
+            "unsupported thinking effort '{level}' for {} (available: {})",
+            model.id,
+            supported()
+        );
     }
-    format!("unknown thinking effort '{level}' (use low|medium|high|off)")
+    agent.reasoning = Some(effort);
+    app.reasoning_effort = Some(effort.as_str().to_string());
+    let _ = history.record_model_reasoning(&model.provider, &model.id, effort);
+    format!("thinking effort: {}", effort.as_str())
 }
 
 fn spawn_turn(
@@ -417,8 +486,16 @@ pub async fn run(
         initial_yolo,
     } = options;
     let history = HistoryStore::from_env();
+    let model_catalog = models.clone();
+    let active_model_entry = |id: &str| {
+        model_catalog
+            .iter()
+            .find(|entry| entry.matches_model_ref(id))
+            .cloned()
+    };
     let profiles = agents::builtin_profiles();
     let base_system_prompt = agent.system_prompt.clone();
+    let explicit_reasoning = agent.reasoning;
     let mut session = initial_session;
     let _ = history.create_session(
         session,
@@ -433,6 +510,18 @@ pub async fn run(
     hydrated_sessions.insert(session);
 
     let mut bus = engine.bus().subscribe();
+    let startup_entry = active_model_entry(&model);
+    agent.reasoning = startup_entry
+        .as_ref()
+        .map(|entry| resolve_model_reasoning(&history, entry, explicit_reasoning))
+        .unwrap_or(explicit_reasoning);
+    update_session_model_snapshot(
+        &history,
+        session,
+        startup_entry.as_ref(),
+        agent.model.as_str(),
+        agent.reasoning,
+    );
     let app = AppState {
         model,
         session_label: session.to_string().chars().take(12).collect(),
@@ -558,14 +647,45 @@ pub async fn run(
                             TuiEffect::Interrupt => {
                                 turn_cancel.cancel();
                             }
-                            TuiEffect::SelectModel(model) => {
-                                let model = ModelRef::new(model);
+                            TuiEffect::SelectModel(entry) => {
+                                let resolved =
+                                    resolve_model_reasoning(&history, &entry, explicit_reasoning);
+                                agent.reasoning = resolved;
+                                controller.app.reasoning_effort =
+                                    resolved.map(|effort| effort.as_str().to_string());
+                                let model = model_ref_for_entry(&entry);
                                 agent.model = model.clone();
                                 let _ = engine.switch_model(session, model).await;
+                                update_session_model_snapshot(
+                                    &history,
+                                    session,
+                                    Some(&entry),
+                                    agent.model.as_str(),
+                                    agent.reasoning,
+                                );
                             }
                             TuiEffect::SelectReasoning(level) => {
-                                let message =
-                                    apply_reasoning(&mut agent, &mut controller.app, &level);
+                                let model = controller
+                                    .active_model()
+                                    .unwrap_or_else(|| ModelEntry {
+                                        id: controller.app.model.clone(),
+                                        provider: String::new(),
+                                        reasoning_variants: Vec::new(),
+                                    });
+                                let message = apply_reasoning(
+                                    &mut agent,
+                                    &mut controller.app,
+                                    &history,
+                                    &model,
+                                    &level,
+                                );
+                                update_session_model_snapshot(
+                                    &history,
+                                    session,
+                                    Some(&model),
+                                    agent.model.as_str(),
+                                    agent.reasoning,
+                                );
                                 let _ = engine.inject_system_message(session, message).await;
                             }
                             TuiEffect::SelectAgent(name) => {
@@ -627,6 +747,14 @@ pub async fn run(
                                     agent.name.as_str(),
                                     &agent.workdir.to_string_lossy(),
                                 );
+                                let active_model = controller.active_model();
+                                update_session_model_snapshot(
+                                    &history,
+                                    session,
+                                    active_model.as_ref(),
+                                    agent.model.as_str(),
+                                    agent.reasoning,
+                                );
                                 controller.app.projection = engine
                                     .read_projection(session)
                                     .await
@@ -651,7 +779,36 @@ pub async fn run(
                                     session = resume;
                                     if let Some(meta) = meta_for(&history, &id) {
                                         controller.app.model = meta.model.clone();
+                                        let resume_entry = controller.set_active_model_by_identity(
+                                            meta.model_provider.as_deref(),
+                                            &meta.model,
+                                        );
+                                        let snapshot = meta
+                                            .reasoning_effort
+                                            .as_deref()
+                                            .and_then(ReasoningEffort::parse);
+                                        let last_used = resume_entry.as_ref().and_then(|entry| {
+                                            history
+                                                .last_model_reasoning(&entry.provider, &entry.id)
+                                                .ok()
+                                                .flatten()
+                                        });
+                                        agent.reasoning = resolve_runtime_reasoning(
+                                            snapshot,
+                                            last_used,
+                                            resume_entry.as_ref(),
+                                        );
+                                        controller.app.reasoning_effort = agent
+                                            .reasoning
+                                            .map(|effort| effort.as_str().to_string());
                                         agent.model = ModelRef::new(meta.model);
+                                        update_session_model_snapshot(
+                                            &history,
+                                            session,
+                                            resume_entry.as_ref(),
+                                            agent.model.as_str(),
+                                            agent.reasoning,
+                                        );
                                         let workdir = PathBuf::from(meta.workdir);
                                         controller.set_agents(agents::dialog_items(&profiles));
                                         controller.set_references(all_reference_items(&workdir, &profiles));
@@ -717,6 +874,13 @@ pub async fn run(
                                 command,
                             } => {
                                 if let Some(model) = model {
+                                    if let Some(entry) = active_model_entry(&model) {
+                                        agent.reasoning = resolve_model_reasoning(
+                                            &history,
+                                            &entry,
+                                            explicit_reasoning,
+                                        );
+                                    }
                                     agent.model = ModelRef::new(model);
                                 }
                                 if let Some(profile) = command_agent
@@ -810,6 +974,124 @@ mod tests {
         let text = std::fs::read_to_string(path).unwrap();
         assert!(text.starts_with("# yaca session "));
         assert!(text.contains("```text"));
+    }
+
+    fn entry(id: &str, provider: &str, variants: &[&str]) -> ModelEntry {
+        ModelEntry {
+            id: id.to_string(),
+            provider: provider.to_string(),
+            reasoning_variants: variants.iter().map(|level| (*level).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn runtime_reasoning_defaults_to_highest_model_variant() {
+        let entry = entry("claude", "anthropic", &["low", "medium", "high", "max"]);
+
+        let resolved = resolve_runtime_reasoning(None, None, Some(&entry));
+
+        assert_eq!(resolved, Some(ReasoningEffort::Max));
+    }
+
+    #[test]
+    fn runtime_reasoning_preserves_last_used_off() {
+        let entry = entry(
+            "gpt-5.5",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+
+        let resolved = resolve_runtime_reasoning(None, Some(ReasoningEffort::Off), Some(&entry));
+
+        assert_eq!(resolved, Some(ReasoningEffort::Off));
+    }
+
+    #[test]
+    fn model_reasoning_keeps_explicit_agent_config_over_last_used() {
+        let root = std::env::temp_dir().join(format!(
+            "yaca-model-reasoning-explicit-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        let history = HistoryStore::new(root);
+        let model = entry(
+            "gpt-5.5",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+        history
+            .record_model_reasoning("openai", "gpt-5.5", ReasoningEffort::Off)
+            .unwrap();
+
+        let resolved = resolve_model_reasoning(&history, &model, Some(ReasoningEffort::High));
+
+        assert_eq!(resolved, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn model_ref_for_entry_preserves_provider_identity() {
+        let model = entry(
+            "shared",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+
+        let resolved = model_ref_for_entry(&model);
+
+        assert_eq!(resolved.as_str(), "openai/shared");
+    }
+
+    #[test]
+    fn runtime_reasoning_unset_without_model_support() {
+        let entry = entry("dummy", "fake", &[]);
+
+        let resolved = resolve_runtime_reasoning(None, None, Some(&entry));
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn apply_reasoning_rejects_unsupported_level() {
+        let root = std::env::temp_dir().join(format!(
+            "yaca-apply-reasoning-test-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        let history = HistoryStore::new(root);
+        let model = entry(
+            "gpt-5.5",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+        let mut agent = crate::agent_with_model("gpt-5.5");
+        let mut app = AppState::default();
+
+        let message = apply_reasoning(&mut agent, &mut app, &history, &model, "max");
+
+        assert!(message.contains("unsupported"));
+        assert_eq!(agent.reasoning, None);
+    }
+
+    #[test]
+    fn apply_reasoning_persists_supported_level() {
+        let root = std::env::temp_dir().join(format!(
+            "yaca-apply-reasoning-ok-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        let history = HistoryStore::new(root);
+        let model = entry("claude", "anthropic", &["low", "medium", "high", "max"]);
+        let mut agent = crate::agent_with_model("claude");
+        let mut app = AppState::default();
+
+        let message = apply_reasoning(&mut agent, &mut app, &history, &model, "max");
+
+        assert_eq!(message, "thinking effort: max");
+        assert_eq!(agent.reasoning, Some(ReasoningEffort::Max));
+        assert_eq!(
+            history.last_model_reasoning("anthropic", "claude").unwrap(),
+            Some(ReasoningEffort::Max)
+        );
     }
 
     #[test]

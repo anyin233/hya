@@ -134,8 +134,8 @@ impl DummyHarness {
     async fn apply_effect(&mut self, effect: TuiEffect) {
         match effect {
             TuiEffect::None => {}
-            TuiEffect::SelectModel(model) => {
-                let model = yaca_proto::ModelRef::new(model);
+            TuiEffect::SelectModel(entry) => {
+                let model = yaca_proto::ModelRef::new(entry.model_ref());
                 self.agent.model = model.clone();
                 self.engine
                     .switch_model(self.session, model)
@@ -270,7 +270,7 @@ mod tests {
         harness.type_text("hello");
         harness.press(key(KeyCode::Enter)).await;
 
-        assert_eq!(harness.seen_models(), vec!["beta".to_string()]);
+        assert_eq!(harness.seen_models(), vec!["test/beta".to_string()]);
         assert!(harness.transcript().contains("dummy response"));
     }
 }
