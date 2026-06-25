@@ -41,3 +41,39 @@ Created docs index, usage guides, detailed project structure, architecture docs,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Model-specific default reasoning effort
+
+**Date**: 2026-06-25
+**Task**: Model-specific default reasoning effort
+**Branch**: `main`
+
+### Summary
+
+Implemented native mini TUI model-specific reasoning defaults with explicit-agent, last-used, and highest-supported precedence; verified with Rust checks and TUI QA.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b027829` | (see git log) |
+| `923ed8d` | (see git log) |
+| `ace5294` | (see git log) |
+| `2087b4d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
