@@ -132,6 +132,39 @@ pub fn agent_with_model(model: &str) -> AgentSpec {
     }
 }
 
+/// First-run guidance produced when no usable config is found and yaca falls
+/// back to the offline echo provider.
+///
+/// It is carried as *data* on [`RuntimeConfig`] rather than printed at the point
+/// of resolution: that keeps it out of machine-readable surfaces (JSONL RPC,
+/// `exec`/`-p` piping, `serve`), which never call [`OfflineNotice::emit`]. Only
+/// interactive startup paths surface it, and always to stderr — never stdout.
+pub struct OfflineNotice {
+    /// Where a config file is expected (and should be created).
+    pub config_path: PathBuf,
+}
+
+impl OfflineNotice {
+    /// Render the multi-line guidance: what happened, that yaca is offline, and
+    /// how to connect a real model.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let path = self.config_path.display();
+        format!(
+            "yaca: no config file found at {path}\n\
+             yaca: running in OFFLINE mode — the built-in provider only echoes input, \
+             so models cannot reason or use tools.\n\
+             yaca: to connect a real model, create {path} (see docs/configuration.md)\n\
+             yaca:   and/or save a provider token with `yaca login <provider> <token>`."
+        )
+    }
+
+    /// Print the notice to stderr so it never corrupts machine-readable stdout.
+    pub fn emit(&self) {
+        eprintln!("{}", self.render());
+    }
+}
+
 pub struct RuntimeConfig {
     pub router: ProviderRouter,
     pub model: String,
@@ -139,6 +172,9 @@ pub struct RuntimeConfig {
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub plugins: Vec<PluginSpec>,
     pub default_agent: Option<String>,
+    /// Set when no usable config was found and the offline provider was chosen.
+    /// Interactive startup emits it; headless/machine-readable modes ignore it.
+    pub offline_notice: Option<OfflineNotice>,
 }
 
 /// Resolve a provider router + active model from yaca's config, falling back
@@ -167,6 +203,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
                 default_agent: cfg.default_agent,
+                offline_notice: None,
             }
         }
         Ok(None) => {
@@ -178,6 +215,9 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: None,
+                offline_notice: Some(OfflineNotice {
+                    config_path: config::expected_config_path(),
+                }),
             }
         }
         Err(e) => {
@@ -190,6 +230,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: None,
+                offline_notice: None,
             }
         }
     }
@@ -400,6 +441,7 @@ impl YacaRuntime {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: opts.default_agent,
+                offline_notice: None,
             }
         } else {
             let mut runtime = resolve_runtime(opts.model);
@@ -455,5 +497,58 @@ impl YacaRuntime {
     #[must_use]
     pub fn app_state(&self) -> yaca_server::AppState {
         self.app_state.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn offline_notice_names_path_offline_mode_and_the_fix() {
+        let notice = OfflineNotice {
+            config_path: PathBuf::from("/home/u/.config/yaca/config.yaml"),
+        };
+        let text = notice.render();
+        // (a) where the missing config is expected,
+        assert!(text.contains("/home/u/.config/yaca/config.yaml"));
+        // (b) that we are in offline/echo mode,
+        assert!(text.contains("OFFLINE"));
+        assert!(text.contains("echoes"));
+        // (c) how to fix it.
+        assert!(text.contains("yaca login"));
+        assert!(text.contains("docs/configuration.md"));
+    }
+
+    #[test]
+    fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
+        // Point config discovery at an empty temp dir so no config file is found.
+        // SAFETY: single-threaded mutation; this is the only test in the crate
+        // that reads or writes HOME / XDG_CONFIG_HOME, so it cannot race.
+        let dir = std::env::temp_dir().join(format!("yaca-no-config-{}", std::process::id()));
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &dir);
+            std::env::set_var("HOME", &dir);
+        }
+
+        let runtime = resolve_runtime(None);
+
+        // Offline fallback selected: the built-in echo provider + "offline" model.
+        assert_eq!(runtime.model, "offline");
+        // The guidance is returned as DATA — resolve_runtime itself prints
+        // nothing, so headless/RPC/serve callers (which never call `emit`) keep
+        // a clean machine-readable stdout. Only interactive startup emits it.
+        let notice = runtime
+            .offline_notice
+            .expect("missing-config path must carry an offline notice");
+        assert!(notice.config_path.ends_with("yaca/config.yaml"));
+        assert!(notice.render().contains("OFFLINE"));
+
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("HOME");
+        }
     }
 }
