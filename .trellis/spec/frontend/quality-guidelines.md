@@ -53,6 +53,7 @@ and 120-column tests.
 - Does the TUI remain readable at 80 columns?
 - Are status labels understandable without color?
 - Do new tests fail on the old behavior and pass on the new behavior?
+- If `tui-check` reports `borderMisaligned=true` on a capture with multiple independent valid frames, verify manually and track the durable fix upstream in `oh-my-openagent`; do not patch the installed generated package cache.
 
 ---
 
@@ -87,6 +88,8 @@ and 120-column tests.
 - Missing reasoning variants -> reasoning remains unset unless the user explicitly selects `off`.
 - Corrupt `model_reasoning.json` -> ignore as empty preferences and overwrite on the next successful write.
 - Provider-prefixed `/model <provider>/<model>` that matches the catalog -> select that provider's `ModelEntry`; do not create an unknown fallback entry.
+- Unknown direct `/model <id>` -> system message with the requested id, no `AppState.model`, `active_model`, runtime agent model, reasoning, or session snapshot mutation.
+- Ambiguous bare `/model <id>` when multiple providers expose the same id -> system message listing provider-prefixed refs; require `/model <provider>/<id>`.
 
 ### 5. Good/Base/Bad Cases
 
