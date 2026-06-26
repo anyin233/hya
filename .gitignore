@@ -1,4 +1,5 @@
 /target
+/.worktrees
 **/*.rs.bk
 *.pdb
 # local runtime / secrets
