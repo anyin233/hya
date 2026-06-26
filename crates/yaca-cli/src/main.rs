@@ -222,6 +222,11 @@ async fn cmd_tui(
     }
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
+    // Interactive startup (stdout is a terminal, checked above): explain the
+    // missing config and the offline fallback. Goes to stderr only.
+    if let Some(notice) = &runtime.offline_notice {
+        notice.emit();
+    }
     let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
