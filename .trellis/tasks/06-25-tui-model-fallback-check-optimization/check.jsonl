@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Checklist context for reviewing TUI-facing behavior changes."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review unknown-model error behavior against model identity/reasoning contracts and TUI test requirements."}
+{"file":".trellis/spec/guides/index.md","reason":"Review cross-layer state consistency and reuse decisions."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/research/evidence.md","reason":"Verify implementation stays grounded in confirmed /model and tui-check root causes."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/design.md","reason":"Review merged scope decisions, conflict resolutions, and out-of-scope boundaries."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/implement.md","reason":"Review TDD task breakdown, verification commands, and manual QA coverage."}

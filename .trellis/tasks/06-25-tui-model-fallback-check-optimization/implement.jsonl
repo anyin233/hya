@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Entry point for TUI/frontend planning and required quality context."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Native TUI model identity/reasoning contracts and TUI testing expectations."}
+{"file":".trellis/spec/guides/index.md","reason":"Cross-layer and code-reuse thinking triggers for command/runtime state boundaries."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/research/evidence.md","reason":"Source-backed facts for unknown /model behavior and tui-check false-positive root cause."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/design.md","reason":"Merged design decisions from parallel planners, including scope split and model resolution rules."}
+{"file":".trellis/tasks/06-25-tui-model-fallback-check-optimization/implement.md","reason":"Step-by-step TDD implementation plan and verification checklist for the approved design."}
