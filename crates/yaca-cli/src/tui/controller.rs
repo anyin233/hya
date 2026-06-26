@@ -54,6 +54,15 @@ enum DialogMode {
     ReferenceCompletion,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ModelCommandError {
+    Unknown(String),
+    Ambiguous {
+        requested: String,
+        candidates: Vec<String>,
+    },
+}
+
 pub struct Controller {
     pub app: AppState,
     available_models: Vec<ModelEntry>,
@@ -452,19 +461,14 @@ impl Controller {
         let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
             Some(CommandKind::Model) if !arguments.is_empty() => {
-                self.app.model = arguments.to_string();
-                let entry = self
-                    .available_models
-                    .iter()
-                    .find(|entry| entry.matches_model_ref(arguments))
-                    .cloned()
-                    .unwrap_or_else(|| ModelEntry {
-                        id: arguments.to_string(),
-                        provider: String::new(),
-                        reasoning_variants: Vec::new(),
-                    });
-                self.active_model = Some(entry.clone());
-                TuiEffect::SelectModel(entry)
+                match self.resolve_model_command(arguments) {
+                    Ok(entry) => {
+                        self.app.model = entry.model_ref();
+                        self.active_model = Some(entry.clone());
+                        TuiEffect::SelectModel(entry)
+                    }
+                    Err(error) => TuiEffect::SystemMessage(model_command_error_message(error)),
+                }
             }
             Some(CommandKind::Model) => {
                 self.open_model_dialog();
@@ -529,6 +533,40 @@ impl Controller {
                     TuiEffect::SystemMessage(format!("unknown command /{name}; try /help"))
                 }
             }
+        }
+    }
+
+    fn resolve_model_command(&self, requested: &str) -> Result<ModelEntry, ModelCommandError> {
+        let exact = self
+            .available_models
+            .iter()
+            .filter(|entry| entry.model_ref() == requested)
+            .cloned()
+            .collect::<Vec<_>>();
+        match exact.as_slice() {
+            [entry] => return Ok(entry.clone()),
+            [] => {}
+            _ => {
+                return Err(ModelCommandError::Ambiguous {
+                    requested: requested.to_string(),
+                    candidates: exact.into_iter().map(|entry| entry.model_ref()).collect(),
+                });
+            }
+        }
+
+        let bare = self
+            .available_models
+            .iter()
+            .filter(|entry| entry.id == requested)
+            .cloned()
+            .collect::<Vec<_>>();
+        match bare.as_slice() {
+            [entry] => Ok(entry.clone()),
+            [] => Err(ModelCommandError::Unknown(requested.to_string())),
+            _ => Err(ModelCommandError::Ambiguous {
+                requested: requested.to_string(),
+                candidates: bare.into_iter().map(|entry| entry.model_ref()).collect(),
+            }),
         }
     }
 
@@ -875,6 +913,21 @@ impl Controller {
     }
 }
 
+fn model_command_error_message(error: ModelCommandError) -> String {
+    match error {
+        ModelCommandError::Unknown(requested) => {
+            format!("unknown model '{requested}'; type /model to pick from the list")
+        }
+        ModelCommandError::Ambiguous {
+            requested,
+            candidates,
+        } => format!(
+            "model '{requested}' is ambiguous; use one of: {}",
+            candidates.join(", ")
+        ),
+    }
+}
+
 fn is_exact_slash_command(input: &str, custom_commands: &[CustomCommand]) -> bool {
     input.strip_prefix('/').is_some_and(|command| {
         commands::resolve_slash(command).is_some()
@@ -1109,6 +1162,94 @@ mod tests {
     }
 
     #[test]
+    fn slash_model_unknown_bare_id_preserves_current_model() {
+        let alpha = model_entry("alpha", "openai", &["low", "high"]);
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: alpha.model_ref(),
+                ..AppState::default()
+            },
+            vec![alpha.clone()],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model nope");
+
+        let effect = controller.handle_key(key(KeyCode::Enter));
+        assert!(matches!(effect, TuiEffect::SystemMessage(message) if message.contains("nope")));
+        assert_eq!(controller.app.model, "openai/alpha");
+        assert_eq!(controller.active_model(), Some(alpha));
+    }
+
+    #[test]
+    fn slash_model_unknown_provider_prefixed_preserves_current_model() {
+        let alpha = model_entry("alpha", "openai", &["low", "high"]);
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: alpha.model_ref(),
+                ..AppState::default()
+            },
+            vec![alpha.clone()],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model openai/nope");
+
+        let effect = controller.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(effect, TuiEffect::SystemMessage(message) if message.contains("openai/nope"))
+        );
+        assert_eq!(controller.app.model, "openai/alpha");
+        assert_eq!(controller.active_model(), Some(alpha));
+    }
+
+    #[test]
+    fn slash_model_ambiguous_bare_id_preserves_current_model() {
+        let anthropic = model_entry("shared", "anthropic", &["low", "medium", "high", "max"]);
+        let openai = model_entry(
+            "shared",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: openai.model_ref(),
+                ..AppState::default()
+            },
+            vec![anthropic.clone(), openai.clone()],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model shared");
+
+        let effect = controller.handle_key(key(KeyCode::Enter));
+        assert!(
+            matches!(effect, TuiEffect::SystemMessage(message) if message.contains("ambiguous") && message.contains("anthropic/shared") && message.contains("openai/shared"))
+        );
+        assert_eq!(controller.app.model, "openai/shared");
+        assert_eq!(controller.active_model(), Some(openai));
+    }
+
+    #[test]
+    fn slash_model_unknown_preserves_uncataloged_current_model_string() {
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: "custom-outside-catalog".to_string(),
+                ..AppState::default()
+            },
+            vec![model_entry("alpha", "openai", &["low", "high"])],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model nope");
+
+        let effect = controller.handle_key(key(KeyCode::Enter));
+        assert!(matches!(effect, TuiEffect::SystemMessage(message) if message.contains("nope")));
+        assert_eq!(controller.app.model, "custom-outside-catalog");
+        assert_eq!(controller.active_model(), None);
+    }
+
+    #[test]
     fn set_active_model_by_identity_matches_provider_prefixed_model() {
         let mut controller = Controller::with_models_and_sessions(
             AppState::default(),
@@ -1133,6 +1274,30 @@ mod tests {
                 &["minimal", "low", "medium", "high", "xhigh"]
             ))
         );
+    }
+
+    #[test]
+    fn set_active_model_by_identity_clears_previous_entry_on_miss() {
+        let openai = model_entry(
+            "shared",
+            "openai",
+            &["minimal", "low", "medium", "high", "xhigh"],
+        );
+        let mut controller = Controller::with_models_and_sessions(
+            AppState::default(),
+            vec![openai.clone()],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            controller.set_active_model_by_identity(Some("openai"), "openai/shared"),
+            Some(openai.clone())
+        );
+        assert_eq!(
+            controller.set_active_model_by_identity(Some("openai"), "openai/missing"),
+            None
+        );
+        assert_eq!(controller.active_model(), None);
     }
 
     #[test]

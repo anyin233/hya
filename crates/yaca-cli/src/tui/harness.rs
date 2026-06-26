@@ -273,4 +273,18 @@ mod tests {
         assert_eq!(harness.seen_models(), vec!["test/beta".to_string()]);
         assert!(harness.transcript().contains("dummy response"));
     }
+
+    #[tokio::test]
+    async fn dummy_harness_unknown_model_keeps_previous_model_for_prompt() {
+        let mut harness = DummyHarness::new(vec!["alpha", "beta"]).await;
+
+        harness.type_text("/model nope");
+        harness.press(key(KeyCode::Enter)).await;
+        harness.type_text("hello");
+        harness.press(key(KeyCode::Enter)).await;
+
+        assert_eq!(harness.seen_models(), vec!["alpha".to_string()]);
+        assert!(harness.transcript().contains("unknown model 'nope'"));
+        assert!(harness.transcript().contains("dummy response"));
+    }
 }
