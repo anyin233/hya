@@ -116,6 +116,13 @@ async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Va
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+fn skill_named<'a>(skills: &'a Value, name: &str) -> &'a Value {
+    skills
+        .as_array()
+        .and_then(|items| items.iter().find(|skill| skill["name"] == name))
+        .unwrap_or_else(|| panic!("missing skill {name}: {skills}"))
+}
+
 fn git(workdir: &PathBuf, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -171,10 +178,11 @@ async fn opencode_instance_routes_return_metadata() {
 
     let (status, skills) = get_json(app.clone(), "/skill").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills[1]["name"], "demo");
-    assert_eq!(skills[1]["description"], "Demo skill");
+    let demo_skill = skill_named(&skills, "demo");
+    assert_eq!(demo_skill["name"], "demo");
+    assert_eq!(demo_skill["description"], "Demo skill");
     assert!(
-        skills[1]["content"]
+        demo_skill["content"]
             .as_str()
             .unwrap()
             .contains("Use this skill.")
@@ -244,8 +252,9 @@ async fn opencode_instance_metadata_routes_use_workspace_routing() {
 
     let (status, skills) = get_json(app, &format!("/skill?directory={encoded_scoped}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills[1]["name"], "scoped");
-    assert_eq!(skills[1]["description"], "Scoped skill");
+    let scoped_skill = skill_named(&skills, "scoped");
+    assert_eq!(scoped_skill["name"], "scoped");
+    assert_eq!(scoped_skill["description"], "Scoped skill");
 }
 
 #[tokio::test]
