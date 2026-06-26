@@ -104,9 +104,16 @@ cargo run -p yaca-cli -- tail-session <session-uuid> --db yaca.db
 line. It is useful for debugging because it shows the same canonical events that
 the server streams over SSE.
 
-## Configure Live Providers
+## From Offline to a Live Provider
 
-Create `~/.config/yaca/config.yaml` or `$XDG_CONFIG_HOME/yaca/config.yaml`:
+Out of the box yaca runs **offline**: with no config it uses a development
+provider that echoes your prompt. You can tell you are offline because the model
+id shows as `offline` and replies are prefixed `(yaca dev provider)`. This is
+intentional, not an error — see
+[Configuration → First-Run / Offline Behavior](configuration.md#first-run--offline-behavior).
+
+To switch to a live model, create `~/.config/yaca/config.yaml` (or
+`$XDG_CONFIG_HOME/yaca/config.yaml`):
 
 ```yaml
 default_model: claude-sonnet-4-6
@@ -118,5 +125,17 @@ providers:
     models: [claude-sonnet-4-6]
 ```
 
-Run `yaca models` to inspect the resolved catalog. `yaca login <provider>
-<token>` stores an auth token that takes precedence over inline `api_key`.
+Then provide the key and confirm the catalog resolved:
+
+```sh
+export ANTHROPIC_API_KEY=sk-...        # or use `yaca login` instead of {env:...}
+yaca login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
+yaca models                            # should list claude-sonnet-4-6, not be empty
+yaca                                    # TUI now runs against the live provider
+```
+
+`yaca login <provider> <token>` stores an auth token that takes precedence over
+inline `api_key`. For a fully-commented sample config, the complete `YACA_*`
+environment-variable reference, and MCP/plugin setup, see
+[Configuration](configuration.md). For the full command and TUI slash-command
+reference, see the [CLI Reference](cli.md).
