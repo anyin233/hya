@@ -13,7 +13,7 @@ pub mod runtime;
 pub mod skills;
 
 pub use runtime::{
-    RuntimeConfig, RuntimeOptions, YacaRuntime, agent_with_model, build_session_engine,
-    compaction_config, discover_context_files, headless_policy, host_info, offline_router,
-    open_store, resolve_runtime, skill_dirs, spawn_team_supervisor, today,
+    OfflineNotice, RuntimeConfig, RuntimeOptions, YacaRuntime, agent_with_model,
+    build_session_engine, compaction_config, discover_context_files, headless_policy, host_info,
+    offline_router, open_store, resolve_runtime, skill_dirs, spawn_team_supervisor, today,
 };

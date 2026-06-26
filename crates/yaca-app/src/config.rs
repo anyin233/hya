@@ -122,6 +122,24 @@ fn config_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+/// Where yaca expects its config file, whether or not it currently exists.
+///
+/// Unlike [`config_path`] (which only returns a path that exists), this always
+/// yields the location a user should create — preferring
+/// `$XDG_CONFIG_HOME/yaca/config.yaml`, then `$HOME/.config/yaca/config.yaml`,
+/// and finally the conventional `~/.config/...` spelling when neither env var
+/// is set. Used to tell users where to put their config on the offline path.
+#[must_use]
+pub fn expected_config_path() -> PathBuf {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("yaca/config.yaml");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".config/yaca/config.yaml");
+    }
+    PathBuf::from("~/.config/yaca/config.yaml")
+}
+
 fn resolve_secret(raw: &str) -> anyhow::Result<String> {
     if let Some(var) = raw.strip_prefix("{env:").and_then(|s| s.strip_suffix('}')) {
         std::env::var(var).with_context(|| format!("apiKey env var {var} is not set"))
