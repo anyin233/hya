@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
-- **Last Active**: 2026-06-25
+- **Total Sessions**: 3
+- **Last Active**: 2026-06-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~79 | Active |
+| `journal-1.md` | ~116 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-06-26 | TUI model fallback safe rejection | `46e144e`, `3232a44`, `4c15c0d`, `f5f8b27`, `a54cf6e` | `main` |
 | 2 | 2026-06-25 | Model-specific default reasoning effort | `b027829`, `923ed8d`, `ace5294`, `2087b4d` | `main` |
 | 1 | 2026-06-21 | Design and write yaca docs structure | uncommitted | `-` |
 <!-- @@@/auto:session-history -->

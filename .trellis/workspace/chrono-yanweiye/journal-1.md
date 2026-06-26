@@ -77,3 +77,40 @@ Implemented native mini TUI model-specific reasoning defaults with explicit-agen
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: TUI model fallback safe rejection
+
+**Date**: 2026-06-26
+**Task**: TUI model fallback safe rejection
+**Branch**: `main`
+
+### Summary
+
+Implemented safe native TUI direct /model rejection for unknown and ambiguous refs, added controller and harness coverage, documented the no-mutation contract, and tracked tui-check frame grouping as upstream work.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `46e144e` | (see git log) |
+| `3232a44` | (see git log) |
+| `4c15c0d` | (see git log) |
+| `f5f8b27` | (see git log) |
+| `a54cf6e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
