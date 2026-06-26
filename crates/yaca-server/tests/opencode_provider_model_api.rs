@@ -35,6 +35,13 @@ fn tempdir() -> std::path::PathBuf {
     dir
 }
 
+fn skill_named<'a>(skills: &'a Value, name: &str) -> &'a Value {
+    skills
+        .as_array()
+        .and_then(|items| items.iter().find(|skill| skill["name"] == name))
+        .unwrap_or_else(|| panic!("missing skill {name}: {skills}"))
+}
+
 async fn state(workdir: impl Into<std::path::PathBuf>) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -188,9 +195,10 @@ async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
 
     let (status, skills) = get_json(app, "/api/skill").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(skills["data"][1]["name"], "demo");
-    assert_eq!(skills["data"][1]["description"], "Demo skill");
-    assert_eq!(skills["data"][1]["content"], "Use this skill.\n");
+    let demo_skill = skill_named(&skills["data"], "demo");
+    assert_eq!(demo_skill["name"], "demo");
+    assert_eq!(demo_skill["description"], "Demo skill");
+    assert_eq!(demo_skill["content"], "Use this skill.\n");
 }
 
 #[tokio::test]
