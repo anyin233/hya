@@ -285,6 +285,28 @@ fn command_like_name(text: &str) -> Option<&str> {
     (!name.is_empty() && !name.contains('/')).then_some(name)
 }
 
+/// Built-in slash commands that are client-side UI actions (open a selector/dialog, start a
+/// session) rather than prompt macros run by the backend. Returns the client command id to
+/// dispatch via `Runtime::handle_command`. Without this, typing `/help`, `/model` or
+/// `/new` in the prompt would be sent to the model as a prompt (or rejected as unknown for
+/// names absent from the backend command catalog), so the command never performs its action.
+/// Aliases mirror the `--mini` TUI vocabulary so both frontends accept the same names. Any
+/// trailing arguments are ignored — the action is still invoked. Prompt-macro commands
+/// (`/review`, `/init`), `/yolo` (handled separately) and custom/unknown commands fall through.
+fn builtin_client_command(text: &str) -> Option<&'static str> {
+    let name = command_like_name(text)?;
+    match name {
+        "help" => Some(COMMAND_HELP),
+        "model" | "models" => Some(COMMAND_MODEL_LIST),
+        "new" | "clear" => Some(COMMAND_SESSION_NEW),
+        "agent" | "agents" => Some(COMMAND_AGENT_LIST),
+        "sessions" | "resume" => Some(COMMAND_SESSION_LIST),
+        "compact" => Some(COMMAND_SESSION_COMPACT),
+        "export" => Some(COMMAND_SESSION_EXPORT),
+        _ => None,
+    }
+}
+
 enum YoloRequest {
     Toggle,
     Set(bool),
@@ -2597,6 +2619,11 @@ impl Runtime {
             self.reset_prompt();
             return;
         }
+        if let Some(client_command) = builtin_client_command(&text) {
+            self.reset_prompt();
+            let _ = self.handle_command(client_command);
+            return;
+        }
         if !self.backend_ready {
             self.pending_prompts.push(text);
             let queued = self.pending_prompts.len();
@@ -2729,8 +2756,8 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        base64_encode, command_like_name, normalize_editor_content, parse_editor_command,
-        slash_command, trailing_mention, yolo_command, YoloRequest,
+        base64_encode, builtin_client_command, command_like_name, normalize_editor_content,
+        parse_editor_command, slash_command, trailing_mention, yolo_command, YoloRequest,
     };
 
     #[test]
@@ -2807,6 +2834,33 @@ mod tests {
     #[test]
     fn normalize_editor_content_when_crlf_and_trailing_newlines_returns_prompt_text() {
         assert_eq!(normalize_editor_content("one\r\ntwo\r\n\r\n"), "one\ntwo");
+    }
+
+    #[test]
+    fn builtin_client_command_routes_builtin_slashes_to_client_actions() {
+        // Built-in UI commands map to their client-side action so typing them in the
+        // prompt performs the action instead of being sent to the model as a prompt.
+        assert_eq!(builtin_client_command("/help"), Some("app.help"));
+        assert_eq!(builtin_client_command("/model"), Some("model.list"));
+        assert_eq!(builtin_client_command("/models"), Some("model.list"));
+        assert_eq!(builtin_client_command("/new"), Some("session.new"));
+        assert_eq!(builtin_client_command("/clear"), Some("session.new"));
+        assert_eq!(builtin_client_command("/agent"), Some("agent.list"));
+        assert_eq!(builtin_client_command("/agents"), Some("agent.list"));
+        assert_eq!(builtin_client_command("/sessions"), Some("session.list"));
+        assert_eq!(builtin_client_command("/resume"), Some("session.list"));
+        assert_eq!(builtin_client_command("/compact"), Some("session.compact"));
+        assert_eq!(builtin_client_command("/export"), Some("session.export"));
+        // Arguments are ignored: the action is still invoked.
+        assert_eq!(builtin_client_command("/model gpt-4"), Some("model.list"));
+        // Prompt-macro commands, unknown commands, paths and plain text fall through.
+        assert_eq!(builtin_client_command("/review"), None);
+        assert_eq!(builtin_client_command("/init"), None);
+        assert_eq!(builtin_client_command("/yolo"), None);
+        assert_eq!(builtin_client_command("/bogus"), None);
+        assert_eq!(builtin_client_command("/usr/bin/x"), None);
+        assert_eq!(builtin_client_command("plain prompt"), None);
+        assert_eq!(builtin_client_command("/"), None);
     }
 
     #[test]
