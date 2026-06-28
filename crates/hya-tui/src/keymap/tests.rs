@@ -219,8 +219,8 @@ fn picks_highest_priority_binding_when_chords_collide() {
 fn default_catalog_contains_known_origin_mappings() {
     let bindings = default_bindings().expect("default keymap should parse");
 
-    assert_eq!(command_mapping().len(), 158);
-    assert_eq!(default_binding_specs().len(), 179);
+    assert_eq!(command_mapping().len(), 159);
+    assert_eq!(default_binding_specs().len(), 180);
     assert_eq!(
         canonical_command("dialog.select.next"),
         BindingId("dialog.select.next".to_owned())
@@ -237,6 +237,11 @@ fn default_catalog_contains_known_origin_mappings() {
     assert!(bindings.iter().any(|binding| {
         binding.config_key == "session_list"
             && binding.command == BindingId("session.list".to_owned())
+    }));
+    assert!(bindings.iter().any(|binding| {
+        binding.config_key == "permission_yolo_switch"
+            && binding.command == BindingId("permission.yolo.switch".to_owned())
+            && !binding.enabled
     }));
     assert!(bindings.iter().any(|binding| {
         binding.config_key == "editor_open"
