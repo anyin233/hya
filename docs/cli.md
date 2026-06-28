@@ -1,18 +1,18 @@
 # CLI Reference
 
-The shipped binary is `yaca`, defined in
-[`../crates/yaca-cli/src/main.rs`](../crates/yaca-cli/src/main.rs).
+The backend CLI/API binary is `hya-backend`, defined in
+[`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs).
 
 ## Global Options
 
 ```text
-yaca [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
+hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
      [--yolo] [--db <PATH>] [--resume <SESSION>] [--mini] [COMMAND]
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `--model <MODEL>` | Override `default_model` from yaca config and `YACA_MODEL`. |
+| `--model <MODEL>` | Override `default_model` from hya config and `HYA_MODEL`. |
 | `-p, --prompt <GOAL>` | Run headless goal mode instead of the TUI or a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
 | `--yolo` | Auto-approve every tool action. This applies to TUI, headless, and server composition. |
@@ -23,19 +23,20 @@ yaca [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 
 When `--prompt` is present, it takes precedence over subcommand dispatch.
 
-## `yaca`
+## `hya` frontend
 
 ```sh
-yaca
+hya
 ```
 
-Starts the interactive terminal UI. If stdout is not a terminal, yaca prints a
+Starts the interactive terminal UI. If stdout is not a terminal, hya prints a
 short help message and exits successfully.
 
 The TUI uses the same `SessionEngine` as the rest of the binary. It uses an
 in-memory store unless `--db <PATH>` is supplied. Read-only tools are
 auto-allowed; mutating tools ask through the permission panel unless `--yolo` is
-set.
+set. In the `hya` frontend, use the command palette's **Switch YOLO** action to
+toggle auto-approval interactively.
 
 TUI slash commands include:
 
@@ -48,22 +49,21 @@ TUI slash commands include:
 | `/init` | Create a starter `AGENTS.md` if one does not already exist. |
 | `/agent`, `/agents` | Select a built-in agent profile. |
 | `/tools`, `/mcp` | Show builtin tools and MCP status. |
-| `/yolo` | Toggle or set auto-approve mode. |
 | `/think` | Set reasoning effort for future turns. |
 | `/export` | Write the current transcript as Markdown. |
 | `/quit`, `/exit`, `/q` | Exit the TUI. |
 | `/help`, `/?` | Show command help. |
 
 Custom markdown commands are loaded from opencode-style command directories and
-yaca prompt directories in the project and user config:
+hya prompt directories in the project and user config:
 
 ```text
 ~/.config/opencode/commands/*.md
 ~/.config/opencode/command/*.md
-~/.config/yaca/prompts/*.md
+~/.config/hya/prompts/*.md
 <workdir>/.opencode/commands/*.md
 <workdir>/.opencode/command/*.md
-<workdir>/.yaca/prompts/*.md
+<workdir>/.hya/prompts/*.md
 ```
 
 Their bodies support `$ARGUMENTS` and positional `$1`...`$9` replacement;
@@ -76,53 +76,53 @@ includes a short listing. A leading built-in agent mention, for example
 `@explore trace this path`, switches that submitted turn to the matching
 profile.
 
-## `yaca exec`
+## `hya-backend exec`
 
 ```sh
-yaca exec "summarize this repo"
-yaca exec --json "summarize this repo"
+hya-backend exec "summarize this repo"
+hya-backend exec --json "summarize this repo"
 ```
 
 Runs one headless turn and prints the rendered transcript. The command uses an
 in-memory store, so it does not persist the session. `--json` prints the
 canonical event stream as JSONL.
 
-## `yaca run`
+## `hya-backend run`
 
 ```sh
-yaca run "summarize this repo"
-yaca run --format json "summarize this repo"
+hya-backend run "summarize this repo"
+hya-backend run --format json "summarize this repo"
 ```
 
 OpenCode-compatible alias for `exec`. Message words are joined with spaces.
 `--format json` and `--json` both emit event JSONL.
 
-## `yaca -p`
+## `hya-backend -p`
 
 ```sh
-yaca -p "make the workspace compile" --max-iterations 6
+hya-backend -p "make the workspace compile" --max-iterations 6
 ```
 
 Runs goal mode. Each iteration runs an agent turn, then an independent evaluator
 judges the transcript. The run stops when the evaluator returns `met=true`, a
 cap is reached, or cancellation is requested.
 
-## `yaca serve`
+## `hya-backend serve`
 
 ```sh
-yaca serve --bind 127.0.0.1:8080 --db yaca.db
+hya-backend serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
-Starts the HTTP/SSE API from [`../crates/yaca-server`](../crates/yaca-server).
+Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
 
 | Flag | Meaning |
 | --- | --- |
 | `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. |
 | `--hostname <HOST>` | OpenCode-compatible alias for the host part of `--bind`. |
 | `--port <PORT>` | OpenCode-compatible alias for the port part of `--bind`. |
-| `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. yaca does not advertise mDNS yet. |
+| `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
 | `--mdns-domain <NAME>` | Accepted for OpenCode CLI compatibility. |
-| `--cors <ORIGIN>` | Accepted for OpenCode CLI compatibility; yaca mirrors CORS origins globally. |
+| `--cors <ORIGIN>` | Accepted for OpenCode CLI compatibility; hya mirrors CORS origins globally. |
 | `--db <PATH>` | SQLite path. Empty string uses an in-memory store. |
 
 The server mounts native `/sessions/*` routes plus OpenCode-compatible legacy
@@ -132,16 +132,16 @@ and v2 route groups. See
 ## Auth and Catalog Commands
 
 ```sh
-yaca login <provider> <token>
-yaca auth list
-yaca auth logout <provider>
-yaca providers list
-yaca providers logout <provider>
-yaca models [provider] [--verbose] [--refresh]
-yaca agent list
+hya-backend login <provider> <token>
+hya-backend auth list
+hya-backend auth logout <provider>
+hya-backend providers list
+hya-backend providers logout <provider>
+hya-backend models [provider] [--verbose] [--refresh]
+hya-backend agent list
 ```
 
-`login` writes a provider token under `~/.config/yaca/auth`; saved tokens take
+`login` writes a provider token under `~/.config/hya/auth`; saved tokens take
 precedence over inline `api_key` values. `providers` is an alias for `auth`.
 `models --refresh` is accepted for OpenCode compatibility but does not fetch a
 remote catalog.
@@ -149,18 +149,18 @@ remote catalog.
 ## Session and RPC Commands
 
 ```sh
-yaca sessions --db yaca.db
-yaca rpc
+hya-backend sessions --db hya.db
+hya-backend rpc
 ```
 
 `sessions` lists persisted sessions in a SQLite database. `rpc` reads JSONL
 requests on stdin, accepts `{"type":"prompt","text":"..."}` and
 `{"type":"quit"}`, and emits new session events plus a `{"type":"done"}` marker.
 
-## `yaca tail-session`
+## `hya-backend tail-session`
 
 ```sh
-yaca tail-session <session-uuid> --db yaca.db
+hya-backend tail-session <session-uuid> --db hya.db
 ```
 
 Replays a persisted session's event log as JSON lines. The `<session-uuid>` is
