@@ -37,6 +37,7 @@ const COMMAND_SESSION_NEW: &str = "session.new";
 const COMMAND_COMMAND_PALETTE: &str = "command.palette.show";
 const COMMAND_AGENT_LIST: &str = "agent.list";
 const COMMAND_MODEL_LIST: &str = "model.list";
+const COMMAND_YOLO_SWITCH: &str = "permission.yolo.switch";
 const COMMAND_VARIANT_LIST: &str = "variant.list";
 const COMMAND_VARIANT_CYCLE: &str = "variant.cycle";
 const COMMAND_SESSION_LIST: &str = "session.list";
@@ -91,6 +92,7 @@ const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
         "Agent",
         true,
     ),
+    ("Switch YOLO", COMMAND_YOLO_SWITCH, "", "Permission", true),
     (
         "Switch variant",
         COMMAND_VARIANT_LIST,
@@ -291,8 +293,8 @@ fn command_like_name(text: &str) -> Option<&str> {
 /// `/new` in the prompt would be sent to the model as a prompt (or rejected as unknown for
 /// names absent from the backend command catalog), so the command never performs its action.
 /// Aliases mirror the `--mini` TUI vocabulary so both frontends accept the same names. Any
-/// trailing arguments are ignored — the action is still invoked. Prompt-macro commands
-/// (`/review`, `/init`), `/yolo` (handled separately) and custom/unknown commands fall through.
+/// trailing arguments are ignored — the action is still invoked. Prompt-macro commands and
+/// custom/unknown commands fall through.
 fn builtin_client_command(text: &str) -> Option<&'static str> {
     let name = command_like_name(text)?;
     match name {
@@ -305,25 +307,6 @@ fn builtin_client_command(text: &str) -> Option<&'static str> {
         "export" => Some(COMMAND_SESSION_EXPORT),
         _ => None,
     }
-}
-
-enum YoloRequest {
-    Toggle,
-    Set(bool),
-}
-
-fn yolo_command(text: &str) -> Option<YoloRequest> {
-    let rest = text.strip_prefix('/')?;
-    let mut parts = rest.split_whitespace();
-    if parts.next()? != "yolo" {
-        return None;
-    }
-    let request = match parts.next() {
-        Some("on" | "true" | "enable" | "enabled") => YoloRequest::Set(true),
-        Some("off" | "false" | "disable" | "disabled") => YoloRequest::Set(false),
-        _ => YoloRequest::Toggle,
-    };
-    Some(request)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -403,6 +386,7 @@ enum DialogKind {
     CommandPalette,
     AgentSwitch,
     ModelSwitch,
+    YoloSwitch,
     VariantList,
     SessionList,
     Timeline,
@@ -416,6 +400,7 @@ impl DialogKind {
             DialogKind::CommandPalette => "Commands",
             DialogKind::AgentSwitch => "Agents",
             DialogKind::ModelSwitch => "Select model",
+            DialogKind::YoloSwitch => "Switch YOLO",
             DialogKind::VariantList => "Select variant",
             DialogKind::SessionList => "Sessions",
             DialogKind::Timeline => "Timeline",
@@ -511,7 +496,7 @@ struct Runtime {
     pending_editor: bool,
     prompt_hits: crate::screens::prompt_box::PromptHits,
     /// Client-side auto-approve ("yolo"): when on, tool permission requests are
-    /// answered automatically instead of prompting. Toggled by the `/yolo` command.
+    /// answered automatically instead of prompting. Toggled by the internal YOLO switch.
     yolo: bool,
     /// Permission request ids already auto-approved under yolo, so each is replied
     /// to exactly once and never flashes on screen.
@@ -1694,6 +1679,12 @@ impl Runtime {
                     DialogSelectItem::new(format!("{title}  {provider}"), value.clone())
                 })
                 .collect(),
+            DialogKind::YoloSwitch => vec![
+                DialogSelectItem::new("Enable YOLO".to_owned(), "enabled".to_owned())
+                    .with_description("auto-approve permission requests"),
+                DialogSelectItem::new("Disable YOLO".to_owned(), "disabled".to_owned())
+                    .with_description("ask before tool actions"),
+            ],
             DialogKind::VariantList => std::iter::once(DialogSelectItem::new(
                 "Default".to_owned(),
                 "default".to_owned(),
@@ -1942,6 +1933,18 @@ impl Runtime {
                     self.active_variant = None;
                 }
             }
+            DialogKind::YoloSwitch => {
+                match value.as_str() {
+                    "enabled" => self.yolo = true,
+                    "disabled" => self.yolo = false,
+                    _ => {}
+                }
+                let state = if self.yolo { "enabled" } else { "disabled" };
+                self.toast = Some((
+                    format!("yolo mode {state}"),
+                    Instant::now() + TOAST_DURATION,
+                ));
+            }
             DialogKind::VariantList => {
                 self.active_variant = (value != "default").then_some(value);
             }
@@ -2186,6 +2189,7 @@ impl Runtime {
             COMMAND_COMMAND_PALETTE => self.open_dialog(DialogKind::CommandPalette),
             COMMAND_AGENT_LIST => self.open_dialog(DialogKind::AgentSwitch),
             COMMAND_MODEL_LIST => self.open_dialog(DialogKind::ModelSwitch),
+            COMMAND_YOLO_SWITCH => self.open_dialog(DialogKind::YoloSwitch),
             COMMAND_VARIANT_LIST => self.open_variant_dialog(),
             COMMAND_VARIANT_CYCLE => self.cycle_variant(),
             COMMAND_SESSION_LIST => self.request_session_list(),
@@ -2597,26 +2601,9 @@ impl Runtime {
         }
     }
 
-    fn toggle_yolo(&mut self, request: YoloRequest) {
-        self.yolo = match request {
-            YoloRequest::Toggle => !self.yolo,
-            YoloRequest::Set(value) => value,
-        };
-        let state = if self.yolo { "enabled" } else { "disabled" };
-        self.toast = Some((
-            format!("yolo mode {state}"),
-            Instant::now() + TOAST_DURATION,
-        ));
-    }
-
     fn submit_prompt(&mut self) {
         let text = self.prompt.text.trim().to_owned();
         if text.is_empty() {
-            return;
-        }
-        if let Some(request) = yolo_command(&text) {
-            self.toggle_yolo(request);
-            self.reset_prompt();
             return;
         }
         if let Some(client_command) = builtin_client_command(&text) {
@@ -2628,7 +2615,9 @@ impl Runtime {
             self.pending_prompts.push(text);
             let queued = self.pending_prompts.len();
             self.toast = Some((
-                format!("Backend still starting \u{2014} queued prompt ({queued}); it will send once ready"),
+                format!(
+                    "Backend still starting \u{2014} queued prompt ({queued}); it will send once ready"
+                ),
                 Instant::now() + TOAST_DURATION,
             ));
             self.reset_prompt();
@@ -2757,7 +2746,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         base64_encode, builtin_client_command, command_like_name, normalize_editor_content,
-        parse_editor_command, slash_command, trailing_mention, yolo_command, YoloRequest,
+        parse_editor_command, slash_command, trailing_mention, PALETTE_TUI_COMMANDS,
     };
 
     #[test]
@@ -2786,28 +2775,14 @@ mod tests {
     }
 
     #[test]
-    fn yolo_command_parses_state_and_ignores_non_yolo() {
-        assert!(matches!(yolo_command("/yolo"), Some(YoloRequest::Toggle)));
-        assert!(matches!(
-            yolo_command("/yolo toggle"),
-            Some(YoloRequest::Toggle)
-        ));
-        assert!(matches!(
-            yolo_command("/yolo on"),
-            Some(YoloRequest::Set(true))
-        ));
-        assert!(matches!(
-            yolo_command("/yolo off"),
-            Some(YoloRequest::Set(false))
-        ));
-        assert!(matches!(
-            yolo_command("/yolo disable"),
-            Some(YoloRequest::Set(false))
-        ));
-        assert!(yolo_command("/yolonope").is_none());
-        assert!(yolo_command("/model").is_none());
-        assert!(yolo_command("yolo").is_none());
-        assert!(yolo_command("be /yolo").is_none());
+    fn palette_tui_commands_include_yolo_switch_action() {
+        let (_, command, _, category, _) = PALETTE_TUI_COMMANDS
+            .iter()
+            .find(|(title, _, _, _, _)| *title == "Switch YOLO")
+            .expect("YOLO should be exposed as an internal switch command");
+
+        assert_eq!(*command, "permission.yolo.switch");
+        assert_eq!(*category, "Permission");
     }
 
     #[test]
