@@ -304,9 +304,16 @@ fn builtin_client_command(text: &str) -> Option<&'static str> {
         "agent" | "agents" => Some(COMMAND_AGENT_LIST),
         "sessions" | "resume" => Some(COMMAND_SESSION_LIST),
         "compact" => Some(COMMAND_SESSION_COMPACT),
+        "tools" | "mcp" => Some(COMMAND_HYA_STATUS),
+        "think" => Some(COMMAND_VARIANT_LIST),
         "export" => Some(COMMAND_SESSION_EXPORT),
+        "?" => Some(COMMAND_HELP),
         _ => None,
     }
+}
+
+fn builtin_quit_command(text: &str) -> bool {
+    matches!(command_like_name(text), Some("quit" | "exit" | "q"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1474,7 +1481,9 @@ impl Runtime {
                 Some(false)
             }
             Key::Enter => {
-                if matches!(self.prompt.text.trim(), "exit" | "quit" | ":q") {
+                if matches!(self.prompt.text.trim(), "exit" | "quit" | ":q")
+                    || builtin_quit_command(&self.prompt.text)
+                {
                     return Some(true);
                 }
                 self.submit_prompt();
@@ -2745,8 +2754,9 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        base64_encode, builtin_client_command, command_like_name, normalize_editor_content,
-        parse_editor_command, slash_command, trailing_mention, PALETTE_TUI_COMMANDS,
+        base64_encode, builtin_client_command, builtin_quit_command, command_like_name,
+        normalize_editor_content, parse_editor_command, slash_command, trailing_mention,
+        PALETTE_TUI_COMMANDS,
     };
 
     #[test]
@@ -2825,9 +2835,14 @@ mod tests {
         assert_eq!(builtin_client_command("/sessions"), Some("session.list"));
         assert_eq!(builtin_client_command("/resume"), Some("session.list"));
         assert_eq!(builtin_client_command("/compact"), Some("session.compact"));
+        assert_eq!(builtin_client_command("/tools"), Some("hya.status"));
+        assert_eq!(builtin_client_command("/mcp"), Some("hya.status"));
+        assert_eq!(builtin_client_command("/think"), Some("variant.list"));
         assert_eq!(builtin_client_command("/export"), Some("session.export"));
+        assert_eq!(builtin_client_command("/?"), Some("app.help"));
         // Arguments are ignored: the action is still invoked.
         assert_eq!(builtin_client_command("/model gpt-4"), Some("model.list"));
+        assert_eq!(builtin_client_command("/think high"), Some("variant.list"));
         // Prompt-macro commands, unknown commands, paths and plain text fall through.
         assert_eq!(builtin_client_command("/review"), None);
         assert_eq!(builtin_client_command("/init"), None);
@@ -2849,5 +2864,16 @@ mod tests {
         let names = vec!["review".to_owned()];
         assert_eq!(slash_command("/bogus", &names), None);
         assert_eq!(command_like_name("/bogus"), Some("bogus"));
+    }
+
+    #[test]
+    fn builtin_quit_command_detects_documented_slash_exit_aliases() {
+        assert!(builtin_quit_command("/quit"));
+        assert!(builtin_quit_command("/exit"));
+        assert!(builtin_quit_command("/q"));
+        assert!(builtin_quit_command("/quit now"));
+        assert!(!builtin_quit_command("quit"));
+        assert!(!builtin_quit_command("/review"));
+        assert!(!builtin_quit_command("/usr/bin/x"));
     }
 }
