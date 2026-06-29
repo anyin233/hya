@@ -236,11 +236,7 @@ async fn cmd_tui(
     .await;
     let agent = agent_with_model(&runtime.model);
     let session = match resume {
-        Some(id) => {
-            let raw = id.strip_prefix("ses_").unwrap_or(&id);
-            let uuid = uuid::Uuid::parse_str(raw).context("parse resume session id")?;
-            SessionId::from_uuid(uuid)
-        }
+        Some(id) => id.parse().context("parse resume session id")?,
         None => engine
             .create(CreateSession {
                 parent: None,
@@ -267,8 +263,7 @@ async fn cmd_tui(
 }
 
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
-    let uuid = uuid::Uuid::parse_str(&id).context("parse session id")?;
-    let session = SessionId::from_uuid(uuid);
+    let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
     let (engine, _asks, _, _mcp_manager, _plugin_host) =
@@ -339,18 +334,20 @@ async fn main() -> anyhow::Result<()> {
             hostname,
             port,
             mdns,
-            db,
+            db: command_db,
             ..
         }) => {
             serve::cmd_serve(
                 cli_args::serve_bind(bind, hostname, port, mdns),
-                db,
+                command_db.unwrap_or_else(|| db.clone()),
                 model,
                 yolo,
             )
             .await
         }
-        Some(Command::TailSession { id, db }) => cmd_tail_session(id, db).await,
+        Some(Command::TailSession { id, db: command_db }) => {
+            cmd_tail_session(id, command_db.unwrap_or_else(|| db.clone())).await
+        }
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
@@ -362,7 +359,9 @@ async fn main() -> anyhow::Result<()> {
             let runtime = resolve_runtime(model);
             models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
         }
-        Some(Command::Sessions { db }) => cmd_sessions(db).await,
+        Some(Command::Sessions { db: command_db }) => {
+            cmd_sessions(command_db.unwrap_or_else(|| db.clone())).await
+        }
         Some(Command::Rpc) => cmd_rpc(model, yolo).await,
     }
 }
