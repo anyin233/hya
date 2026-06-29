@@ -1,3 +1,3 @@
-# 0.0.0
+# 0.28.1
 
-- Added the initial release automation contract for publishing the `hya` binary from version tags.
+- Bumped the Rust workspace crates to 0.28.1.
