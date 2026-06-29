@@ -95,6 +95,8 @@ or verifiers; workers do not decide that their own objective is done.
 
 ## Verification
 
+- After any fix, feature, or refactor, run the CI-equivalent checks for the touched areas and build a local executable before reporting done.
+
 For Rust changes, run:
 
 ```sh
