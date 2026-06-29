@@ -1,12 +1,12 @@
 # Tools and Permissions
 
-The tool system lives in [`../../crates/yaca-tool`](../../crates/yaca-tool). The
+The tool system lives in [`../../crates/hya-tool`](../../crates/hya-tool). The
 engine exposes tool schemas to the model, then executes requested calls only
 after permission checks pass.
 
 ## Tool Registry
 
-[`tool.rs`](../../crates/yaca-tool/src/tool.rs) defines:
+[`tool.rs`](../../crates/hya-tool/src/tool.rs) defines:
 
 - `Tool`: name, schema, async execute.
 - `ToolCtx`: permission plane, interaction/spawner/todo/skill/websearch/LSP/
@@ -44,7 +44,7 @@ large outputs.
 
 ## Permission Model
 
-[`permission.rs`](../../crates/yaca-tool/src/permission.rs) defines:
+[`permission.rs`](../../crates/hya-tool/src/permission.rs) defines:
 
 | Type | Meaning |
 | --- | --- |
@@ -99,7 +99,7 @@ The next provider round then sees the tool result in the projected transcript.
 
 ## External Tool Sources
 
-`yaca-cli` registers MCP tools from `yaca-mcp` after connecting configured
+`hya-backend` registers MCP tools from `hya-mcp` after connecting configured
 servers. Those tools are named `mcp__<server>__<tool>`. It then registers plugin
-tools from `yaca-plugin`. Both sources use the same registry, permission plane,
+tools from `hya-plugin`. Both sources use the same registry, permission plane,
 tool result events, and projection replay as builtin tools.

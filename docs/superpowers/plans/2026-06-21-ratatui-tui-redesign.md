@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a polished opencode-inspired, Rust-only ratatui TUI for yaca's existing chat/session state.
+**Goal:** Build a polished opencode-inspired, Rust-only ratatui TUI for hya's existing chat/session state.
 
-**Architecture:** Keep `yaca-cli` as the terminal/event-loop owner and keep `yaca-tui` as a pure view crate. Split rendering into semantic theme, responsive layout, projection view-model, and focused widgets while preserving `AppState` and `draw`.
+**Architecture:** Keep `hya-backend` as the terminal/event-loop owner and keep `hya-legacy-tui` as a pure view crate. Split rendering into semantic theme, responsive layout, projection view-model, and focused widgets while preserving `AppState` and `draw`.
 
 **Tech Stack:** Rust 2024, `ratatui 0.28`, `crossterm 0.28` in CLI, `ratatui::backend::TestBackend` for render tests.
 
@@ -12,17 +12,17 @@
 
 ## File Structure
 
-- Create: `crates/yaca-tui/src/theme.rs` — semantic colors and style helpers.
-- Create: `crates/yaca-tui/src/layout.rs` — status/body/sidebar/prompt/footer rectangle calculation.
-- Create: `crates/yaca-tui/src/view_model.rs` — convert `Projection` messages and parts into renderable timeline items.
-- Create: `crates/yaca-tui/src/widgets.rs` — draw status, timeline, prompt, sidebar, and footer.
-- Modify: `crates/yaca-tui/src/lib.rs` — keep public state and delegate drawing to new modules.
-- Modify: `crates/yaca-tui/tests/tui_render.rs` — add failing tests first, then update old expectations.
+- Create: `crates/hya-legacy-tui/src/theme.rs` — semantic colors and style helpers.
+- Create: `crates/hya-legacy-tui/src/layout.rs` — status/body/sidebar/prompt/footer rectangle calculation.
+- Create: `crates/hya-legacy-tui/src/view_model.rs` — convert `Projection` messages and parts into renderable timeline items.
+- Create: `crates/hya-legacy-tui/src/widgets.rs` — draw status, timeline, prompt, sidebar, and footer.
+- Modify: `crates/hya-legacy-tui/src/lib.rs` — keep public state and delegate drawing to new modules.
+- Modify: `crates/hya-legacy-tui/tests/tui_render.rs` — add failing tests first, then update old expectations.
 
 ### Task 1: Failing Render Tests
 
 **Files:**
-- Modify: `crates/yaca-tui/tests/tui_render.rs`
+- Modify: `crates/hya-legacy-tui/tests/tui_render.rs`
 
 - [ ] **Step 1: Add tests for desired layout behavior**
 
@@ -62,15 +62,15 @@ fn timeline_renders_message_rails_and_tool_status() {
 
 - [ ] **Step 2: Run test to verify RED**
 
-Run: `cargo test -p yaca-tui wide_layout_renders_sidebar_and_surface_labels narrow_layout_hides_sidebar_without_hiding_prompt timeline_renders_message_rails_and_tool_status`
+Run: `cargo test -p hya-legacy-tui wide_layout_renders_sidebar_and_surface_labels narrow_layout_hides_sidebar_without_hiding_prompt timeline_renders_message_rails_and_tool_status`
 
 Expected: FAIL because the current renderer has no `context` sidebar, no `model fake` sidebar label, and no compact `tool read completed` row.
 
 ### Task 2: Theme and Layout
 
 **Files:**
-- Create: `crates/yaca-tui/src/theme.rs`
-- Create: `crates/yaca-tui/src/layout.rs`
+- Create: `crates/hya-legacy-tui/src/theme.rs`
+- Create: `crates/hya-legacy-tui/src/layout.rs`
 
 - [ ] **Step 1: Implement semantic theme**
 
@@ -92,7 +92,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub const fn yaca_dark() -> Self {
+    pub const fn hya_dark() -> Self {
         Self {
             background: Color::Rgb(10, 10, 10),
             panel: Color::Rgb(20, 20, 20),
@@ -157,16 +157,16 @@ pub fn app_layout(area: Rect) -> AppLayout {
 
 - [ ] **Step 3: Run focused tests**
 
-Run: `cargo test -p yaca-tui wide_layout_renders_sidebar_and_surface_labels`
+Run: `cargo test -p hya-legacy-tui wide_layout_renders_sidebar_and_surface_labels`
 
 Expected: Still FAIL until widgets and `draw` use the layout.
 
 ### Task 3: View Model and Widgets
 
 **Files:**
-- Create: `crates/yaca-tui/src/view_model.rs`
-- Create: `crates/yaca-tui/src/widgets.rs`
-- Modify: `crates/yaca-tui/src/lib.rs`
+- Create: `crates/hya-legacy-tui/src/view_model.rs`
+- Create: `crates/hya-legacy-tui/src/widgets.rs`
+- Modify: `crates/hya-legacy-tui/src/lib.rs`
 
 - [ ] **Step 1: Implement timeline conversion**
 
@@ -227,7 +227,7 @@ pub fn render_sidebar(frame: &mut Frame, area: Rect, state: &AppState, theme: &T
 
 ```rust
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
-    let theme = Theme::yaca_dark();
+    let theme = Theme::hya_dark();
     let layout = app_layout(frame.area());
     render_status(frame, layout.status, state, &theme);
     render_timeline(frame, layout.timeline, state, &theme);
@@ -241,7 +241,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
 - [ ] **Step 4: Run focused tests**
 
-Run: `cargo test -p yaca-tui`
+Run: `cargo test -p hya-legacy-tui`
 
 Expected: PASS for new and existing TUI render tests.
 

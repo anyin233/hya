@@ -1,8 +1,8 @@
-# yaca Design System
+# hya Design System
 
 ## 1. Atmosphere & Identity
 
-yaca feels like a quiet terminal command center: dense, fast, and focused, with
+hya feels like a quiet terminal command center: dense, fast, and focused, with
 just enough surface contrast to keep long coding sessions readable. The
 signature is borderless tonal layering: panels are separated by subtle dark
 surface shifts and restrained status colors instead of decorative boxes.
@@ -67,7 +67,7 @@ Terminal spacing derives from a single cell.
 | `cell-1` | 1 terminal column/row | Horizontal transcript gutter, inline spacing |
 | `cell-2` | 2 terminal columns/rows | Overlay inset |
 | `row-status` | 1 row | Status line |
-| `row-input` | 3 rows | Single-line input region |
+| `row-input` | 6-11 rows | Width-aware expanding prompt region |
 | `row-footer` | 1 row | Keyboard hint footer |
 
 ### Grid
@@ -97,10 +97,10 @@ Terminal spacing derives from a single cell.
 - **States**: user, assistant, system, tool running, tool completed, tool error.
 - **Accessibility**: tool rows include text status and elapsed time when available.
 
-### Input Row
+### Prompt Composer
 
-- **Structure**: model prefix plus grapheme-aware single-line editor.
-- **Spacing**: `row-input` height with no border.
+- **Structure**: agent/model prefix plus grapheme-aware editor that soft-wraps by terminal width.
+- **Spacing**: `row-input` height with no border; text grows from 1 to 6 visible rows, then scrolls to keep the cursor row visible.
 - **States**: editable, disabled while running, hidden cursor when overlays are active.
 - **Accessibility**: cursor remains visible inside the viewport for long or wide Unicode text.
 

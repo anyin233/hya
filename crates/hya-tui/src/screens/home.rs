@@ -12,6 +12,10 @@ const LOGO_ID: NodeId = NodeId(1);
 const PROMPT_ID: NodeId = NodeId(2);
 const PROMPT_MAX_WIDTH: u16 = 75;
 
+fn prompt_width(area_width: u16) -> u16 {
+    area_width.saturating_sub(4).clamp(20, PROMPT_MAX_WIDTH)
+}
+
 pub const PLACEHOLDERS: &[&str] = &[
     "Ask anything... \"Fix a TODO in the codebase\"",
     "Ask anything... \"What is the tech stack of this project?\"",
@@ -34,7 +38,7 @@ pub struct HomeLayout {
 
 #[must_use]
 pub fn compute_layout(area: Rect, prompt_height: u16) -> HomeLayout {
-    let prompt_width = area.width.saturating_sub(4).clamp(20, PROMPT_MAX_WIDTH);
+    let prompt_width = prompt_width(area.width);
     let root = RenderNode {
         id: None,
         flex: FlexSpec {
@@ -110,7 +114,8 @@ pub fn draw(
         height: area.height.saturating_sub(2),
     };
 
-    let layout = compute_layout(content_area, prompt_box::box_height(&doc.text));
+    let prompt_height = prompt_box::box_height(&doc.text, prompt_width(content_area.width));
+    let layout = compute_layout(content_area, prompt_height);
     let logo = Paragraph::new(draw::text_to_ratatui(
         &super::logo::logo_text_at(theme, logo_elapsed),
         background,

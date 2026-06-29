@@ -1,0 +1,25 @@
+[package]
+name = "hya-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hya-core = { workspace = true }
+hya-provider = { workspace = true }
+hya-tool = { workspace = true }
+hya-store = { workspace = true }
+hya-server = { workspace = true }
+hya-proto = { workspace = true }
+hya-mcp = { workspace = true }
+hya-plugin = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_norway = { workspace = true }
+anyhow = { workspace = true }
+time = { workspace = true }

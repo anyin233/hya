@@ -36,15 +36,15 @@ Use this guide when deciding where a change belongs:
 
 | Change | Crate |
 | --- | --- |
-| New event, id, API DTO, message field, projection behavior | `yaca-proto` |
-| New provider route, protocol encoder/decoder, capability preflight | `yaca-provider` |
-| New builtin tool or permission action | `yaca-tool` |
-| Persistence, replay, migrations, usage ledger | `yaca-store` |
-| Turn-loop behavior, goal/loop/team/worktree runtime logic | `yaca-core` |
-| HTTP route or SSE behavior | `yaca-server` |
-| Typed HTTP integration | `yaca-client` |
-| Pure terminal rendering | `yaca-tui` |
-| User-facing CLI command, config loading, terminal event loop | `yaca-cli` |
+| New event, id, API DTO, message field, projection behavior | `hya-proto` |
+| New provider route, protocol encoder/decoder, capability preflight | `hya-provider` |
+| New builtin tool or permission action | `hya-tool` |
+| Persistence, replay, migrations, usage ledger | `hya-store` |
+| Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
+| HTTP route or SSE behavior | `hya-server` |
+| Typed HTTP integration | `hya-client` |
+| Pure terminal rendering | `hya-legacy-tui` |
+| User-facing CLI command, config loading, terminal event loop | `hya-backend` |
 
 ## Testing Strategy
 

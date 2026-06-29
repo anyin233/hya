@@ -1,6 +1,6 @@
 # Architecture Overview
 
-yaca is built around one invariant: the runtime produces a canonical,
+hya is built around one invariant: the runtime produces a canonical,
 replayable stream of `Event`s, and every surface reads from or writes to that
 stream.
 
@@ -8,7 +8,7 @@ stream.
 user input
    |
    v
-yaca-cli / yaca-server
+hya-backend / hya-server
    |
    v
 SessionEngine
@@ -29,12 +29,12 @@ TUI / API clients / transcript renderers
 
 | Layer | Crates | Responsibility |
 | --- | --- | --- |
-| Protocol | [`yaca-proto`](../../crates/yaca-proto) | Shared ids, events, messages, DTOs, and projection reducer. |
-| Model I/O | [`yaca-provider`](../../crates/yaca-provider) | Normalize OpenAI-compatible, Anthropic, Google, fake, and dev providers into event streams. |
-| Tools | [`yaca-tool`](../../crates/yaca-tool), [`yaca-mcp`](../../crates/yaca-mcp), [`yaca-plugin`](../../crates/yaca-plugin) | Define tool schemas, execute builtin/MCP/plugin tools, and enforce permissions. |
-| Persistence | [`yaca-store`](../../crates/yaca-store) | Append and replay events from SQLite; fold projections on read. |
-| Runtime | [`yaca-core`](../../crates/yaca-core) | Own sessions, turn execution, event publication, hooks, compaction, goal/loop/team primitives. |
-| Surfaces | [`yaca-cli`](../../crates/yaca-cli), [`yaca-server`](../../crates/yaca-server), [`yaca-client`](../../crates/yaca-client), [`yaca-tui`](../../crates/yaca-tui), [`yaca-plugin-opencode`](../../crates/yaca-plugin-opencode) | Expose the runtime through CLI, TUI, native/OpenCode HTTP/SSE, typed client APIs, and the OpenCode plugin adapter. |
+| Protocol | [`hya-proto`](../../crates/hya-proto) | Shared ids, events, messages, DTOs, and projection reducer. |
+| Model I/O | [`hya-provider`](../../crates/hya-provider) | Normalize OpenAI-compatible, Anthropic, Google, fake, and dev providers into event streams. |
+| Tools | [`hya-tool`](../../crates/hya-tool), [`hya-mcp`](../../crates/hya-mcp), [`hya-plugin`](../../crates/hya-plugin) | Define tool schemas, execute builtin/MCP/plugin tools, and enforce permissions. |
+| Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
+| Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, event publication, hooks, compaction, goal/loop/team primitives. |
+| Surfaces | [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-legacy-tui`](../../crates/hya-legacy-tui), [`hya-plugin-opencode`](../../crates/hya-plugin-opencode) | Expose the runtime through CLI, TUI, native/OpenCode HTTP/SSE, typed client APIs, and the OpenCode plugin adapter. |
 
 ## Turn Flow
 
@@ -56,7 +56,7 @@ TUI / API clients / transcript renderers
 
 ## Why Event Sourcing
 
-The event log is the source of truth. This gives yaca a few useful properties:
+The event log is the source of truth. This gives hya a few useful properties:
 
 - Replay and live streaming use the same `Envelope` shape.
 - TUI state and API state fold through the same projection reducer.
@@ -65,12 +65,12 @@ The event log is the source of truth. This gives yaca a few useful properties:
 
 ## Current Runtime Surfaces
 
-- The default `yaca` command runs the interactive TUI in-process.
-- `yaca exec` runs one turn and prints a transcript.
-- `yaca run` is an OpenCode-compatible alias for headless prompt execution.
-- `yaca -p` runs goal mode with an independent model-backed evaluator.
-- `yaca serve` exposes HTTP and SSE over the same engine.
-- `yaca tail-session` replays JSON envelopes from a persisted SQLite event log.
-- `yaca models`, `login`, `auth`/`providers`, `agent`, `sessions`, and `rpc`
+- The default `hya` command runs the interactive TUI in-process.
+- `hya-backend exec` runs one turn and prints a transcript.
+- `hya-backend run` is an OpenCode-compatible alias for headless prompt execution.
+- `hya-backend -p` runs goal mode with an independent model-backed evaluator.
+- `hya-backend serve` exposes HTTP and SSE over the same engine.
+- `hya-backend tail-session` replays JSON envelopes from a persisted SQLite event log.
+- `hya-backend models`, `login`, `auth`/`providers`, `agent`, `sessions`, and `rpc`
   expose local catalogs, auth tokens, session listing, and JSONL integration
   modes.

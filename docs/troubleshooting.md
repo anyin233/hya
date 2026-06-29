@@ -2,23 +2,23 @@
 
 ## The TUI Says It Needs a Terminal
 
-Bare `yaca` starts the interactive TUI. If stdout is not a terminal, the binary
+Bare `hya` starts the interactive TUI. If stdout is not a terminal, the binary
 prints a short message and exits. Use a real terminal, or run a headless command:
 
 ```sh
-yaca exec "summarize this repo"
+hya-backend exec "summarize this repo"
 ```
 
-## yaca Uses the Offline Provider
+## hya Uses the Offline Provider
 
-If the response starts with `(yaca dev provider)`, yaca did not find a usable
+If the response starts with `(hya dev provider)`, hya did not find a usable
 live provider route. Check:
 
-- `$XDG_CONFIG_HOME/yaca/config.yaml`
-- `$HOME/.config/yaca/config.yaml`
+- `$XDG_CONFIG_HOME/hya/config.yaml`
+- `$HOME/.config/hya/config.yaml`
 - each provider has `kind`, `base_url`, and at least one model under `models`
 - each provider has either an inline `api_key` or a saved token from
-  `yaca login <provider> <token>`
+  `hya-backend login <provider> <token>`
 - `kind` is `openai`, `openai-compatible`, `anthropic`, or `google`
 
 See [Configuration](configuration.md).
@@ -29,7 +29,7 @@ The selected model is not served by any configured provider. Check selection
 order:
 
 1. `--model`
-2. `YACA_MODEL`
+2. `HYA_MODEL`
 3. default model chosen from config
 
 Then make sure that exact model id appears as a key under a supported provider's
@@ -38,7 +38,7 @@ Then make sure that exact model id appears as a key under a supported provider's
 ## API Key Template Fails
 
 For `{env:VAR}`, confirm the variable is exported in the shell that launches
-yaca:
+hya:
 
 ```sh
 echo "$VAR"
@@ -65,14 +65,15 @@ file and read the specific section you need.
 
 ## `tail-session` Cannot Parse the Session Id
 
-`tail-session` expects the raw UUID:
+`tail-session` accepts any valid session id: a new `hysec_...` id, a legacy
+`ses_...` display id, or a legacy raw UUID:
 
 ```sh
-yaca tail-session 018f... --db yaca.db
+hya-backend tail-session hysec_ABCDEFGHIJKLMNOPQRST --db hya.db
 ```
 
-If you copied a display id such as `ses_<uuid-without-dashes>`, convert it back
-to the raw UUID format first.
+If parsing fails, confirm the id came from `hya-backend sessions --db <PATH>`
+for the same database path.
 
 ## Server SSE Emits `resync`
 
@@ -99,8 +100,8 @@ continue:
 Use an explicit bind address:
 
 ```sh
-yaca serve --bind 127.0.0.1:8080 --db yaca.db
+hya-backend serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
-Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; yaca
+Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; hya
 prints the actual listening address on startup.
