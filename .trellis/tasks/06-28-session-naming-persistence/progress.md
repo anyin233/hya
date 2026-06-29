@@ -58,3 +58,19 @@ D5 PASS: verification is concrete at each wave plus final gates, with targeted t
 D6 PASS: scope discipline is maintained by crate boundaries, additive migration, JSON-history bridge-only language, no broad server shutdown cleanup, no new event variant unless tests require it, and explicit stop points before broadening semantics [.trellis/tasks/06-28-session-naming-persistence/design.md:169] [.trellis/tasks/06-28-session-naming-persistence/design.md:208] [.trellis/tasks/06-28-session-naming-persistence/design.md:121] [.trellis/tasks/06-28-session-naming-persistence/implement.md:492]
 VERDICT: PASS
 ```
+
+## 2026-06-29
+
+- Resumed completion in isolated worktree `.worktrees/finish-session-naming-persistence` on branch `finish/session-naming-persistence`; main checkout remained dirty and was not used for implementation.
+- Integrated the required parallel swarm: backend CLI, CLI subprocess tests, docs/help, Trellis/spec closeout, security/privacy, code quality, and real-surface QA agents. Backend/QA findings drove `tail-session` shared-parser replay coverage and exact `sessions --db` checks; docs/security findings drove SQLite/transcript privacy wording; quality review required the final docs/Trellis closeout fixes.
+- Implemented durable headless session persistence in commit `461ea1f`: `cmd_exec` / `run` / `exec` use the selected store, `tail-session` parses IDs through shared `SessionId`, and subprocess tests isolate `HOME`, `XDG_CONFIG_HOME`, `HYA_CONFIG_HOME`, cwd, and `PATH`.
+- Updated docs/help in commits `11a28f0` and `75e4534`: top-level `--db` now covers TUI, `serve`, headless `exec`/`run`, `sessions`, and `tail-session`; `tail-session` documents accepted `hysec_...`, `ses_...`, and legacy raw UUID forms; TUI resume is described as active-store persistence rather than JSONL-only history.
+- Merged current `main` into the feature branch in commit `2c484d3`; resolved unrelated TUI/yolo-task conflicts by keeping main's hidden `/init`/`/yolo` behavior and preserving hya crate names.
+- Verification evidence before Trellis closeout:
+  - `cargo test -p hya-backend --test opencode_agent_cli -- --nocapture` passed: 3 tests, 0 failures.
+  - `cargo fmt --all --check` passed after formatting merge resolution in `c1213d2`.
+  - `cargo clippy --workspace --all-targets -- -D warnings` passed.
+  - `cargo test --workspace` passed: 833 tests, 2 ignored, 0 failures.
+- Manual real-surface CLI QA passed with temp DBs under `/tmp/hya-session-qa-az026ssm`: rendered `exec --db` created `hysec_fFsKtGtOmbU2K8KLfxCv`; `sessions --db` listed it; JSON `exec --json --db` emitted `session_created.session = hysec_5mcTqqqKSzy6J8KFj4r2`; `sessions --db` listed the exact JSON session; `tail-session hysec_fFsKtGtOmbU2K8KLfxCv --db <same-db>` replayed JSONL for that exact session.
+- Final reviewer `FinalBackendReview` passed backend CLI scope: prior blockers resolved, deterministic subprocess tests cover rendered/JSON persistence and `tail-session` replay. `FinalDocsReview` initially failed stale `/resume` JSONL wording and open Trellis metadata; both are fixed in `docs/cli.md`, `task_plan.md`, and `task.json`.
+- Marked this task complete in `task.json` with completed date `2026-06-29`, branch `finish/session-naming-persistence`, worktree path `.worktrees/finish-session-naming-persistence`, and commit `75e4534c0302fbc7181ebd06f834481f6eef8b4f`.
