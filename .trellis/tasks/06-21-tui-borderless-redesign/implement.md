@@ -8,7 +8,7 @@
 
 ## Rollback point
 
-The entire change is contained in `crates/yaca-tui/` and `crates/yaca-cli/src/tui.rs`/
+The entire change is contained in `crates/hya-render-tui/` and `crates/hya-cli/src/tui.rs`/
 `main.rs`. If anything fails final validation, revert those files and remove the
 new example; no migrations needed.
 
@@ -19,42 +19,42 @@ new example; no migrations needed.
 - Edit `Cargo.toml` (workspace root):
   - Add `unicode-width = "0.1"` and `unicode-segmentation = "1.11"` to
     `[workspace.dependencies]`.
-- Edit `crates/yaca-tui/Cargo.toml`:
+- Edit `crates/hya-render-tui/Cargo.toml`:
   - Add `unicode-width = { workspace = true }` and
     `unicode-segmentation = { workspace = true }` under `[dependencies]`.
 
-**Validation:** `cargo check -p yaca-tui` compiles (will fail on missing imports
+**Validation:** `cargo check -p hya-render-tui` compiles (will fail on missing imports
 until step 3; that's OK).
 
 ### 2. Theme struct and default palette
 
-- Create `crates/yaca-tui/src/theme.rs`:
+- Create `crates/hya-render-tui/src/theme.rs`:
   - `Theme` struct with fields from design.md.
   - `Theme::opencode_dark()` constructor returning the palette from
     opencode's `opencode.json`.
-- Add `pub mod theme;` and `pub use theme::Theme;` in `crates/yaca-tui/src/lib.rs`.
+- Add `pub mod theme;` and `pub use theme::Theme;` in `crates/hya-render-tui/src/lib.rs`.
 - Add `pub theme: Theme` to `AppState` (default to `Theme::opencode_dark()`).
 
-**Validation:** `cargo check -p yaca-tui` passes.
+**Validation:** `cargo check -p hya-render-tui` passes.
 
 ### 3. InputState and unit tests
 
-- Create `crates/yaca-tui/src/input.rs`:
+- Create `crates/hya-render-tui/src/input.rs`:
   - `InputState` struct and all methods listed in design.md §5.3.
   - Grapheme operations via `unicode_segmentation::UnicodeSegmentation`.
   - Width via `unicode_width::UnicodeWidthStr`.
   - Helper: `graphemes(s: &str) -> Vec<&str>`.
 - Add `pub mod input;` and `pub use input::InputState;` in `lib.rs`.
-- Create `crates/yaca-tui/tests/input_state.rs`:
+- Create `crates/hya-render-tui/tests/input_state.rs`:
   - ASCII motion/deletion tests.
   - CJK width tests (`cursor_column`, `visible_slice`, backspace).
   - Word-boundary tests for punctuation and whitespace.
 
-**Validation:** `cargo test -p yaca-tui input_state` passes.
+**Validation:** `cargo test -p hya-render-tui input_state` passes.
 
 ### 4. Redesign main layout
 
-- Rewrite `draw()` in `crates/yaca-tui/src/lib.rs`:
+- Rewrite `draw()` in `crates/hya-render-tui/src/lib.rs`:
   - Remove `Borders::ALL` from transcript and input.
   - Implement status bar (1 row, `background_panel`).
   - Implement transcript area (`background`, padding 1).
@@ -72,12 +72,12 @@ step 10; that's OK).
 - Render model label inside the input area (left side) as a muted span.
 - Keep `AppState.model` for engine/agent updates.
 
-**Validation:** Visual inspection via `cargo run --example preview -p yaca-tui`.
+**Validation:** Visual inspection via `cargo run --example preview -p hya-render-tui`.
 
 ### 6. Wire InputState into AppState and event loop
 
 - Change `AppState.input` from `String` to `InputState`.
-- Update `yaca-cli/src/tui.rs`:
+- Update `hya-cli/src/tui.rs`:
   - `handle_key` routes keys to `InputState` methods per design.md §5.4.
   - `Action::Submit` uses `app.input.text()` instead of `app.input`.
   - After submit, `app.input.clear()`.
@@ -86,7 +86,7 @@ step 10; that's OK).
   - Cursor positioning calls `app.input.cursor_column()` and
     `app.input.visible_slice(width)`.
 
-**Validation:** `cargo check -p yaca-cli` passes.
+**Validation:** `cargo check -p hya-cli` passes.
 
 ### 7. Update overlay styling
 
@@ -96,11 +96,11 @@ step 10; that's OK).
     floating surfaces is intentional).
   - Use theme colors for titles/options.
 
-**Validation:** `cargo run --example preview -p yaca-tui` shows styled overlays.
+**Validation:** `cargo run --example preview -p hya-render-tui` shows styled overlays.
 
 ### 8. Add `--mock` CLI flag
 
-- Edit `crates/yaca-cli/src/main.rs`:
+- Edit `crates/hya-cli/src/main.rs`:
   - Add `mock: bool` to `Cli`.
   - Update `cmd_tui` signature to accept `mock: bool` and pass `cli.mock`
     when calling it.
@@ -121,28 +121,28 @@ step 10; that's OK).
     ```
     Do **not** change `offline_router`'s return type; other callers rely on it.
 
-**Validation:** `cargo run --bin yaca -- --mock` launches and echoes typed text.
+**Validation:** `cargo run --bin hya -- --mock` launches and echoes typed text.
 
 ### 9. Add render-preview example
 
-- Create `crates/yaca-tui/examples/preview.rs`:
+- Create `crates/hya-render-tui/examples/preview.rs`:
   - Build 4-5 fixtures (empty, chat, tool, overlay, CJK).
   - Render each to `TestBackend` and print the buffer.
-- Add `[[example]]` entry in `crates/yaca-tui/Cargo.toml` if needed (Cargo
+- Add `[[example]]` entry in `crates/hya-render-tui/Cargo.toml` if needed (Cargo
   auto-discovers `examples/*.rs`).
 
-**Validation:** `cargo run --example preview -p yaca-tui` exits 0 and prints
+**Validation:** `cargo run --example preview -p hya-render-tui` exits 0 and prints
 layout.
 
 ### 10. Update existing render tests
 
-- Edit `crates/yaca-tui/tests/tui_render.rs`:
+- Edit `crates/hya-render-tui/tests/tui_render.rs`:
   - Replace assertions that look for `"conversation"`/`"message"` titles.
   - Assert model name appears in the input area.
   - Assert status bar no longer contains the model name (or update if kept).
   - Add a test for CJK input rendering.
 
-**Validation:** `cargo test -p yaca-tui` passes.
+**Validation:** `cargo test -p hya-render-tui` passes.
 
 ### 11. Final quality gate
 
@@ -158,9 +158,9 @@ Fix any warnings/errors before declaring done.
 
 ## Follow-up checks after implementation
 
-- [ ] Manually run `cargo run --example preview -p yaca-tui` and verify the
+- [ ] Manually run `cargo run --example preview -p hya-render-tui` and verify the
       borderless color blocks.
-- [ ] Manually run `cargo run --bin yaca -- --mock`, type a message, press
+- [ ] Manually run `cargo run --bin hya -- --mock`, type a message, press
       Enter, and confirm the echo response streams in.
 - [ ] Verify CJK input in the mock TUI (cursor position, backspace, delete).
 - [ ] Confirm `cargo clippy --workspace --all-targets -- -D warnings` is clean.

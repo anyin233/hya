@@ -8,7 +8,7 @@
 ## Goal
 
 Let a plugin contribute **new model-callable tools**: the plugin declares tools
-(name + JSON schema) at registration; yaca advertises them to the model alongside
+(name + JSON schema) at registration; hya advertises them to the model alongside
 builtins; when the model calls one, a plugin-tool proxy dispatches the call over
 the IPC protocol to the owning plugin and returns its JSON result, all under the
 normal permission plane. Mirrors OpenCode's `tool:` registration.
@@ -28,7 +28,7 @@ which Child A defines but B exercises end-to-end).
 ## Requirements
 
 - **B-R1 (R5).** Register plugin tools at bootstrap via the **already-existing**
-  `ToolRegistry::register` ([tool.rs:94](../../../crates/yaca-tool/src/tool.rs#L94),
+  `ToolRegistry::register` ([tool.rs:94](../../../crates/hya-tool/src/tool.rs#L94),
   already used by MCP) — the registry is **not** static, so no new registry
   primitive is required. Add at most an optional `extend(...)` convenience wrapper;
   the `builtins()` path is unchanged.
@@ -55,7 +55,7 @@ which Child A defines but B exercises end-to-end).
 
 - [ ] **B-AC1 (AC2).** An example plugin registers a tool; its schema appears in
       the provider request; the model can call it; the call round-trips over IPC
-      and the result appears as a normal `ToolResult` — test + live `yaca exec` QA.
+      and the result appears as a normal `ToolResult` — test + live `hya exec` QA.
 - [ ] **B-AC2.** A plugin tool call is permission-checked: denying it yields a
       `ToolError`/blocked result, not an executed side effect.
 - [ ] **B-AC3 (B-R5).** A plugin that hangs/crashes during a tool call yields a

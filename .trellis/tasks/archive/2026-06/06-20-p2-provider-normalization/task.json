@@ -2,7 +2,7 @@
   "id": "p2-provider-normalization",
   "name": "p2-provider-normalization",
   "title": "Phase 2 provider normalization keystone",
-  "description": "yaca-provider Provider/Protocol/Route + FakeProvider + OpenAI Chat + conformance suite",
+  "description": "hya-provider Provider/Protocol/Route + FakeProvider + OpenAI Chat + conformance suite",
   "status": "completed",
   "dev_type": null,
   "scope": null,

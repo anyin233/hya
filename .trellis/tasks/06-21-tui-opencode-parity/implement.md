@@ -11,8 +11,8 @@ python3 ./.trellis/scripts/task.py start 06-21-tui-opencode-parity
 ## Iteration 1: Baseline And Input-State Failing Tests
 
 - Run the focused current tests:
-  - `cargo test -p yaca-tui`
-  - `cargo test -p yaca-cli tui`
+  - `cargo test -p hya-render-tui`
+  - `cargo test -p hya-cli tui`
 - Add pure prompt-state tests before production code for:
   - `/` popup opens, filters, and completes existing commands;
   - `@` popup opens, filters, and completes file/reference options;
@@ -33,8 +33,8 @@ python3 ./.trellis/scripts/task.py start 06-21-tui-opencode-parity
 - Add a yolo flag to `AppState` and render it in status/prompt/sidebar.
 - Wire yolo mode into permission handling so active yolo auto-allows prompts.
 - Re-run:
-  - `cargo test -p yaca-cli tui`
-  - `cargo test -p yaca-tui`
+  - `cargo test -p hya-cli tui`
+  - `cargo test -p hya-render-tui`
 
 ## Iteration 3: Popup Rendering And Paste/Image UI
 
@@ -72,7 +72,7 @@ python3 ./.trellis/scripts/task.py start 06-21-tui-opencode-parity
   - `widgets/mod.rs`
 - Move code without changing behavior first, then run:
   - `cargo fmt --all --check`
-  - `cargo test -p yaca-tui`
+  - `cargo test -p hya-render-tui`
 
 ## Iteration 6: Transcript And Tool Rendering
 
@@ -90,8 +90,8 @@ python3 ./.trellis/scripts/task.py start 06-21-tui-opencode-parity
   data.
 - Keep narrow layout behavior and prompt cursor behavior intact.
 - Re-run:
-  - `cargo test -p yaca-tui`
-  - `cargo test -p yaca-cli tui`
+  - `cargo test -p hya-render-tui`
+  - `cargo test -p hya-cli tui`
 
 ## Iteration 8: Full Verification
 
@@ -103,8 +103,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-- Review diff for accidental changes outside `crates/yaca-tui`,
-  `crates/yaca-cli` tests if needed, and Trellis task docs.
+- Review diff for accidental changes outside `crates/hya-render-tui`,
+  `crates/hya-cli` tests if needed, and Trellis task docs.
 
 ## Implemented In This Pass
 
@@ -121,10 +121,10 @@ cargo test --workspace
 - Added `/sessions` as a `/resume` alias.
 - Added `/quit` and `/exit`.
 - Added `/export`, writing the current transcript as Markdown under
-  `YACA_EXPORT_DIR` or `~/.yaca/exports`.
+  `HYA_EXPORT_DIR` or `~/.hya/exports`.
 - Baseline verified before changes:
-  - `cargo test -p yaca-tui`
-  - `cargo test -p yaca-cli tui`
+  - `cargo test -p hya-render-tui`
+  - `cargo test -p hya-cli tui`
 - Added `/` command completion popup behavior through the existing command
   registry.
 - Added `@` reference completion popup behavior using local files/directories
@@ -143,11 +143,11 @@ cargo test --workspace
   - Markdown image links;
   - `<image ... path="...">` tags.
 - Added prompt attachment metadata in `AppState`.
-- Split prompt behavior into `crates/yaca-cli/src/tui/prompt.rs`.
+- Split prompt behavior into `crates/hya-cli/src/tui/prompt.rs`.
 - Added render-buffer tests for yolo/exit hints, sidebar transcript summary, and
   system/turn error highlighting with error color.
 - Enriched the sidebar with transcript message/tool/error/attachment counts.
-- Split `crates/yaca-tui/src/widgets.rs` into focused submodules:
+- Split `crates/hya-render-tui/src/widgets.rs` into focused submodules:
   - `widgets/status.rs`
   - `widgets/transcript.rs`
   - `widgets/sidebar.rs`

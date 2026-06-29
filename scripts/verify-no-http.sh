@@ -18,7 +18,7 @@ BIN=$(cargo test -p hya --test native_round_trip --no-run --message-format=json 
 TRACE=$(mktemp)
 trap 'rm -f "$TRACE"' EXIT
 
-# Empty HOME -> no ~/.config/yaca config (belt-and-suspenders with force_offline).
+# Empty HOME -> no ~/.config/hya config (belt-and-suspenders with force_offline).
 HOME=$(mktemp -d) strace -f -e trace=socket,bind,connect,listen,accept -o "$TRACE" \
   "$BIN" native_turn_opens_no_socket --exact --nocapture >/dev/null 2>&1 || {
     echo "FAIL: native_round_trip test did not pass under strace"; exit 1;

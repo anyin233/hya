@@ -7,17 +7,17 @@
 > Stop and fix on first red. Estimated effort: Medium–Large (3–5 focused days).
 
 ## Phase 0 — Scaffold (no behavior change)
-1. Create `crates/yaca-plugin/` (`Cargo.toml` + `src/lib.rs` with empty
+1. Create `crates/hya-plugin/` (`Cargo.toml` + `src/lib.rs` with empty
    `pub mod protocol; pub mod messages; pub mod error;`) and
-   `crates/yaca-plugin-example/` (bin stub). `members = ["crates/*"]` auto-includes.
+   `crates/hya-plugin-example/` (bin stub). `members = ["crates/*"]` auto-includes.
 2. Gate green; nothing references the new crates yet.
 - **Rollback**: delete the two dirs. **AC**: baseline (AC6/AC8 green).
 
 ## Phase 1 — Protocol + codec + manifest/config (pure data, TDD)
 1. `tests/protocol_roundtrip.rs`: assert every frame (request/response-ok/
    response-error/notification) and every hook/tool payload (parent §2) serde
-   round-trips as **JSON-RPC 2.0** (`jsonrpc:"2.0"`), matching `yaca-mcp` shapes.
-2. Implement `protocol.rs` (reuse `yaca-mcp::protocol` shapes) + `messages.rs`
+   round-trips as **JSON-RPC 2.0** (`jsonrpc:"2.0"`), matching `hya-mcp` shapes.
+2. Implement `protocol.rs` (reuse `hya-mcp::protocol` shapes) + `messages.rs`
    (typed payloads, `HookName`, `HookPosture`, constants).
 3. `tests/codec_lines.rs`: duplex stream with valid + malformed + oversized lines →
    `FrameReader` yields valid frames, surfaces `Malformed`/`OversizedLine` once, no
@@ -28,15 +28,15 @@
 - **Rollback**: crate is self-contained. **AC**: foundation.
 
 ## Phase 2 — `HookDispatcher` trait + engine seam (no-op proven)
-1. `yaca-core/src/hooks.rs`: trait + native payload/outcome types (parent §3);
+1. `hya-core/src/hooks.rs`: trait + native payload/outcome types (parent §3);
    re-export from `lib.rs`.
 2. Engine: add `hooks: Option<Arc<dyn HookDispatcher>>` (default `None`) +
    `with_hooks`. Wire ALL insertion points (design §2.2) as gated no-op calls.
    Add `PermissionInterceptor` trait + `with_interceptor` + the `assert` Ask-arm
    short-circuit + `apply_decision` refactor (design §3).
-3. Test (yaca-core): a `CountingHookHost` (in-crate test impl) asserts each hook is
+3. Test (hya-core): a `CountingHookHost` (in-crate test impl) asserts each hook is
    invoked exactly once per logical event over a `FakeProvider` turn, and that text/
-   request/results pass through unchanged. Test (yaca-tool): interceptor returning
+   request/results pass through unchanged. Test (hya-tool): interceptor returning
    `Some(AllowOnce)` means the ask channel never receives an `AskRequest`; existing
    permission tests stay green.
 4. **[D4] Permission-preservation test:** a test `HookDispatcher` whose
@@ -48,9 +48,9 @@
 - **AC**: AC6/AC8 (no-op path identical; zero overhead).
 
 ## Phase 3 — `PluginClient` + `ChildProcess` transport (TDD vs fixture)
-1. Add a fixture plugin (inline python like `yaca-mcp`'s manager test, or a small
+1. Add a fixture plugin (inline python like `hya-mcp`'s manager test, or a small
    rust bin): replies to `initialize`; echoes `hook/tool.execute.before`.
-2. `tests/client_demux.rs` (port `yaca-mcp`'s `demuxes_responses_by_id` +
+2. `tests/client_demux.rs` (port `hya-mcp`'s `demuxes_responses_by_id` +
    `returns_timeout_errors`). Implement `client.rs` (`PluginClient`: reader/writer
    tasks, `Pending` demux, `call`/`notify`/`close_pending`) + `child.rs`
    (`spawn` + `ChildGuard`).
@@ -84,10 +84,10 @@
    Implement `run_hook` timeout + `apply_posture` + watcher/restart.
 - **Rollback**: posture local to host/chain. **AC**: AC3, AC4.
 
-## Phase 6 — Config schema + dir-scan + `YacaRuntime` bootstrap (all 5 modes)
+## Phase 6 — Config schema + dir-scan + `HyaRuntime` bootstrap (all 5 modes)
 1. `config.rs`: `plugins:` on `FileConfig`; carry specs through resolution. New
    `plugins.rs` (discover + merge) with unit tests.
-2. New `bootstrap()` → `YacaRuntime` (parent §6.3); wire `PluginHost` →
+2. New `bootstrap()` → `HyaRuntime` (parent §6.3); wire `PluginHost` →
    `with_interceptor` + `with_hooks` + goal/loop wrappers. Thread through
    `cmd_exec`/`cmd_rpc`/`cmd_goal`/`cmd_tui`/`cmd_serve`; empty set for
    `cmd_tail_session`. `PluginHost` dropped last.
@@ -96,13 +96,13 @@
 - **Rollback**: revert `main.rs`/`config.rs`; rest unused. **AC**: AC5.
 
 ## Phase 7 — Example plugin + e2e + live QA + bench
-1. `crates/yaca-plugin-example`: implements `message.user.before` (marker),
+1. `crates/hya-plugin-example`: implements `message.user.before` (marker),
    `chat.params` (`temperature=0.1`), `tool.execute.before` (veto sentinel),
    `event` (stderr log).
-2. e2e test (`yaca-cli`): temp `config.yaml` → example bin; `yaca exec` on the
+2. e2e test (`hya-cli`): temp `config.yaml` → example bin; `hya exec` on the
    offline `DevProvider`; assert mutated prompt + (via a `FakeProvider` last-request
    tap) `temperature=0.1`; assert the sentinel command is vetoed.
-3. **Live QA runbook** (record evidence): real `yaca exec`, observe mutation + veto;
+3. **Live QA runbook** (record evidence): real `hya exec`, observe mutation + veto;
    `kill -9` the plugin mid-turn → turn completes (AC4 in the wild).
 4. **[D1] Overhead protocol (concrete, per AC8):** (a) HARD GATE unit test —
    default `SessionEngine::new` has `hooks == None`; with a counting global
@@ -114,11 +114,11 @@
 - **Rollback**: delete example + tests. **AC**: AC1, AC2, AC6, AC7 + overhead gate (AC8).
 
 ## Risky files / rollback map
-- High-risk (revert with care): `crates/yaca-core/src/engine.rs` (run_turn/emit),
-  `crates/yaca-tool/src/permission.rs` (assert), `crates/yaca-cli/src/main.rs`
+- High-risk (revert with care): `crates/hya-core/src/engine.rs` (run_turn/emit),
+  `crates/hya-tool/src/permission.rs` (assert), `crates/hya-cli/src/main.rs`
   (bootstrap touches all 5 modes).
-- Low-risk: `crates/yaca-plugin/*` (new), `config.rs` additions, `plugins.rs` (new),
-  `crates/yaca-plugin-example/*` (new).
+- Low-risk: `crates/hya-plugin/*` (new), `config.rs` additions, `plugins.rs` (new),
+  `crates/hya-plugin-example/*` (new).
 
 ## Pre-start gate
 - Cross-model **plan-review** on this `implement.md` + both `design.md` files

@@ -5,7 +5,7 @@ builds on, not duplicates, the in-flight work.
 
 | Effort | Reference | Focus | Where |
 |---|---|---|---|
-| `06-20-yaca-pi-parity` (existing) | **pi** (`earendil-works/pi`) | **functional** "yaca can code": permission fix, ls/find, context, slash cmds, compaction, providers+auth, session tree, RPC | worktree `w1-pi-parity`, branch `feat/yaca-w1-agent-can-code`, **uncommitted WIP** (ahead of `main`) |
+| `06-20-hya-pi-parity` (existing) | **pi** (`earendil-works/pi`) | **functional** "hya can code": permission fix, ls/find, context, slash cmds, compaction, providers+auth, session tree, RPC | worktree `w1-pi-parity`, branch `feat/hya-w1-agent-can-code`, **uncommitted WIP** (ahead of `main`) |
 | `06-21-tui-opencode-parity` (this) | **opencode** TUI | **appearance + UX**: theme/logo/layout, editor parts-model, dialog system, rich markdown/diff render, keymap+leader | `main` |
 
 pi-parity = the functional **backend/substrate**; opencode-parity = the **TUI front-end**. They layer.
@@ -13,9 +13,9 @@ pi-parity = the functional **backend/substrate**; opencode-parity = the **TUI fr
 ## Existing TUI architecture (worktree, verified)
 
 Embedded `SessionEngine` + in-process `EventBus`; `tui::run(engine, agent, model, asks, session)`
-`select!`s over bus / turn-done / permission asks / key events. `yaca-tui` is still **one pure
+`select!`s over bus / turn-done / permission asks / key events. `hya-render-tui` is still **one pure
 renderer** (`AppState` direct-mutation in `handle_key` — **no** TEA `Msg`/`update`/`Effect`, **no**
-`TuiBackend` trait, **no** theme module). `serve`/`rpc`/`yaca-client` exist but the TUI does **not**
+`TuiBackend` trait, **no** theme module). `serve`/`rpc`/`hya-client` exist but the TUI does **not**
 use them. → matches our embedded direction; **diverges** from our TEA/trait/theme design (that's the W0 refactor).
 
 ## DONE / PARTIAL / MISSING vs our waves
@@ -31,7 +31,7 @@ use them. → matches our embedded direction; **diverges** from our TEA/trait/th
 
 ## Re-scoped plan deltas (apply to design.md / implement.md)
 
-1. **W0 = refactor, not greenfield**: wrap the existing `tui::run` engine access in `TuiBackend`/`EmbeddedBackend`; introduce `Msg`/`update`/`Effect` + 16ms tick around the existing `select!`; modularize `yaca-tui`; add theme module + `insta` harness. Keep engine/bus/store/provider untouched.
+1. **W0 = refactor, not greenfield**: wrap the existing `tui::run` engine access in `TuiBackend`/`EmbeddedBackend`; introduce `Msg`/`update`/`Effect` + 16ms tick around the existing `select!`; modularize `hya-render-tui`; add theme module + `insta` harness. Keep engine/bus/store/provider untouched.
 2. **Backend matrix downgrades** (no longer pure-MISSING): persistence, session list/resume, providers incl. Google, auth/OAuth, RPC/serve, `since_seq` on `/events`, ls/find, reasoning/tool-lifecycle events → **EXISTING/PARTIAL**. Net-new backend shrinks to: usage/cost wire-up, `/stream` backfill, list-models/agents + abort/title/permission-decision/question routes, theme/keybind config.
 3. **W5 permission = wiring + bug-fix** (overlay exists): fix `AllowAlways` persistence; add abort/interrupt; question flow; rename/fork/timeline.
 4. **W2/W4 remain the largest net-new** (editor parts-model + completion; markdown/diff/syntax/specialized renderers + visible reasoning) — opencode's signature UX the pi-work doesn't touch.
@@ -41,4 +41,4 @@ use them. → matches our embedded direction; **diverges** from our TEA/trait/th
 Where does the opencode-TUI work happen, given the substrate is uncommitted in the `w1-pi-parity` worktree?
 - **(A)** In the `w1-pi-parity` worktree/branch — build directly on the WIP substrate (fastest reuse; intermixes with pi-parity WIP).
 - **(B)** Commit/merge pi-parity to `main` first, then build opencode-TUI on `main` (clean base; needs the WIP landed first).
-- **(C)** Fold opencode-TUI as added waves of the existing `06-20-yaca-pi-parity` effort (one unified parity program).
+- **(C)** Fold opencode-TUI as added waves of the existing `06-20-hya-pi-parity` effort (one unified parity program).

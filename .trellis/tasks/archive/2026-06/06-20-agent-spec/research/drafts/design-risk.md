@@ -1,4 +1,4 @@
-# Design Risk Draft: yaca Ambitious v0
+# Design Risk Draft: hya Ambitious v0
 
 ## Scope Lens
 
@@ -14,7 +14,7 @@ The main risk is composition: provider streaming feeds tool execution, tool exec
 feeds persisted transcript state, team mode deliberately hides child transcripts from
 the lead, and the goal evaluator can only judge the visible transcript. If those
 interfaces are not designed and tested first, the project can appear to work in
-single-agent demos while failing the exact differentiators that justify yaca.
+single-agent demos while failing the exact differentiators that justify hya.
 
 The survivable strategy is therefore: build a thin vertical slice first, but make
 the slice cross every dangerous seam. Stub breadth, not seams.
@@ -109,7 +109,7 @@ terminates all children deterministically.
 
 ### 4. Permission model correctness under concurrency
 
-**Why risky:** yaca needs an allow/ask/deny permission plane while multiple
+**Why risky:** hya needs an allow/ask/deny permission plane while multiple
 subagents may request shell/edit/write permissions concurrently. Child sessions
 derive permissions from parents, but team members must not become confused
 deputies that use the lead's authority beyond their scope.
@@ -210,7 +210,7 @@ available; otherwise the feature degrades with a clear capability error.
 **Why risky:** Token efficiency is a differentiator, but providers report usage
 differently and local providers may not report it at all. Team mode hides child
 transcripts; goal mode can loop turns; summaries can silently grow. Without a
-central ledger, yaca cannot prove the benefit or enforce budgets.
+central ledger, hya cannot prove the benefit or enforce budgets.
 
 **Failure mode:** Goal loops burn tokens without clear caps; team mode looks cheap
 because child usage is omitted; model routing chooses expensive models for cheap
@@ -356,7 +356,7 @@ must still pass through the permission engine.
 worktrees, tmux.
 
 **Validation gate:** Run a dev fixture such as
-`cargo run --bin yaca-server -- --dev-fixture provider_tool_turn` and connect a
+`cargo run --bin hya-server -- --dev-fixture provider_tool_turn` and connect a
 minimal client. The observed behavior: streamed text appears once, the tool
 transitions pending to running to completed, the final transcript survives
 restart, and reconnect from a stored event id produces the same final projection.
@@ -627,5 +627,5 @@ HTTP/SSE: provider streams text, requests a tool, permission is checked, the too
 runs, events persist, the client renders, and replay/reconnect works. The second
 demo should set a goal over that transcript. The third should add a fake team and
 prove the goal evaluator can judge the team evidence envelope without seeing
-child transcripts. Only then should yaca widen into the full 12-tool team surface,
+child transcripts. Only then should hya widen into the full 12-tool team surface,
 real category routing, worktrees, tmux, and polished ratatui UX.

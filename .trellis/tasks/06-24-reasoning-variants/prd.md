@@ -15,17 +15,17 @@ and no `type=reasoning` part is ever produced. (Verified 2026-06-24: opus
 ## Background (verified current state)
 
 - `ReasoningEffort` is only `Low | Medium | High`; `parse("max") -> None`
-  (`crates/yaca-provider/src/lib.rs:74-116`).
+  (`crates/hya-provider/src/lib.rs:74-116`).
 - Agent frontmatter `variant` + `options` are parsed and stored in the opencode
   agent catalog (`agent_disk_sources.rs:22,29`, `agent_catalog.rs:17`) but never
   mapped to reasoning. `agent_with_model` hardcodes `reasoning: None`
-  (`yaca-app/src/runtime.rs:131`); `session_agent_with_guidance` copies only
-  `system_prompt`+`name` (`yaca-server/src/opencode/reference.rs:19-40`).
+  (`hya-app/src/runtime.rs:131`); `session_agent_with_guidance` copies only
+  `system_prompt`+`name` (`hya-server/src/opencode/reference.rs:19-40`).
 - Provider request sites already consume `req.reasoning` correctly when set:
   Anthropic `thinking{type,budget_tokens}` (`anthropic.rs:42-47`), OpenAI
   `reasoning_effort` (`openai.rs:59-60`), Google `thinkingConfig` (`google.rs:180-183`);
   router strips reasoning when `!caps.reasoning_request` (`router.rs:55-56`).
-- yaca-server opencode layer already loads `opencode.json`/`opencode.jsonc`
+- hya-server opencode layer already loads `opencode.json`/`opencode.jsonc`
   (`global.rs:27`, `agent_sources.rs:133-136`).
 
 See `research/opencode-reasoning-schema.md` for the OpenCode schema + citations.
@@ -65,10 +65,10 @@ See `research/opencode-reasoning-schema.md` for the OpenCode schema + citations.
   (reuse the existing opencode config load path).
 - R5: Agent `variant:` resolves to the request; pass-through agent options
   (e.g. `reasoningEffort:`) are honored.
-- R6: Backward compatible. Existing `~/.config/yaca/config.yaml` (no variants) and
+- R6: Backward compatible. Existing `~/.config/hya/config.yaml` (no variants) and
   existing agents keep working; default reasoning is unchanged when no variant is
   set; sonnet (no variant) is unaffected.
-- R7: yaca-proto stays dependency-light; library crates keep `unwrap_used` /
+- R7: hya-proto stays dependency-light; library crates keep `unwrap_used` /
   `expect_used` denied; event-sourced architecture preserved.
 
 ## Acceptance Criteria
@@ -96,14 +96,14 @@ See `research/opencode-reasoning-schema.md` for the OpenCode schema + citations.
   pass-through) beyond what is already supported.
 - Changing the TUI reasoning rendering itself (only ensuring reasoning parts are
   produced so the existing renderer shows them).
-- Migrating yaca's native `config.yaml` to JSON; this task reads reasoning from
+- Migrating hya's native `config.yaml` to JSON; this task reads reasoning from
   the OpenCode config that the server layer already loads.
 
 ## Constraints
 
 - Verification gate: `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.
 - For OpenCode adapter changes (if any): `bun run typecheck && bun test` in
-  `crates/yaca-plugin-opencode/adapter`.
+  `crates/hya-plugin-opencode/adapter`.
 - No `as any` / `@ts-ignore` equivalents; no suppression of type errors.
 - Smallest correct change; reuse existing planes/loaders over adding parallel ones.
 
@@ -111,10 +111,10 @@ See `research/opencode-reasoning-schema.md` for the OpenCode schema + citations.
 
 - DQ1: Keep the simple `ReasoningEffort` enum (extended with the full level set +
   a provider-validity function) vs. adopt OpenCode's richer "variant = arbitrary
-  provider-option bundle" model. Parity argues for option bundles; yaca's current
+  provider-option bundle" model. Parity argues for option bundles; hya's current
   surface argues for the enum. Decide the boundary.
-- DQ2: Where variant resolution lives (yaca-core engine vs. yaca-server opencode
-  agent resolution vs. yaca-provider router) and how the per-model `variants` map
+- DQ2: Where variant resolution lives (hya-core engine vs. hya-server opencode
+  agent resolution vs. hya-provider router) and how the per-model `variants` map
   flows from config → request without breaking the in-process native path.
 - DQ3: How `max` budget bounding by model output limit is sourced (model
-  capability metadata availability in yaca-provider).
+  capability metadata availability in hya-provider).

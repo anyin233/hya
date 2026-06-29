@@ -66,7 +66,7 @@ developer_instructions = """ <full system prompt body> """
 - **Tool policy is PROSE** inside `developer_instructions` ("Tools I will NEVER call:
   edit/write/apply_patch…"), NOT a structured allowlist. Skills referenced in prose too.
 
-## Distilled model for yaca (in-process engine — no hook IPC needed)
+## Distilled model for hya (in-process engine — no hook IPC needed)
 
 - `AgentCore { name, model, prompt, allowed_tools, skills, injections }`.
 - **Injection directive** = library file with frontmatter selectors
@@ -76,7 +76,7 @@ developer_instructions = """ <full system prompt body> """
   `agents` ∧ `models` match the active `(name, model)` and whose `trigger` fires; inject bodies
   by `priority`; dedup by `once`. `ulw` = `{ trigger: keyword, keyword: (?i)(ultrawork|ulw),
   once: true, agents: [lead] }`.
-- **yaca improves on omo**: structured + **enforced** `allowed_tools` (advertise-filter +
+- **hya improves on omo**: structured + **enforced** `allowed_tools` (advertise-filter +
   execution reject), vs omo's prose tool policy.
 - **Defer** (vs omo): char budgets/truncation, dynamic rules, post-compact recovery
-  (yaca compaction is its own pi-parity wave).
+  (hya compaction is its own pi-parity wave).

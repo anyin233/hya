@@ -31,7 +31,7 @@
 |---|------|-------|---------|--------|
 | 3 | 2026-06-26 | TUI model fallback safe rejection | `46e144e`, `3232a44`, `4c15c0d`, `f5f8b27`, `a54cf6e` | `main` |
 | 2 | 2026-06-25 | Model-specific default reasoning effort | `b027829`, `923ed8d`, `ace5294`, `2087b4d` | `main` |
-| 1 | 2026-06-21 | Design and write yaca docs structure | uncommitted | `-` |
+| 1 | 2026-06-21 | Design and write hya docs structure | uncommitted | `-` |
 <!-- @@@/auto:session-history -->
 
 ---

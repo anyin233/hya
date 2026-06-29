@@ -2,14 +2,14 @@
 
 ## Goal
 
-Create a GitHub Actions release workflow for the Rust workspace so publishing a version tag builds the `yaca` release binary, creates/updates a GitHub Release, and uses the current root `CHANGELOG.md` as the release-note body.
+Create a GitHub Actions release workflow for the Rust workspace so publishing a version tag builds the `hya` release binary, creates/updates a GitHub Release, and uses the current root `CHANGELOG.md` as the release-note body.
 
 The local-agent release rule must be explicit in the repository: before a new version is tagged, the local agent writes that version's changelog into root `CHANGELOG.md`; root `CHANGELOG.md` contains only the newest version; older version changelogs are archived under `docs/changes/CHANGELOG_<version>.md`.
 
 ## Confirmed Facts
 
 - The repository is a Rust workspace with an existing CI workflow at `.github/workflows/ci.yml`.
-- The release binary is the `yaca` binary declared in `crates/yaca-cli/Cargo.toml`.
+- The release binary is the `hya` binary declared in `crates/hya-cli/Cargo.toml`.
 - The workspace version lives at `[workspace.package].version` in root `Cargo.toml`.
 - There is no existing root `CHANGELOG.md`, `docs/changes/`, or release workflow.
 - The existing CI uses `dtolnay/rust-toolchain@stable` and `Swatinem/rust-cache@v2`.
@@ -19,7 +19,7 @@ The local-agent release rule must be explicit in the repository: before a new ve
 
 - Add a GitHub Actions workflow dedicated to release publishing.
 - Trigger release publishing from version tags using the repository's release tag convention.
-- Build the `yaca` binary in release mode before publishing.
+- Build the `hya` binary in release mode before publishing.
 - Package the built binary into a downloadable release asset.
 - Publish a GitHub Release for the triggering tag.
 - Use root `CHANGELOG.md` verbatim as the GitHub Release body.
@@ -40,7 +40,7 @@ The local-agent release rule must be explicit in the repository: before a new ve
 ## Acceptance Criteria
 
 - [ ] `.github/workflows/release.yml` exists and runs on version tag pushes.
-- [ ] The workflow installs the Rust toolchain, builds `cargo build --release --bin yaca`, packages the resulting binary, uploads the build artifact, then publishes/updates a GitHub Release.
+- [ ] The workflow installs the Rust toolchain, builds `cargo build --release --bin hya`, packages the resulting binary, uploads the build artifact, then publishes/updates a GitHub Release.
 - [ ] The release job uses `CHANGELOG.md` as the release body and rejects missing or empty changelog content.
 - [ ] `CHANGELOG.md` exists at the repository root and is documented as newest-version-only.
 - [ ] `docs/changes/` exists as the historical changelog archive location.

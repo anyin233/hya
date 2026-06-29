@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add a release-only GitHub Actions workflow that runs on version tag pushes, builds the `yaca` CLI binary, packages a Linux x86_64 release asset, and publishes a GitHub Release whose body is the root `CHANGELOG.md` content.
+Add a release-only GitHub Actions workflow that runs on version tag pushes, builds the `hya` CLI binary, packages a Linux x86_64 release asset, and publishes a GitHub Release whose body is the root `CHANGELOG.md` content.
 
 The repository-local release contract is agent-driven: before a release tag is pushed, the local agent must write the new version's notes into root `CHANGELOG.md`, keep that file newest-version-only, and archive the previous version's notes under `docs/changes/CHANGELOG_<version>.md`.
 
@@ -16,7 +16,7 @@ The repository-local release contract is agent-driven: before a release tag is p
 
 ### Build scope
 
-- Build one first-release asset: `yaca-${version}-x86_64-unknown-linux-gnu.tar.gz`.
+- Build one first-release asset: `hya-${version}-x86_64-unknown-linux-gnu.tar.gz`.
 - Run on `ubuntu-22.04` instead of `ubuntu-latest` to reduce glibc drift for Linux users.
 - Defer macOS, Windows, musl, signing, and notarization to future tasks. The user requested a release binary, not a platform matrix.
 
@@ -28,7 +28,7 @@ The repository-local release contract is agent-driven: before a release tag is p
 
 ### Version safety
 
-- Validate that the pushed tag minus a leading `v` equals the Cargo package version reported for `yaca-cli` by `cargo metadata`.
+- Validate that the pushed tag minus a leading `v` equals the Cargo package version reported for `hya-cli` by `cargo metadata`.
 - Smoke test the packaged binary with `--version` and `--help`; `--version` must contain the tag version.
 - These checks prevent releasing an asset whose binary version does not match the GitHub tag.
 
@@ -48,12 +48,12 @@ The repository-local release contract is agent-driven: before a release tag is p
 1. Check out the tag ref.
 2. Install stable Rust with the `x86_64-unknown-linux-gnu` target through the pinned `dtolnay/rust-toolchain` action SHA.
 3. Restore Rust cache using the pinned `Swatinem/rust-cache` action SHA.
-4. Validate tag version shape and match it against `cargo metadata` for the `yaca-cli` package.
+4. Validate tag version shape and match it against `cargo metadata` for the `hya-cli` package.
 5. Validate `CHANGELOG.md` exists, is non-empty, and its first heading matches the tag version.
-6. Run `cargo build --release --locked --bin yaca --target x86_64-unknown-linux-gnu`.
+6. Run `cargo build --release --locked --bin hya --target x86_64-unknown-linux-gnu`.
 7. Stage the binary under a versioned directory and include `README.md`.
 8. Create a `.tar.gz` release archive and `SHA256SUMS`.
-9. Extract the archive to a temporary directory and run `yaca --version` and `yaca --help` from the packaged copy.
+9. Extract the archive to a temporary directory and run `hya --version` and `hya --help` from the packaged copy.
 10. Create build provenance attestations for the archive and checksum.
 11. Upload the archive and checksum as one uniquely named workflow artifact.
 

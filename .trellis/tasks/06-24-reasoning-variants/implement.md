@@ -9,8 +9,8 @@ deny `unwrap_used`/`expect_used` (tests `#![allow(...)]`).
 - Confirm `session_agent_with_guidance` is on the native `hya` prompt path
   (DONE: `session_prompt.rs:113,155`). Spot-confirm the in-process bridge hits
   `/session/{id}/...prompt` → `session_prompt.rs`.
-- Read `crates/yaca-provider/src/anthropic.rs` current `max_tokens` bump and
-  `crates/yaca-provider/tests/conformance.rs:366` to confirm the High=16000 budget
+- Read `crates/hya-provider/src/anthropic.rs` current `max_tokens` bump and
+  `crates/hya-provider/tests/conformance.rs:366` to confirm the High=16000 budget
   keeps `max_tokens > 16384`.
 - Confirm `HttpProvider::new` sets `reasoning_request: true` (`http.rs:117`).
 - Confirm `model_ref::model_ref_parts` / `split_variant` signatures for the resolver.
@@ -23,8 +23,8 @@ deny `unwrap_used`/`expect_used` (tests `#![allow(...)]`).
 
 ## Task 1 — Extend `ReasoningEffort` vocabulary + per-provider methods  [AC2, AC6]
 
-Files: `crates/yaca-provider/src/lib.rs` (+ tests in same file or
-`crates/yaca-provider/tests/reasoning_levels.rs` new).
+Files: `crates/hya-provider/src/lib.rs` (+ tests in same file or
+`crates/hya-provider/tests/reasoning_levels.rs` new).
 
 1. RED: tests — `parse` accepts none/off,minimal,low,medium,med,high,xhigh,max and
    rejects junk; `openai_label(Max,"gpt-5.5")=="xhigh"` and never "max"; `anthropic_budget`:
@@ -33,12 +33,12 @@ Files: `crates/yaca-provider/src/lib.rs` (+ tests in same file or
 2. GREEN: rewrite the enum (7 variants `Off..Max`), `parse`, `as_str`,
    `openai_label(model_id)`, `anthropic_budget`, `google_budget(model_id)`. Keep
    them `Option`-returning. No serde derives.
-3. `cargo test -p yaca-provider`; `cargo check -p yaca-core` (it imports the enum).
+3. `cargo test -p hya-provider`; `cargo check -p hya-core` (it imports the enum).
 
 ## Task 2 — Switch provider encoders to the Option methods  [AC2, AC3, AC6]
 
 Files: `anthropic.rs` (42-47), `openai.rs` (59-60), `google.rs` (180-183);
-`crates/yaca-provider/tests/conformance.rs` (update existing High-budget assertions).
+`crates/hya-provider/tests/conformance.rs` (update existing High-budget assertions).
 
 1. RED: encoder tests — Anthropic `Max` → body `thinking.budget_tokens==31999` and
    `max_tokens > 31999`; Anthropic `High` → 16000; OpenAI `Max` → `reasoning_effort=="xhigh"`;
@@ -53,7 +53,7 @@ Files: `anthropic.rs` (42-47), `openai.rs` (59-60), `google.rs` (180-183);
    (Google High — 24576 is OpenCode's *max*, not *high*). VERIFIED budget literals:
    the enum source `lib.rs:105` (16384) / `:114` (24576) — rewritten in Task 1 —
    plus these two test assertions; dispatcher/harness use `parse`/`as_str`, not budgets.
-4. `cargo test -p yaca-provider` (incl. existing `conformance.rs`, `multiprovider.rs`).
+4. `cargo test -p hya-provider` (incl. existing `conformance.rs`, `multiprovider.rs`).
 
 ## Task 2.5 — EARLY AC1 gateway smoke (de-risk BEFORE building the resolver)  [AC1 risk]
 
@@ -73,11 +73,11 @@ so the enabled+budget shape is the risk point).
 
 ## Task 3 — Reasoning resolver + DISK opencode.json loader  [AC3, AC4, AC5, AC6]
 
-Files: new `crates/yaca-server/src/opencode/reasoning_options.rs` (BOTH
+Files: new `crates/hya-server/src/opencode/reasoning_options.rs` (BOTH
 `load_opencode_config(workdir)` and `resolve_reasoning`); new
-`crates/yaca-server/src/opencode/json_merge.rs` (extract `merge_json_value` from
+`crates/hya-server/src/opencode/json_merge.rs` (extract `merge_json_value` from
 `agent_catalog.rs`, update its callsite); declare both modules in
-`crates/yaca-server/src/opencode.rs` (the module root — there is NO `opencode/mod.rs`).
+`crates/hya-server/src/opencode.rs` (the module root — there is NO `opencode/mod.rs`).
 Make `config_paths` `pub(super)` in `agent_sources.rs` (currently private) so
 `reasoning_options.rs` can reuse it — do NOT duplicate the 4-path list.
 `load_opencode_config` reads `config_paths(workdir)` [+ `~/.config/opencode/opencode.json{,c}`]
@@ -103,16 +103,16 @@ via `super::jsonc::from_str::<Value>` and deep-merges (workdir wins); returns `{
    `thinking.budget_tokens == 31999`. Proves disk file → request body. [AC3]
 3. GREEN: implement `load_opencode_config` + `resolve_reasoning` per design §4 +
    the extracted deep-merge.
-4. `cargo test -p yaca-server reasoning_options`.
+4. `cargo test -p hya-server reasoning_options`.
 
 ## Task 4 — Wire variant → `AgentSpec.reasoning` at the seam  [AC1, AC4, AC5, AC6]
 
-Files: `crates/yaca-server/src/opencode/reference.rs` (shared `apply_agent_entry`
+Files: `crates/hya-server/src/opencode/reference.rs` (shared `apply_agent_entry`
 in `agent_with_guidance` + `session_agent_with_guidance`). No `runtime.rs` change —
 the `model#variant` direct-selection fallback is out of scope (design §8).
 
 1. RED (INTERNAL unit test in `reference.rs` `#[cfg(test)] mod` — the seam helpers
-   are `pub(in crate::opencode)`, unreachable from `crates/yaca-server/tests`):
+   are `pub(in crate::opencode)`, unreachable from `crates/hya-server/tests`):
    - build `AgentEntry { variant: Some("max"), model: Some("<prefixed>/claude-opus-4-8"), .. }`
      + an opencode-config `Value` with the matching `provider.<id>.models.<id>`; call
      the pure `apply_agent_entry(&mut agent, &entry, &model, &config)` and assert
@@ -124,7 +124,7 @@ the `model#variant` direct-selection fallback is out of scope (design §8).
    `config = load_opencode_config(location::workdir(st))` (DISK) and pass it; widen
    the existing entry lookup; set `agent.reasoning` from `resolve_reasoning` with
    session/model-variant precedence.
-3. `cargo test -p yaca-server apply_agent_entry` (internal `reference.rs` test).
+3. `cargo test -p hya-server apply_agent_entry` (internal `reference.rs` test).
 
 ## Task 5 — Backward-compat sweep + existing literals  [AC5, AC6]
 
@@ -133,7 +133,7 @@ the `model#variant` direct-selection fallback is out of scope (design §8).
 2. GREEN: fix any `AgentSpec` / `ReasoningEffort` match sites that no longer
    compile (exhaustive matches now have 7 variants): grep `ReasoningEffort::`
    and `match .* reasoning`. Prefer not adding `AgentSpec` fields.
-3. `cargo test -p yaca-core && cargo test -p yaca-server`.
+3. `cargo test -p hya-core && cargo test -p hya-server`.
 
 ## Task 6 — Full gate + manual AC1 verification  [AC1, AC6]
 

@@ -2,7 +2,7 @@
 
 ## Current State
 
-`crates/yaca-cli/src/tui.rs` owns terminal setup, event polling, key handling, permission prompts, prompt submission, turn spawning, cancellation, and view state updates in one file. `crates/yaca-tui` is already a pure render crate with `AppState`, widgets, layout, and render tests. Providers already include `FakeProvider`, which can emit canonical events without model calls.
+`crates/hya-cli/src/tui.rs` owns terminal setup, event polling, key handling, permission prompts, prompt submission, turn spawning, cancellation, and view state updates in one file. `crates/hya-render-tui` is already a pure render crate with `AppState`, widgets, layout, and render tests. Providers already include `FakeProvider`, which can emit canonical events without model calls.
 
 The immediate bugs come from this shape:
 
@@ -12,7 +12,7 @@ The immediate bugs come from this shape:
 
 ## Chosen Approach
 
-Introduce a small TUI controller layer inside `yaca-cli` while keeping rendering in `yaca-tui`.
+Introduce a small TUI controller layer inside `hya-cli` while keeping rendering in `hya-render-tui`.
 
 The controller will translate terminal events into semantic commands, update dialog/input/session state, and request runtime side effects through a narrow runtime trait. This gives tests a cheap fake runtime and lets the live TUI keep using `SessionEngine`, `EventBus`, and crossterm.
 
@@ -20,32 +20,32 @@ The first implementation should stay incremental. It should not rebuild all of o
 
 ## Modules
 
-- `crates/yaca-cli/src/tui/mod.rs`
+- `crates/hya-cli/src/tui/mod.rs`
   - Terminal setup/teardown and live event loop.
   - Wires the controller to `SessionEngine`, `EventBus`, crossterm events, and permission requests.
 
-- `crates/yaca-cli/src/tui/controller.rs`
+- `crates/hya-cli/src/tui/controller.rs`
   - Pure-ish state machine for input, commands, dialogs, selected model, active session id, running/cancelled state, and input history.
   - Exposes `handle_key`, `handle_mouse`, `submit_input`, `open_dialog`, and `apply_runtime_event`.
 
-- `crates/yaca-cli/src/tui/keymap.rs`
+- `crates/hya-cli/src/tui/keymap.rs`
   - Maps key strokes into semantic `TuiCommand`s.
   - Provides opencode-inspired defaults: model list, resume list, new session, help, scrolling, input editing, dialog movement, interrupt, exit.
 
-- `crates/yaca-cli/src/tui/commands.rs`
+- `crates/hya-cli/src/tui/commands.rs`
   - Registry for slash commands and palette commands.
   - `/model`, shortcut model list, and palette model list all dispatch `TuiCommand::OpenModelDialog`.
   - `/resume` dispatches `TuiCommand::OpenResumeDialog`.
 
-- `crates/yaca-cli/src/tui/dialog.rs`
+- `crates/hya-cli/src/tui/dialog.rs`
   - Shared list-dialog state: items, filter text, selected index, paging, submit/cancel.
   - Used for model selection, resume, help, and permission choices.
 
-- `crates/yaca-cli/src/tui/history.rs`
+- `crates/hya-cli/src/tui/history.rs`
   - Per-session JSON/JSONL history manager.
   - Owns session bundle creation, event append, meta updates, listing, and loading.
 
-- `crates/yaca-cli/src/tui/harness.rs`
+- `crates/hya-cli/src/tui/harness.rs`
   - Test-only fake runtime and helper for driving controller events.
   - Uses `FakeProvider` or a simple scripted provider with fixed responses.
 
@@ -107,9 +107,9 @@ Use a directory of independent session bundles:
 
 Default history root:
 
-- `YACA_HISTORY_DIR` if set;
+- `HYA_HISTORY_DIR` if set;
 - otherwise platform data directory via `dirs` if available;
-- otherwise `~/.yaca/history`.
+- otherwise `~/.hya/history`.
 
 `meta.json` fields:
 

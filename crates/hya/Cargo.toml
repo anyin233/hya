@@ -3,17 +3,17 @@ name = "hya"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-default-run = "hya"
+default-run = "hya-frontend"
 
 [[bin]]
-name = "hya"
+name = "hya-frontend"
 path = "src/main.rs"
 
 [dependencies]
 hya-sdk = { path = "../hya-sdk" }
 hya-tui = { path = "../hya-tui" }
-hya-yaca = { path = "../hya-yaca" }
-yaca-app = { workspace = true }
+hya-hya = { path = "../hya-hya" }
+hya-app = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "charset", "http2"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync"] }
 

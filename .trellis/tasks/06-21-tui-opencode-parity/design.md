@@ -26,11 +26,11 @@ OpenCode's current TUI is a componentized terminal app:
 - prompt input owns autocomplete for `/` and `@`, paste placeholders,
   attachments, and mode-aware key handling.
 
-yaca will adopt these concepts with ratatui primitives and projected data.
+hya will adopt these concepts with ratatui primitives and projected data.
 
 ## Rust Module Shape
 
-Keep `yaca-tui` as a pure renderer. Refactor internal modules to:
+Keep `hya-render-tui` as a pure renderer. Refactor internal modules to:
 
 - `layout.rs`
   - Keep responsive row/body/sidebar calculation.
@@ -53,7 +53,7 @@ Keep `yaca-tui` as a pure renderer. Refactor internal modules to:
   - Own user card, assistant text, system row, and error row rendering.
 - `widgets/tools.rs`
   - Own tool display classification and inline/block formatting.
-  - Map known yaca tool names (`read`, `write`, `edit`, `glob`, `grep`,
+  - Map known hya tool names (`read`, `write`, `edit`, `glob`, `grep`,
     `shell`/`bash`, `task`, unknown) to opencode-style labels/icons.
 - `widgets/sidebar.rs`
   - Render title/session/model/state plus sections for goal, loop, team,
@@ -63,7 +63,7 @@ Keep `yaca-tui` as a pure renderer. Refactor internal modules to:
     cursor math together.
 - `widgets/overlays.rs`
   - Keep permission and list dialog rendering.
-- `input.rs` or `prompt_state.rs` in `yaca-tui` or `yaca-cli::tui`
+- `input.rs` or `prompt_state.rs` in `hya-render-tui` or `hya-cli::tui`
   - Own pure prompt state transitions that can be tested without a terminal:
     text editing, paste placeholder insertion/expansion, attachment tracking,
     popup mode, popup movement/completion, yolo flag, and double-Ctrl-C timing.
@@ -81,7 +81,7 @@ Spacing rules:
 - First row starts at the top of the scroll region with no leading blank line.
 - User messages are bordered/padded blocks with a primary rail and blank space
   after them.
-- Assistant text starts with left indentation and no repeated `yaca` label on
+- Assistant text starts with left indentation and no repeated `hya` label on
   every wrapped line.
 - Reasoning is a subdued `Thinking`/`Thought` row.
 - Inline tools use fixed-width icons and concise labels.
@@ -167,10 +167,10 @@ Wide sidebar remains optional, but its contents become richer:
 - Core context: model, session, state.
 - Runtime sections: goal, loop, team, permission.
 - Context summary from available state: message count, tool count, error count.
-- Footer: `yaca` product label plus status hint.
+- Footer: `hya` product label plus status hint.
 
 This gives the user the visible context density they expect from OpenCode while
-using only data yaca already has.
+using only data hya already has.
 
 ## Testing Strategy
 
@@ -201,9 +201,9 @@ only on text substrings.
 - The current projection ignores `Event::Error`. A protocol-level fix is better
   long-term but wider than the first UI parity pass; classify injected system
   errors first and document the protocol follow-up if needed.
-- OpenCode has richer SDK data than yaca currently projects. Sidebar context
-  should summarize available yaca data without inventing fake token/cost values.
-- yaca currently sends one plain user prompt string to the engine. Attachment
+- OpenCode has richer SDK data than hya currently projects. Sidebar context
+  should summarize available hya data without inventing fake token/cost values.
+- hya currently sends one plain user prompt string to the engine. Attachment
   metadata should be preserved in the TUI state and represented textually on
   submit until the provider/core protocol grows true multimodal prompt parts.
 - Auto-allow yolo mode is intentionally TUI-scoped for this pass. A later core

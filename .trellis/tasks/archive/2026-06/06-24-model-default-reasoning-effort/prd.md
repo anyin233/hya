@@ -2,7 +2,7 @@
 
 ## Goal
 
-When a user selects or uses a model that supports reasoning, yaca should choose a sensible default reasoning effort without requiring the user to manually run `/think` every time. The default should be model-specific and follow this precedence:
+When a user selects or uses a model that supports reasoning, hya should choose a sensible default reasoning effort without requiring the user to manually run `/think` every time. The default should be model-specific and follow this precedence:
 
 1. Reasoning effort explicitly set by the active agent file / agent configuration.
 2. The last reasoning effort the user selected for that model.
@@ -12,18 +12,18 @@ This should make reasoning-capable models feel ready by default while preserving
 
 ## Confirmed Facts
 
-- `AgentSpec.reasoning` is the value sent into provider completion requests through `crates/yaca-core/src/engine/turn/messages.rs`.
-- The TUI `/think` flow currently updates only the active in-memory `AgentSpec.reasoning` and `AppState.reasoning_effort` in `crates/yaca-cli/src/tui.rs::apply_reasoning`.
+- `AgentSpec.reasoning` is the value sent into provider completion requests through `crates/hya-core/src/engine/turn/messages.rs`.
+- The TUI `/think` flow currently updates only the active in-memory `AgentSpec.reasoning` and `AppState.reasoning_effort` in `crates/hya-cli/src/tui.rs::apply_reasoning`.
 - `Controller::open_think_dialog` currently offers only `off`, `low`, `medium`, and `high`, independent of the selected model's supported reasoning variants.
-- OpenCode-compatible reasoning option resolution already exists in `crates/yaca-server/src/opencode/reasoning_options.rs::resolve_reasoning`, but it returns `None` when no variant or agent option signals reasoning.
-- Provider model catalog data can expose supported reasoning variants through `yaca_provider::ProviderModel.reasoning_variants`; provider families currently advertise:
+- OpenCode-compatible reasoning option resolution already exists in `crates/hya-server/src/opencode/reasoning_options.rs::resolve_reasoning`, but it returns `None` when no variant or agent option signals reasoning.
+- Provider model catalog data can expose supported reasoning variants through `hya_provider::ProviderModel.reasoning_variants`; provider families currently advertise:
   - Anthropic: `low`, `medium`, `high`, `max`
   - OpenAI-compatible: `minimal`, `low`, `medium`, `high`, `xhigh`
   - Google: `high`, `max`
-- `crates/yaca-app/src/config.rs::ModelEntry` currently stores only model id and provider id, so the main TUI model list does not carry reasoning variant metadata today.
+- `crates/hya-app/src/config.rs::ModelEntry` currently stores only model id and provider id, so the main TUI model list does not carry reasoning variant metadata today.
 - No existing code path was found that persists “last selected reasoning effort per model.”
 - `ProviderKind::reasoning_variants` is the current source of provider-family supported effort names, and `ProviderRouter::catalog` exposes those names through `SessionEngine::provider_catalog`.
-- `HistoryStore` is the existing native TUI local persistence mechanism. It writes JSON session history under `YACA_HISTORY_DIR` or `~/.yaca/history`; the SQLite `SessionStore` persists event logs and projections, not user preferences.
+- `HistoryStore` is the existing native TUI local persistence mechanism. It writes JSON session history under `HYA_HISTORY_DIR` or `~/.hya/history`; the SQLite `SessionStore` persists event logs and projections, not user preferences.
 - The OpenCode-compatible surface already supports agent-file and inline-agent reasoning through `AgentEntry.variant`, `AgentEntry.options`, and `apply_agent_entry`; native TUI profiles are built-in only and do not currently read agent files.
 - Session model changes are event-sourced with `ModelSwitched`; reasoning effort changes are not currently event-sourced and are only in the live `AgentSpec` / `AppState`.
 - Provider request encoders already treat `ReasoningEffort::Off` as “emit no provider reasoning field,” so explicit-off state must be distinguishable before request encoding if it participates in default resolution.

@@ -3,7 +3,7 @@
 ## Repository facts
 
 - Existing CI lives at `.github/workflows/ci.yml` and uses `actions/checkout@v4`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`, and `cargo test --workspace`.
-- The workspace binary to release is `yaca`, declared by `[[bin]]` in `crates/yaca-cli/Cargo.toml`.
+- The workspace binary to release is `hya`, declared by `[[bin]]` in `crates/hya-cli/Cargo.toml`.
 - Workspace versioning is centralized in root `Cargo.toml` at `[workspace.package].version`.
 - No root `CHANGELOG.md`, `docs/changes/`, or release workflow exists before this task.
 

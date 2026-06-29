@@ -3,7 +3,7 @@
 ## Goal
 
 Track and (when prioritized) close the **out-of-scope** surfaces identified during
-the TUI opencode-parity effort — every opencode TUI feature that yaca deliberately
+the TUI opencode-parity effort — every opencode TUI feature that hya deliberately
 did NOT build because it has no equivalent backend concept yet. This task is the
 parent backlog; each deliverable below is independently verifiable and should
 become its own child task (with its own `design.md`) when picked up.
@@ -18,11 +18,11 @@ wizard (tracked separately, per direction).
 - The TUI parity work (W0–W7: editor, dialogs, theme loader+persistence, token
   usage, rename/delete, skill picker, markdown/diff render, abort) lives on the
   unmerged branch `tui/opencode-parity` (off substrate `f5ae121`).
-- **Architecture has since diverged on `main`:** yaca now uses its own
-  `~/.config/yaca/config.yaml` (`providers: { kind: openai|anthropic|google }`)
+- **Architecture has since diverged on `main`:** hya now uses its own
+  `~/.config/hya/config.yaml` (`providers: { kind: openai|anthropic|google }`)
   instead of reading opencode's config. Any backend work here targets the current
   `main` architecture, not the opencode-config substrate the branch was cut from.
-- yaca is currently **single-agent** (`agent_with_model` is fixed to `build`) and
+- hya is currently **single-agent** (`agent_with_model` is fixed to `build`) and
   has no MCP, sharing, workspace-warp, tag, or model-variant concepts.
 
 ## Hard dependency
@@ -39,10 +39,10 @@ Each item lists: what it is, the current gap, what a real implementation needs
 ### 1. Stash dialog (S) — TUI-local, no backend
 
 - **What:** opencode's prompt-stash (set aside drafts, pop them back).
-- **Gap:** `PromptStash` exists in `yaca-tui` (push/pop/cap) but is wired to
+- **Gap:** `PromptStash` exists in `hya-render-tui` (push/pop/cap) but is wired to
   nothing; opencode itself ships it **unbound** by default.
 - **Build:** a stash-add action + a stash list/pop dialog (`DialogKind::Stash`);
-  persist to `$XDG_STATE_HOME/yaca/tui/stash.jsonl` like prompt history.
+  persist to `$XDG_STATE_HOME/hya/tui/stash.jsonl` like prompt history.
 - **Accept:** stashing a draft clears the editor and stores it; the stash dialog
   lists entries and pops the selected one back into the editor; survives restart.
 
@@ -57,7 +57,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 ### 3. Session tags (M) — needs backend
 
 - **What:** user-assigned tags on sessions; filter/group the session list by tag.
-- **Gap:** no tag concept in `yaca-proto`/`yaca-store`.
+- **Gap:** no tag concept in `hya-proto`/`hya-store`.
 - **Build:** an `Event::SessionTagged { tags }` (or tag table) + projection field
   + store query; a tag dialog to add/remove + a filter in the session switcher.
 - **Accept:** tagging persists and the session switcher can filter by tag.
@@ -66,7 +66,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 - **What:** opencode model "variants" (e.g., reasoning-effort / config presets per
   model) selectable from a variant picker.
-- **Gap:** yaca has `ModelRef` only; no variant concept.
+- **Gap:** hya has `ModelRef` only; no variant concept.
 - **Build:** decide the variant model (reasoning effort? sampling preset?), add it
   to the provider/agent request, expose a `DialogKind::Variant` picker.
 - **Accept:** selecting a variant changes the next turn's request parameters.
@@ -76,12 +76,12 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 - **What:** Model Context Protocol server integration + a dialog listing
   servers/tools and their status.
-- **Gap:** yaca has no MCP client at all.
+- **Gap:** hya has no MCP client at all.
 - **Build:** an MCP client subsystem (spawn/connect servers, import their tools
   into `ToolRegistry`, surface status), then a `DialogKind::Mcp` view.
 - **Accept:** a configured MCP server's tools are callable in a turn and listed in
   the dialog.
-- **Risk:** large; only worth it if MCP is on yaca's roadmap (see open questions).
+- **Risk:** large; only worth it if MCP is on hya's roadmap (see open questions).
 
 ### 6. Workspace warp / move-workspace (M) — needs backend
 
@@ -94,16 +94,16 @@ Each item lists: what it is, the current gap, what a real implementation needs
 ### 7. Console / org / share (L) — needs hosted backend
 
 - **What:** opencode's session sharing / org console links.
-- **Gap:** yaca has no hosted/console concept.
+- **Gap:** hya has no hosted/console concept.
 - **Build:** would require a sharing backend (upload session, return a URL) — large
-  and arguably outside yaca's local-first design.
+  and arguably outside hya's local-first design.
 - **Accept:** N/A until a sharing backend exists.
 - **Risk:** likely **won't-do** for a local-first tool (see open questions).
 
 ## Explicitly out of scope
 
 - **Provider OAuth / in-TUI provider-connect wizard** — excluded by direction;
-  yaca resolves keys via `config.yaml` + `yaca login`.
+  hya resolves keys via `config.yaml` + `hya login`.
 
 ## Related, tracked elsewhere (NOT this task)
 
@@ -113,7 +113,7 @@ and should be their own tasks:
 - 33 built-in opencode themes (the JSON loader already shipped; only the bundled
   theme data is missing).
 - Syntax highlighting (syntect) + full-screen DiffViewer (W4.5 polish).
-- Session compact / fork / timeline (need new public `yaca-core` APIs;
+- Session compact / fork / timeline (need new public `hya-core` APIs;
   compaction is currently internal to the turn loop).
 - `/stream?since_seq=N` SSE backfill (server-only; the embedded TUI uses the
   in-process bus).
@@ -129,10 +129,10 @@ and should be their own tasks:
 ## Open questions (product intent — resolve before promoting children)
 
 1. **Roadmap fit:** Which of MCP (5), warp (6), and console/share (7) are actually
-   wanted for yaca, vs. permanently won't-do? These are the large, backend-heavy,
+   wanted for hya, vs. permanently won't-do? These are the large, backend-heavy,
    possibly off-mission items. *Recommendation:* defer MCP unless on the roadmap;
    mark console/org/share won't-do for a local-first tool; treat warp as optional.
-2. **Variant semantics (4):** what does a "variant" mean in yaca — reasoning
+2. **Variant semantics (4):** what does a "variant" mean in hya — reasoning
    effort, sampling preset, or system-prompt preset? *Recommendation:* reasoning
    effort, since the provider request already has a slot for it.
 3. **Priority order:** if building, recommended order is the cheap, fully-grounded

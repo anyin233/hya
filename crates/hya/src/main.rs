@@ -6,6 +6,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use hya_app::{HyaRuntime, RuntimeOptions};
+use hya_hya::{spawn_event_bridge, HyaNativeTransport};
 use hya_sdk::{
     stream_global_events, ApiClient, Client, GlobalEvent, HttpClient, NativeBridge, PendingClient,
     PendingSlot, ServerHandle,
@@ -13,9 +15,7 @@ use hya_sdk::{
 use hya_tui::app::{run_tui, AppEvent, RunTuiInput};
 use hya_tui::state::AppState;
 use hya_tui::tui::{install_panic_hook, spawn_input_task, Tui};
-use hya_yaca::{spawn_event_bridge, YacaNativeTransport};
 use tokio::sync::mpsc;
-use yaca_app::{RuntimeOptions, YacaRuntime};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -125,8 +125,8 @@ fn spawn_connect(
 
 /// Keeps the active backend connection alive for the lifetime of the TUI and tears it down on exit.
 enum Transport {
-    Yaca {
-        runtime: Arc<YacaRuntime>,
+    Hya {
+        runtime: Arc<HyaRuntime>,
         bridge: tokio::task::JoinHandle<()>,
     },
     Native(NativeBridge),
@@ -138,8 +138,8 @@ enum Transport {
 }
 
 impl Transport {
-    /// Connect using the mode implied by `args`: by default run the `yaca` backend IN-PROCESS and
-    /// talk to it natively (no TCP, no reqwest). `--http` spawns `yaca serve` and talks HTTP/SSE;
+    /// Connect using the mode implied by `args`: by default run the `hya` backend IN-PROCESS and
+    /// talk to it natively (no TCP, no reqwest). `--http` spawns `hya serve` and talks HTTP/SSE;
     /// `--server <url>` attaches to an already-running opencode-compatible server; `--opencode`
     /// switches to the opencode backend (native bun bridge, or `opencode serve` over HTTP with
     /// `--http`). Returns the shared client plus the guard that owns the connection.
@@ -150,7 +150,7 @@ impl Transport {
     ) -> Result<(Arc<dyn Client>, Transport), Box<dyn Error + Send + Sync>> {
         if args.server.is_none() && !args.http && !args.opencode {
             let runtime = Arc::new(
-                YacaRuntime::start(RuntimeOptions {
+                HyaRuntime::start(RuntimeOptions {
                     model: None,
                     db: String::new(),
                     yolo: false,
@@ -160,13 +160,13 @@ impl Transport {
                 })
                 .await?,
             );
-            let transport = YacaNativeTransport::new(runtime.router().clone(), directory);
+            let transport = HyaNativeTransport::new(runtime.router().clone(), directory);
             let client: Arc<dyn Client> = Arc::new(ApiClient::with_transport(transport));
             let (event_tx, event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
             forward_events(event_rx, tx.clone());
             let bridge =
                 spawn_event_bridge(runtime.router().clone(), directory.to_owned(), event_tx);
-            return Ok((client, Transport::Yaca { runtime, bridge }));
+            return Ok((client, Transport::Hya { runtime, bridge }));
         }
 
         if args.opencode && !args.http && args.server.is_none() {
@@ -204,7 +204,7 @@ impl Transport {
 
     fn shutdown(self) {
         match self {
-            Transport::Yaca { runtime, bridge } => {
+            Transport::Hya { runtime, bridge } => {
                 bridge.abort();
                 drop(runtime);
             }
@@ -354,35 +354,35 @@ fn resolve_backend_dir() -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
     })
 }
 
-/// Resolve the `yaca` binary to spawn. Order: `--yaca-bin`, `HYA_YACA_BIN`, the sibling `release`
-/// build, a `yaca` on `PATH`, then the sibling `debug` build. Release is preferred over `debug`
+/// Resolve the `hya` binary to spawn. Order: `--hya-bin`, `HYA_HYA_BIN`, the sibling `release`
+/// build, a `hya` on `PATH`, then the sibling `debug` build. Release is preferred over `debug`
 /// because the unoptimized debug binary is ~10x larger and far slower to cold-load (the cause of
-/// slow backend starts); developers wanting a fresh debug backend can set `HYA_YACA_BIN`.
-fn resolve_yaca_bin(args: &Args) -> String {
-    if let Some(bin) = &args.yaca_bin {
+/// slow backend starts); developers wanting a fresh debug backend can set `HYA_HYA_BIN`.
+fn resolve_hya_bin(args: &Args) -> String {
+    if let Some(bin) = &args.hya_bin {
         return bin.clone();
     }
-    if let Ok(bin) = std::env::var("HYA_YACA_BIN") {
+    if let Ok(bin) = std::env::var("HYA_HYA_BIN") {
         return bin;
     }
     let sibling = |profile: &str| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../../../yaca/target/{profile}/yaca"))
+            .join(format!("../../../hya/target/{profile}/hya"))
             .canonicalize()
             .ok()
             .map(|path| path.display().to_string())
     };
     sibling("release")
-        .or_else(yaca_on_path)
+        .or_else(hya_on_path)
         .or_else(|| sibling("debug"))
-        .unwrap_or_else(|| "yaca".to_string())
+        .unwrap_or_else(|| "hya".to_string())
 }
 
-/// First `yaca` executable found on `PATH`, if any.
-fn yaca_on_path() -> Option<String> {
+/// First `hya` executable found on `PATH`, if any.
+fn hya_on_path() -> Option<String> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths).find_map(|dir| {
-        let candidate = dir.join("yaca");
+        let candidate = dir.join("hya");
         candidate.is_file().then(|| candidate.display().to_string())
     })
 }
@@ -400,9 +400,9 @@ impl ServerMode {
         if args.opencode {
             return Ok(Self::Spawned(ServerHandle::spawn(directory).await?));
         }
-        let yaca_bin = resolve_yaca_bin(args);
+        let hya_bin = resolve_hya_bin(args);
         Ok(Self::Spawned(
-            ServerHandle::spawn_yaca(&yaca_bin, directory).await?,
+            ServerHandle::spawn_hya(&hya_bin, directory).await?,
         ))
     }
 
@@ -419,7 +419,7 @@ struct Args {
     server: Option<String>,
     http: bool,
     opencode: bool,
-    yaca_bin: Option<String>,
+    hya_bin: Option<String>,
     version: bool,
     help: bool,
 }
@@ -440,11 +440,11 @@ impl Args {
                 }
                 "--http" => parsed.http = true,
                 "--opencode" => parsed.opencode = true,
-                "--yaca-bin" => {
-                    parsed.yaca_bin = Some(args.next().ok_or_else(|| {
+                "--hya-bin" => {
+                    parsed.hya_bin = Some(args.next().ok_or_else(|| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            "--yaca-bin requires a path",
+                            "--hya-bin requires a path",
                         )
                     })?);
                 }
@@ -465,14 +465,14 @@ impl Args {
 fn print_usage() {
     println!("usage: hya [OPTIONS]");
     println!(
-        "  (default)          run the `yaca` backend in-process and talk to it natively (no HTTP)"
+        "  (default)          run the `hya` backend in-process and talk to it natively (no HTTP)"
     );
-    println!("  --http             spawn `yaca serve` and connect over HTTP/SSE (with --opencode: `opencode serve`)");
+    println!("  --http             spawn `hya serve` and connect over HTTP/SSE (with --opencode: `opencode serve`)");
     println!(
-        "  --server <url>     attach to a running opencode-compatible server (yaca or opencode)"
+        "  --server <url>     attach to a running opencode-compatible server (hya or opencode)"
     );
-    println!("  --yaca-bin <path>  yaca binary to spawn for --http (else $HYA_YACA_BIN, sibling build, or PATH)");
-    println!("  --opencode         use the opencode backend (native bun bridge) instead of yaca");
+    println!("  --hya-bin <path>  hya binary to spawn for --http (else $HYA_HYA_BIN, sibling build, or PATH)");
+    println!("  --opencode         use the opencode backend (native bun bridge) instead of hya");
     println!("  --version, -v      print version");
     println!("  --help, -h         print this help");
 }

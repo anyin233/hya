@@ -8,23 +8,23 @@
 
 ## Goal
 
-1. In yaca, make direct native TUI `/model <id>` fail safely when the requested model is not a valid catalog entry: show a visible system message and preserve the last valid/current model state.
+1. In hya, make direct native TUI `/model <id>` fail safely when the requested model is not a valid catalog entry: show a visible system message and preserve the last valid/current model state.
 2. For terminal visual QA, stop treating multiple valid independent frames as a `borderMisaligned` failure while preserving detection of genuinely malformed boxes.
 
 ## Current facts
 
-- `crates/yaca-cli/src/tui/controller.rs::dispatch_slash` currently mutates `self.app.model` before validating a direct `/model <arguments>` command.
+- `crates/hya-cli/src/tui/controller.rs::dispatch_slash` currently mutates `self.app.model` before validating a direct `/model <arguments>` command.
 - On miss, that branch synthesizes `ModelEntry { provider: "", id: arguments, reasoning_variants: [] }`, assigns it to `active_model`, and emits `TuiEffect::SelectModel(entry)`.
-- `crates/yaca-cli/src/tui.rs` handles `TuiEffect::SelectModel(entry)` by converting the entry to `entry.model_ref()`, assigning `agent.model`, switching the engine model, and updating session model snapshot state.
+- `crates/hya-cli/src/tui.rs` handles `TuiEffect::SelectModel(entry)` by converting the entry to `entry.model_ref()`, assigning `agent.model`, switching the engine model, and updating session model snapshot state.
 - `ModelEntry::matches_model_ref` accepts both bare `id` and provider-prefixed `<provider>/<id>` refs; provider/model identity must not collapse when duplicate ids exist.
 - `Controller::set_active_model_by_identity` is used by session resume/hydration, not by failed direct `/model` commands. Its lookup-miss semantics must clear `active_model` on resume misses so stale provider/reasoning metadata from a previous session cannot survive after `controller.app.model` changes to an uncataloged session model.
 - The durable `tui-check` source is upstream `oh-my-openagent`, path `packages/shared-skills/skills/visual-qa/scripts/tui-grid.ts`; the installed package cache is generated output and must not be treated as the owned source.
 
 ## Scope decision
 
-### D1: yaca change in this repository
+### D1: hya change in this repository
 
-Implement and verify the safe `/model` behavior in yaca now:
+Implement and verify the safe `/model` behavior in hya now:
 
 - Validate the requested model ref before mutating controller state.
 - Preserve `app.model`, `active_model`, runtime `AgentSpec.model`, reasoning defaults, and session model snapshot on invalid or ambiguous requests.
@@ -37,19 +37,19 @@ Implement and verify the safe `/model` behavior in yaca now:
 
 ### D2: upstream `oh-my-openagent` change tracked from this task
 
-Do not patch yaca's installed `visual-qa` package cache. The durable checker fix should be implemented as an upstream patch to `oh-my-openagent`:
+Do not patch hya's installed `visual-qa` package cache. The durable checker fix should be implemented as an upstream patch to `oh-my-openagent`:
 
 - Add tests for valid independent frame layouts that currently false-positive.
 - Change `tui-grid.ts` border analysis to evaluate frame-line width consistency per independent frame/row-band group instead of across the whole capture.
 - Keep existing overflow, ANSI, wide-character, and malformed-box checks green.
 
-Yaca can keep task fixtures and a spec note to document why a `borderMisaligned` result from the currently installed checker may be non-actionable until upstream is patched and released.
+Hya can keep task fixtures and a spec note to document why a `borderMisaligned` result from the currently installed checker may be non-actionable until upstream is patched and released.
 
 ## Planner conflict resolution
 
 | Topic | Conservative planner | Failure-mode planner | Merged decision |
 | --- | --- | --- | --- |
-| `tui-check` ownership | Split yaca `/model` fix from upstream checker PR. | Same durable-source concern; warn against cache patch. | Use split scope: yaca D1 now, upstream D2 separately, with yaca tracking/spec note only. |
+| `tui-check` ownership | Split hya `/model` fix from upstream checker PR. | Same durable-source concern; warn against cache patch. | Use split scope: hya D1 now, upstream D2 separately, with hya tracking/spec note only. |
 | Direct `/model` implementation shape | Small local validation in `dispatch_slash`; no signature changes. | Add a resolver/error path to catch ambiguity and no-mutation edge cases. | Add a small private resolver/helper only if needed to keep exact-ref/unique-bare/ambiguous-bare behavior testable; do not modify `ModelEntry` or provider routing. |
 | Bare duplicate ids | Not emphasized. | Reject ambiguous bare `/model shared`. | Reject ambiguous bare ids because provider identity is a routing contract in `.trellis/spec/frontend/quality-guidelines.md`. |
 | Malformed refs | Treat unknown refs as misses. | Flag malformed provider refs. | Do not reject `a/b/c` solely for multiple slashes because model ids may contain slashes. Exact `entry.model_ref()` match takes precedence; otherwise unique bare `entry.id` match is allowed; misses return an error without mutation. |
@@ -92,7 +92,7 @@ This keeps the existing malformed CJK-width fixture failing while allowing valid
 - Fuzzy model matching or suggestions beyond ambiguous candidate refs.
 - Model catalog refresh, provider routing changes, `ModelEntry` schema changes, or `/think` redesign.
 - Patching generated installed package caches for `visual-qa`.
-- Changing yaca's terminal rendering to satisfy a false-positive checker unless a manual visual inspection proves the frame is actually malformed.
+- Changing hya's terminal rendering to satisfy a false-positive checker unless a manual visual inspection proves the frame is actually malformed.
 - Starting `task.py start` or implementation work before the plan review verdict is recorded and the user approves the split scope.
 
 ## Multi-deliverable task structure
@@ -100,8 +100,8 @@ This keeps the existing malformed CJK-width fixture failing while allowing valid
 Recommended Trellis structure after approval:
 
 - Keep this task as the parent planning/coordination record.
-- Child D1: yaca native TUI `/model` safe rejection. Dependency: this merged plan and review verdict; independently verifiable by Rust controller/runtime tests and native TUI manual QA.
-- Child D2: upstream `oh-my-openagent` `tui-check` frame grouping. Dependency: confirmed upstream source path and yaca fixture evidence; independently verifiable by upstream Bun tests and checker CLI fixture runs.
+- Child D1: hya native TUI `/model` safe rejection. Dependency: this merged plan and review verdict; independently verifiable by Rust controller/runtime tests and native TUI manual QA.
+- Child D2: upstream `oh-my-openagent` `tui-check` frame grouping. Dependency: confirmed upstream source path and hya fixture evidence; independently verifiable by upstream Bun tests and checker CLI fixture runs.
 
 If child tasks are created, write those dependencies into each child `prd.md`/`implement.md`; do not rely on tree position alone to imply ordering.
 
@@ -109,7 +109,7 @@ If child tasks are created, write those dependencies into each child `prd.md`/`i
 
 Proceed with this split-scope plan?
 
-- D1: implement yaca `/model` safe rejection now in this repository.
+- D1: implement hya `/model` safe rejection now in this repository.
 - D2: prepare or track the durable `tui-check` fix as an upstream `oh-my-openagent` change rather than editing the installed package cache.
 
 ## Plan Review
@@ -119,10 +119,10 @@ Proceed with this split-scope plan?
 This review passed the earlier merged draft, but the plan was later revised after collecting the official background planner outputs. Treat this verdict as advisory evidence only; execution remains blocked until the fresh review of the current on-disk plan completes.
 
 ```text
-D1 PASS - goals split D1 yaca / D2 upstream with explicit out-of-scope and falsifiable acceptance criteria [design.md:9-13,86-90; prd.md:41-62]
+D1 PASS - goals split D1 hya / D2 upstream with explicit out-of-scope and falsifiable acceptance criteria [design.md:9-13,86-90; prd.md:41-62]
 D2 PASS - tasks ordered red-tests→resolver→runtime-proof→spec→upstream→gates; each step is 1-3 tool calls [implement.md:41-396]
 D3 PASS - cited APIs verified: dispatch_slash [controller.rs:449-468], SystemMessage variant [controller.rs:35], available_models [controller.rs:59], model_ref behavior locked by existing test slash_model_provider_prefixed_selects_matching_provider_entry [controller.rs:1081-1108]; upstream tui-grid.ts ownership documented [evidence.md:46-51]
-D4 PASS - named ModelCommandError enum with three error cases and explicit no-mutation contract [design.md:55-71; implement.md:142-188]; pre-existing yaca-server test failure acknowledged so it cannot mask regressions [implement.md:372]
+D4 PASS - named ModelCommandError enum with three error cases and explicit no-mutation contract [design.md:55-71; implement.md:142-188]; pre-existing hya-server test failure acknowledged so it cannot mask regressions [implement.md:372]
 D5 PASS - per-task gate commands present: focused cargo tests [implement.md:122,228], workspace fmt/clippy/test trio [implement.md:367-369], bun test for upstream [implement.md:344], task.py validate [implement.md:292], manual QA steps [implement.md:386-396]; each PRD acceptance criterion maps to a task [prd.md:41-62]
 D6 PASS - changes confined to private resolver in controller.rs + spec note; ModelEntry / provider routing edits forbidden [design.md:50,86-90]; tui-check fix routed upstream rather than patching installed cache [design.md:35-44; implement.md:299-352]
 VERDICT: PASS

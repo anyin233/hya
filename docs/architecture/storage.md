@@ -1,6 +1,6 @@
 # Storage
 
-The storage layer lives in [`../../crates/yaca-store`](../../crates/yaca-store)
+The storage layer lives in [`../../crates/hya-store`](../../crates/hya-store)
 and persists canonical events in SQLite.
 
 ## Connections
@@ -16,13 +16,13 @@ and persists canonical events in SQLite.
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
 connection. The CLI uses in-memory stores for `exec`, `run`, goal mode, and the
-TUI default; `yaca --db <PATH>` and `yaca serve --db <PATH>` use file-backed
+TUI default; `hya --db <PATH>` and `hya serve --db <PATH>` use file-backed
 SQLite.
 
 ## Migrations
 
 The first migration is
-[`0001_init.sql`](../../crates/yaca-store/migrations/0001_init.sql). It creates
+[`0001_init.sql`](../../crates/hya-store/migrations/0001_init.sql). It creates
 tables for:
 
 - sessions, messages, and parts
@@ -84,7 +84,7 @@ The same store replay powers:
 
 - `SessionEngine::replay`
 - `GET /sessions/:id/events`
-- `yaca tail-session`
+- `hya tail-session`
 - `read_projection`
 
 This makes the database a useful debugging artifact: if the event log is intact,

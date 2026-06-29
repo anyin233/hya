@@ -31,13 +31,13 @@ docs/
 
 This borrows OpenCode's discoverable topic-page style for user docs and Oh My
 Pi's engineering-topic depth for architecture docs, while keeping the tree small
-enough for yaca's current workspace.
+enough for hya's current workspace.
 
 ## Content Boundaries
 
 - `docs/README.md`: landing page, reading paths, docs map.
 - `getting-started.md`: prerequisites, build, first TUI run, first headless run.
-- `configuration.md`: opencode config reuse, `YACA_MODEL`, fallback provider,
+- `configuration.md`: opencode config reuse, `HYA_MODEL`, fallback provider,
   security notes for API keys.
 - `cli.md`: command reference for the shipped CLI surface.
 - `project-structure.md`: repository map, crate table, source-file guide, data
@@ -61,15 +61,15 @@ enough for yaca's current workspace.
 Claims must be grounded in the current code, especially:
 
 - Root `Cargo.toml` and `README.md`
-- `crates/yaca-cli/src/main.rs`, `config.rs`, `tui.rs`
-- `crates/yaca-core/src/*.rs`
-- `crates/yaca-proto/src/*.rs`
-- `crates/yaca-provider/src/*.rs`
-- `crates/yaca-tool/src/*.rs`
-- `crates/yaca-store/src/*.rs`, `migrations/*.sql`
-- `crates/yaca-server/src/lib.rs`
-- `crates/yaca-client/src/lib.rs`
-- `crates/yaca-tui/src/lib.rs`
+- `crates/hya-cli/src/main.rs`, `config.rs`, `tui.rs`
+- `crates/hya-core/src/*.rs`
+- `crates/hya-proto/src/*.rs`
+- `crates/hya-provider/src/*.rs`
+- `crates/hya-tool/src/*.rs`
+- `crates/hya-store/src/*.rs`, `migrations/*.sql`
+- `crates/hya-server/src/lib.rs`
+- `crates/hya-client/src/lib.rs`
+- `crates/hya-render-tui/src/lib.rs`
 
 ## Risks
 

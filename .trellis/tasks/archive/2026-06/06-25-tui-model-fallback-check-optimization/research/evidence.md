@@ -7,14 +7,14 @@
 
 ## Confirmed `/model` behavior
 
-- `crates/yaca-cli/src/tui/controller.rs` handles direct `/model <arguments>` in `dispatch_slash`.
+- `crates/hya-cli/src/tui/controller.rs` handles direct `/model <arguments>` in `dispatch_slash`.
 - Current direct model command flow:
   1. sets `self.app.model = arguments.to_string()` before validation;
   2. searches `available_models` with `ModelEntry::matches_model_ref(arguments)`;
   3. when no match exists, creates a synthetic `ModelEntry` with empty provider and no reasoning variants;
   4. sets `active_model` to that synthetic entry;
   5. emits `TuiEffect::SelectModel(entry)`.
-- `crates/yaca-cli/src/tui.rs` handles `TuiEffect::SelectModel(entry)` by resolving reasoning, assigning `agent.model = model_ref_for_entry(&entry)`, calling `engine.switch_model`, and updating the session model snapshot.
+- `crates/hya-cli/src/tui.rs` handles `TuiEffect::SelectModel(entry)` by resolving reasoning, assigning `agent.model = model_ref_for_entry(&entry)`, calling `engine.switch_model`, and updating the session model snapshot.
 - Therefore unknown direct model refs must be rejected in the controller before emitting `SelectModel`, otherwise runtime state and session metadata can be mutated.
 
 ## Existing known-model contracts to preserve
@@ -52,10 +52,10 @@
 
 ## Upstream tracking status
 
-- Split-scope implementation is active for this yaca task: D1 is the in-repository `/model` no-mutation fix; D2 remains the durable upstream `oh-my-openagent` `tui-check` frame-grouping follow-up.
-- No generated installed package-cache checker files are part of the yaca change. The yaca-side documentation now records that `borderMisaligned=true` on captures with multiple independent valid frames must be manually verified and tracked upstream instead of patched locally.
+- Split-scope implementation is active for this hya task: D1 is the in-repository `/model` no-mutation fix; D2 remains the durable upstream `oh-my-openagent` `tui-check` frame-grouping follow-up.
+- No generated installed package-cache checker files are part of the hya change. The hya-side documentation now records that `borderMisaligned=true` on captures with multiple independent valid frames must be manually verified and tracked upstream instead of patched locally.
 - The D2 follow-up should add upstream tests for valid independent frames and malformed single boxes, then update `packages/shared-skills/skills/visual-qa/scripts/tui-grid.ts` so border width consistency is computed per independent frame group.
-- Until the upstream patch is released and installed, yaca verification can only treat the current checker result as objective evidence for overflow, ANSI leakage, and obvious malformed boxes; known independent-frame false positives remain upstream-owned.
+- Until the upstream patch is released and installed, hya verification can only treat the current checker result as objective evidence for overflow, ANSI leakage, and obvious malformed boxes; known independent-frame false positives remain upstream-owned.
 
 ## Planning implications
 
@@ -63,9 +63,9 @@
 - Tests should first assert no mutation and a visible error effect for unknown bare and provider-prefixed model refs.
 - A harness/runtime test should ensure an unknown model does not reach provider routing or `engine.switch_model` state.
 - `tui-check` fix should group or validate frame lines by actual frame instance rather than globally comparing every frame width in a capture.
-- `tui-check` ownership is outside this repository. The owned source has been identified upstream, so this yaca task should either split the `tui-check` fix into an upstream patch/follow-up or explicitly limit yaca implementation to the `/model` behavior and documentation.
+- `tui-check` ownership is outside this repository. The owned source has been identified upstream, so this hya task should either split the `tui-check` fix into an upstream patch/follow-up or explicitly limit hya implementation to the `/model` behavior and documentation.
 
 ## Open issue for merged design
 
-- Decide whether this Trellis task should implement only the yaca-side `/model` fix and document/upstream the `tui-check` change separately, or expand scope to patch the upstream `oh-my-openagent` source as a second repository change.
-- Decision: implement only the yaca-side `/model` fix in this repository and document/track the checker fix as upstream `oh-my-openagent` work.
+- Decide whether this Trellis task should implement only the hya-side `/model` fix and document/upstream the `tui-check` change separately, or expand scope to patch the upstream `oh-my-openagent` source as a second repository change.
+- Decision: implement only the hya-side `/model` fix in this repository and document/track the checker fix as upstream `oh-my-openagent` work.

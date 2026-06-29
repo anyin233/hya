@@ -57,7 +57,7 @@ color alone for important state; include text labels such as `streaming`,
 
 ## Common Mistakes
 
-- Do not put crossterm input handling in `yaca-tui`.
+- Do not put crossterm input handling in `hya-render-tui`.
 - Do not parse provider/tool business logic in widgets; use the projection and
   view-model layers.
 - Do not compare whole-screen snapshots for routine layout tests when semantic

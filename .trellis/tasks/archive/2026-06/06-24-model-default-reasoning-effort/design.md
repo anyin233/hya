@@ -24,7 +24,7 @@ Persist last-used reasoning as user preference state, not event-sourced session 
 
 ### OpenCode compatibility stays explicit/config-driven in v1
 
-OpenCode agent files and inline agent config already resolve explicit reasoning through `crates/yaca-server/src/opencode/reasoning_options.rs::resolve_reasoning`. Do not introduce a dependency from `yaca-server` to `yaca-cli::HistoryStore` and do not duplicate preference-file I/O in `yaca-server`.
+OpenCode agent files and inline agent config already resolve explicit reasoning through `crates/hya-server/src/opencode/reasoning_options.rs::resolve_reasoning`. Do not introduce a dependency from `hya-server` to `hya-cli::HistoryStore` and do not duplicate preference-file I/O in `hya-server`.
 
 OpenCode can reuse the pure resolver for explicit/config parsing where it helps, but last-used defaults are native TUI-only unless a later task extracts shared preference storage into a non-CLI crate.
 
@@ -36,7 +36,7 @@ This resolves the planner conflict as follows:
 
 ## Resolver contract
 
-Add a pure helper next to `ReasoningEffort` in `crates/yaca-provider/src/lib.rs` because both native CLI/TUI and OpenCode server already depend on `yaca-provider`.
+Add a pure helper next to `ReasoningEffort` in `crates/hya-provider/src/lib.rs` because both native CLI/TUI and OpenCode server already depend on `hya-provider`.
 
 Proposed signature:
 
@@ -71,7 +71,7 @@ Current facts:
 - `ProviderKind::reasoning_variants` advertises provider-family variants.
 - `HttpProvider::catalog` writes those variants into `ProviderModel.reasoning_variants`.
 - `ProviderRouter::catalog` exposes `ProviderModel` values.
-- `yaca_app::config::ModelEntry` currently stores only `{ id, provider }`.
+- `hya_app::config::ModelEntry` currently stores only `{ id, provider }`.
 
 Design:
 
@@ -89,7 +89,7 @@ This avoids needing to build the router first and re-query `router.catalog()` on
 Add a small JSON preference map under the existing `HistoryStore` root:
 
 ```text
-~/.yaca/history/model_reasoning.json
+~/.hya/history/model_reasoning.json
 ```
 
 Structure:
@@ -200,7 +200,7 @@ This keeps old metadata valid and gives new metadata a stable session-level snap
 
 ## OpenCode resolver boundary
 
-Do not add last-used preference persistence to `crates/yaca-server` in this task.
+Do not add last-used preference persistence to `crates/hya-server` in this task.
 
 Allowed server-side work:
 
@@ -210,7 +210,7 @@ Allowed server-side work:
 
 Not in v1:
 
-- No server read/write of `~/.yaca/history/model_reasoning.json`.
+- No server read/write of `~/.hya/history/model_reasoning.json`.
 - No new OpenCode config key unless a future product decision asks for OpenCode defaults to mirror TUI defaults.
 
 ## Compatibility and migration
@@ -225,7 +225,7 @@ Not in v1:
 
 The real surface is the native TUI. After implementation and automated tests:
 
-1. Launch `yaca` in tmux with a temporary `YACA_HISTORY_DIR` and configured fake/dev provider models if available.
+1. Launch `hya` in tmux with a temporary `HYA_HISTORY_DIR` and configured fake/dev provider models if available.
 2. Open `/think` and verify the dialog shows provider-specific options, including `xhigh` or `max` for a model that supports it.
 3. Select `/think off`, exit, relaunch with the same history directory, and verify the model does not fall back to highest effort.
 4. Select a non-off effort, switch away and back to the same provider/model, and verify the last-used effort returns.

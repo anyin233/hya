@@ -2,11 +2,11 @@
 
 ## Scope
 
-This design upgrades yaca's TUI presentation while preserving existing behavior and architecture. opencode is used only as a visual reference. The implementation remains Rust-only and ratatui-based.
+This design upgrades hya's TUI presentation while preserving existing behavior and architecture. opencode is used only as a visual reference. The implementation remains Rust-only and ratatui-based.
 
 ## Current boundary
 
-`crates/yaca-tui` owns pure rendering of `AppState`. `crates/yaca-cli/src/tui.rs` owns terminal setup, crossterm input, async task spawning, bus subscription, and redraw scheduling. This boundary stays unchanged.
+`crates/hya-render-tui` owns pure rendering of `AppState`. `crates/hya-cli/src/tui.rs` owns terminal setup, crossterm input, async task spawning, bus subscription, and redraw scheduling. This boundary stays unchanged.
 
 ## Visual model
 
@@ -42,16 +42,16 @@ The view-model allows tests to assert user/tool/sidebar behavior without dependi
 
 ## File structure
 
-- `crates/yaca-tui/src/lib.rs`: public `AppState`, view structs, `draw`, and module exports.
-- `crates/yaca-tui/src/theme.rs`: semantic theme and style helpers.
-- `crates/yaca-tui/src/view_model.rs`: projection-to-timeline conversion.
-- `crates/yaca-tui/src/layout.rs`: responsive layout calculation.
-- `crates/yaca-tui/src/widgets.rs`: ratatui rendering helpers for status, timeline, prompt, sidebar, and footer.
-- `crates/yaca-tui/tests/tui_render.rs`: render regression tests using `TestBackend`.
+- `crates/hya-render-tui/src/lib.rs`: public `AppState`, view structs, `draw`, and module exports.
+- `crates/hya-render-tui/src/theme.rs`: semantic theme and style helpers.
+- `crates/hya-render-tui/src/view_model.rs`: projection-to-timeline conversion.
+- `crates/hya-render-tui/src/layout.rs`: responsive layout calculation.
+- `crates/hya-render-tui/src/widgets.rs`: ratatui rendering helpers for status, timeline, prompt, sidebar, and footer.
+- `crates/hya-render-tui/tests/tui_render.rs`: render regression tests using `TestBackend`.
 
 ## Compatibility
 
-The first implementation should not change CLI key handling or engine events. Existing tests continue to compile, although assertions may be updated to match the new labels and layout. New modules stay inside `yaca-tui`; no store, provider, tool, server, or core crate changes are required.
+The first implementation should not change CLI key handling or engine events. Existing tests continue to compile, although assertions may be updated to match the new labels and layout. New modules stay inside `hya-render-tui`; no store, provider, tool, server, or core crate changes are required.
 
 ## Error handling
 

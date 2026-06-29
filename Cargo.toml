@@ -1,4 +1,4 @@
-# yaca — Rust multi-agent coding agent. Workspace root.
+# hya — Rust multi-agent coding agent. Workspace root.
 # See .trellis/tasks/06-20-agent-spec/{design.md,implement.md} for the full spec.
 [workspace]
 resolver = "3"
@@ -12,18 +12,18 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # --- internal crates (path deps) ---
-yaca-proto = { path = "crates/yaca-proto" }
-yaca-provider = { path = "crates/yaca-provider" }
-yaca-tool = { path = "crates/yaca-tool" }
-yaca-store = { path = "crates/yaca-store" }
-yaca-core = { path = "crates/yaca-core" }
-yaca-server = { path = "crates/yaca-server" }
-yaca-client = { path = "crates/yaca-client" }
-yaca-tui = { path = "crates/yaca-tui" }
-yaca-mcp = { path = "crates/yaca-mcp" }
-yaca-plugin = { path = "crates/yaca-plugin" }
-yaca-app = { path = "crates/yaca-app" }
-hya-yaca = { path = "crates/hya-yaca" }
+hya-proto = { path = "crates/hya-proto" }
+hya-provider = { path = "crates/hya-provider" }
+hya-tool = { path = "crates/hya-tool" }
+hya-store = { path = "crates/hya-store" }
+hya-core = { path = "crates/hya-core" }
+hya-server = { path = "crates/hya-server" }
+hya-client = { path = "crates/hya-client" }
+hya-render-tui = { path = "crates/hya-render-tui" }
+hya-mcp = { path = "crates/hya-mcp" }
+hya-plugin = { path = "crates/hya-plugin" }
+hya-app = { path = "crates/hya-app" }
+hya-hya = { path = "crates/hya-hya" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }

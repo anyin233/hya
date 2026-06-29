@@ -1,0 +1,19 @@
+[package]
+name = "hya-hya"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+hya-sdk = { path = "../hya-sdk" }
+hya-app = { workspace = true }
+hya-server = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+http-body-util = { workspace = true }
+eventsource-stream = "0.2"
+futures-util = "0.3"
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }

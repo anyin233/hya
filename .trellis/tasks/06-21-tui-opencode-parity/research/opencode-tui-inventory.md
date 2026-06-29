@@ -3,7 +3,7 @@
 Source: opencode's current TUI, sparse-cloned to `/tmp/opencode-src/packages/tui`
 (version 1.17.9). **TypeScript on `@opentui/solid`** (OpenTUI + Solid.js reactive
 terminal rendering), ~27k LOC. We port its **appearance + features + keymap** into
-**Rust/ratatui** (immediate-mode), keeping **yaca** branding.
+**Rust/ratatui** (immediate-mode), keeping **hya** branding.
 
 Full agent dumps (for fine detail / truncated tails) saved at:
 - dialogs: `~/.local/share/opencode/tool-output/tool_ee7bae078001dvgGOciKDzTEC4`
@@ -11,21 +11,21 @@ Full agent dumps (for fine detail / truncated tails) saved at:
 
 ---
 
-## 1. Architecture (opencode) → proposed yaca module mapping
+## 1. Architecture (opencode) → proposed hya module mapping
 
 opencode boots a Solid render tree under a deep provider stack; transport is an
 SDK + global **SSE** event stream, batched (16ms) into a **normalized store**.
 
-| opencode (TS) | role | yaca (Rust/ratatui) target |
+| opencode (TS) | role | hya (Rust/ratatui) target |
 |---|---|---|
-| `app.tsx` | root: renderer (60fps), provider tree, route switch (home/session), global key dispatch, selection/copy | `AppShell` (event loop in `yaca-cli`, state in `yaca-tui`) |
+| `app.tsx` | root: renderer (60fps), provider tree, route switch (home/session), global key dispatch, selection/copy | `AppShell` (event loop in `hya-cli`, state in `hya-render-tui`) |
 | `routes/home.tsx` | centered logo + prompt | `HomeView` |
 | `routes/session/index.tsx` (2648) | chat transcript, msg/tool/reasoning render, scroll, sidebar mount, prompt-area state machine | `SessionView` |
 | `routes/session/sidebar.tsx` | 42-col sidebar (title/workspace/share + slots) | `Sidebar` |
 | `routes/session/subagent-footer.tsx` | child-session footer (parent/prev/next + tokens/cost) | `SubagentFooter` |
 | `component/prompt/index.tsx` (1697) | extmark editor, modes, submit, paste | `PromptEditor` |
 | `component/prompt/autocomplete.tsx` (770) | `@`/`/` completion popup | `Autocomplete` |
-| `context/sdk.tsx` + `context/event.ts` | SSE transport + reconnect/backoff | `SseEventPump` (yaca-client) |
+| `context/sdk.tsx` + `context/event.ts` | SSE transport + reconnect/backoff | `SseEventPump` (hya-client) |
 | `context/sync.tsx` (655) | normalized session/message/part store | `SyncStore` |
 | `context/local.tsx` | persisted prefs: agent/model/favorites/pinned sessions | `LocalStore` |
 | `theme/index.ts` (1089) | theme schema + 33 built-ins + resolution | `theme` module |
@@ -98,8 +98,8 @@ shadow markers `_`=shadow cell, `^`=`▀`, `~`=`▀`, `,`=`▄`. Combined:
 █__█ █__█ █^^^ █__█ █___ █__█ █__█ █^^^
 ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
 ```
-Renders centered on home above the prompt (`home_logo` slot). **For yaca: keep the
-"yaca" wordmark** (reuse the same block-glyph style + shadow technique + primary glow).
+Renders centered on home above the prompt (`home_logo` slot). **For hya: keep the
+"hya" wordmark** (reuse the same block-glyph style + shadow technique + primary glow).
 
 ## 4. Keymap (default; leader = `Ctrl+X`, leader timeout 2000ms)
 
@@ -147,7 +147,7 @@ Primitives: `dialog.tsx` (stack/backdrop), `dialog-select.tsx` (searchable list 
 most), `dialog-prompt.tsx` (text entry), `dialog-confirm.tsx`, `dialog-alert.tsx`,
 `dialog-export-options.tsx`, `dialog-help.tsx`.
 
-Concrete dialogs (★ = needs backend data yaca lacks):
+Concrete dialogs (★ = needs backend data hya lacks):
 - ★`command-palette` (~80 cmds over `namespace:"palette"`)
 - ★`dialog-model` (favorites/recents/providers + connect) ← model.list
 - ★`dialog-provider` (multi-step connect/OAuth/API-key wizard)
@@ -167,11 +167,11 @@ Concrete dialogs (★ = needs backend data yaca lacks):
 
 ---
 
-## 9. yaca backend gap → extensions required for parity (decision #2: build them)
+## 9. hya backend gap → extensions required for parity (decision #2: build them)
 
 Today: 4 routes (`POST /sessions`, `POST /sessions/:id/prompt`, `GET .../events`,
 `GET .../stream`); embedded in-process engine; in-memory store (no persistence). To
-drive the parity features, yaca-core/server/client (+ new `Event`/DTO variants) need:
+drive the parity features, hya-core/server/client (+ new `Event`/DTO variants) need:
 
 1. **Session list + metadata + load** (session switcher, quick-switch, continue) — store query + `GET /sessions` + client method.
 2. **Session persistence by default** (durable store path, not in-memory).
@@ -191,9 +191,9 @@ drive the parity features, yaca-core/server/client (+ new `Event`/DTO variants) 
 ## 10. Proposed wave breakdown (to be finalized in design.md / implement.md)
 
 - **W0 — Baseline + scaffolding**: confirm `cargo build --workspace` green; reconcile the
-  in-progress permission refactor; stand up new `yaca-tui` module structure + theme module
+  in-progress permission refactor; stand up new `hya-render-tui` module structure + theme module
   (port `opencode` dark palette) + a render-test harness (ratatui TestBackend snapshots).
-- **W1 — Appearance shell**: AppShell + HomeView (yaca logo + theme) + status/footer +
+- **W1 — Appearance shell**: AppShell + HomeView (hya logo + theme) + status/footer +
   SessionView transcript with markdown + the existing tool/text/reasoning render upgraded
   to opencode's model. Mouse + sticky-bottom scroll.
 - **W2 — Editor parity**: PromptEditor (parts/extmark model, modes, submit/newline, paste,

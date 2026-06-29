@@ -1,8 +1,8 @@
-# yaca Design System
+# hya Design System
 
 ## 1. Atmosphere & Identity
 
-yaca feels like a quiet terminal command center: dense, fast, and focused, with
+hya feels like a quiet terminal command center: dense, fast, and focused, with
 just enough surface contrast to keep long coding sessions readable. The
 signature is borderless tonal layering: panels are separated by subtle dark
 surface shifts and restrained status colors instead of decorative boxes.

@@ -1,4 +1,4 @@
-//! Spawn and supervise a real backend `serve` subprocess (`opencode` or `yaca`).
+//! Spawn and supervise a real backend `serve` subprocess (`opencode` or `hya`).
 //!
 //! Both backends print `<name> server listening on http://127.0.0.1:<port>` to their output,
 //! which we parse for the base URL (see [`parse_listen_url`]). `Drop` guarantees no orphaned
@@ -15,9 +15,9 @@ use crate::error::{Result, SdkError};
 
 const DEFAULT_BIN: &str = "opencode";
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
-/// yaca binds its listener only after connecting MCP servers, which can be slow; give the
+/// hya binds its listener only after connecting MCP servers, which can be slow; give the
 /// background connect a generous window before declaring the spawn dead.
-const YACA_READY_TIMEOUT: Duration = Duration::from_secs(180);
+const HYA_READY_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// `opencode serve` flags: ephemeral port on loopback, logs to stdout so the URL is parseable.
 const OPENCODE_SERVE_ARGS: &[&str] = &[
@@ -28,8 +28,8 @@ const OPENCODE_SERVE_ARGS: &[&str] = &[
     "127.0.0.1",
     "--print-logs",
 ];
-/// `yaca serve` flags: ephemeral loopback port (`:0`). yaca prints the same `listening on` line.
-const YACA_SERVE_ARGS: &[&str] = &["serve", "--bind", "127.0.0.1:0"];
+/// `hya serve` flags: ephemeral loopback port (`:0`). hya prints the same `listening on` line.
+const HYA_SERVE_ARGS: &[&str] = &["serve", "--bind", "127.0.0.1:0"];
 
 /// A running `opencode serve` process plus its discovered base URL.
 #[derive(Debug)]
@@ -58,12 +58,12 @@ impl ServerHandle {
         Self::spawn_args(bin, OPENCODE_SERVE_ARGS, directory, timeout).await
     }
 
-    /// Spawn `yaca serve` on an ephemeral loopback port and wait until it announces its URL.
+    /// Spawn `hya serve` on an ephemeral loopback port and wait until it announces its URL.
     ///
     /// # Errors
     /// See [`ServerHandle::spawn`].
-    pub async fn spawn_yaca(bin: &str, directory: &str) -> Result<Self> {
-        Self::spawn_args(bin, YACA_SERVE_ARGS, directory, YACA_READY_TIMEOUT).await
+    pub async fn spawn_hya(bin: &str, directory: &str) -> Result<Self> {
+        Self::spawn_args(bin, HYA_SERVE_ARGS, directory, HYA_READY_TIMEOUT).await
     }
 
     async fn spawn_args(

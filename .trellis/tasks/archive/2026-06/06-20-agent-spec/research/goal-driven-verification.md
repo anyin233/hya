@@ -67,7 +67,7 @@ turn, so completion is decided by a **fresh model**, not the one doing the work.
 Auto-mode (approve tool calls) is complementary: auto-mode removes per-tool
 prompts; `/goal` removes per-turn prompts.
 
-## Implications for OUR Rust design (yaca)
+## Implications for OUR Rust design (hya)
 
 This maps cleanly onto a **goal/verification engine**:
 

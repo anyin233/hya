@@ -2,7 +2,7 @@
 
 > Execute only after Child A (plugin host/core protocol) and Child B
 > (plugin-registered tools) are complete and this plan has passed review.
-> Production implementation must not change the yaca stdio plugin protocol.
+> Production implementation must not change the hya stdio plugin protocol.
 
 ## 0. Preconditions
 
@@ -10,12 +10,12 @@
   spawning, or this child adds only the config-resolution branch needed to spawn
   the bundled adapter as an ordinary child command.
 - Child B dynamic tool registration is merged, so OpenCode `tool:` definitions can
-  become yaca model-callable tools through `initialize.tools` and `tool/call`.
-- The yaca HTTP server still exposes at least the current endpoints documented in
-  README and implemented in `yaca-server`: `POST /sessions`,
+  become hya model-callable tools through `initialize.tools` and `tool/call`.
+- The hya HTTP server still exposes at least the current endpoints documented in
+  README and implemented in `hya-server`: `POST /sessions`,
   `POST /sessions/:id/prompt`, `GET /sessions/:id/events`, and
-  `GET /sessions/:id/stream`. Source: [README](/chivier-disk/yanweiye/Projects/yaca/README.md:68),
-  [router](/chivier-disk/yanweiye/Projects/yaca/crates/yaca-server/src/lib.rs:30).
+  `GET /sessions/:id/stream`. Source: [README](/chivier-disk/yanweiye/Projects/hya/README.md:68),
+  [router](/chivier-disk/yanweiye/Projects/hya/crates/hya-server/src/lib.rs:30).
 - Adapter package dependencies are pinned to `@opencode-ai/plugin@1.17.9` and
   `@opencode-ai/sdk@1.17.9` for the first compatibility target. Source:
   [plugin package](/tmp/opencode-src/packages/plugin/package.json:3).
@@ -26,9 +26,9 @@ Acceptance mapping: C-AC5.
 
 Tasks:
 
-1. Add `crates/yaca-plugin-opencode/Cargo.toml` as a tiny Rust package with no
-   Bun dependency and no dependency from yaca core.
-2. Add `crates/yaca-plugin-opencode/adapter/package.json`, `tsconfig.json`, and
+1. Add `crates/hya-plugin-opencode/Cargo.toml` as a tiny Rust package with no
+   Bun dependency and no dependency from hya core.
+2. Add `crates/hya-plugin-opencode/adapter/package.json`, `tsconfig.json`, and
    `bun.lock` with pinned OpenCode packages.
 3. Add a minimal `src/main.ts` that can start, print a version/health message to
    stderr, and exit cleanly when invoked with `--version` or `--help`.
@@ -47,7 +47,7 @@ cargo test --workspace
 
 ```sh
 if command -v bun >/dev/null; then
-  cd crates/yaca-plugin-opencode/adapter
+  cd crates/hya-plugin-opencode/adapter
   bun install --frozen-lockfile
   bun test
 else
@@ -55,8 +55,8 @@ else
 fi
 ```
 
-Rollback point: remove `crates/yaca-plugin-opencode/` and the `kind: opencode`
-command-resolution branch. yaca core remains unchanged.
+Rollback point: remove `crates/hya-plugin-opencode/` and the `kind: opencode`
+command-resolution branch. hya core remains unchanged.
 
 ## 2. Phase 2 - Stdio JSON-RPC adapter runtime
 
@@ -70,8 +70,8 @@ Tasks:
    and replies with:
    - `protocol_version: 1`
    - `plugin: { id: "opencode", version: <adapter version>, kind: "opencode" }`
-   - declared yaca hooks derived from loaded OpenCode hooks
-   - declared yaca tools derived from OpenCode `tool:` definitions
+   - declared hya hooks derived from loaded OpenCode hooks
+   - declared hya tools derived from OpenCode `tool:` definitions
 3. Implement `shutdown` to call every loaded OpenCode hook `dispose()` in order,
    then exit after flushing stdout/stderr.
 4. Add unit tests for request/response correlation, malformed JSON lines,
@@ -80,12 +80,12 @@ Tasks:
 Validation:
 
 ```sh
-cd crates/yaca-plugin-opencode/adapter
+cd crates/hya-plugin-opencode/adapter
 bun test protocol initialize shutdown
 ```
 
 Rollback point: keep the package skeleton but disable `kind: opencode` bootstrap;
-no yaca runtime behavior depends on this phase until the child command is enabled.
+no hya runtime behavior depends on this phase until the child command is enabled.
 
 ## 3. Phase 3 - OpenCode loader fidelity (split into atomic TDD sub-steps — D2)
 
@@ -109,7 +109,7 @@ and is an independent rollback unit (revert only that sub-step's file/section).
 
 ### Phase 3c — npm spec resolution + Bun install (cache dir)
 - RED: `bun test loader.npm` (Bun-only, opt-in) — an npm specifier installs into
-  `$XDG_CACHE_HOME/yaca/opencode-adapter/`, preserves package order, and never
+  `$XDG_CACHE_HOME/hya/opencode-adapter/`, preserves package order, and never
   writes `node_modules` into the user's repo unless the plugin is already local.
 - GREEN: implement `bun add`/`bun install` shell-out + resolution. Rollback: revert
   `loader/npm.ts`.
@@ -128,10 +128,10 @@ and is an independent rollback unit (revert only that sub-step's file/section).
 - GREEN: implement the `applyPlugin` loop with per-plugin try/catch. Rollback:
   revert `loader/init.ts`.
 
-Phase-3 exit gate: `cd crates/yaca-plugin-opencode/adapter && bun test loader`
+Phase-3 exit gate: `cd crates/hya-plugin-opencode/adapter && bun test loader`
 (all sub-suites green).
 
-## 4. Phase 4 - OpenCode init context and SDK-shaped yaca client
+## 4. Phase 4 - OpenCode init context and SDK-shaped hya client
 
 Acceptance mapping: C-R4, C-AC4.
 
@@ -143,9 +143,9 @@ Tasks:
 2. Implement `sdk-client.ts` with supported methods:
    - `session.create` -> `POST /sessions`
    - `session.prompt` -> `POST /sessions/:id/prompt` for text-only parts
-   - `session.messages` -> adapter replay/reduce only if a yaca projection endpoint
+   - `session.messages` -> adapter replay/reduce only if a hya projection endpoint
      is not yet available; otherwise call `GET /sessions/:id/messages`
-   - `event.subscribe` / `global.event` -> adapter-local stream of incoming yaca
+   - `event.subscribe` / `global.event` -> adapter-local stream of incoming hya
      protocol `event` notifications
    - `app.log` -> stderr/tracing now, `POST /log` when the server follow-up lands
    - `project.current`, `path.get`, `vcs.get` -> local context/git shims
@@ -154,13 +154,13 @@ Tasks:
    method name and a pointer to Child C compatibility docs.
 3b. Implement the re-entrancy guard (design §4b): a `currentHookContext` set/cleared
    around every hook handler; `session.prompt`/`session.create` throw
-   `YacaReentrantWriteError` while a hook is in flight. Read methods
+   `HyaReentrantWriteError` while a hook is in flight. Read methods
    (`session.messages`, `event.subscribe`) are allowed mid-hook. Add a test that a
    write SDK call from inside a hook throws and a read call succeeds.
-4. Add tests that a plugin can call at least one SDK method against a live yaca
-   server. Minimum C-AC4 target: `client.session.create` calls yaca
+4. Add tests that a plugin can call at least one SDK method against a live hya
+   server. Minimum C-AC4 target: `client.session.create` calls hya
    `POST /sessions` successfully and receives a session id.
-5. Coordinate yaca-server follow-ups only if selected target plugins need them:
+5. Coordinate hya-server follow-ups only if selected target plugins need them:
    - `GET /sessions/:id`
    - `GET /sessions/:id/messages`
    - `GET /events/stream` or `GET /stream`
@@ -170,14 +170,14 @@ Tasks:
 Validation:
 
 ```sh
-cd crates/yaca-plugin-opencode/adapter
+cd crates/hya-plugin-opencode/adapter
 bun test sdk-client init-context
 ```
 
 ```sh
-tmux new-session -d -s yaca-opencode-sdk 'cargo run -p yaca-cli -- serve --bind 127.0.0.1:0 --db "" 2>&1 | tee /tmp/yaca-opencode-sdk.log'
+tmux new-session -d -s hya-opencode-sdk 'cargo run -p hya-cli -- serve --bind 127.0.0.1:0 --db "" 2>&1 | tee /tmp/hya-opencode-sdk.log'
 # Capture the selected server URL from the log, then run the Bun SDK integration
-# test with YACA_SERVER_URL set to that URL.
+# test with HYA_SERVER_URL set to that URL.
 ```
 
 Rollback point: adapter remains loadable, but SDK methods can be disabled by
@@ -194,31 +194,31 @@ Tasks:
    - `Error` -> `session.error`
    - `TextDelta` -> `message.part.delta`
    - `ToolResult`/`ToolError` -> `message.part.updated` for a tool part
-   - unknown yaca events -> logged and skipped by default
+   - unknown hya events -> logged and skipped by default
 2. Implement `message.user.before` -> OpenCode `chat.message` text-only mapping.
 3. Implement `chat.params` -> `experimental.chat.system.transform` then
-   `chat.params`, applying supported fields to yaca `CompletionRequest`.
+   `chat.params`, applying supported fields to hya `CompletionRequest`.
 4. Implement `tool.execute.before`:
-   - seed output `{ args }` from yaca input
-   - normal return -> yaca `continue { input: output.args }`
-   - throw -> yaca `veto { reason }`
+   - seed output `{ args }` from hya input
+   - normal return -> hya `continue { input: output.args }`
+   - throw -> hya `veto { reason }`
 5. Implement `tool.execute.after`:
-   - seed OpenCode output `{ title, output, metadata }` from yaca JSON result/error
-   - normal return -> yaca `continue { result }`
+   - seed OpenCode output `{ title, output, metadata }` from hya JSON result/error
+   - normal return -> hya `continue { result }`
    - never synthesize permission errors AND never rewrite an original permission
      `Err` into a success — when the seeded input was a permission denial, the
-     adapter returns the original `Err` unchanged (parent design §2.6; the yaca host
+     adapter returns the original `Err` unchanged (parent design §2.6; the hya host
      also enforces this defensively).
 6. Implement `permission.ask`:
-   - OpenCode `allow` -> yaca `allow_once`
-   - OpenCode `deny` -> yaca `reject`
-   - OpenCode `ask` -> yaca `defer`
+   - OpenCode `allow` -> hya `allow_once`
+   - OpenCode `deny` -> hya `reject`
+   - OpenCode `ask` -> hya `defer`
 7. Add Bun tests for:
-   - in-place arg mutation changes yaca outcome input
+   - in-place arg mutation changes hya outcome input
    - **[D5] permission-preservation:** a `tool.execute.after` whose seeded input is a
      permission denial and whose OpenCode plugin rewrites `output.output` to a
      success string — assert the adapter still returns the original permission `Err`
-     outcome (does not mask the denial), per parent design §2.6. (A yaca-side
+     outcome (does not mask the denial), per parent design §2.6. (A hya-side
      integration test in Phase 8 confirms the host preserves it end-to-end.)
    - `tool.execute.before` throw becomes veto
    - `chat.params` mutates temperature/max output tokens/system where supported
@@ -229,7 +229,7 @@ Tasks:
 Validation:
 
 ```sh
-cd crates/yaca-plugin-opencode/adapter
+cd crates/hya-plugin-opencode/adapter
 bun test hooks
 ```
 
@@ -242,21 +242,21 @@ Acceptance mapping: C-AC2.
 
 Tasks:
 
-1. Convert each OpenCode `ToolDefinition` to a yaca tool declaration in the locked
+1. Convert each OpenCode `ToolDefinition` to a hya tool declaration in the locked
    `initialize.tools[]` wire shape (parent design §2.2 — the wire key is
    **`inputSchema`** camelCase, NOT `input_schema`):
    - `name` from the `tool:` object key
    - `description` from `ToolDefinition.description`
    - **`inputSchema`** from the Zod args object via `zod-to-json-schema`
    Add an adapter wire-shape test asserting the emitted `initialize` result uses the
-   key `inputSchema` (matching yaca-mcp `ToolInfo` and the protocol codec).
+   key `inputSchema` (matching hya-mcp `ToolInfo` and the protocol codec).
 2. Implement `tool/call` dispatch to the corresponding OpenCode
    `ToolDefinition.execute(args, context)`.
 3. Build OpenCode `ToolContext` with `sessionID`, `messageID`, `agent`,
    `directory`, `worktree`, `abort`, `metadata`, and `ask`.
 4. Implement `metadata()` by accumulating the latest title/metadata and merging it
-   into the final yaca tool result.
-5. For `context.ask()`, return a documented unsupported error until the yaca
+   into the final hya tool result.
+5. For `context.ask()`, return a documented unsupported error until the hya
    stdio protocol grows a reverse request or the SDK/server exposes permission
    answering. This is a compatibility gap, not a Child C protocol change.
 6. Add tests for string result, object result, metadata accumulation, thrown tool
@@ -265,14 +265,14 @@ Tasks:
 Validation:
 
 ```sh
-cd crates/yaca-plugin-opencode/adapter
+cd crates/hya-plugin-opencode/adapter
 bun test tools
 ```
 
 End-to-end C-AC2 validation after Rust integration:
 
 ```sh
-# Start yaca with a fixture OpenCode plugin that returns { tool: { mytool: tool(...) } }.
+# Start hya with a fixture OpenCode plugin that returns { tool: { mytool: tool(...) } }.
 # Prompt a model/fake provider to call the tool or drive the tool/call path through
 # the plugin host test harness.
 cargo test --workspace opencode_tool_registration
@@ -287,13 +287,13 @@ Acceptance mapping: C-R1, C-R6, C-AC5.
 
 Tasks:
 
-1. Extend yaca plugin config resolution so `kind: opencode` without an explicit
-   command resolves to the bundled Bun command under `crates/yaca-plugin-opencode/adapter`.
-2. Inject `YACA_SERVER_URL`, `YACA_DIRECTORY`, `YACA_WORKTREE`, `YACA_PROJECT_ID`,
-   `YACA_AGENT`, `YACA_MODEL`, and serialized adapter options into the child env.
-3. If current yaca mode cannot provide `YACA_SERVER_URL`, fail the adapter child
+1. Extend hya plugin config resolution so `kind: opencode` without an explicit
+   command resolves to the bundled Bun command under `crates/hya-plugin-opencode/adapter`.
+2. Inject `HYA_SERVER_URL`, `HYA_DIRECTORY`, `HYA_WORKTREE`, `HYA_PROJECT_ID`,
+   `HYA_AGENT`, `HYA_MODEL`, and serialized adapter options into the child env.
+3. If current hya mode cannot provide `HYA_SERVER_URL`, fail the adapter child
    open with a clear message and do not enable OpenCode hooks for that session.
-   This is a yaca-server/CLI follow-up gate, not a stdio protocol change.
+   This is a hya-server/CLI follow-up gate, not a stdio protocol change.
 4. Ensure disabled/missing Bun behavior does not fail zero-plugin or non-OpenCode
    runs.
 5. Add Rust tests for config parsing, command resolution, missing Bun graceful
@@ -318,7 +318,7 @@ Live QA must run through the real surface, not just unit tests.
 
 Setup:
 
-1. Start `yaca serve` in tmux with adapter trace enabled and an ephemeral/in-memory
+1. Start `hya serve` in tmux with adapter trace enabled and an ephemeral/in-memory
    DB.
 2. Configure one real off-the-shelf OpenCode plugin using either:
    - a public `.opencode/plugins` plugin that implements `tool.execute.before`,
@@ -332,8 +332,8 @@ Setup:
 Commands:
 
 ```sh
-tmux new-session -d -s yaca-opencode-live \
-  'YACA_OPENCODE_TRACE=1 cargo run -p yaca-cli -- serve --bind 127.0.0.1:0 --db "" 2>&1 | tee /tmp/yaca-opencode-live.log'
+tmux new-session -d -s hya-opencode-live \
+  'HYA_OPENCODE_TRACE=1 cargo run -p hya-cli -- serve --bind 127.0.0.1:0 --db "" 2>&1 | tee /tmp/hya-opencode-live.log'
 
 # In a second tmux pane/session, run a prompt or direct harness action that causes
 # the target hook to fire. For tool.execute.before/after, use a prompt or fixture
@@ -343,26 +343,26 @@ tmux new-session -d -s yaca-opencode-live \
 
 Required evidence:
 
-- tmux capture showing yaca started and loaded the adapter.
+- tmux capture showing hya started and loaded the adapter.
 - adapter log line showing the real plugin spec/id loaded.
 - adapter trace line showing the specific hook key fired.
-- yaca-side effect:
-  - for `tool.execute.before`: mutated args or veto observed in yaca tool input or
+- hya-side effect:
+  - for `tool.execute.before`: mutated args or veto observed in hya tool input or
     `ToolError`;
-  - for `tool.execute.after`: rewritten result observed in yaca `ToolResult`;
-  - for `event`: plugin hook receives a yaca-derived OpenCode event, proven by
+  - for `tool.execute.after`: rewritten result observed in hya `ToolResult`;
+  - for `event`: plugin hook receives a hya-derived OpenCode event, proven by
     adapter trace and/or plugin side effect.
 - one SDK callback success, minimum `client.session.create` or another supported
   method used by the selected plugin.
 
-5. **[D5] yaca-side permission-preservation E2E (deterministic, required):** add a
-   Rust/`yaca-cli` integration test `opencode_permission_preservation` — load the
+5. **[D5] hya-side permission-preservation E2E (deterministic, required):** add a
+   Rust/`hya-cli` integration test `opencode_permission_preservation` — load the
    adapter with a fixture OpenCode plugin whose `tool.execute.after` rewrites the
-   result to a success string; drive a tool call that yaca's permission plane DENIES
-   (original `Err(ToolError::Permission)`); assert the final yaca projection still
+   result to a success string; drive a tool call that hya's permission plane DENIES
+   (original `Err(ToolError::Permission)`); assert the final hya projection still
    shows a `ToolError` (the denial is NOT masked into a `ToolResult`), proving the
    host enforces parent design §2.6 end-to-end through the adapter. This is the
-   yaca-side check that Phase 5's Bun unit test forward-references.
+   hya-side check that Phase 5's Bun unit test forward-references.
 
 Rollback point: set `plugins.opencode.enabled: false`; the core plugin host and
 native plugin path remain enabled.
@@ -375,19 +375,19 @@ Tasks:
 
 1. Document supported OpenCode package version and Bun version.
 2. Document supported hooks and explicit no-ops/unsupported hooks.
-3. Document SDK-supported methods and yaca-server follow-up gaps.
+3. Document SDK-supported methods and hya-server follow-up gaps.
 4. Document loader differences from OpenCode, especially npm cache location and
    TUI exclusion.
 5. Add examples:
    - local `.opencode/plugins/example.ts` hook plugin
    - config npm plugin tuple with options
-   - yaca `config.yaml` enabling `kind: opencode`
+   - hya `config.yaml` enabling `kind: opencode`
 6. Record live QA transcript path and source plugin commit.
 
 Validation:
 
 ```sh
-rg -n "opencode|plugin|Bun|unsupported|1.17.9" README.md crates/yaca-plugin-opencode .trellis/tasks/06-21-opencode-adapter
+rg -n "opencode|plugin|Bun|unsupported|1.17.9" README.md crates/hya-plugin-opencode .trellis/tasks/06-21-opencode-adapter
 ```
 
 Rollback point: documentation-only changes can be reverted independently of code.
@@ -403,7 +403,7 @@ cargo test --workspace
 ```
 
 ```sh
-cd crates/yaca-plugin-opencode/adapter
+cd crates/hya-plugin-opencode/adapter
 bun install --frozen-lockfile
 bun test
 bun run typecheck
@@ -411,18 +411,18 @@ bun run typecheck
 
 ```sh
 # Manual/live QA gate
-tmux capture-pane -t yaca-opencode-live -p > /tmp/yaca-opencode-live.tmux.txt
-rg -n "adapter loaded|hook fired|tool.execute|event|session.create" /tmp/yaca-opencode-live.log /tmp/yaca-opencode-live.tmux.txt
+tmux capture-pane -t hya-opencode-live -p > /tmp/hya-opencode-live.tmux.txt
+rg -n "adapter loaded|hook fired|tool.execute|event|session.create" /tmp/hya-opencode-live.log /tmp/hya-opencode-live.tmux.txt
 ```
 
 Completion criteria:
 
-- C-AC1: real off-the-shelf OpenCode hook fires against yaca with tmux/log evidence.
-- C-AC2: OpenCode `tool:` registration exposes a yaca tool and `tool/call`
+- C-AC1: real off-the-shelf OpenCode hook fires against hya with tmux/log evidence.
+- C-AC2: OpenCode `tool:` registration exposes a hya tool and `tool/call`
   round-trips.
-- C-AC3: in-place mutation and throw-to-block produce the correct yaca outcomes.
-- C-AC4: at least one SDK callback succeeds against `yaca serve`.
-- C-AC5: yaca builds/tests and starts without Bun; enabling the adapter without
+- C-AC3: in-place mutation and throw-to-block produce the correct hya outcomes.
+- C-AC4: at least one SDK callback succeeds against `hya serve`.
+- C-AC5: hya builds/tests and starts without Bun; enabling the adapter without
   Bun degrades gracefully.
 
 ## 11. Overall Rollback Strategy
@@ -430,8 +430,8 @@ Completion criteria:
 - Configuration rollback: set `plugins.opencode.enabled: false`.
 - Runtime rollback: remove `kind: opencode` command resolution while leaving
   native plugin support intact.
-- Adapter rollback: remove `crates/yaca-plugin-opencode/` package and its docs.
-- Server follow-up rollback: revert any yaca-server compatibility endpoints; the
+- Adapter rollback: remove `crates/hya-plugin-opencode/` package and its docs.
+- Server follow-up rollback: revert any hya-server compatibility endpoints; the
   stdio protocol remains unchanged.
 - Lockfile rollback: restore the previous Bun lockfile if dependency upgrades
   cause plugin loader drift.
@@ -442,10 +442,10 @@ Completion criteria:
   copied from observed behavior.
 - SDK gap creep: do not implement the entire OpenCode server; add only methods a
   target plugin or acceptance criterion uses.
-- Event shape mismatch: prefer documented OpenCode event names for known yaca
+- Event shape mismatch: prefer documented OpenCode event names for known hya
   events and skip unknowns by default.
 - Permission bypass by plugin-local filesystem SDK shims: document that plugins
-  are trusted code; do not confuse plugin-local reads with yaca tool permission
+  are trusted code; do not confuse plugin-local reads with hya tool permission
   decisions.
 - Bun absence in Rust CI: keep Bun checks opt-in and validate graceful degrade in
   Rust tests.

@@ -2,12 +2,12 @@
 
 ## Goal
 
-Upgrade yaca's default terminal UI into a polished Rust/ratatui developer workspace inspired by opencode's TUI visual language, without copying opencode functionality or implementation technology.
+Upgrade hya's default terminal UI into a polished Rust/ratatui developer workspace inspired by opencode's TUI visual language, without copying opencode functionality or implementation technology.
 
 ## Requirements
 
 - Render the TUI with Rust and `ratatui` only; do not introduce OpenTUI, Solid, TypeScript, JavaScript renderers, or plugin slot systems.
-- Keep `yaca-tui` as a pure rendering/view crate. Terminal raw mode, crossterm input, async streaming, and cancellation remain owned by `yaca-cli`.
+- Keep `hya-render-tui` as a pure rendering/view crate. Terminal raw mode, crossterm input, async streaming, and cancellation remain owned by `hya-cli`.
 - Preserve existing interactive behavior: prompt input, submit on Enter, quit with Ctrl-C/Ctrl-D/Esc, PgUp/PgDn and Up/Down scrolling, streaming state, permission takeover, goal/loop/team status.
 - Replace the current large bordered conversation box with a time-line style layout: subtle background, user panels with left rails, assistant text blocks, compact tool rows, and minimal metadata.
 - Add responsive context treatment: wide terminals show a right sidebar for session/model/goal/loop/team/permission summaries; narrow terminals keep content readable and avoid overlap.
@@ -26,4 +26,4 @@ Upgrade yaca's default terminal UI into a polished Rust/ratatui developer worksp
 ## Notes
 
 - Visual reference is limited to opencode's TUI style: dark surface hierarchy, sparse borders, compact footer/status, message rails, bottom prompt, and responsive side context.
-- Existing yaca event projection remains the source of truth; this task is a rendering and view-model upgrade, not an agent-engine change.
+- Existing hya event projection remains the source of truth; this task is a rendering and view-model upgrade, not an agent-engine change.

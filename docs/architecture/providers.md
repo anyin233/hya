@@ -1,11 +1,11 @@
 # Providers
 
-The provider layer lives in [`../../crates/yaca-provider`](../../crates/yaca-provider).
-It converts upstream LLM APIs into yaca's canonical event stream.
+The provider layer lives in [`../../crates/hya-provider`](../../crates/hya-provider).
+It converts upstream LLM APIs into hya's canonical event stream.
 
 ## Core Traits
 
-[`lib.rs`](../../crates/yaca-provider/src/lib.rs) defines:
+[`lib.rs`](../../crates/hya-provider/src/lib.rs) defines:
 
 | Type | Purpose |
 | --- | --- |
@@ -20,7 +20,7 @@ streaming tool calls.
 
 ## Provider Router
 
-[`router.rs`](../../crates/yaca-provider/src/router.rs) keeps an ordered list of
+[`router.rs`](../../crates/hya-provider/src/router.rs) keeps an ordered list of
 providers. It resolves a request by asking each provider whether it has
 capabilities for the requested `ModelRef`.
 
@@ -28,7 +28,7 @@ If no route supports the model, the router returns `UnknownModel`.
 
 ## HTTP Provider
 
-[`http.rs`](../../crates/yaca-provider/src/http.rs) is the shared live-provider
+[`http.rs`](../../crates/hya-provider/src/http.rs) is the shared live-provider
 implementation. It owns:
 
 - reqwest client
@@ -54,7 +54,7 @@ and decoded events are forwarded through a channel as an `EventStream`.
 
 ## OpenAI-Compatible Protocol
 
-[`openai.rs`](../../crates/yaca-provider/src/openai.rs) encodes requests for
+[`openai.rs`](../../crates/hya-provider/src/openai.rs) encodes requests for
 Chat Completions compatible APIs:
 
 - system prompts become `role: system`
@@ -62,7 +62,7 @@ Chat Completions compatible APIs:
 - tool results are emitted as `role: tool`
 - streamed text deltas become `TextStart` / `TextDelta` / `TextEnd`
 - streamed tool arguments are accumulated and emitted as `ToolCallRequested`
-- finish reasons map to yaca `FinishReason`
+- finish reasons map to hya `FinishReason`
 
 Stored assistant messages may contain interleaved text and tool parts. The
 encoder clusters `text + tool calls + results` into wire messages that satisfy
@@ -70,7 +70,7 @@ the provider's tool-call pairing rules.
 
 ## Anthropic Protocol
 
-[`anthropic.rs`](../../crates/yaca-provider/src/anthropic.rs) encodes requests
+[`anthropic.rs`](../../crates/hya-provider/src/anthropic.rs) encodes requests
 for Anthropic Messages:
 
 - system prompt is placed in the top-level `system` field
@@ -81,11 +81,11 @@ for Anthropic Messages:
 - `stop_reason: max_tokens` maps to `FinishReason::Length`
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
-stream events into the same yaca event variants.
+stream events into the same hya event variants.
 
 ## Google Protocol
 
-[`google.rs`](../../crates/yaca-provider/src/google.rs) encodes requests for
+[`google.rs`](../../crates/hya-provider/src/google.rs) encodes requests for
 Gemini:
 
 - system prompts become `systemInstruction`
@@ -95,16 +95,16 @@ Gemini:
 - tool results become `functionResponse` parts
 - reasoning effort maps to Gemini thinking-budget settings
 
-The decoder maps streamed text, function calls, and finish reasons into yaca's
+The decoder maps streamed text, function calls, and finish reasons into hya's
 canonical event variants.
 
 ## Fake and Dev Providers
 
 Two non-live providers support development and tests:
 
-- [`FakeProvider`](../../crates/yaca-provider/src/fake.rs) replays scripted
+- [`FakeProvider`](../../crates/hya-provider/src/fake.rs) replays scripted
   `FakeStep`s and is used by tests.
-- [`DevProvider`](../../crates/yaca-provider/src/dev.rs) echoes the latest user
+- [`DevProvider`](../../crates/hya-provider/src/dev.rs) echoes the latest user
   prompt and is used by the CLI when no live config is available.
 
 The dev provider intentionally responds on every turn so multi-turn flows remain
@@ -112,7 +112,7 @@ usable without API keys.
 
 ## CLI Configuration
 
-`yaca-cli` builds routes from `~/.config/yaca/config.yaml`. Provider ids and
-models are surfaced through `yaca models`, OpenCode-compatible provider/model
+`hya-cli` builds routes from `~/.config/hya/config.yaml`. Provider ids and
+models are surfaced through `hya models`, OpenCode-compatible provider/model
 HTTP routes, and saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.

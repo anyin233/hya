@@ -3,7 +3,7 @@
 Reference source:
 
 - Repository: `https://github.com/anomalyco/opencode`
-- Local clone: `/tmp/yaca-opencode-ref`
+- Local clone: `/tmp/hya-opencode-ref`
 - Commit: `f12ac6f234ebe31982ee78f3359e8170cb09ffc9`
 
 ## Relevant OpenCode Paths
@@ -12,8 +12,8 @@ Reference source:
   - Defines the TUI package boundary: OpenTUI renderer, Solid composition,
     components, routes, dialogs, themes, keymaps, SDK synchronization, tool
     presentation, plugin slots, local persistence, and presentation utilities.
-  - Important rule for yaca: keep UI presentation independent from backend
-    implementation modules. yaca's equivalent is keeping `yaca-tui` pure over
+  - Important rule for hya: keep UI presentation independent from backend
+    implementation modules. hya's equivalent is keeping `hya-render-tui` pure over
     `Projection`/`AppState`.
 - `packages/tui/src/routes/session/index.tsx`
   - Session root composes scrollback, message rendering, prompt, permission and
@@ -71,48 +71,48 @@ Reference source:
 
 - The user explicitly wants Claude Code/OpenCode-like paste UX: pasted text
   should not flood the prompt by default, but the original content must still be
-  what gets submitted. yaca should implement this with Rust-side prompt state
+  what gets submitted. hya should implement this with Rust-side prompt state
   rather than terminal-only text substitution.
 - Claude Code is used here as a behavior reference only; no Claude Code source
   is assumed available in this repository.
 
-## yaca Current State
+## hya Current State
 
-- `crates/yaca-tui/src/lib.rs`
+- `crates/hya-render-tui/src/lib.rs`
   - Pure renderer entry point; `AppState` stores projection, goal/loop/team,
     permission/dialog/input/running/scroll/model/session label.
-- `crates/yaca-tui/src/layout.rs`
+- `crates/hya-render-tui/src/layout.rs`
   - Four vertical rows: status, body, 3-line prompt, footer.
   - Sidebar appears only when body width is at least `110`; width is `38`.
-- `crates/yaca-tui/src/view_model.rs`
+- `crates/hya-render-tui/src/view_model.rs`
   - Converts projection messages into simple `TimelineItem` / `TimelinePart`.
   - Tool inputs/errors are ellipsized immediately.
-- `crates/yaca-tui/src/widgets.rs`
+- `crates/hya-render-tui/src/widgets.rs`
   - Status, timeline, sidebar, prompt, permission, dialog, footer, and tool
     status formatting are all in one file.
   - System messages are plain muted `sys` rows.
   - Tool calls are one compact row with `tool {name} {status}`.
-- `crates/yaca-proto/src/projection.rs`
+- `crates/hya-proto/src/projection.rs`
   - `Event::Error` is currently ignored by the projection, so turn/session
     failures are not first-class visible rows.
-- `crates/yaca-cli/src/tui.rs`
+- `crates/hya-cli/src/tui.rs`
   - `spawn_turn` converts prompt and turn failures into injected system
     messages (`input error: ...`, `turn error: ...`), which the TUI renders as
     muted system text.
-- `crates/yaca-cli/src/tui/controller.rs`
+- `crates/hya-cli/src/tui/controller.rs`
   - Input state is currently a plain string.
   - Tab currently completes slash commands only when the prompt starts with `/`;
     otherwise it does nothing.
   - Ctrl-C currently clears non-empty input, interrupts a running turn, and exits
     immediately when idle/empty. There is no double-press exit guard.
-- `crates/yaca-tool/src/permission.rs`
+- `crates/hya-tool/src/permission.rs`
   - `PermissionPlane` already has `AllowAlways`; yolo mode can be expressed in
     the TUI by auto-allowing while the mode is enabled, then later by a more
     explicit permission-mode API if needed.
 
 ## Design Implications
 
-- Treat yaca errors as first-class display rows. The least invasive first pass is
+- Treat hya errors as first-class display rows. The least invasive first pass is
   a view-model classifier that detects `input error:` / `turn error:` / `error:`
   system messages and renders them as error rows. A later protocol pass can add
   projected `Event::Error` rows.

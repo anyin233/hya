@@ -1,18 +1,18 @@
-//! Accept-gate proof: a full session turn against the in-process `yaca` backend completes through
+//! Accept-gate proof: a full session turn against the in-process `hya` backend completes through
 //! the native transport, and OUR PROCESS opens zero network sockets while doing it.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
+use hya_app::{HyaRuntime, RuntimeOptions};
+use hya_hya::{spawn_event_bridge, HyaNativeTransport};
 use hya_sdk::{ApiClient, Client, GlobalEvent};
-use hya_yaca::{spawn_event_bridge, YacaNativeTransport};
 use serde_json::json;
 use tokio::sync::mpsc;
-use yaca_app::{RuntimeOptions, YacaRuntime};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_turn_opens_no_socket() {
-    let runtime = YacaRuntime::start(RuntimeOptions {
+    let runtime = HyaRuntime::start(RuntimeOptions {
         model: None,
         db: String::new(),
         yolo: true,
@@ -24,7 +24,7 @@ async fn native_turn_opens_no_socket() {
     .expect("offline runtime should start");
 
     let client =
-        ApiClient::with_transport(YacaNativeTransport::new(runtime.router().clone(), "/tmp"));
+        ApiClient::with_transport(HyaNativeTransport::new(runtime.router().clone(), "/tmp"));
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
     let _bridge = spawn_event_bridge(runtime.router().clone(), "/tmp".to_owned(), event_tx);
 
@@ -110,7 +110,7 @@ fn offending_sockets(owned: &HashSet<String>) -> Vec<String> {
             if !owned.contains(*inode) {
                 continue;
             }
-            // 0A = LISTEN (any), 01 = ESTABLISHED (only a loopback peer counts as HTTP-to-yaca).
+            // 0A = LISTEN (any), 01 = ESTABLISHED (only a loopback peer counts as HTTP-to-hya).
             let is_listen = *state == "0A";
             let is_loopback_established = *state == "01" && is_loopback_peer(rem);
             if is_listen || is_loopback_established {

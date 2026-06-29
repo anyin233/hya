@@ -40,7 +40,7 @@ Bun/TS monorepo. Key packages:
 - Server is an Effect HTTP app: typed route groups, WebSocket tracking, OpenAPI
   gen, SSE/event routes, UI fallback.
 
-> Lesson for yaca (lean v0): we can ship a **single process** with a clean
+> Lesson for hya (lean v0): we can ship a **single process** with a clean
 > internal "core API" trait boundary, and add a real server later (mode B) for
 > remote/SDK. Don't pay the socket/IPC cost on day 1.
 

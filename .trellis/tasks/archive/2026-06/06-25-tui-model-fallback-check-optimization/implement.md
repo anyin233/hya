@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Safely reject unknown native TUI `/model <id>` commands in yaca and track the durable upstream `tui-check` frame-grouping fix.
+**Goal:** Safely reject unknown native TUI `/model <id>` commands in hya and track the durable upstream `tui-check` frame-grouping fix.
 
-**Architecture:** The yaca change stays in the native TUI controller/runtime boundary: resolve a requested model against the configured catalog before mutating state, and emit only `SystemMessage` on invalid or ambiguous refs. The checker change belongs upstream in `oh-my-openagent`, where `tui-grid.ts` should group independent frame spans before deciding `borderMisaligned`.
+**Architecture:** The hya change stays in the native TUI controller/runtime boundary: resolve a requested model against the configured catalog before mutating state, and emit only `SystemMessage` on invalid or ambiguous refs. The checker change belongs upstream in `oh-my-openagent`, where `tui-grid.ts` should group independent frame spans before deciding `borderMisaligned`.
 
-**Tech Stack:** Rust 2024 (`yaca-cli`, `yaca-app`, `yaca-tui` contracts), ratatui/TUI controller tests, Bun/TypeScript for upstream `oh-my-openagent` checker tests.
+**Tech Stack:** Rust 2024 (`hya-cli`, `hya-app`, `hya-render-tui` contracts), ratatui/TUI controller tests, Bun/TypeScript for upstream `oh-my-openagent` checker tests.
 
 ## Global Constraints
 
 - Do not implement until plan review passes and the user approves the split scope.
 - Use TDD: write and observe failing tests before behavior changes.
-- Preserve event-sourced architecture and keep terminal I/O/event-loop behavior in `crates/yaca-cli`.
-- Keep `yaca-tui` pure rendering/state; this task should not require `yaca-tui` rendering changes.
+- Preserve event-sourced architecture and keep terminal I/O/event-loop behavior in `crates/hya-cli`.
+- Keep `hya-render-tui` pure rendering/state; this task should not require `hya-render-tui` rendering changes.
 - Do not use `unwrap`, `expect`, `as any`, `@ts-ignore`, or `@ts-expect-error` to bypass correctness.
 - Do not patch generated installed package caches as the durable `tui-check` solution.
 - Rust verification gate: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
@@ -22,12 +22,12 @@
 
 ## File structure
 
-- Modify: `crates/yaca-cli/src/tui/controller.rs`
+- Modify: `crates/hya-cli/src/tui/controller.rs`
   - Add failing controller tests for unknown/ambiguous direct `/model` commands.
   - Resolve direct model commands before mutating `AppState.model` or `active_model`.
-- Possibly modify: `crates/yaca-cli/src/tui.rs` or `crates/yaca-cli/src/tui/harness.rs`
+- Possibly modify: `crates/hya-cli/src/tui.rs` or `crates/hya-cli/src/tui/harness.rs`
   - Only if the no-runtime-switch behavior cannot be proven through controller effects alone.
-- Audit and possibly modify: `crates/yaca-cli/src/tui/controller.rs::set_active_model_by_identity`
+- Audit and possibly modify: `crates/hya-cli/src/tui/controller.rs::set_active_model_by_identity`
   - Ensure lookup miss semantics match the real caller: session resume/hydration should clear `active_model` on miss so stale provider metadata cannot survive after `AppState.model` changes.
 - Modify: `.trellis/spec/frontend/quality-guidelines.md`
   - Add the unknown/ambiguous `/model` no-mutation contract and temporary checker ownership note.
@@ -43,7 +43,7 @@
 ### Task 1: Lock direct `/model` no-mutation behavior with failing controller tests
 
 **Files:**
-- Modify: `crates/yaca-cli/src/tui/controller.rs`
+- Modify: `crates/hya-cli/src/tui/controller.rs`
 
 **Interfaces:**
 - Consumes: `Controller::with_models_and_sessions`, `Controller::handle_key`, `Controller::active_model`, `TuiEffect`, `model_entry` test helper.
@@ -121,7 +121,7 @@ fn slash_model_ambiguous_bare_id_preserves_current_model() {
 Run:
 
 ```sh
-cargo test -p yaca-cli tui::controller::tests::slash_model_unknown_bare_id_preserves_current_model tui::controller::tests::slash_model_unknown_provider_prefixed_preserves_current_model tui::controller::tests::slash_model_ambiguous_bare_id_preserves_current_model
+cargo test -p hya-cli tui::controller::tests::slash_model_unknown_bare_id_preserves_current_model tui::controller::tests::slash_model_unknown_provider_prefixed_preserves_current_model tui::controller::tests::slash_model_ambiguous_bare_id_preserves_current_model
 ```
 
 Expected before implementation: at least the unknown tests fail because old behavior emits `SelectModel` and mutates `app.model`; the ambiguous test fails because old behavior selects the first matching bare id.
@@ -131,7 +131,7 @@ Expected before implementation: at least the unknown tests fail because old beha
 ### Task 2: Resolve direct `/model` commands before mutation
 
 **Files:**
-- Modify: `crates/yaca-cli/src/tui/controller.rs`
+- Modify: `crates/hya-cli/src/tui/controller.rs`
 
 **Interfaces:**
 - Consumes: `ModelEntry::model_ref()` and the controller's `available_models` catalog.
@@ -227,7 +227,7 @@ Some(CommandKind::Model) if !arguments.is_empty() => match self.resolve_model_co
 Run:
 
 ```sh
-cargo test -p yaca-cli tui::controller::tests::slash_model_unknown_bare_id_preserves_current_model tui::controller::tests::slash_model_unknown_provider_prefixed_preserves_current_model tui::controller::tests::slash_model_ambiguous_bare_id_preserves_current_model tui::controller::tests::slash_model_provider_prefixed_selects_matching_provider_entry tui::controller::tests::model_dialog_enter_returns_selected_entry
+cargo test -p hya-cli tui::controller::tests::slash_model_unknown_bare_id_preserves_current_model tui::controller::tests::slash_model_unknown_provider_prefixed_preserves_current_model tui::controller::tests::slash_model_ambiguous_bare_id_preserves_current_model tui::controller::tests::slash_model_provider_prefixed_selects_matching_provider_entry tui::controller::tests::model_dialog_enter_returns_selected_entry
 ```
 
 Expected after implementation: all listed tests pass.
@@ -260,7 +260,7 @@ fn slash_model_unknown_preserves_uncataloged_current_model_string() {
 Run:
 
 ```sh
-cargo test -p yaca-cli tui::controller::tests::slash_model_unknown_preserves_uncataloged_current_model_string
+cargo test -p hya-cli tui::controller::tests::slash_model_unknown_preserves_uncataloged_current_model_string
 ```
 
 Expected before implementation: fails if the old path mutates `app.model` to `nope`; expected after implementation: passes.
@@ -270,7 +270,7 @@ Expected before implementation: fails if the old path mutates `app.model` to `no
 ### Task 3: Audit active-model identity lookup miss semantics
 
 **Files:**
-- Modify if needed: `crates/yaca-cli/src/tui/controller.rs`
+- Modify if needed: `crates/hya-cli/src/tui/controller.rs`
 
 **Interfaces:**
 - Consumes: `Controller::set_active_model_by_identity(provider, model)`.
@@ -316,7 +316,7 @@ Direct `/model <id>` failures must preserve state by resolving before mutation a
 Run:
 
 ```sh
-cargo test -p yaca-cli tui::controller::tests::set_active_model_by_identity_matches_provider_prefixed_model tui::controller::tests::set_active_model_by_identity_clears_previous_entry_on_miss
+cargo test -p hya-cli tui::controller::tests::set_active_model_by_identity_matches_provider_prefixed_model tui::controller::tests::set_active_model_by_identity_clears_previous_entry_on_miss
 ```
 
 Expected: existing provider-prefixed match remains green; new miss-clearing test passes after the helper behavior is confirmed.
@@ -326,8 +326,8 @@ Expected: existing provider-prefixed match remains green; new miss-clearing test
 ### Task 4: Prove runtime model switching cannot observe failed direct commands
 
 **Files:**
-- Prefer modifying: `crates/yaca-cli/src/tui/controller.rs`
-- Modify only if needed: `crates/yaca-cli/src/tui.rs` or `crates/yaca-cli/src/tui/harness.rs`
+- Prefer modifying: `crates/hya-cli/src/tui/controller.rs`
+- Modify only if needed: `crates/hya-cli/src/tui.rs` or `crates/hya-cli/src/tui/harness.rs`
 
 **Interfaces:**
 - Consumes: `TuiEffect::SelectModel` is the only runtime trigger for `engine.switch_model`.
@@ -343,7 +343,7 @@ The test should drive `/model nope`, then assert the last selected model/snapsho
 
 - [ ] **Step 3: Run runtime-adjacent tests**
 
-Run the focused yaca-cli TUI test subset that contains the new or existing harness tests.
+Run the focused hya-cli TUI test subset that contains the new or existing harness tests.
 
 Expected: failed direct `/model` is represented as a system message and no model switch state changes.
 
@@ -437,7 +437,7 @@ bun test packages/shared-skills/skills/visual-qa/scripts/tui-grid.test.ts
 
 Expected: existing overflow, ANSI, wide-character, and malformed-box tests pass; new independent-frame tests pass.
 
-- [ ] **Step 4: Track upstream result in the yaca task**
+- [ ] **Step 4: Track upstream result in the hya task**
 
 Record the upstream PR or issue URL in `.trellis/tasks/06-25-tui-model-fallback-check-optimization/research/evidence.md` and replace any temporary spec note after an upstream release is installed.
 
@@ -449,7 +449,7 @@ Record the upstream PR or issue URL in `.trellis/tasks/06-25-tui-model-fallback-
 - No production file changes expected in this task unless verification exposes defects.
 
 **Interfaces:**
-- Consumes: completed D1 yaca implementation and, when available, D2 upstream checker patch.
+- Consumes: completed D1 hya implementation and, when available, D2 upstream checker patch.
 - Produces: evidence that the user-facing behavior works through the native TUI and checker surfaces.
 
 - [ ] **Step 1: Run Rust workspace checks**
@@ -460,14 +460,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Expected: fmt and clippy pass. If `cargo test --workspace` still fails in known unrelated `crates/yaca-server/tests/opencode_instance_api.rs` cases expecting `demo`/`scoped` but observing `brainstorming`, record that as pre-existing and keep focused TUI tests green.
+Expected: fmt and clippy pass. If `cargo test --workspace` still fails in known unrelated `crates/hya-server/tests/opencode_instance_api.rs` cases expecting `demo`/`scoped` but observing `brainstorming`, record that as pre-existing and keep focused TUI tests green.
 
 - [ ] **Step 2: Manual native TUI QA**
 
 Launch:
 
 ```sh
-./target/debug/yaca --mini
+./target/debug/hya --mini
 ```
 
 Drive these paths in a terminal session:
@@ -493,4 +493,4 @@ Expected: valid independent frames report `borderMisaligned: false`; malformed s
 - Spec coverage: every PRD acceptance criterion maps to a task above; the runtime criterion is covered by the no-`SelectModel` controller effect and optional harness test if demanded by review.
 - Placeholder scan: no `TBD`, no unspecified edge handling, no future-only test directive without expected behavior.
 - Type consistency: new Rust names are private to `controller.rs`; existing public interfaces remain unchanged.
-- Multi-deliverable structure: treat yaca D1 and upstream D2 as independent child deliverables after approval; each child artifact must restate its dependencies rather than relying on parent/child tree position.
+- Multi-deliverable structure: treat hya D1 and upstream D2 as independent child deliverables after approval; each child artifact must restate its dependencies rather than relying on parent/child tree position.

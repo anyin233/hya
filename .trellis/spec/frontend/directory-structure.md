@@ -6,12 +6,12 @@
 
 ## Overview
 
-The frontend layer is the Rust terminal UI in `crates/yaca-tui`. It is a pure
+The frontend layer is the Rust terminal UI in `crates/hya-render-tui`. It is a pure
 ratatui rendering crate: it receives `AppState` and paints a frame. Terminal
 setup, crossterm events, async tasks, cancellation, and model streaming stay in
-`crates/yaca-cli/src/tui.rs`.
+`crates/hya-cli/src/tui.rs`.
 
-For TUI work, keep presentation-only modules inside `crates/yaca-tui/src/`:
+For TUI work, keep presentation-only modules inside `crates/hya-render-tui/src/`:
 
 - `lib.rs` exposes public state types and `draw`.
 - `theme.rs` owns semantic colors and shared styles.
@@ -19,7 +19,7 @@ For TUI work, keep presentation-only modules inside `crates/yaca-tui/src/`:
 - `view_model.rs` converts protocol projections into renderable timeline items.
 - `widgets.rs` renders status, timeline, sidebar, prompt, and footer widgets.
 
-`crates/yaca-cli` should not grow view-model or ratatui widget code. `crates/yaca-tui`
+`crates/hya-cli` should not grow view-model or ratatui widget code. `crates/hya-render-tui`
 should not own terminal raw mode, input polling, network calls, or engine events.
 
 ---
@@ -29,7 +29,7 @@ should not own terminal raw mode, input polling, network calls, or engine events
 ## Directory Layout
 
 ```
-crates/yaca-tui/src/
+crates/hya-render-tui/src/
 ├── lib.rs
 ├── layout.rs
 ├── theme.rs
@@ -56,5 +56,5 @@ types that describe render concepts (`TimelineItem`, `AppLayout`, `Theme`).
 
 ## Examples
 
-- `crates/yaca-tui/src/layout.rs` for responsive terminal geometry.
-- `crates/yaca-tui/src/view_model.rs` for projection-to-render conversion.
+- `crates/hya-render-tui/src/layout.rs` for responsive terminal geometry.
+- `crates/hya-render-tui/src/view_model.rs` for projection-to-render conversion.

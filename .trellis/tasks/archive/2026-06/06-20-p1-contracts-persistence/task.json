@@ -2,7 +2,7 @@
   "id": "p1-contracts-persistence",
   "name": "p1-contracts-persistence",
   "title": "Phase 1 contracts and persistence",
-  "description": "yaca-proto types + yaca-store SQLite event-log/projection migrations 0001/0002",
+  "description": "hya-proto types + hya-store SQLite event-log/projection migrations 0001/0002",
   "status": "completed",
   "dev_type": null,
   "scope": null,

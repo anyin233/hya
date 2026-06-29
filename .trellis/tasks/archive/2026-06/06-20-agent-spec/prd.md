@@ -1,4 +1,4 @@
-# Spec: Rust Multi-Agent Coding Agent ("yaca")
+# Spec: Rust Multi-Agent Coding Agent ("hya")
 
 > Status: **PLANNING / brainstorm in progress.** This PRD captures the user
 > request and confirmed facts. Requirements marked _(proposed)_ are not yet
@@ -187,7 +187,7 @@ This task's deliverable is the **spec**, not running code. Done when:
   delegates to a team gets its team results summarized into the lead transcript
   for the evaluator to judge.
 - Wire-protocol shape (reuse opencode-style normalized event stream).
-- Naming: working name "yaca" (repo dir) unless the user renames.
+- Naming: working name "hya" (repo dir) unless the user renames.
 
 ### Assumptions to confirm (loop feature — D5 sub-decisions)
 These are my proposed defaults; correct any before/after the re-review.

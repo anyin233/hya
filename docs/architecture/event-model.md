@@ -1,11 +1,11 @@
 # Event Model
 
-The event model lives in [`../../crates/yaca-proto`](../../crates/yaca-proto).
+The event model lives in [`../../crates/hya-proto`](../../crates/hya-proto).
 It is shared by the engine, store, provider layer, server, client, and TUI.
 
 ## Strong Ids
 
-[`ids.rs`](../../crates/yaca-proto/src/ids.rs) defines distinct newtypes for:
+[`ids.rs`](../../crates/hya-proto/src/ids.rs) defines distinct newtypes for:
 
 - sessions
 - messages
@@ -23,7 +23,7 @@ compile time.
 
 ## Events and Envelopes
 
-[`event.rs`](../../crates/yaca-proto/src/event.rs) defines `Event`, the
+[`event.rs`](../../crates/hya-proto/src/event.rs) defines `Event`, the
 canonical runtime stream. Major event groups are:
 
 - session lifecycle
@@ -49,7 +49,7 @@ The envelope is the unit stored in SQLite replay results and streamed over SSE.
 
 ## Messages and Parts
 
-[`message.rs`](../../crates/yaca-proto/src/message.rs) defines the model-facing
+[`message.rs`](../../crates/hya-proto/src/message.rs) defines the model-facing
 message shape:
 
 | Type | Meaning |
@@ -71,7 +71,7 @@ Pending -> Running -> Completed
 
 ## Projection
 
-[`projection.rs`](../../crates/yaca-proto/src/projection.rs) folds ordered
+[`projection.rs`](../../crates/hya-proto/src/projection.rs) folds ordered
 envelopes into a `Projection`:
 
 - `SessionCreated` sets session metadata.

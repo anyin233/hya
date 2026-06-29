@@ -2,7 +2,7 @@
 
 ## Goal
 
-Redesign the yaca interactive TUI so it looks and feels like opencode's TUI:
+Redesign the hya interactive TUI so it looks and feels like opencode's TUI:
 a borderless layout where regions are distinguished by background color blocks
 (not box borders), the current model name shown inside the input area, and a
 fully capable text input that supports the complete editing keybinding set
@@ -14,17 +14,17 @@ plus a fast inner-loop for visual/interaction iteration.
 
 ## Confirmed facts (from inspection)
 
-- **Current render is fully bordered.** `yaca-tui::draw` (crates/yaca-tui/src/lib.rs)
+- **Current render is fully bordered.** `hya-render-tui::draw` (crates/hya-render-tui/src/lib.rs)
   wraps the transcript, input, and every overlay in `Block::borders(ALL)`; the
   status line sits on its own top row. This is the look we are replacing.
-- **Current input is minimal.** `handle_key` (crates/yaca-cli/src/tui.rs) only
+- **Current input is minimal.** `handle_key` (crates/hya-cli/src/tui.rs) only
   supports append / Backspace(pop) / Enter. `AppState.input` is a plain `String`
   with **no cursor position**; Left/Right are bound to scroll; there are **zero**
   emacs bindings. Model name is rendered in the top status line, not the input.
-- **A render/mock harness already exists.** `crates/yaca-tui/tests/tui_render.rs`
+- **A render/mock harness already exists.** `crates/hya-render-tui/tests/tui_render.rs`
   drives `AppState` -> `draw` on a ratatui `TestBackend` and asserts on the
   rendered buffer (snapshot-style). Good seed for fast visual iteration.
-- **A fake backend already exists.** `yaca-provider` ships `FakeProvider`
+- **A fake backend already exists.** `hya-provider` ships `FakeProvider`
   (fake.rs / dev.rs) used as the offline echo provider, so a full-loop mock does
   not start from zero.
 - **Dependency posture.** Workspace pins deps in `[workspace.dependencies]`;
@@ -56,7 +56,7 @@ plus a fast inner-loop for visual/interaction iteration.
 2. **Mock backend for fast TUI iteration.** Provide BOTH:
    (a) a **render-preview harness** (example binary) that paints canned
    `AppState` fixtures for instant visual iteration with no async/engine; and
-   (b) a **`yaca --mock` live loop** that wires the existing `DevProvider` into
+   (b) a **`hya --mock` live loop** that wires the existing `DevProvider` into
    the real TEA event loop so full interaction (streaming, tools, overlays,
    input) runs offline with no model/network access.
 3. **Model name in the input box.** Surface the active model name inside the
@@ -79,7 +79,7 @@ plus a fast inner-loop for visual/interaction iteration.
       on wide chars), verified by a test with multi-byte/double-width input.
 - [ ] The render-preview example runs and produces the same fixture output
       deterministically (suitable for snapshot-style iteration).
-- [ ] `yaca --mock` launches the TUI and runs turns against the offline
+- [ ] `hya --mock` launches the TUI and runs turns against the offline
       `DevProvider` without requiring config or network.
 - [ ] `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`,
       and `cargo test --workspace` all pass.

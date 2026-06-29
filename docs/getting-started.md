@@ -1,14 +1,14 @@
 # Getting Started
 
-This guide runs yaca from the workspace. The same commands apply to an installed
-`yaca` binary once you install `crates/yaca-cli`.
+This guide runs hya from the workspace. The same commands apply to an installed
+`hya` binary once you install `crates/hya-cli`.
 
 ## Prerequisites
 
 - Rust toolchain compatible with the workspace manifest in [`../Cargo.toml`](../Cargo.toml).
 - A terminal that supports alternate-screen TUI programs.
-- Optional: a yaca provider config if you want live model calls. Without
-  one, yaca uses an offline development provider that echoes prompts.
+- Optional: a hya provider config if you want live model calls. Without
+  one, hya uses an offline development provider that echoes prompts.
 
 ## Build
 
@@ -16,23 +16,23 @@ This guide runs yaca from the workspace. The same commands apply to an installed
 cargo build --workspace
 ```
 
-The main binary lives in [`../crates/yaca-cli`](../crates/yaca-cli). To install it
+The main binary lives in [`../crates/hya-cli`](../crates/hya-cli). To install it
 from this checkout:
 
 ```sh
-cargo install --path crates/yaca-cli
+cargo install --path crates/hya-cli
 ```
 
 ## Run the TUI
 
 ```sh
-cargo run -p yaca-cli --
+cargo run -p hya-cli --
 ```
 
 or, after installing:
 
 ```sh
-yaca
+hya
 ```
 
 The TUI creates an in-memory session, streams assistant events into the chat
@@ -53,7 +53,7 @@ Key controls:
 ## Run One Headless Turn
 
 ```sh
-cargo run -p yaca-cli -- exec "summarize this repository"
+cargo run -p hya-cli -- exec "summarize this repository"
 ```
 
 `exec` creates an in-memory session, admits one user prompt, runs one assistant
@@ -62,23 +62,23 @@ turn, and prints the transcript. Add `--json` to emit canonical event JSONL.
 OpenCode-compatible prompt execution is also accepted:
 
 ```sh
-cargo run -p yaca-cli -- run --format json "summarize this repository"
+cargo run -p hya-cli -- run --format json "summarize this repository"
 ```
 
 ## Run Goal Mode
 
 ```sh
-cargo run -p yaca-cli -- -p "make all tests pass" --max-iterations 6
+cargo run -p hya-cli -- -p "make all tests pass" --max-iterations 6
 ```
 
 Goal mode iterates until an independent evaluator says the goal is met or a cap
 is reached. It is driven by `run_goal` in
-[`../crates/yaca-core/src/completion.rs`](../crates/yaca-core/src/completion.rs).
+[`../crates/hya-core/src/completion.rs`](../crates/hya-core/src/completion.rs).
 
 ## Run the HTTP/SSE Server
 
 ```sh
-cargo run -p yaca-cli -- serve --bind 127.0.0.1:8080 --db yaca.db
+cargo run -p hya-cli -- serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
 Use an empty `--db ""` for an in-memory store, or a file path for SQLite
@@ -87,7 +87,7 @@ persistence.
 The server prints the address it bound to:
 
 ```text
-yaca server listening on http://127.0.0.1:8080
+hya server listening on http://127.0.0.1:8080
 ```
 
 The same server exposes native `/sessions/*` routes and OpenCode-compatible
@@ -97,7 +97,7 @@ permissions/questions, MCP, PTY, VCS, projects/worktrees, TUI control, and sync.
 ## Replay a Session
 
 ```sh
-cargo run -p yaca-cli -- tail-session <session-uuid> --db yaca.db
+cargo run -p hya-cli -- tail-session <session-uuid> --db hya.db
 ```
 
 `tail-session` reads the persisted event log and prints one JSON `Envelope` per
@@ -106,14 +106,14 @@ the server streams over SSE.
 
 ## From Offline to a Live Provider
 
-Out of the box yaca runs **offline**: with no config it uses a development
+Out of the box hya runs **offline**: with no config it uses a development
 provider that echoes your prompt. You can tell you are offline because the model
-id shows as `offline` and replies are prefixed `(yaca dev provider)`. This is
+id shows as `offline` and replies are prefixed `(hya dev provider)`. This is
 intentional, not an error — see
 [Configuration → First-Run / Offline Behavior](configuration.md#first-run--offline-behavior).
 
-To switch to a live model, create `~/.config/yaca/config.yaml` (or
-`$XDG_CONFIG_HOME/yaca/config.yaml`):
+To switch to a live model, create `~/.config/hya/config.yaml` (or
+`$XDG_CONFIG_HOME/hya/config.yaml`):
 
 ```yaml
 default_model: claude-sonnet-4-6
@@ -128,14 +128,14 @@ providers:
 Then provide the key and confirm the catalog resolved:
 
 ```sh
-export ANTHROPIC_API_KEY=sk-...        # or use `yaca login` instead of {env:...}
-yaca login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
-yaca models                            # should list claude-sonnet-4-6, not be empty
-yaca                                    # TUI now runs against the live provider
+export ANTHROPIC_API_KEY=sk-...        # or use `hya login` instead of {env:...}
+hya login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
+hya models                            # should list claude-sonnet-4-6, not be empty
+hya                                    # TUI now runs against the live provider
 ```
 
-`yaca login <provider> <token>` stores an auth token that takes precedence over
-inline `api_key`. For a fully-commented sample config, the complete `YACA_*`
+`hya login <provider> <token>` stores an auth token that takes precedence over
+inline `api_key`. For a fully-commented sample config, the complete `HYA_*`
 environment-variable reference, and MCP/plugin setup, see
 [Configuration](configuration.md). For the full command and TUI slash-command
 reference, see the [CLI Reference](cli.md).

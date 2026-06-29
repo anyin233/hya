@@ -2,7 +2,7 @@
   "id": "p3-tools-permissions",
   "name": "p3-tools-permissions",
   "title": "Phase 3 tools and permission plane",
-  "description": "yaca-tool read/write/edit/glob/grep/shell + PermissionPlane",
+  "description": "hya-tool read/write/edit/glob/grep/shell + PermissionPlane",
   "status": "completed",
   "dev_type": null,
   "scope": null,

@@ -44,7 +44,7 @@ VERIFIED: all prompt turns converge on `session_agent_with_guidance`
 (`session_legacy.rs:401`). The native `hya` bridge talks to these in-process
 opencode endpoints, so this one seam covers the native path.
 
-## 2. Type design (`crates/yaca-provider/src/lib.rs`)
+## 2. Type design (`crates/hya-provider/src/lib.rs`)
 
 Keep `ReasoningEffort` a typed enum (NOT a stringly/option-bag), extended to the
 full OpenCode vocabulary. Per-provider validity + clamping live in methods on the
@@ -112,7 +112,7 @@ The "OpenAI never emits max" rule is enforced INSIDE `openai_label()` (returns
 "xhigh" for Max) and asserted by a unit test, so a future encoder edit cannot
 silently regress it.
 
-## 4. Reasoning resolver (new: `crates/yaca-server/src/opencode/reasoning_options.rs`)
+## 4. Reasoning resolver (new: `crates/hya-server/src/opencode/reasoning_options.rs`)
 
 ```rust
 /// Read + deep-merge opencode.json{,c} from DISK into one Value (workdir paths
@@ -126,7 +126,7 @@ pub(in crate::opencode) fn resolve_reasoning(
     agent_options: &BTreeMap<String, serde_json::Value>,
     model: &ModelRef,                 // active model (may carry #variant)
     config: &serde_json::Value,       // merged disk opencode.json ({} if none)
-) -> Option<yaca_provider::ReasoningEffort>;
+) -> Option<hya_provider::ReasoningEffort>;
 ```
 
 Algorithm (mirrors OpenCode precedence):
@@ -150,11 +150,11 @@ Algorithm (mirrors OpenCode precedence):
    d. Google `thinkingConfig.thinkingBudget` / `thinkingLevel` similarly.
 6. Explicit "none"/"off" → `Some(Off)`; nothing found → `None`.
 
-This module is the ONLY place that knows opencode.json shape. `yaca-provider`
-knows nothing about variants; `yaca-core`/`yaca-proto` know nothing about
+This module is the ONLY place that knows opencode.json shape. `hya-provider`
+knows nothing about variants; `hya-core`/`hya-proto` know nothing about
 opencode.json.
 
-## 5. Wiring (`crates/yaca-server/src/opencode/reference.rs`)
+## 5. Wiring (`crates/hya-server/src/opencode/reference.rs`)
 
 Extend `session_agent_with_guidance` (and `agent_with_guidance` for the
 no-session default agent) with a shared PURE helper
@@ -167,7 +167,7 @@ the existing block — widen its scope), call `resolve_reasoning`, and set
 when both a session `model#variant` and an agent `variant` exist: the
 session/model variant wins (explicit user selection > agent default).
 
-`crates/yaca-app/src/runtime.rs::agent_with_model` stays `reasoning: None` for a
+`crates/hya-app/src/runtime.rs::agent_with_model` stays `reasoning: None` for a
 plain id — UNCHANGED. The native direct-selection `model#variant` fallback is
 OUT OF SCOPE (see §8): the user's agents use frontmatter `variant:`, which flows
 through the seam above, so no AC needs it.

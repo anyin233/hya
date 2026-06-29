@@ -1,4 +1,4 @@
-# Design — yaca plugin system (shared architecture & protocol)
+# Design — hya plugin system (shared architecture & protocol)
 
 > Parent/cross-child design. Authoritative for the **IPC protocol**, the
 > **crate/dependency layout**, the **hook-dispatch model**, and the **failure
@@ -9,82 +9,82 @@ Merged from two diverse parallel planners (architecture-first `oracle` +
 implementation-first `ultrabrain`) per the parallel-planning pipeline. Merge
 decisions are recorded inline as **[MERGE]** notes.
 
-## 0. Pivotal precedent: `yaca-mcp`
+## 0. Pivotal precedent: `hya-mcp`
 
-yaca **already** ships `crates/yaca-mcp` — a stdio JSON-RPC subprocess integration
+hya **already** ships `crates/hya-mcp` — a stdio JSON-RPC subprocess integration
 that is a near-exact precedent for the plugin host:
 
-- `McpClient` ([client.rs](../../../crates/yaca-mcp/src/client.rs)): `jsonrpc:"2.0"`
+- `McpClient` ([client.rs](../../../crates/hya-mcp/src/client.rs)): `jsonrpc:"2.0"`
   framing, `MAX_LINE_BYTES = 1MiB`, `Pending = Arc<Mutex<HashMap<u64, oneshot::Sender>>>`
   id-correlated demux, `INITIALIZE_TIMEOUT = 5s`, `DEFAULT_CALL_TIMEOUT = 30s`,
   `McpError::{Closed, Timeout, OversizedLine, Rpc, …}`, `close_pending` on EOF, a
   `demuxes_responses_by_id` duplex test.
 - `McpClient::spawn(&command, env) -> (client, ChildGuard)` (drop-kills the child).
-- `McpManager::connect_all(configs)` ([manager.rs](../../../crates/yaca-mcp/src/manager.rs)):
+- `McpManager::connect_all(configs)` ([manager.rs](../../../crates/hya-mcp/src/manager.rs)):
   `tokio::task::JoinSet`, **fault-isolated** (`one_failed_server_does_not_abort_others`),
   per server `spawn → initialize → tools/list → wrap`.
 - `McpServerConfig { command: Vec<String>, env, enabled, timeout_ms }` — the exact
   config shape we want for plugins.
-- `McpTool: impl yaca_tool::Tool` ([bridge.rs](../../../crates/yaca-mcp/src/bridge.rs))
+- `McpTool: impl hya_tool::Tool` ([bridge.rs](../../../crates/hya-mcp/src/bridge.rs))
   — the precedent for Child B's plugin-tool proxy.
-- Wired once in [`yaca-cli/src/main.rs`](../../../crates/yaca-cli/src/main.rs) — the
+- Wired once in [`hya-cli/src/main.rs`](../../../crates/hya-cli/src/main.rs) — the
   bootstrap integration point.
 
-**[MERGE] The plugin host is a generalization of `yaca-mcp`'s client+manager**, and
+**[MERGE] The plugin host is a generalization of `hya-mcp`'s client+manager**, and
 the protocol adopts **JSON-RPC 2.0** (the house style) rather than either planner's
 bespoke envelope. This de-risks transport, reuses proven patterns, keeps the
 codebase consistent, and makes the OpenCode Bun adapter (Child C) trivial (JSON-RPC
 2.0 is ubiquitous in JS). Follow-up (not now): extract a shared `jsonrpc-stdio`
-helper crate that both `yaca-mcp` and `yaca-plugin` use; for v1 we keep a parallel
-minimal impl in `yaca-plugin` to avoid refactoring a working crate.
+helper crate that both `hya-mcp` and `hya-plugin` use; for v1 we keep a parallel
+minimal impl in `hya-plugin` to avoid refactoring a working crate.
 
-> Note: MCP is yaca's **parallel** extension mechanism (external tool servers). The
+> Note: MCP is hya's **parallel** extension mechanism (external tool servers). The
 > plugin system is broader (lifecycle interception + tools + OpenCode compat) but
 > deliberately shares MCP's transport DNA.
 
 ## 1. Crate & dependency layout (the DAG)
 
-New crate **`yaca-plugin`** (host/manager + protocol + bridges) and a new bin
-crate **`yaca-plugin-example`** (QA fixture). `members = ["crates/*"]` auto-includes
+New crate **`hya-plugin`** (host/manager + protocol + bridges) and a new bin
+crate **`hya-plugin-example`** (QA fixture). `members = ["crates/*"]` auto-includes
 both.
 
 ```
-crates/yaca-plugin/src/
+crates/hya-plugin/src/
   lib.rs            public re-exports
   protocol.rs       JSON-RPC 2.0 frames (Request/Response/Error) + notifications
   messages.rs       typed hook/tool payloads, HookName, HookPosture, constants
   codec.rs          line-framed async read/write + MAX_LINE_BYTES guard
   client.rs         PluginClient (per-plugin RPC handle; modeled on McpClient)
-  child.rs          ChildProcess::spawn + ChildGuard (reuse yaca-mcp pattern)
+  child.rs          ChildProcess::spawn + ChildGuard (reuse hya-mcp pattern)
   manifest.rs       plugin.toml parser + dir-scan
   config.rs         config.yaml `plugins:` schema
   host.rs           PluginHost: plugins + supervisor + event fan-out + chains
-  dispatcher.rs     impl yaca_core::HookDispatcher for PluginHost
-  permission_bridge.rs  impl yaca_tool::PermissionInterceptor
+  dispatcher.rs     impl hya_core::HookDispatcher for PluginHost
+  permission_bridge.rs  impl hya_tool::PermissionInterceptor
   goal_bridge.rs    HookedGoalEvaluator / HookedLoopVerifier / HookedLoopPlanner
 ```
 
-**[MERGE] Trait-in-the-consumer inversion (chosen over "trait in yaca-plugin").**
+**[MERGE] Trait-in-the-consumer inversion (chosen over "trait in hya-plugin").**
 The traits the existing code calls are defined where they are *used*, and
-`yaca-plugin` (the implementor) depends on those crates. This keeps the DAG acyclic
-and means **`yaca-core` does NOT depend on `yaca-plugin`**:
+`hya-plugin` (the implementor) depends on those crates. This keeps the DAG acyclic
+and means **`hya-core` does NOT depend on `hya-plugin`**:
 
-- `HookDispatcher` trait + native payload types → **`yaca-core`** (new
+- `HookDispatcher` trait + native payload types → **`hya-core`** (new
   `hooks.rs`). The engine holds `Option<Arc<dyn HookDispatcher>>`.
-- `PermissionInterceptor` trait → **`yaca-tool`** (in `permission.rs`). The plane
+- `PermissionInterceptor` trait → **`hya-tool`** (in `permission.rs`). The plane
   holds `Option<Arc<dyn PermissionInterceptor>>`.
-- `yaca-plugin` → `yaca-core`, `yaca-tool`, `yaca-provider`, `yaca-proto`, tokio,
+- `hya-plugin` → `hya-core`, `hya-tool`, `hya-provider`, `hya-proto`, tokio,
   serde/serde_json, thiserror, async-trait, toml, tracing (all already in the
   workspace; no new root deps).
-- `yaca-cli` → `yaca-plugin` (loads/spawns/wires).
+- `hya-cli` → `hya-plugin` (loads/spawns/wires).
 
-Edges: `yaca-cli → yaca-plugin → {yaca-core, yaca-tool, yaca-provider, yaca-proto}`;
-`yaca-core → {yaca-tool, yaca-provider, yaca-proto}`. No cycle.
+Edges: `hya-cli → hya-plugin → {hya-core, hya-tool, hya-provider, hya-proto}`;
+`hya-core → {hya-tool, hya-provider, hya-proto}`. No cycle.
 
 ## 2. The IPC protocol (JSON-RPC 2.0 over stdio JSONL)
 
 One JSON object per line, UTF-8, `\n`-terminated, `MAX_LINE_BYTES = 1MiB`
-(reuse the `yaca-mcp` constant + `OversizedLine` handling). Frames are JSON-RPC
+(reuse the `hya-mcp` constant + `OversizedLine` handling). Frames are JSON-RPC
 2.0:
 
 ```jsonc
@@ -98,7 +98,7 @@ One JSON object per line, UTF-8, `\n`-terminated, `MAX_LINE_BYTES = 1MiB`
 { "jsonrpc":"2.0", "method":"event", "params": { … } }
 ```
 
-Reuse `yaca-mcp` `protocol.rs` shapes (`JsonRpcRequest/Response/Error`). Error
+Reuse `hya-mcp` `protocol.rs` shapes (`JsonRpcRequest/Response/Error`). Error
 codes: `-32601` method-not-found, `-32602` invalid-params, `-32603` internal,
 `1` veto. Id correlation via an `AtomicU64` + `Pending` map (as McpClient).
 
@@ -117,7 +117,7 @@ codes: `-32601` method-not-found, `-32602` invalid-params, `-32603` internal,
 ```jsonc
 // host→plugin (first frame)
 { "jsonrpc":"2.0","id":1,"method":"initialize",
-  "params": { "protocol_version":1, "host":{"name":"yaca","version":"0.x"} } }
+  "params": { "protocol_version":1, "host":{"name":"hya","version":"0.x"} } }
 // plugin→host (must arrive within INITIALIZE_TIMEOUT=5s)
 { "jsonrpc":"2.0","id":1,"result": {
     "protocol_version":1,
@@ -137,7 +137,7 @@ on mismatch.
 
 **[D6] Tool-schema wire key is `inputSchema` (camelCase) EVERYWHERE** — in
 `initialize.tools[]` above and in any Child C adapter output. This mirrors the
-existing `yaca-mcp` `ToolInfo` (`#[serde(rename_all = "camelCase")]`, whose test
+existing `hya-mcp` `ToolInfo` (`#[serde(rename_all = "camelCase")]`, whose test
 asserts the wire contains `inputSchema`) and OpenCode's own `inputSchema`. Rust
 structs may name the field `input_schema` internally but MUST serde-rename to
 `inputSchema` on the wire. Children B and C MUST NOT emit snake_case `input_schema`
@@ -161,7 +161,7 @@ tagged enum so mutation, pass-through, veto, and defer are explicit:
 ```
 
 Per-hook payloads (typed structs in `messages.rs`; native equivalents in
-`yaca-core::hooks`). `[MERGE]` chose the impl-first planner's explicit
+`hya-core::hooks`). `[MERGE]` chose the impl-first planner's explicit
 `outcome`-tagged results (+ a `defer` for answer-hooks):
 
 | `hook/<name>` | input | outcome → effect | veto | posture default |
@@ -175,7 +175,7 @@ Per-hook payloads (typed structs in `messages.rs`; native equivalents in
 | `loop.verifier` | `{target,transcript}` | `verdict{…}`\|`defer` | n/a | open |
 | `loop.planner` | `{target,history,last,planner_notes}` | `plan{…}`\|`defer` | n/a | open |
 
-`request`/`result`/verdict payloads serialize the corresponding yaca types
+`request`/`result`/verdict payloads serialize the corresponding hya types
 (`CompletionRequest`, tool output, `VerifierVerdict`, `PlannerOutput`). `chat.params`
 mutation is **partial-merge**: only present keys overwrite; invalid values (e.g.
 `temperature` out of range) ⇒ fail-open to original.
@@ -184,7 +184,7 @@ mutation is **partial-merge**: only present keys overwrite; invalid values (e.g.
 
 ```jsonc
 { "jsonrpc":"2.0","method":"event",
-  "params": { "envelope": { "seq":42,"ts_millis":…, "event": { /* yaca_proto::Event */ } } } }
+  "params": { "envelope": { "seq":42,"ts_millis":…, "event": { /* hya_proto::Event */ } } } }
 ```
 
 The **only** high-frequency frame. Host side: per-plugin **bounded** mpsc (cap 256),
@@ -217,9 +217,9 @@ Other Ok⇄Err swaps (non-permission) are allowed.
 `host→plugin {method:"shutdown"}` → reply → child EOFs. Host waits
 `shutdown_grace` (2s) then SIGTERM, then SIGKILL (ChildGuard).
 
-## 3. Hook-dispatch model (`yaca-core`)
+## 3. Hook-dispatch model (`hya-core`)
 
-New `crates/yaca-core/src/hooks.rs`: the `HookDispatcher` trait the engine calls,
+New `crates/hya-core/src/hooks.rs`: the `HookDispatcher` trait the engine calls,
 plus **native** (non-serde) payload/outcome types so engine code never touches wire
 shapes.
 
@@ -239,7 +239,7 @@ shapes.
 
 `SessionEngine` gains `hooks: Option<Arc<dyn HookDispatcher>>` (default `None`) +
 `with_hooks(...)` builder (mirrors `with_interaction`/`with_spawner` at
-[engine.rs:73-93](../../../crates/yaca-core/src/engine.rs#L73)).
+[engine.rs:73-93](../../../crates/hya-core/src/engine.rs#L73)).
 
 **[MERGE] R10 zero-overhead is structural**: every site is
 `if let Some(d) = &self.hooks { … } else { <original> }`. `None` ⇒ one predicted
@@ -250,23 +250,23 @@ Future) because it runs on every text-delta token.
 
 | Hook | Site | Edit |
 |---|---|---|
-| `event` | `emit` [engine.rs:169](../../../crates/yaca-core/src/engine.rs#L169) | build `envelope` first → `d.dispatch_event(&envelope)` → `bus.publish(envelope)` |
-| `message.user.before` | `admit_user_prompt` [engine.rs:195](../../../crates/yaca-core/src/engine.rs#L195) | rebind `text` from outcome |
-| `chat.params` | between `request_from_messages` & `providers.stream` [engine.rs:294](../../../crates/yaca-core/src/engine.rs#L294) | rebind `request` (partial-merge) |
-| `tool.execute.before` | top of tool loop [engine.rs:336](../../../crates/yaca-core/src/engine.rs#L336) | `Continue`⇒replace `tc.input`; `Veto`⇒emit `ToolError`, `continue` |
-| `tool.execute.after` | result mapping [engine.rs:353](../../../crates/yaca-core/src/engine.rs#L353) | rewrite `Result<Value,ToolError>` before building the event |
-| `permission.ask` | `PermissionPlane::assert` Ask arm [permission.rs:196](../../../crates/yaca-tool/src/permission.rs#L196) | `Some(decision)`⇒apply; `None`⇒existing user-ask flow |
+| `event` | `emit` [engine.rs:169](../../../crates/hya-core/src/engine.rs#L169) | build `envelope` first → `d.dispatch_event(&envelope)` → `bus.publish(envelope)` |
+| `message.user.before` | `admit_user_prompt` [engine.rs:195](../../../crates/hya-core/src/engine.rs#L195) | rebind `text` from outcome |
+| `chat.params` | between `request_from_messages` & `providers.stream` [engine.rs:294](../../../crates/hya-core/src/engine.rs#L294) | rebind `request` (partial-merge) |
+| `tool.execute.before` | top of tool loop [engine.rs:336](../../../crates/hya-core/src/engine.rs#L336) | `Continue`⇒replace `tc.input`; `Veto`⇒emit `ToolError`, `continue` |
+| `tool.execute.after` | result mapping [engine.rs:353](../../../crates/hya-core/src/engine.rs#L353) | rewrite `Result<Value,ToolError>` before building the event |
+| `permission.ask` | `PermissionPlane::assert` Ask arm [permission.rs:196](../../../crates/hya-tool/src/permission.rs#L196) | `Some(decision)`⇒apply; `None`⇒existing user-ask flow |
 | session/message observe | (subsumed by `event`) | — |
-| `goal.evaluate` | wrapper, no engine edit | `HookedGoalEvaluator` wraps `ModelGoalEvaluator` ([completion.rs:119](../../../crates/yaca-core/src/completion.rs#L119)) |
-| `loop.verifier`/`loop.planner` | wrapper, no engine edit | `HookedLoopVerifier`/`HookedLoopPlanner` wrap impls ([loop_mode.rs:36-58](../../../crates/yaca-core/src/loop_mode.rs#L36)) |
+| `goal.evaluate` | wrapper, no engine edit | `HookedGoalEvaluator` wraps `ModelGoalEvaluator` ([completion.rs:119](../../../crates/hya-core/src/completion.rs#L119)) |
+| `loop.verifier`/`loop.planner` | wrapper, no engine edit | `HookedLoopVerifier`/`HookedLoopPlanner` wrap impls ([loop_mode.rs:36-58](../../../crates/hya-core/src/loop_mode.rs#L36)) |
 
 **[MERGE] goal/loop via wrapper adapters** (both planners independently chose this)
 keeps `completion.rs`/`loop_mode.rs` untouched: the wrapper prefers the plugin's
 `Some(verdict/plan)` and falls back to the inner evaluator on `None`.
 
 **[MERGE] `permission.ask` crosses crates** via the `PermissionInterceptor` trait in
-`yaca-tool` (impl in `yaca-plugin`, wired by CLI) — both planners converged after
-considering and rejecting a `yaca-tool → yaca-plugin` dep. Returning `None`/`defer`
+`hya-tool` (impl in `hya-plugin`, wired by CLI) — both planners converged after
+considering and rejecting a `hya-tool → hya-plugin` dep. Returning `None`/`defer`
 falls through to the existing ask channel, preserving today's safety semantics.
 
 ## 4. Failure posture (R6 / D7)
@@ -288,7 +288,7 @@ match tokio::time::timeout(posture_timeout(posture), fut).await {
 
 Timeouts (defaults; per-plugin `timeout_ms` + per-hook override): `permission.ask`
 5s (humans answer slowly), `tool.execute.before` 1s, others 500ms,
-`INITIALIZE` 5s (matches yaca-mcp).
+`INITIALIZE` 5s (matches hya-mcp).
 
 **Crash/restart**: a per-plugin watcher (`child.wait()` / JoinSet) drains the
 `Pending` map with `Closed` on exit, marks the plugin `Dead` (its chain entries
@@ -335,7 +335,7 @@ plugins:
 
 ### 6.2 Dir-scan + `plugin.toml` manifest (mirrors `skills.rs`)
 
-Scan `.yaca/plugins/*/plugin.toml` and `$XDG_CONFIG_HOME|~/.config/yaca/plugins/*/plugin.toml`:
+Scan `.hya/plugins/*/plugin.toml` and `$XDG_CONFIG_HOME|~/.config/hya/plugins/*/plugin.toml`:
 
 ```toml
 id = "remember"
@@ -352,14 +352,14 @@ Trust boundary = "you own these dirs" (D6); same isolation/posture as config
 plugins; unknown hook names → warn + drop. Config wins on id collision; either
 side's `enabled:false` disables.
 
-### 6.3 Bootstrap → `YacaRuntime`
+### 6.3 Bootstrap → `HyaRuntime`
 
 **[MERGE]** Replace the split `resolve_router` + `build_session_engine` (called by
-all 5 modes) with a single `bootstrap(store, model_override) -> YacaRuntime`
+all 5 modes) with a single `bootstrap(store, model_override) -> HyaRuntime`
 returning a struct (not a growing tuple):
 
 ```rust
-pub struct YacaRuntime {
+pub struct HyaRuntime {
     pub engine: Arc<SessionEngine>,
     pub agent: AgentSpec,
     pub asks: AskRx,
@@ -382,14 +382,14 @@ use it; `cmd_tail_session` uses an empty plugin set.
   tools. It ships the `tool/call` types (§2.5) but does not wire them.
 - **Child B** adds the `PluginTool` proxy (the `McpTool` analog) using §2.5 and
   registers declared `tools` during bootstrap (via the **already-existing**
-  `ToolRegistry::register`, [tool.rs:94](../../../crates/yaca-tool/src/tool.rs#L94))
+  `ToolRegistry::register`, [tool.rs:94](../../../crates/hya-tool/src/tool.rs#L94))
   before the registry freezes into `Arc`. No new registry primitive is required
   (the registry is already dynamic); an `extend(...)` convenience wrapper is
   optional.
 - **Child C** adds a `kind:opencode` Bun plugin (one child process) that speaks this
   exact protocol on stdio and re-emits OpenCode `Hooks`. **The protocol does not
   change for C.** C maps OpenCode `(input,output)`+throw ⇄ our outcome enums, and
-  points the OpenCode SDK `client` at a `yaca serve` instance.
+  points the OpenCode SDK `client` at a `hya serve` instance.
 
 ## 8. Risks / explicit tradeoffs
 
@@ -401,7 +401,7 @@ use it; `cmd_tail_session` uses an empty plugin set.
 | bootstrap ordering vs. `Arc`-freeze (Child B tools) | `connect_all` awaited before registry `Arc::new` |
 | restart storm on a bad plugin | 3/60s then Disabled + loud log |
 | no OS sandbox (D7) | explicit; plugins inherit parent fs/net; documented trust boundary |
-| duplicating yaca-mcp transport | accept minor dup for v1; follow-up extract shared `jsonrpc-stdio` |
+| duplicating hya-mcp transport | accept minor dup for v1; follow-up extract shared `jsonrpc-stdio` |
 
 ## 9. Open follow-ups (not v1)
 

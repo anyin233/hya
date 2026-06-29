@@ -2,9 +2,9 @@
 
 The terminal UI is split between:
 
-- [`yaca-cli/src/tui.rs`](../../crates/yaca-cli/src/tui.rs): terminal I/O and
+- [`hya-cli/src/tui.rs`](../../crates/hya-cli/src/tui.rs): terminal I/O and
   async event loop.
-- [`yaca-tui`](../../crates/yaca-tui): pure ratatui state, layout, theme,
+- [`hya-render-tui`](../../crates/hya-render-tui): pure ratatui state, layout, theme,
   view-model conversion, and widgets.
 
 ## CLI Event Loop
@@ -31,20 +31,20 @@ screen, and draws the initial UI. Each submitted prompt runs in a spawned task:
 
 ## Renderer Crate
 
-`yaca-tui` is intentionally free of terminal I/O. Its public entrypoint is
-[`draw`](../../crates/yaca-tui/src/lib.rs), which composes four internal
+`hya-render-tui` is intentionally free of terminal I/O. Its public entrypoint is
+[`draw`](../../crates/hya-render-tui/src/lib.rs), which composes four internal
 modules:
 
 | Module | Responsibility |
 | --- | --- |
-| [`layout.rs`](../../crates/yaca-tui/src/layout.rs) | Computes status, timeline, optional sidebar, prompt, and footer rectangles. |
-| [`theme.rs`](../../crates/yaca-tui/src/theme.rs) | Defines the dark color palette and base style. |
-| [`view_model.rs`](../../crates/yaca-tui/src/view_model.rs) | Converts `Projection` messages into timeline items. |
-| [`widgets.rs`](../../crates/yaca-tui/src/widgets.rs) | Renders the status bar, timeline, sidebar, prompt, footer, permission panel, and cursor. |
+| [`layout.rs`](../../crates/hya-render-tui/src/layout.rs) | Computes status, timeline, optional sidebar, prompt, and footer rectangles. |
+| [`theme.rs`](../../crates/hya-render-tui/src/theme.rs) | Defines the dark color palette and base style. |
+| [`view_model.rs`](../../crates/hya-render-tui/src/view_model.rs) | Converts `Projection` messages into timeline items. |
+| [`widgets.rs`](../../crates/hya-render-tui/src/widgets.rs) | Renders the status bar, timeline, sidebar, prompt, footer, permission panel, and cursor. |
 
 ## Renderer State
 
-[`AppState`](../../crates/yaca-tui/src/lib.rs) holds:
+[`AppState`](../../crates/hya-render-tui/src/lib.rs) holds:
 
 - current `Projection`
 - optional goal, loop, team, and permission views
@@ -142,7 +142,7 @@ history. It mirrors each interactive session into its own bundle:
       events.jsonl
 ```
 
-`YACA_HISTORY_DIR` overrides the root. Otherwise yaca uses `~/.yaca/history`.
+`HYA_HISTORY_DIR` overrides the root. Otherwise hya uses `~/.hya/history`.
 `index.json` is only a rebuildable listing cache; `meta.json` and
 `events.jsonl` are the source of truth. A malformed session bundle is skipped
 while other sessions remain listable and resumable.
@@ -162,10 +162,10 @@ non-empty text.
 
 ## Test Boundary
 
-Because `yaca-tui` is pure rendering, tests in
-[`../../crates/yaca-tui/tests`](../../crates/yaca-tui/tests) can render states
+Because `hya-render-tui` is pure rendering, tests in
+[`../../crates/hya-render-tui/tests`](../../crates/hya-render-tui/tests) can render states
 into buffers without opening a real terminal. The CLI event loop remains covered
-separately by controller, history, and dummy harness tests in `yaca-cli`.
+separately by controller, history, and dummy harness tests in `hya-cli`.
 
 The dummy harness drives the TUI controller with key events and a local provider
 that records requested models while returning a fixed `dummy response`. This

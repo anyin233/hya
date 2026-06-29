@@ -2,17 +2,17 @@
 
 ## Goal
 
-Bring the Rust `yaca` TUI much closer to OpenCode's terminal UI in visible
+Bring the Rust `hya` TUI much closer to OpenCode's terminal UI in visible
 conversation structure, spacing, sidebar content, tool/action presentation, and
-error highlighting while keeping the existing yaca event-sourced architecture.
+error highlighting while keeping the existing hya event-sourced architecture.
 
 ## Requirements
 
 - Study the upstream OpenCode TUI source and use it as the reference for
   presentation behavior, not just the provided screenshot.
-- Preserve yaca's current Rust/ratatui stack. Do not replace it with OpenTUI,
+- Preserve hya's current Rust/ratatui stack. Do not replace it with OpenTUI,
   Ink, curses, a webview, or any other terminal UI stack.
-- Preserve the crate boundary where `yaca-tui` is a pure renderer over projected
+- Preserve the crate boundary where `hya-render-tui` is a pure renderer over projected
   state plus interaction state.
 - Implement first-class prompt popups for both `/` commands and `@` references:
   - `/` opens a command popup with the existing slash commands;
@@ -53,7 +53,7 @@ error highlighting while keeping the existing yaca event-sourced architecture.
   exposes the session title/id, model/state, goal/loop/team/permission summaries,
   and future-friendly sections for context/files/status where data exists.
 - Keep narrow terminals usable by hiding or overlaying sidebar content according
-  to existing yaca constraints.
+  to existing hya constraints.
 - Keep slash dialogs, permission prompts, and the input box functional.
 - Refactor toward reusable UI modules and pure view-model functions; avoid one
   large widget file collecting every presentation concern.
@@ -66,8 +66,8 @@ error highlighting while keeping the existing yaca event-sourced architecture.
 
 - [ ] Planning artifacts (`prd.md`, `design.md`, `implement.md`, and research
 - [x] Planning artifacts (`prd.md`, `design.md`, `implement.md`, and research
-      notes) cite the OpenCode reference paths and the yaca files to change.
-- [x] `yaca-tui` exposes a modular rendering structure for status/sidebar,
+      notes) cite the OpenCode reference paths and the hya files to change.
+- [x] `hya-render-tui` exposes a modular rendering structure for status/sidebar,
       transcript/message rows, tool rows, error rows, prompt, and dialogs.
 - [x] Render tests prove wide layout shows an enriched sidebar and narrow layout
       keeps prompt/transcript readable without sidebar loss.
@@ -92,4 +92,4 @@ error highlighting while keeping the existing yaca event-sourced architecture.
 
 - Local repository did not contain a `reference/` directory. Reference source is
   the upstream `anomalyco/opencode` repository cloned to
-  `/tmp/yaca-opencode-ref` at commit `f12ac6f234ebe31982ee78f3359e8170cb09ffc9`.
+  `/tmp/hya-opencode-ref` at commit `f12ac6f234ebe31982ee78f3359e8170cb09ffc9`.

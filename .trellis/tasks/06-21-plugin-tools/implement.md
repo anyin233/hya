@@ -10,7 +10,7 @@
 Preconditions:
 
 - Child A is landed and green.
-- `crates/yaca-plugin` exposes the protocol types, `PluginClient`, and
+- `crates/hya-plugin` exposes the protocol types, `PluginClient`, and
   `PluginHost` with initialized plugin records that include declared tools.
 - The parent `tool/call` frame remains exactly:
   `{ "tool", "session", "call", "input" } -> { "ok", "output", "time_ms" }`.
@@ -39,8 +39,8 @@ Acceptance criteria: B-AC5, B-AC4 groundwork.
 RED tests first:
 
 - Add a `ToolRegistry::extend` test in
-  `crates/yaca-tool/tests/tool.rs` beside
-  [`registry_rejects_duplicate_tool_name`](../../../crates/yaca-tool/tests/tool.rs#L69).
+  `crates/hya-tool/tests/tool.rs` beside
+  [`registry_rejects_duplicate_tool_name`](../../../crates/hya-tool/tests/tool.rs#L69).
 - Test that extending with one unique dummy tool registers it and extending with a
   duplicate returns `DuplicateName` without replacing the original.
 - Add a no-plugin schema regression test that captures the builtin schema names
@@ -50,7 +50,7 @@ RED tests first:
 GREEN implementation:
 
 - Add `ToolRegistry::extend<I>(&mut self, tools: I) -> Vec<DuplicateName>` in
-  `crates/yaca-tool/src/tool.rs` after `register`.
+  `crates/hya-tool/src/tool.rs` after `register`.
 - Keep `builtins()` unchanged.
 - Do not change `get()` or `schemas()`.
 
@@ -71,25 +71,25 @@ Acceptance criteria: B-AC1, B-AC2, B-AC3 groundwork.
 
 RED tests first:
 
-- Update one existing `ToolCtx` test helper in `crates/yaca-tool/tests/tool.rs` to
+- Update one existing `ToolCtx` test helper in `crates/hya-tool/tests/tool.rs` to
   require `session` and `tool_call`; leave `tool_call: None` for builtin tools.
-- Add a serde round-trip test in `crates/yaca-tool/src/permission.rs` mirroring the
+- Add a serde round-trip test in `crates/hya-tool/src/permission.rs` mirroring the
   existing `Action::Mcp` test at
-  [`permission.rs:267`](../../../crates/yaca-tool/src/permission.rs#L267), asserting
+  [`permission.rs:267`](../../../crates/hya-tool/src/permission.rs#L267), asserting
   `Action::Plugin` serializes to `"plugin"`.
-- Add policy tests in `crates/yaca-cli/src/permission.rs` beside
-  [`mcp_policy_matches_wave5_contract`](../../../crates/yaca-cli/src/permission.rs#L176):
+- Add policy tests in `crates/hya-cli/src/permission.rs` beside
+  [`mcp_policy_matches_wave5_contract`](../../../crates/hya-cli/src/permission.rs#L176):
   `ReadOnly` rejects plugin tools, `Scoped` allows once, `Yolo` allows once.
 
 GREEN implementation:
 
 - Add `ToolCtx { session: SessionId, tool_call: Option<ToolCallId>, ... }` in
-  `crates/yaca-tool/src/tool.rs`.
+  `crates/hya-tool/src/tool.rs`.
 - Update `SessionEngine`'s tool loop at
-  [`engine.rs:340`](../../../crates/yaca-core/src/engine.rs#L340) to set
+  [`engine.rs:340`](../../../crates/hya-core/src/engine.rs#L340) to set
   `session` and `tool_call: Some(tc.call)`.
 - Update tests and helper constructors that build `ToolCtx`.
-- Add `Action::Plugin` in `crates/yaca-tool/src/permission.rs`.
+- Add `Action::Plugin` in `crates/hya-tool/src/permission.rs`.
 - Add the TUI/CLI label and policy handling for `Action::Plugin` wherever action
   labels are exhaustively matched.
 
@@ -108,14 +108,14 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
 
 Acceptance criteria: B-AC1, B-AC2, B-AC3.
 
-RED tests first in `crates/yaca-plugin/src/tool.rs`:
+RED tests first in `crates/hya-plugin/src/tool.rs`:
 
 - `try_new_accepts_object_schema`: a declared tool with
   `{ "type":"object" }` returns a `Tool` whose `name()` and `schema()` match the
   plugin declaration.
 - `try_new_rejects_non_object_schema`: string/array input schemas return `None`.
 - `execute_sends_locked_tool_call_frame`: use `tokio::io::duplex` like
-  [`McpTool` tests](../../../crates/yaca-mcp/src/bridge.rs#L104) and assert the
+  [`McpTool` tests](../../../crates/hya-mcp/src/bridge.rs#L104) and assert the
   request method is `tool/call` with `tool`, `session`, `call`, and `input`.
 - `execute_maps_ok_reply_to_output`: reply with
   `{ "ok": true, "output": { "remembered": true }, "time_ms": 1 }` and assert
@@ -131,9 +131,9 @@ RED tests first in `crates/yaca-plugin/src/tool.rs`:
 
 GREEN implementation:
 
-- Add `crates/yaca-plugin/src/tool.rs` with `PluginTool`, `ToolCallReply`,
+- Add `crates/hya-plugin/src/tool.rs` with `PluginTool`, `ToolCallReply`,
   `plugin_tool_resource`, `format_plugin_error`, and the `Tool` impl.
-- Re-export `PluginTool` from `crates/yaca-plugin/src/lib.rs`.
+- Re-export `PluginTool` from `crates/hya-plugin/src/lib.rs`.
 - Use Child A's existing declaration type for plugin tools. Do not duplicate the
   protocol shape.
 - Map all `PluginError` variants to `ToolError::Other` with prefix
@@ -142,7 +142,7 @@ GREEN implementation:
 
 Rollback point:
 
-- Revert only `crates/yaca-plugin/src/tool.rs` and its `lib.rs` re-export. Phases
+- Revert only `crates/hya-plugin/src/tool.rs` and its `lib.rs` re-export. Phases
   1 and 2 remain useful groundwork.
 
 Gate:
@@ -157,12 +157,12 @@ Acceptance criteria: B-AC1, B-AC4, B-AC5.
 
 RED tests first:
 
-- In `crates/yaca-plugin` or `crates/yaca-cli` tests, create two initialized fake
+- In `crates/hya-plugin` or `crates/hya-cli` tests, create two initialized fake
   plugins with declared tools in a known order and assert registration preserves
   that order for collision precedence.
 - Add a builtin collision test: plugin declares `read`; after bootstrap registry
   lookup for `read` still returns the builtin schema description from
-  [`ReadTool`](../../../crates/yaca-tool/src/tool.rs#L140).
+  [`ReadTool`](../../../crates/hya-tool/src/tool.rs#L140).
 - Add a plugin-vs-plugin collision test: two plugins declare `remember`; first
   plugin's proxy wins, second is skipped.
 - Add a no-plugin bootstrap test: with an empty plugin set, the registered schema
@@ -173,7 +173,7 @@ GREEN implementation:
 - Add a Child B accessor on `PluginHost`, for example
   `plugins_in_load_order()` or `tools_in_load_order()`, using Child A's stored
   plugin order, not `JoinSet` completion order.
-- In Child A's `bootstrap(...) -> YacaRuntime`, insert the plugin-tool loop after
+- In Child A's `bootstrap(...) -> HyaRuntime`, insert the plugin-tool loop after
   MCP registration and before `Arc::new(registry)`.
 - Use `registry.register(...)` or `registry.extend(...)`; on `DuplicateName`, log
   `tracing::warn!(plugin, tool, error, "skipping duplicate plugin tool")` and keep
@@ -198,7 +198,7 @@ Acceptance criteria: B-AC1, B-AC5.
 RED tests first:
 
 - Add a request-capturing provider test, using the pattern from
-  `crates/yaca-core/tests/category_routing.rs`, that records the
+  `crates/hya-core/tests/category_routing.rs`, that records the
   `CompletionRequest` passed to `Provider::stream`.
 - Configure one plugin tool named `remember` with an object schema.
 - Run one engine turn with a fake provider that stops immediately.
@@ -343,23 +343,23 @@ Acceptance criteria: B-AC1, B-AC2, B-AC3, B-AC5.
 
 RED/manual target first:
 
-- Extend `crates/yaca-plugin-example/src/main.rs` from Child A so it declares and
+- Extend `crates/hya-plugin-example/src/main.rs` from Child A so it declares and
   handles the `remember` tool used in tests.
 - Build the CLI and example plugin:
 
 ```sh
-cargo build -p yaca-cli -p yaca-plugin-example
+cargo build -p hya-cli -p hya-plugin-example
 ```
 
 - Create a temporary config that keeps an existing real tool-capable provider and
   adds the example plugin. If no real provider credentials are available, record
   the live QA as blocked and do not claim B-AC1 live QA complete.
 
-Live `yaca exec` QA command shape:
+Live `hya exec` QA command shape:
 
 ```sh
-XDG_CONFIG_HOME="$TMP_YACA_CONFIG" \
-  target/debug/yaca exec --model "$YACA_TOOL_MODEL" --json \
+XDG_CONFIG_HOME="$TMP_HYA_CONFIG" \
+  target/debug/hya exec --model "$HYA_TOOL_MODEL" --json \
   'Call the remember tool exactly once with key="qa" and value="plugin-round-trip", then summarize the returned JSON.'
 ```
 
@@ -381,7 +381,7 @@ Timeout/crash live QA:
 
 - Run the example plugin in a mode that hangs or exits on `tool/call` with
   `timeout_ms: 50`.
-- Assert `yaca exec` exits normally and the transcript contains a `ToolError`.
+- Assert `hya exec` exits normally and the transcript contains a `ToolError`.
 
 GREEN implementation:
 
@@ -411,7 +411,7 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
 
 Acceptance checklist:
 
-- B-AC1: automated integration and live `yaca exec` show schema advertisement,
+- B-AC1: automated integration and live `hya exec` show schema advertisement,
   model-called `remember`, IPC `tool/call`, and normal `ToolResult`.
 - B-AC2: permission denial produces a blocked/error result and fixture side-effect
   counter stays zero.

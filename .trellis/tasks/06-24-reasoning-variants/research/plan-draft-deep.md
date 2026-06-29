@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use the project `trellis-before-dev` skill before editing, then use Rust TDD. This plan is implementation-first and assumes the worker has low context. Do not start source edits until the Trellis task is active.
 
-**Goal:** Make OpenCode agent/model `variant:` values such as `max` drive real provider extended-thinking requests in yaca, with provider/model validity and backward-compatible defaults.
+**Goal:** Make OpenCode agent/model `variant:` values such as `max` drive real provider extended-thinking requests in hya, with provider/model validity and backward-compatible defaults.
 
-**Architecture:** Resolve OpenCode variant/options at the server/native request boundary into a typed `ReasoningEffort`, then normalize that effort in `yaca-provider` against provider family + model id before encoding wire-specific request fields. Keep event/projection behavior unchanged: providers emit canonical reasoning events, and existing TUI/OpenCode surfaces render them.
+**Architecture:** Resolve OpenCode variant/options at the server/native request boundary into a typed `ReasoningEffort`, then normalize that effort in `hya-provider` against provider family + model id before encoding wire-specific request fields. Keep event/projection behavior unchanged: providers emit canonical reasoning events, and existing TUI/OpenCode surfaces render them.
 
-**Tech Stack:** Rust 2024 workspace; `serde_json::Value` for the existing OpenCode config boundary; yaca event-sourced engine; provider protocols in `yaca-provider`; OpenCode-compatible HTTP surface in `yaca-server`.
+**Tech Stack:** Rust 2024 workspace; `serde_json::Value` for the existing OpenCode config boundary; hya event-sourced engine; provider protocols in `hya-provider`; OpenCode-compatible HTTP surface in `hya-server`.
 
 ## Global Constraints
 
 - Planning only in this file; no source edits in this pass.
 - Rust crates deny `unwrap_used` / `expect_used` outside tests.
-- Preserve yaca's event-sourced architecture: variant resolution prepares `CompletionRequest`; it must not create a second projection/replay path.
-- Keep `yaca-proto` dependency-light; no new reasoning config types belong there.
+- Preserve hya's event-sourced architecture: variant resolution prepares `CompletionRequest`; it must not create a second projection/replay path.
+- Keep `hya-proto` dependency-light; no new reasoning config types belong there.
 - Reuse existing opencode config/agent catalog loaders instead of adding an unrelated configuration system.
 - Verification gate: `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.
 
@@ -21,18 +21,18 @@
 
 ## Current State Summary
 
-- `crates/yaca-provider/src/lib.rs` has `ReasoningEffort::{Low, Medium, High}` only. `parse()` accepts `low`, `medium|med`, `high`; `as_str()` returns `low|medium|high`; `anthropic_budget()` is `1024/4096/16384`; `google_budget()` is `1024/8192/24576`.
+- `crates/hya-provider/src/lib.rs` has `ReasoningEffort::{Low, Medium, High}` only. `parse()` accepts `low`, `medium|med`, `high`; `as_str()` returns `low|medium|high`; `anthropic_budget()` is `1024/4096/16384`; `google_budget()` is `1024/8192/24576`.
 - Provider encoders already consume `CompletionRequest.reasoning`: Anthropic writes `thinking:{type:"enabled",budget_tokens}`, OpenAI writes `reasoning_effort`, Google writes `generationConfig.thinkingConfig.thinkingBudget`.
 - `ProviderRouter::stream()` strips reasoning only when provider capabilities say `reasoning_request == false`, but current HTTP providers expose a provider-wide boolean, not a per-model validity matrix.
 - `AgentSpec.reasoning` exists and `request_from_messages()` forwards it into `CompletionRequest`, but runtime/server constructors leave it unset for OpenCode variants.
-- `yaca-server` parses `AgentEntry.variant` and `AgentEntry.options`, and `model_ref.rs` preserves `#variant` in OpenCode model refs, but `reference.rs::session_agent_with_guidance()` only copies selected agent `prompt` and `name`.
+- `hya-server` parses `AgentEntry.variant` and `AgentEntry.options`, and `model_ref.rs` preserves `#variant` in OpenCode model refs, but `reference.rs::session_agent_with_guidance()` only copies selected agent `prompt` and `name`.
 - Workdir `opencode.json` readers currently parse agent/default/permission/command-style sections; provider model `options` / `variants` need a shared resolver over the same config file paths/global config value.
 
 ---
 
 ## 1. Design
 
-### 1.1 Type changes in `crates/yaca-provider/src/lib.rs`
+### 1.1 Type changes in `crates/hya-provider/src/lib.rs`
 
 Extend the existing type instead of replacing it with stringly typed config. The public abstraction should remain typed and exhaustive.
 
@@ -91,11 +91,11 @@ Justification:
 
 - Keeping `ReasoningEffort` gives compile-time exhaustive matches and minimizes churn in callers already using `Option<ReasoningEffort>`.
 - `ReasoningEffort::None` is still useful because OpenCode's vocabulary includes `none`; when an option bundle explicitly says `none`, it should override weaker defaults. `Option<ReasoningEffort>::None` means “no configured reasoning setting”. `Some(ReasoningEffort::None)` means “explicitly disable reasoning”.
-- Provider wire differences belong in provider code, not yaca-core or yaca-proto.
+- Provider wire differences belong in provider code, not hya-core or hya-proto.
 
 ### 1.2 Provider family and per-model metadata
 
-Move or mirror `ProviderKind` from `crates/yaca-provider/src/http.rs` into provider-level public metadata. Do not make `router.rs` depend on a private HTTP enum.
+Move or mirror `ProviderKind` from `crates/hya-provider/src/http.rs` into provider-level public metadata. Do not make `router.rs` depend on a private HTTP enum.
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +137,7 @@ Implement the matrix in `ReasoningEffort::normalize_for()` and provider-specific
 | OpenAI | `gpt-5*`, `o*`, generic OpenAI-compatible reasoning models | `none,minimal,low,medium,high,xhigh` | `reasoning_effort` string; never `max` | `max -> xhigh`; levels below model subset clamp upward/downward to nearest supported; unknown/non-reasoning model -> `None` |
 | OpenAI | older/non-reasoning models detected by no reasoning capability or model blacklist | none | omit field | drop reasoning entirely |
 | Anthropic classic budget | `claude-opus-4-*`, `claude-sonnet-4-*` before adaptive families if not matched below | `high,max` | `high=16000`, `max=min(31999, output_limit - 1)` | `minimal/low/medium -> high`; `xhigh/max -> max`; `none -> omit` |
-| Anthropic adaptive | `claude-opus-4-7*`, `claude-opus-4-8*`, `claude-sonnet-4-6*` and later known adaptive models | `low,medium,high,xhigh,max` | **Source-gated.** OpenCode research reports adaptive thinking for these models, but implementation must verify the exact Anthropic wire shape before emitting it. If not verified, normalize to bounded budget mode (`low/medium -> high`, `xhigh/max -> max`) so yaca never sends an undocumented body. | `minimal -> low`; `none -> omit`; unknown high levels clamp to max |
+| Anthropic adaptive | `claude-opus-4-7*`, `claude-opus-4-8*`, `claude-sonnet-4-6*` and later known adaptive models | `low,medium,high,xhigh,max` | **Source-gated.** OpenCode research reports adaptive thinking for these models, but implementation must verify the exact Anthropic wire shape before emitting it. If not verified, normalize to bounded budget mode (`low/medium -> high`, `xhigh/max -> max`) so hya never sends an undocumented body. | `minimal -> low`; `none -> omit`; unknown high levels clamp to max |
 | Google Gemini 2.5 | `gemini-2.5-flash*`, `gemini-2.5-pro*` | `high,max` | `thinkingBudget`: `high=16000`; `max=24576`, or `32768` for `2.5-pro` | `minimal/low/medium -> high`; `xhigh/max -> max`; `none -> omit` |
 | Google Gemini 3 Flash | `gemini-3*flash*` | `minimal,low,medium,high` | `thinkingLevel` string | `xhigh/max -> high`; `none -> omit` |
 | Google Gemini 3 non-Flash | `gemini-3*` | `low,medium,high` | `thinkingLevel` string | `minimal -> low`; `xhigh/max -> high`; `none -> omit` |
@@ -167,20 +167,20 @@ Where the output limit comes from:
 - Populate it from OpenCode provider model metadata if available in `opencode.json` / `/global/config` (`provider.<id>.models.<id>.limit.output` or equivalent value object).
 - For native `config.yaml` providers, there is no model limit field today, so use fallback constants. This is explicitly approximate but bounded and backward-compatible.
 
-Anthropic encoder rule in `crates/yaca-provider/src/anthropic.rs`:
+Anthropic encoder rule in `crates/hya-provider/src/anthropic.rs`:
 
 - If `AnthropicThinking::Disabled`, omit `thinking`.
 - If `Budget { budget_tokens }`, set `thinking:{type:"enabled",budget_tokens}`.
 - If `Adaptive { effort }`, require a failing encoder test that asserts the exact OpenCode-backed Anthropic wire object. If the implementer cannot source that contract, do not emit adaptive; normalize to `Budget` via the bounded helper instead. This fail-closed rule avoids production 400s on undocumented request bodies.
 - Ensure `max_tokens > budget_tokens` for budget mode. If the user requested lower `max_output_tokens`, raise it to `budget_tokens + 1`, not `budget + 4096`.
 
-Google encoder rule in `crates/yaca-provider/src/google.rs`:
+Google encoder rule in `crates/hya-provider/src/google.rs`:
 
 - Gemini 2.5 uses `thinkingConfig:{thinkingBudget}`.
 - Gemini 3 uses `thinkingConfig:{thinkingLevel}`.
 - Include `includeThoughts:true` if OpenCode parity requires it for thought parts from Google.
 
-OpenAI encoder rule in `crates/yaca-provider/src/openai.rs`:
+OpenAI encoder rule in `crates/hya-provider/src/openai.rs`:
 
 - Use `effort.openai_wire_effort(model_id)`.
 - `Max` must never reach `reasoning_effort`.
@@ -190,13 +190,13 @@ OpenAI encoder rule in `crates/yaca-provider/src/openai.rs`:
 
 Add a focused resolver module:
 
-**Create:** `crates/yaca-server/src/opencode/reasoning_options.rs`
+**Create:** `crates/hya-server/src/opencode/reasoning_options.rs`
 
 ```rust
 use std::collections::BTreeMap;
 use serde_json::{Map, Value};
-use yaca_provider::ReasoningEffort;
-use yaca_proto::ModelRef;
+use hya_provider::ReasoningEffort;
+use hya_proto::ModelRef;
 
 pub(super) struct ReasoningSources<'a> {
     pub(super) config: &'a Value,
@@ -229,9 +229,9 @@ This module deliberately parses only reasoning-related keys. Generic provider-op
 
 ### 1.6 Agent variant -> reasoning on the native path
 
-The native path is `hya -> hya-yaca -> in-process yaca-server OpenCode endpoints -> yaca-core -> yaca-provider`, so resolution must happen in the OpenCode server agent preparation layer, not in the TUI renderer.
+The native path is `hya -> hya-hya -> in-process hya-server OpenCode endpoints -> hya-core -> hya-provider`, so resolution must happen in the OpenCode server agent preparation layer, not in the TUI renderer.
 
-Modify `crates/yaca-server/src/opencode/reference.rs`:
+Modify `crates/hya-server/src/opencode/reference.rs`:
 
 ```rust
 pub(in crate::opencode) async fn agent_with_guidance(st: &ServerState) -> AgentSpec;
@@ -253,7 +253,7 @@ Behavior:
 - If `entry.model` is present and `entry.variant` is present, construct `ModelRef` as `model#variant` only for OpenCode display/session metadata if needed; actual reasoning should come from `resolve_reasoning()` so provider encoders never depend on the suffix after `HttpProvider::stream()` strips it.
 - Preserve existing guidance appending.
 
-Modify `crates/yaca-app/src/runtime.rs::agent_with_model(model: &str) -> AgentSpec` minimally:
+Modify `crates/hya-app/src/runtime.rs::agent_with_model(model: &str) -> AgentSpec` minimally:
 
 - Keep `reasoning: None` for plain model ids.
 - If `model` already contains `#variant`, parse the variant into `ReasoningEffort` as a native fallback. This covers direct native model selection such as `12th/claude-opus-4-8#max` before any agent catalog override.
@@ -261,9 +261,9 @@ Modify `crates/yaca-app/src/runtime.rs::agent_with_model(model: &str) -> AgentSp
 
 ### 1.7 Request flow and provider normalization
 
-Modify `crates/yaca-core/src/engine/turn/messages.rs` only to keep forwarding `agent.reasoning`. No projection/event changes are needed.
+Modify `crates/hya-core/src/engine/turn/messages.rs` only to keep forwarding `agent.reasoning`. No projection/event changes are needed.
 
-Modify `crates/yaca-provider/src/router.rs`:
+Modify `crates/hya-provider/src/router.rs`:
 
 ```rust
 if let Some(caps) = provider.capabilities(&req.model) {
@@ -296,7 +296,7 @@ Implement it for `HttpProvider`, `DevProvider`, and `FakeProvider`. This keeps p
 | Unknown variant string | ignore variant bundle; parse falls back to no reasoning unless agent options specify effort | `resolve_reasoning()` skips unknown disabled/missing variants | unit test |
 | OpenAI `max` | clamp to `xhigh` or model's highest supported effort; never emit `max` | `openai_wire_effort()` | AC2 test |
 | Model without reasoning request capability | omit reasoning entirely | `ProviderRouter::stream()` clears `req.reasoning` before provider stream | router/fake provider test |
-| Config.yaml-only user | unchanged; no OpenCode variants loaded | `yaca-app::config` untouched except fallback parse of `#variant` | runtime/config test |
+| Config.yaml-only user | unchanged; no OpenCode variants loaded | `hya-app::config` untouched except fallback parse of `#variant` | runtime/config test |
 | Sonnet with no variant | unaffected | no configured reasoning signal | AC5 test |
 | Anthropic `max` with no output limit | use fallback output limit 32_000 and budget 31_999 | `bounded_anthropic_max(None)` | budget unit test |
 | Anthropic `max` with `max_output_tokens <= budget` | raise `max_tokens` to `budget + 1` | `anthropic.rs` | encoder test |
@@ -314,8 +314,8 @@ Implement it for `HttpProvider`, `DevProvider`, and `FakeProvider`. This keeps p
 
 **Files:**
 
-- Modify: `crates/yaca-provider/src/lib.rs`
-- Test: `crates/yaca-provider/tests/conformance.rs`
+- Modify: `crates/hya-provider/src/lib.rs`
+- Test: `crates/hya-provider/tests/conformance.rs`
 
 **Interfaces produced:**
 
@@ -328,7 +328,7 @@ Steps:
 1. Red: add tests for parsing `none|minimal|low|medium|med|high|xhigh|max`, and rejecting unknown strings.
 2. Red: add tests for OpenAI `Max -> XHigh`, OpenAI never returns `Max`, Anthropic classic `High/Max`, Anthropic adaptive `Low..Max`, Google 2.5 budget, and Gemini 3 level mode.
 3. Green: extend `ReasoningEffort` and add helper enums/constants.
-4. Run: `cargo test -p yaca-provider conformance::reasoning_effort_vocab -- --nocapture` or exact test names added.
+4. Run: `cargo test -p hya-provider conformance::reasoning_effort_vocab -- --nocapture` or exact test names added.
 5. Run: `cargo fmt --all --check`.
 
 ### Task 2: Normalize provider request encoding
@@ -337,15 +337,15 @@ Steps:
 
 **Files:**
 
-- Modify: `crates/yaca-provider/src/lib.rs`
-- Modify: `crates/yaca-provider/src/router.rs`
-- Modify: `crates/yaca-provider/src/http.rs`
-- Modify: `crates/yaca-provider/src/anthropic.rs`
-- Modify: `crates/yaca-provider/src/openai.rs`
-- Modify: `crates/yaca-provider/src/google.rs`
-- Modify if needed: `crates/yaca-provider/src/dev.rs`, `crates/yaca-provider/src/fake.rs`
-- Test: `crates/yaca-provider/tests/conformance.rs`
-- Test: `crates/yaca-provider/tests/multiprovider.rs`
+- Modify: `crates/hya-provider/src/lib.rs`
+- Modify: `crates/hya-provider/src/router.rs`
+- Modify: `crates/hya-provider/src/http.rs`
+- Modify: `crates/hya-provider/src/anthropic.rs`
+- Modify: `crates/hya-provider/src/openai.rs`
+- Modify: `crates/hya-provider/src/google.rs`
+- Modify if needed: `crates/hya-provider/src/dev.rs`, `crates/hya-provider/src/fake.rs`
+- Test: `crates/hya-provider/tests/conformance.rs`
+- Test: `crates/hya-provider/tests/multiprovider.rs`
 
 **Interfaces produced:**
 
@@ -364,8 +364,8 @@ Steps:
 2. Red: add router test with a fake provider/model where `reasoning_request=false`; assert the encoded/request-observed reasoning is `None`.
 3. Green: add family/model-id methods to providers and normalize in `ProviderRouter::stream()`.
 4. Green: update each provider encoder to use provider-specific helper output.
-5. Run: `cargo test -p yaca-provider --test conformance reasoning -- --nocapture`.
-6. Run: `cargo test -p yaca-provider --test multiprovider reasoning -- --nocapture`.
+5. Run: `cargo test -p hya-provider --test conformance reasoning -- --nocapture`.
+6. Run: `cargo test -p hya-provider --test multiprovider reasoning -- --nocapture`.
 
 ### Task 3: Add OpenCode reasoning option resolver
 
@@ -373,9 +373,9 @@ Steps:
 
 **Files:**
 
-- Create: `crates/yaca-server/src/opencode/reasoning_options.rs`
-- Modify: `crates/yaca-server/src/opencode/mod.rs`
-- Test: `crates/yaca-server/tests/opencode_reasoning_variants_api.rs` or `crates/yaca-server/tests/opencode_agent_config_api.rs`
+- Create: `crates/hya-server/src/opencode/reasoning_options.rs`
+- Modify: `crates/hya-server/src/opencode/mod.rs`
+- Test: `crates/hya-server/tests/opencode_reasoning_variants_api.rs` or `crates/hya-server/tests/opencode_agent_config_api.rs`
 
 **Interfaces produced:**
 
@@ -392,7 +392,7 @@ Steps:
 4. Red: test `reasoningEffort: xhigh` in agent unknown keys resolves to `XHigh`.
 5. Green: implement JSON object navigation and deep merge helpers in `reasoning_options.rs`.
 6. Green: implement extraction for direct, Anthropic, OpenAI, and Google option key shapes.
-7. Run: `cargo test -p yaca-server opencode_reasoning_variants -- --nocapture`.
+7. Run: `cargo test -p hya-server opencode_reasoning_variants -- --nocapture`.
 
 ### Task 4: Wire selected agent/model variant into `AgentSpec.reasoning`
 
@@ -400,11 +400,11 @@ Steps:
 
 **Files:**
 
-- Modify: `crates/yaca-server/src/opencode/reference.rs`
-- Modify if needed: `crates/yaca-server/src/opencode/session_v2.rs`
-- Modify: `crates/yaca-app/src/runtime.rs`
-- Test: `crates/yaca-server/tests/opencode_reasoning_variants_api.rs`
-- Test: `crates/yaca-app/src/runtime.rs` unit tests if runtime tests live inline
+- Modify: `crates/hya-server/src/opencode/reference.rs`
+- Modify if needed: `crates/hya-server/src/opencode/session_v2.rs`
+- Modify: `crates/hya-app/src/runtime.rs`
+- Test: `crates/hya-server/tests/opencode_reasoning_variants_api.rs`
+- Test: `crates/hya-app/src/runtime.rs` unit tests if runtime tests live inline
 
 Steps:
 
@@ -414,8 +414,8 @@ Steps:
 4. Green: add `apply_agent_entry()` in `reference.rs` to copy model/variant/options and call `resolve_reasoning()`.
 5. Green: update `session_v2.rs` only if session creation must store selected agent model/variant before the first prompt. Keep session model override precedence explicit.
 6. Green: update `runtime.rs::agent_with_model()` to parse `#variant` only; do not duplicate workdir config loading there.
-7. Run: `cargo test -p yaca-server opencode_reasoning_variants -- --nocapture`.
-8. Run: `cargo test -p yaca-app runtime -- --nocapture` if a targeted test exists; otherwise rely on workspace tests.
+7. Run: `cargo test -p hya-server opencode_reasoning_variants -- --nocapture`.
+8. Run: `cargo test -p hya-app runtime -- --nocapture` if a targeted test exists; otherwise rely on workspace tests.
 
 ### Task 5: Preserve backward compatibility and update existing literals/tests
 
@@ -423,16 +423,16 @@ Steps:
 
 **Files:**
 
-- Modify only if compile requires: `crates/yaca-core/src/category.rs`
-- Modify only if compile requires: all tests constructing `AgentSpec` literals under `crates/yaca-core/tests/**` and `crates/yaca-server/tests/**`
+- Modify only if compile requires: `crates/hya-core/src/category.rs`
+- Modify only if compile requires: all tests constructing `AgentSpec` literals under `crates/hya-core/tests/**` and `crates/hya-server/tests/**`
 - Test: existing workspace tests
 
 Steps:
 
 1. Red: add/adjust backward-compat test where config has no variants and request body has no `thinking`, `reasoning_effort`, or `thinkingConfig`.
 2. Green: if new struct fields were added, update literals with `reasoning: None` / default fields. Prefer not adding `AgentSpec` fields unless Task 3 proves typed extraction is insufficient.
-3. Run: `cargo test -p yaca-core`.
-4. Run: `cargo test -p yaca-server`.
+3. Run: `cargo test -p hya-core`.
+4. Run: `cargo test -p hya-server`.
 
 ### Task 6: End-to-end/manual verification for AC1
 
@@ -460,15 +460,15 @@ Steps:
 
 | Test | File | Covers | Expected result |
 | --- | --- | --- | --- |
-| `reasoning_effort_parses_opencode_vocab` | `crates/yaca-provider/tests/conformance.rs` | AC2 | `none,minimal,low,medium,med,high,xhigh,max` parse; unknown returns `None` |
-| `openai_reasoning_never_emits_max` | `crates/yaca-provider/tests/conformance.rs` | AC2 | OpenAI request for `Max` emits `xhigh` or highest valid model effort, never `max` |
-| `anthropic_high_and_max_budgets_match_opencode` | `crates/yaca-provider/tests/conformance.rs` | AC2, AC3 | `high=16000`, `max=31999` bounded by output limit |
-| `google_25_and_3_use_correct_thinking_shape` | `crates/yaca-provider/tests/conformance.rs` | AC2 | 2.5 uses `thinkingBudget`; 3 uses `thinkingLevel` |
-| `router_drops_reasoning_when_model_has_no_reasoning_request` | `crates/yaca-provider/tests/multiprovider.rs` | AC5 | fake non-reasoning model sees no reasoning |
-| `opencode_model_variant_bundle_resolves_reasoning` | `crates/yaca-server/tests/opencode_reasoning_variants_api.rs` | AC3 | `provider.12th.models.claude-opus-4-8.variants.max` produces `ReasoningEffort::Max` and Anthropic body budget 31999 |
-| `agent_frontmatter_variant_sets_agent_spec_reasoning` | `crates/yaca-server/tests/opencode_reasoning_variants_api.rs` | AC4 | `.opencode/agent/*.md` `variant:max` sets `AgentSpec.reasoning=Some(Max)` |
-| `agent_unknown_reasoning_effort_option_is_honored` | `crates/yaca-server/tests/opencode_reasoning_variants_api.rs` | AC4 | `reasoningEffort:xhigh` in frontmatter extra/options resolves to `XHigh` |
-| `no_variant_no_thinking_backward_compat` | `crates/yaca-provider/tests/conformance.rs` and server runtime test | AC5 | no reasoning fields emitted |
+| `reasoning_effort_parses_opencode_vocab` | `crates/hya-provider/tests/conformance.rs` | AC2 | `none,minimal,low,medium,med,high,xhigh,max` parse; unknown returns `None` |
+| `openai_reasoning_never_emits_max` | `crates/hya-provider/tests/conformance.rs` | AC2 | OpenAI request for `Max` emits `xhigh` or highest valid model effort, never `max` |
+| `anthropic_high_and_max_budgets_match_opencode` | `crates/hya-provider/tests/conformance.rs` | AC2, AC3 | `high=16000`, `max=31999` bounded by output limit |
+| `google_25_and_3_use_correct_thinking_shape` | `crates/hya-provider/tests/conformance.rs` | AC2 | 2.5 uses `thinkingBudget`; 3 uses `thinkingLevel` |
+| `router_drops_reasoning_when_model_has_no_reasoning_request` | `crates/hya-provider/tests/multiprovider.rs` | AC5 | fake non-reasoning model sees no reasoning |
+| `opencode_model_variant_bundle_resolves_reasoning` | `crates/hya-server/tests/opencode_reasoning_variants_api.rs` | AC3 | `provider.12th.models.claude-opus-4-8.variants.max` produces `ReasoningEffort::Max` and Anthropic body budget 31999 |
+| `agent_frontmatter_variant_sets_agent_spec_reasoning` | `crates/hya-server/tests/opencode_reasoning_variants_api.rs` | AC4 | `.opencode/agent/*.md` `variant:max` sets `AgentSpec.reasoning=Some(Max)` |
+| `agent_unknown_reasoning_effort_option_is_honored` | `crates/hya-server/tests/opencode_reasoning_variants_api.rs` | AC4 | `reasoningEffort:xhigh` in frontmatter extra/options resolves to `XHigh` |
+| `no_variant_no_thinking_backward_compat` | `crates/hya-provider/tests/conformance.rs` and server runtime test | AC5 | no reasoning fields emitted |
 | manual tmux native `hya` run | Trellis progress evidence | AC1 | visible Thinking part + event log `type=reasoning` |
 | full workspace gate | terminal | AC6 | fmt/clippy/tests exit 0 |
 
@@ -492,7 +492,7 @@ Steps:
    - Mitigation: define precedence as session/model variant first, agent variant second. Add a test.
 
 6. **Risk: many `AgentSpec` literals break if fields are added.**
-   - Mitigation: avoid new `AgentSpec` fields unless typed extraction is insufficient. If fields are required, add an `AgentSpec::new_for_tests()` or builder in `yaca-core` before mechanical test updates.
+   - Mitigation: avoid new `AgentSpec` fields unless typed extraction is insufficient. If fields are required, add an `AgentSpec::new_for_tests()` or builder in `hya-core` before mechanical test updates.
 
 7. **Risk: `ReasoningEffort::None` inside `Option` is confusing.**
    - Mitigation: document semantics in `lib.rs`: outer `Option` = configured/unconfigured, inner `None` variant = explicit OpenCode disable.
@@ -545,7 +545,7 @@ D1 PASS: AC1–AC6 each mapped to tasks/tests in [plan-draft-deep.md:459-473]; A
 D2 PASS: Concrete signatures for `ReasoningEffort`, `ProviderFamily`, `AnthropicThinking`, `GoogleThinking`, `resolve_reasoning`, `Provider::served_model_id`, `Provider::family` provided [plan-draft-deep.md:39-87,100-126,195-208,278-286]; trait additions named for all three impls (HttpProvider/DevProvider/FakeProvider).
 D3 PASS: §4 test table names ten concrete tests with file paths, AC coverage, and expected outcomes [plan-draft-deep.md:461-473]; each Task lists red→green→run commands.
 D4 PASS: §2 backward-compat matrix enumerates 12 edge cases including no-variant default, explicit `none`, unknown variant, OpenAI `max` clamp, non-reasoning models, Anthropic `max` with absent/lower output limit, Gemini 3 vs 2.5, `disabled:true`, and session-vs-agent variant precedence [plan-draft-deep.md:292-305].
-D5 PASS: Resolver lives in `crates/yaca-server/src/opencode/reasoning_options.rs` reusing `model_ref_parts` and `st.global.config()`; provider normalization stays in `ProviderRouter::stream` before `HttpProvider::stream` rewrites the model id [plan-draft-deep.md:200-208,267-286]; no engine/projection changes per §1.7 line 264; matches `AgentEntry` (super-visible at crates/yaca-server/src/opencode/agent_catalog.rs:10) and existing `AgentSpec.reasoning` field at crates/yaca-core/src/engine.rs:43.
-D6 PASS: Each task has red/green/run TDD steps with file paths and exact test commands [plan-draft-deep.md:326-456]; the §1.7 pseudocode "provider.served/bare model helper" is disambiguated by the explicit `fn served_model_id(&self, model: &ModelRef) -> Option<String>` trait addition immediately below at line 282 and is provably `Some` here since `capabilities()` already gated on it (crates/yaca-provider/src/http.rs:193-195).
+D5 PASS: Resolver lives in `crates/hya-server/src/opencode/reasoning_options.rs` reusing `model_ref_parts` and `st.global.config()`; provider normalization stays in `ProviderRouter::stream` before `HttpProvider::stream` rewrites the model id [plan-draft-deep.md:200-208,267-286]; no engine/projection changes per §1.7 line 264; matches `AgentEntry` (super-visible at crates/hya-server/src/opencode/agent_catalog.rs:10) and existing `AgentSpec.reasoning` field at crates/hya-core/src/engine.rs:43.
+D6 PASS: Each task has red/green/run TDD steps with file paths and exact test commands [plan-draft-deep.md:326-456]; the §1.7 pseudocode "provider.served/bare model helper" is disambiguated by the explicit `fn served_model_id(&self, model: &ModelRef) -> Option<String>` trait addition immediately below at line 282 and is provably `Some` here since `capabilities()` already gated on it (crates/hya-provider/src/http.rs:193-195).
 VERDICT: PASS
 ```

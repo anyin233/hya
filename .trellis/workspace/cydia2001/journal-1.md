@@ -7,10 +7,10 @@
 
 
 
-## Session 1: Design and write yaca docs structure
+## Session 1: Design and write hya docs structure
 
 **Date**: 2026-06-21
-**Task**: Design and write yaca docs structure
+**Task**: Design and write hya docs structure
 
 ### Summary
 
@@ -20,7 +20,7 @@ Created docs index, usage guides, detailed project structure, architecture docs,
 
 - Added a `docs/` documentation structure with user-facing guides, architecture notes, development guidance, and troubleshooting.
 - Added a detailed project-structure guide covering workspace layout, crate responsibilities, source modules, tests, and runtime data flow.
-- Kept project docs focused on yaca itself and excluded project-private workflow documentation.
+- Kept project docs focused on hya itself and excluded project-private workflow documentation.
 
 ### Git Commits
 

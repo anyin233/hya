@@ -1,41 +1,41 @@
 # Configuration
 
-yaca reads its own YAML config from:
+hya reads its own YAML config from:
 
-1. `$XDG_CONFIG_HOME/yaca/config.yaml`
-2. `$HOME/.config/yaca/config.yaml`
+1. `$XDG_CONFIG_HOME/hya/config.yaml`
+2. `$HOME/.config/hya/config.yaml`
 
-If no usable provider route is configured, yaca falls back to `DevProvider`, the
-offline echo provider from [`../crates/yaca-provider/src/dev.rs`](../crates/yaca-provider/src/dev.rs).
+If no usable provider route is configured, hya falls back to `DevProvider`, the
+offline echo provider from [`../crates/hya-provider/src/dev.rs`](../crates/hya-provider/src/dev.rs).
 The same config file also drives MCP servers, plugins, and formatter status.
 
 ## First-Run / Offline Behavior
 
-On startup, yaca tries to load `config.yaml` (see
-[`../crates/yaca-app/src/config.rs`](../crates/yaca-app/src/config.rs) `load()`
+On startup, hya tries to load `config.yaml` (see
+[`../crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) `load()`
 and `config_path()`). A missing, empty, or provider-less config is **not an
-error** — yaca silently falls back to the offline `DevProvider` so the whole
-stack stays runnable without API keys. yaca runs offline when any of these hold:
+error** — hya silently falls back to the offline `DevProvider` so the whole
+stack stays runnable without API keys. hya runs offline when any of these hold:
 
 - No `config.yaml` exists at either search path.
 - The file exists but is empty.
 - It declares no usable provider routes, MCP servers, or plugins.
 - A provider has models but no resolvable key (no inline `api_key` and no saved
-  `yaca login` token), so it is dropped.
+  `hya login` token), so it is dropped.
 
 How to tell you are offline:
 
 - The active model id shows as `offline` instead of a real model id.
-- `yaca models` prints an empty catalog (no provider routes resolved).
-- Assistant replies are prefixed `(yaca dev provider)` and just echo your
-  prompt back, e.g. `(yaca dev provider) You said: "..."`.
+- `hya models` prints an empty catalog (no provider routes resolved).
+- Assistant replies are prefixed `(hya dev provider)` and just echo your
+  prompt back, e.g. `(hya dev provider) You said: "..."`.
 
-The fallback is silent. The only message yaca prints is when a config file is
+The fallback is silent. The only message hya prints is when a config file is
 present but fails to parse — then it logs to stderr and still continues
 offline:
 
 ```text
-yaca: config error (...); using the offline provider
+hya: config error (...); using the offline provider
 ```
 
 To leave offline mode, configure at least one provider with a resolvable key
@@ -48,10 +48,10 @@ server, and a plugin. Remove the parts you do not need; every top-level section
 is optional.
 
 ```yaml
-# ~/.config/yaca/config.yaml  (or $XDG_CONFIG_HOME/yaca/config.yaml)
+# ~/.config/hya/config.yaml  (or $XDG_CONFIG_HOME/hya/config.yaml)
 
-# Model used when neither `--model` nor `YACA_MODEL` is set. Must be served by
-# one of the providers below. If omitted, yaca prefers a model whose id
+# Model used when neither `--model` nor `HYA_MODEL` is set. Must be served by
+# one of the providers below. If omitted, hya prefers a model whose id
 # contains "sonnet", otherwise the first configured model.
 default_model: claude-sonnet-4-6
 
@@ -60,13 +60,13 @@ default_model: claude-sonnet-4-6
 default_agent: build
 
 # Each entry under `providers.<id>` becomes one HTTP route. The <id> is also the
-# name used by `yaca login <id>` and shown as the provider in model refs.
+# name used by `hya login <id>` and shown as the provider in model refs.
 providers:
   anthropic:
     kind: anthropic                      # openai | openai-compatible | anthropic | google
     base_url: https://api.anthropic.com/v1
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
-    # A token saved via `yaca login anthropic <token>` takes precedence.
+    # A token saved via `hya login anthropic <token>` takes precedence.
     api_key: "{env:ANTHROPIC_API_KEY}"
     models: [claude-sonnet-4-6]          # providers with no models are skipped
 
@@ -79,7 +79,7 @@ mcp:
     timeout_ms: 1000
     # enabled: false                     # set to skip this server
 
-# Plugins. May also be discovered from <workdir>/.yaca/plugins/**/plugin.toml.
+# Plugins. May also be discovered from <workdir>/.hya/plugins/**/plugin.toml.
 plugins:
   memory:
     command: [python3, memory.py]        # stdio JSON-RPC process
@@ -138,12 +138,12 @@ api_key: "{file:/absolute/path/to/key.txt}"
 Saved tokens take precedence over inline `api_key` values:
 
 ```sh
-yaca login anthropic "$ANTHROPIC_API_KEY"
-yaca auth list
-yaca auth logout anthropic
+hya login anthropic "$ANTHROPIC_API_KEY"
+hya auth list
+hya auth logout anthropic
 ```
 
-Tokens are stored under `~/.config/yaca/auth/<provider>.yaml`. HTTP auth headers
+Tokens are stored under `~/.config/hya/auth/<provider>.yaml`. HTTP auth headers
 are marked sensitive and redirects are disabled so a secret is not forwarded to
 another host.
 
@@ -152,7 +152,7 @@ another host.
 The active model is selected in this order:
 
 1. `--model <id>` CLI flag.
-2. `YACA_MODEL` environment variable.
+2. `HYA_MODEL` environment variable.
 3. `default_model` from `config.yaml`.
 4. A configured model whose id contains `sonnet`.
 5. The first configured model id.
@@ -161,10 +161,10 @@ The active model is selected in this order:
 Examples:
 
 ```sh
-YACA_MODEL=claude-sonnet-4-6 yaca
-yaca --model gpt-5.5 exec "summarize the architecture"
-yaca models
-yaca models gateway --verbose
+HYA_MODEL=claude-sonnet-4-6 hya
+hya --model gpt-5.5 exec "summarize the architecture"
+hya models
+hya models gateway --verbose
 ```
 
 The selected model must be served by one configured route. If no route reports
@@ -172,27 +172,27 @@ capabilities for the model, the router returns `unknown provider for model`.
 
 ## Environment Variables
 
-yaca reads the following `YACA_*` variables (verified against the source listed
+hya reads the following `HYA_*` variables (verified against the source listed
 in each row). Unset variables fall back to the documented default. Beyond these,
-yaca honors the standard `HOME` and `XDG_CONFIG_HOME` for config/auth paths.
+hya honors the standard `HOME` and `XDG_CONFIG_HOME` for config/auth paths.
 
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
-| `YACA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/yaca-app/src/config.rs`, `crates/yaca-app/src/runtime.rs` |
-| `YACA_COMPACTION_THRESHOLD` | Token count that triggers context compaction. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().token_threshold` | `crates/yaca-app/src/runtime.rs` (`compaction_config`) |
-| `YACA_COMPACTION_KEEP_RECENT` | Number of most-recent messages kept verbatim when compacting. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().keep_recent` | `crates/yaca-app/src/runtime.rs` (`compaction_config`) |
-| `YACA_HISTORY_DIR` | Directory for the TUI's JSONL session history. | `$HOME/.yaca/history`, else a temp dir. | `crates/yaca-cli/src/tui/history.rs` |
-| `YACA_EXPORT_DIR` | Directory where `/export` writes Markdown transcripts. | `$HOME/.yaca/exports`, else a temp dir. | `crates/yaca-cli/src/tui.rs` (`export_root`) |
-| `YACA_OPENCODE_ADAPTER_DIR` | Path to an alternate OpenCode plugin adapter checkout (used for `kind: opencode` plugins). | Bundled adapter in `crates/yaca-plugin-opencode/adapter`. | `crates/yaca-app/src/plugins.rs` |
-| `YACA_HYA_BIN` | Path to the `hya` binary spawned by `yaca serve` integrations. | Newest sibling build, else `hya` on `PATH`. | `crates/yaca-cli/src/serve.rs` (`resolve_hya_bin`) |
+| `HYA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/config.rs`, `crates/hya-app/src/runtime.rs` |
+| `HYA_COMPACTION_THRESHOLD` | Token count that triggers context compaction. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().token_threshold` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
+| `HYA_COMPACTION_KEEP_RECENT` | Number of most-recent messages kept verbatim when compacting. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().keep_recent` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
+| `HYA_HISTORY_DIR` | Directory for the TUI's JSONL session history. | `$HOME/.hya/history`, else a temp dir. | `crates/hya-cli/src/tui/history.rs` |
+| `HYA_EXPORT_DIR` | Directory where `/export` writes Markdown transcripts. | `$HOME/.hya/exports`, else a temp dir. | `crates/hya-cli/src/tui.rs` (`export_root`) |
+| `HYA_OPENCODE_ADAPTER_DIR` | Path to an alternate OpenCode plugin adapter checkout (used for `kind: opencode` plugins). | Bundled adapter in `crates/hya-plugin-opencode/adapter`. | `crates/hya-app/src/plugins.rs` |
+| `HYA_HYA_BIN` | Path to the `hya` binary spawned by `hya serve` integrations. | Newest sibling build, else `hya` on `PATH`. | `crates/hya-cli/src/serve.rs` (`resolve_hya_bin`) |
 
-Related, non-`YACA_` variables that also affect behavior:
+Related, non-`HYA_` variables that also affect behavior:
 
 | Variable | Effect | Source |
 | --- | --- | --- |
-| `BUN` | Bun binary used to run the bundled OpenCode adapter. | `crates/yaca-app/src/plugins.rs` |
-| `OPENCODE_WEBSEARCH_PROVIDER` | Selects the web-search backend used by the websearch tool. | `crates/yaca-tool/src/websearch.rs` |
-| `PARALLEL_API_KEY`, `EXA_API_KEY` | API keys for the corresponding websearch providers. | `crates/yaca-tool/src/websearch.rs` |
+| `BUN` | Bun binary used to run the bundled OpenCode adapter. | `crates/hya-app/src/plugins.rs` |
+| `OPENCODE_WEBSEARCH_PROVIDER` | Selects the web-search backend used by the websearch tool. | `crates/hya-tool/src/websearch.rs` |
+| `PARALLEL_API_KEY`, `EXA_API_KEY` | API keys for the corresponding websearch providers. | `crates/hya-tool/src/websearch.rs` |
 
 ## MCP Servers
 
@@ -220,7 +220,7 @@ new tools into an already running engine.
 ## Plugins
 
 Plugins may be declared directly in config or discovered from
-`<workdir>/.yaca/plugins/**/plugin.toml`:
+`<workdir>/.hya/plugins/**/plugin.toml`:
 
 ```yaml
 plugins:
@@ -243,9 +243,9 @@ Config entries support:
 | `timeout_ms` | Optional request timeout. |
 | `env` | Environment variables passed to the plugin process as configured. |
 
-For `kind: opencode` entries without `command`, yaca uses the bundled Bun
-adapter from `crates/yaca-plugin-opencode/adapter`. Set `BUN` to choose a Bun
-binary or `YACA_OPENCODE_ADAPTER_DIR` to point at an alternate adapter checkout.
+For `kind: opencode` entries without `command`, hya uses the bundled Bun
+adapter from `crates/hya-plugin-opencode/adapter`. Set `BUN` to choose a Bun
+binary or `HYA_OPENCODE_ADAPTER_DIR` to point at an alternate adapter checkout.
 If Bun is not available, that plugin is skipped.
 
 The plugin host supports registered tools, command/message/text/chat hooks,
@@ -282,10 +282,10 @@ The TUI loads markdown prompt commands from:
 
 1. `$HOME/.config/opencode/commands/*.md`
 2. `$HOME/.config/opencode/command/*.md`
-3. `$HOME/.config/yaca/prompts/*.md`
+3. `$HOME/.config/hya/prompts/*.md`
 4. `<workdir>/.opencode/commands/*.md`
 5. `<workdir>/.opencode/command/*.md`
-6. `<workdir>/.yaca/prompts/*.md`
+6. `<workdir>/.hya/prompts/*.md`
 
 Project commands override user commands with the same file stem. The file stem
 becomes the slash command name. Optional frontmatter fields are parsed:
@@ -302,5 +302,5 @@ All args: $ARGUMENTS
 ```
 
 Expanded command bodies are submitted as normal prompts. If `agent` names a
-built-in TUI profile, yaca applies that profile before the turn starts. If
-`model` is present, yaca switches the submitted turn to that model.
+built-in TUI profile, hya applies that profile before the turn starts. If
+`model` is present, hya switches the submitted turn to that model.

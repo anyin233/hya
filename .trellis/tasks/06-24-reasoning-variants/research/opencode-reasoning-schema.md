@@ -49,10 +49,10 @@ Example (Anthropic per-model variants):
 - Markdown agents: frontmatter parsed by gray-matter; `variant:` supported, unknown keys pass through to options. `config/markdown.ts#L3-L10`, `config/plugin/agent.ts#L116-L142`.
 - Applying agent: `if item.variant -> agent.model.variant = variant`. `config/plugin/agent.ts#L77-L83`.
 
-## 5. Implication for yaca
+## 5. Implication for hya
 
-yaca today: `ReasoningEffort = {Low,Medium,High}` + per-provider budget fns; agent `variant`/`options` parsed but NEVER mapped to `AgentSpec.reasoning`. To reach parity:
+hya today: `ReasoningEffort = {Low,Medium,High}` + per-provider budget fns; agent `variant`/`options` parsed but NEVER mapped to `AgentSpec.reasoning`. To reach parity:
 - Extend the reasoning vocabulary + per-provider validity (OpenAI must never emit `max`).
-- Read `provider.<id>.models.<id>.{options,variants}` from opencode.json (yaca-server opencode layer already loads opencode.json/jsonc via `global.config()`).
+- Read `provider.<id>.models.<id>.{options,variants}` from opencode.json (hya-server opencode layer already loads opencode.json/jsonc via `global.config()`).
 - Resolve agent `variant` -> selected variant bundle / effort -> provider request.
 - Anthropic budgets to match: high=16000, max=31999 (bounded by output limit).

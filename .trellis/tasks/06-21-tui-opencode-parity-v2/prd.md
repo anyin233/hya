@@ -2,7 +2,7 @@
 
 ## Goal
 
-Optimize yaca TUI to true 1:1 feature + visual parity with opencode, building on the tui/opencode-parity (W0-W7) branch in worktree tui-parity-v2. Driven by a fresh two-agent distillation of opencode's @opentui/solid TUI.
+Optimize hya TUI to true 1:1 feature + visual parity with opencode, building on the tui/opencode-parity (W0-W7) branch in worktree tui-parity-v2. Driven by a fresh two-agent distillation of opencode's @opentui/solid TUI.
 
 ## Requirements
 

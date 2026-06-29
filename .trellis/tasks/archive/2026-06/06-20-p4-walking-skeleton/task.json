@@ -2,7 +2,7 @@
   "id": "p4-walking-skeleton",
   "name": "p4-walking-skeleton",
   "title": "Phase 4 single-agent walking skeleton",
-  "description": "yaca-core SessionEngine+AgentLoop + minimal yaca-server SSE + yaca-client",
+  "description": "hya-core SessionEngine+AgentLoop + minimal hya-server SSE + hya-client",
   "status": "completed",
   "dev_type": null,
   "scope": null,

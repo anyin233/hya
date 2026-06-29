@@ -7,7 +7,7 @@
 - Anthropic wire: POST {base}/messages, AuthStyle::Anthropic (x-api-key + anthropic-version 2023-06-01) (http.rs:86-93,133-143). ✓
 
 ## Task 2.5 — EARLY AC1 gateway smoke — PASS (2026-06-24)
-Direct Anthropic Messages call to 12th.day with yaca's exact wire format:
+Direct Anthropic Messages call to 12th.day with hya's exact wire format:
 `POST https://api.12th.day/v1/messages`, headers `x-api-key` + `anthropic-version: 2023-06-01`,
 body `thinking:{type:"enabled",budget_tokens:16000}`, model `claude-opus-4-8`.
 
@@ -17,17 +17,17 @@ body `thinking:{type:"enabled",budget_tokens:16000}`, model `claude-opus-4-8`.
 adaptive thinking needed. Implementation proceeds.
 
 ## Implementation (Tasks 1-6) — DONE + verified
-- Task 1+2 (yaca-provider): `ReasoningEffort` = Off/Minimal/Low/Medium/High/XHigh/Max;
+- Task 1+2 (hya-provider): `ReasoningEffort` = Off/Minimal/Low/Medium/High/XHigh/Max;
   `openai_label`(Max→xhigh, never max), `anthropic_budget`(High=16000,Max=31999),
   `google_budget(model_id)`(2.5-pro Max=32768 else 24576); encoders use Option methods;
   conformance budgets updated. Unit tested (AC2). fmt+clippy green.
-- Task 3 (yaca-server): `reasoning_options::{load_opencode_config(DISK), resolve_reasoning}`
+- Task 3 (hya-server): `reasoning_options::{load_opencode_config(DISK), resolve_reasoning}`
   + `json_merge` extracted; `config_paths` pub(super). Unit + FILE-BACKED tests (AC3/AC5).
 - Task 4: `apply_agent_entry` pure helper wired into `agent_with_guidance` +
   `session_agent_with_guidance` (entry lookup widened). Internal test (AC4).
 - Delegated Task 3+4 to trellis-implement; VERIFIED file-by-file. REVERTED its
   unrelated `skill_catalog.rs` change (scope-creep gaming a brittle env-dependent test;
-  the 2 `opencode_instance_api` failures are ENVIRONMENTAL — global `~/.config/yaca/skills`
+  the 2 `opencode_instance_api` failures are ENVIRONMENTAL — global `~/.config/hya/skills`
   pollute an index-based skill assertion; proven by clean-HOME pass).
 - Gate: fmt clean; clippy --workspace clean; `test --workspace` 185 ok / 0 fail (clean HOME).
 
@@ -36,16 +36,16 @@ adaptive thinking needed. Implementation proceeds.
 → `anthropic encode model=claude-opus-4-8 reasoning=Some(Max) thinking_set=true`.
 So the request to the gateway carries `thinking{type:enabled,budget_tokens:31999}`. ✓
 
-## CRITICAL FINDING — AC1 visible render blocked by GATEWAY (not yaca)
+## CRITICAL FINDING — AC1 visible render blocked by GATEWAY (not hya)
 The 12th.day gateway REDACTS thinking content: non-streaming returns a `thinking`
 block with `thinking_len=0` (empty), streaming sends `content_block_start(thinking)`
 + `signature_delta` but NO `thinking_delta`. The model thinks (signature proves it)
 but the gateway withholds the readable content. So nothing streams to render.
 => Original "reasoning doesn't render" had 3 layers: (a) variant:max not enabling
    thinking [FIXED], (b) Anthropic decoder dropped thinking blocks [FIXED], (c) gateway
-   redacts thinking content [GATEWAY limit — unfixable in yaca].
+   redacts thinking content [GATEWAY limit — unfixable in hya].
 
-## Decoder fix (yaca-provider/anthropic/decoder.rs) — BEYOND original plan scope
+## Decoder fix (hya-provider/anthropic/decoder.rs) — BEYOND original plan scope
 Plan §8 assumed render worked once parts produced; it did NOT (decoder only handled
 text/tool_use, dropped `thinking`/`thinking_delta`). Added `BlockKind::Reasoning` +
 `thinking`/`thinking_delta`/`content_block_stop` handling → emits ReasoningStart/Delta/End.

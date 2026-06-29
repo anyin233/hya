@@ -23,7 +23,7 @@ cargo test --workspace
 ## Forbidden Patterns
 
 - Non-Rust TUI renderers in this crate.
-- Terminal I/O, async streaming, or crossterm event loops inside `yaca-tui`.
+- Terminal I/O, async streaming, or crossterm event loops inside `hya-render-tui`.
 - Raw color literals inside widgets when a semantic theme field can express the role.
 - Layout code that indexes optional sidebar columns eagerly; use explicit `if`
   branches when a rectangle may not exist.
@@ -49,7 +49,7 @@ and 120-column tests.
 
 ## Code Review Checklist
 
-- Does `crates/yaca-cli/src/tui.rs` still own terminal/event-loop behavior?
+- Does `crates/hya-cli/src/tui.rs` still own terminal/event-loop behavior?
 - Does the TUI remain readable at 80 columns?
 - Are status labels understandable without color?
 - Do new tests fail on the old behavior and pass on the new behavior?
@@ -62,7 +62,7 @@ and 120-column tests.
 ### 1. Scope / Trigger
 
 - Trigger: any native `--mini` TUI change that selects models, displays the active model, resolves reasoning effort, or persists per-model reasoning preferences.
-- Applies to `crates/yaca-app/src/config.rs`, `crates/yaca-cli/src/tui.rs`, `crates/yaca-cli/src/tui/controller.rs`, and `crates/yaca-cli/src/tui/history.rs`.
+- Applies to `crates/hya-app/src/config.rs`, `crates/hya-cli/src/tui.rs`, `crates/hya-cli/src/tui/controller.rs`, and `crates/hya-cli/src/tui/history.rs`.
 
 ### 2. Signatures
 
@@ -105,7 +105,7 @@ and 120-column tests.
 - Unit: `/think` dialog tests for provider-specific variants including `minimal`, `xhigh`, and `max`.
 - Unit: `/think` dialog test that `reasoning_effort: "none"` selects and marks the `off` row current.
 - Runtime/helper: selected `ModelEntry` converts to provider-prefixed `ModelRef` before engine switch.
-- Manual QA: run native `./target/debug/yaca --mini` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
+- Manual QA: run native `./target/debug/hya --mini` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
 
 ### 7. Wrong vs Correct
 

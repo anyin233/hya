@@ -1,0 +1,41 @@
+[package]
+name = "hya-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hya"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+hya-core = { workspace = true }
+hya-provider = { workspace = true }
+hya-tool = { workspace = true }
+hya-store = { workspace = true }
+hya-server = { workspace = true }
+hya-proto = { workspace = true }
+hya-render-tui = { workspace = true }
+hya-mcp = { workspace = true }
+hya-plugin = { workspace = true }
+hya-app = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+axum = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }

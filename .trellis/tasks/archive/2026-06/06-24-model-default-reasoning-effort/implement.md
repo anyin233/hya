@@ -4,7 +4,7 @@
 
 **Goal:** Make native TUI reasoning effort default per model with precedence explicit agent/profile config → last-used for exact provider/model → highest supported effort.
 
-**Architecture:** Add a pure resolver in `yaca-provider`, carry provider reasoning variants through `yaca-app::ModelEntry`, persist native TUI last-used preferences in `HistoryStore`, and update controller/runtime paths to resolve and validate reasoning by the active model. OpenCode explicit/config reasoning remains stable.
+**Architecture:** Add a pure resolver in `hya-provider`, carry provider reasoning variants through `hya-app::ModelEntry`, persist native TUI last-used preferences in `HistoryStore`, and update controller/runtime paths to resolve and validate reasoning by the active model. OpenCode explicit/config reasoning remains stable.
 
 **Tech Stack:** Rust 2024 workspace, `cargo`, `serde_json`, existing `anyhow`, ratatui/crossterm TUI controller tests, provider unit tests.
 
@@ -13,7 +13,7 @@
 - No production Rust code before a failing test has been written and observed failing.
 - Library crates deny `unwrap_used` and `expect_used`; keep unwrap/expect in tests only where existing test modules already allow them.
 - Preserve event-sourced architecture; do not add reasoning preference defaults to `SessionStore` events.
-- Keep `yaca-tui` as pure rendering/state; terminal I/O and persistence stay in `yaca-cli`.
+- Keep `hya-render-tui` as pure rendering/state; terminal I/O and persistence stay in `hya-cli`.
 - Do not change provider-specific request encoders unless a test proves a regression in existing behavior.
 - Full Rust verification after implementation: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
 
@@ -21,21 +21,21 @@
 
 ## File map
 
-- Modify `crates/yaca-provider/src/lib.rs`: add `resolve_default_reasoning` and resolver unit tests.
-- Modify `crates/yaca-app/src/config.rs`: add `ModelEntry.reasoning_variants` and config tests for family-specific variants.
-- Modify `crates/yaca-cli/src/tui/history.rs`: add last-used reasoning preference persistence and optional session meta field.
-- Modify `crates/yaca-cli/src/tui/controller.rs`: carry provider/model in selection effects and build `/think` choices dynamically.
-- Modify `crates/yaca-cli/src/tui.rs`: resolve startup/model-switch/resume/custom-command reasoning and persist `/think` selections.
-- Modify `crates/yaca-cli/src/tui/harness.rs`: teach harness model entries about reasoning variants and update reasoning-effect handling.
-- Modify `crates/yaca-server/src/opencode/reasoning_options_tests.rs` only if needed to lock no-signal compatibility.
-- Optionally modify `crates/yaca-server/src/opencode/reasoning_options.rs` only for behavior-preserving reuse of the provider helper.
+- Modify `crates/hya-provider/src/lib.rs`: add `resolve_default_reasoning` and resolver unit tests.
+- Modify `crates/hya-app/src/config.rs`: add `ModelEntry.reasoning_variants` and config tests for family-specific variants.
+- Modify `crates/hya-cli/src/tui/history.rs`: add last-used reasoning preference persistence and optional session meta field.
+- Modify `crates/hya-cli/src/tui/controller.rs`: carry provider/model in selection effects and build `/think` choices dynamically.
+- Modify `crates/hya-cli/src/tui.rs`: resolve startup/model-switch/resume/custom-command reasoning and persist `/think` selections.
+- Modify `crates/hya-cli/src/tui/harness.rs`: teach harness model entries about reasoning variants and update reasoning-effect handling.
+- Modify `crates/hya-server/src/opencode/reasoning_options_tests.rs` only if needed to lock no-signal compatibility.
+- Optionally modify `crates/hya-server/src/opencode/reasoning_options.rs` only for behavior-preserving reuse of the provider helper.
 
 ---
 
 ### Task 1: Provider resolver
 
 **Files:**
-- Modify: `crates/yaca-provider/src/lib.rs`
+- Modify: `crates/hya-provider/src/lib.rs`
 
 **Interfaces:**
 - Produces: `pub fn resolve_default_reasoning(explicit: Option<ReasoningEffort>, last_used: Option<ReasoningEffort>, supported: &[String]) -> Option<ReasoningEffort>`.
@@ -97,7 +97,7 @@ fn default_reasoning_stays_unset_without_reasoning_support() {
 Run:
 
 ```bash
-cargo test -p yaca-provider default_reasoning --lib
+cargo test -p hya-provider default_reasoning --lib
 ```
 
 Expected: compile failure or test failure because `resolve_default_reasoning` does not exist.
@@ -137,7 +137,7 @@ pub fn resolve_default_reasoning(
 Run:
 
 ```bash
-cargo test -p yaca-provider default_reasoning --lib
+cargo test -p hya-provider default_reasoning --lib
 ```
 
 Expected: tests pass.
@@ -147,8 +147,8 @@ Expected: tests pass.
 ### Task 2: Model entries carry reasoning variants
 
 **Files:**
-- Modify: `crates/yaca-app/src/config.rs`
-- Modify follow-up compile sites in `crates/yaca-cli/src/tui/controller.rs` and test constructors that instantiate `ModelEntry`.
+- Modify: `crates/hya-app/src/config.rs`
+- Modify follow-up compile sites in `crates/hya-cli/src/tui/controller.rs` and test constructors that instantiate `ModelEntry`.
 
 **Interfaces:**
 - Produces: `ModelEntry { id, provider, reasoning_variants }`.
@@ -156,7 +156,7 @@ Expected: tests pass.
 
 - [ ] **Step 1: Write failing config test**
 
-Add to `crates/yaca-app/src/config.rs` tests a unit that exercises a helper or the resolved model construction. If no helper exists yet, first extract a small helper under test:
+Add to `crates/hya-app/src/config.rs` tests a unit that exercises a helper or the resolved model construction. If no helper exists yet, first extract a small helper under test:
 
 ```rust
 #[test]
@@ -183,7 +183,7 @@ fn model_entries_include_provider_reasoning_variants() {
 Run:
 
 ```bash
-cargo test -p yaca-app model_entries_include_provider_reasoning_variants --lib
+cargo test -p hya-app model_entries_include_provider_reasoning_variants --lib
 ```
 
 Expected: compile failure because `ModelEntry.reasoning_variants` or `model_entries` does not exist.
@@ -229,7 +229,7 @@ Update all test-only `ModelEntry` literals, especially `Controller::with_models`
 Run:
 
 ```bash
-cargo test -p yaca-app model_entries_include_provider_reasoning_variants --lib
+cargo test -p hya-app model_entries_include_provider_reasoning_variants --lib
 ```
 
 Expected: pass.
@@ -239,12 +239,12 @@ Expected: pass.
 ### Task 3: HistoryStore last-used persistence
 
 **Files:**
-- Modify: `crates/yaca-cli/src/tui/history.rs`
+- Modify: `crates/hya-cli/src/tui/history.rs`
 
 **Interfaces:**
 - Produces: `record_model_reasoning(provider, model, effort)` and `last_model_reasoning(provider, model)`.
 - Produces optional `SessionMeta.reasoning_effort` if needed for resume snapshot compatibility.
-- Consumes: `ReasoningEffort` from `yaca-provider`.
+- Consumes: `ReasoningEffort` from `hya-provider`.
 
 - [ ] **Step 1: Write failing persistence tests**
 
@@ -257,20 +257,20 @@ fn model_reasoning_is_keyed_by_provider_and_model() {
     let store = HistoryStore::new(root.clone());
 
     store
-        .record_model_reasoning("openai", "gpt-5.5", yaca_provider::ReasoningEffort::XHigh)
+        .record_model_reasoning("openai", "gpt-5.5", hya_provider::ReasoningEffort::XHigh)
         .expect("record openai reasoning");
     store
-        .record_model_reasoning("anthropic", "gpt-5.5", yaca_provider::ReasoningEffort::Max)
+        .record_model_reasoning("anthropic", "gpt-5.5", hya_provider::ReasoningEffort::Max)
         .expect("record anthropic reasoning");
 
     let reopened = HistoryStore::new(root);
     assert_eq!(
         reopened.last_model_reasoning("openai", "gpt-5.5").expect("read openai"),
-        Some(yaca_provider::ReasoningEffort::XHigh)
+        Some(hya_provider::ReasoningEffort::XHigh)
     );
     assert_eq!(
         reopened.last_model_reasoning("anthropic", "gpt-5.5").expect("read anthropic"),
-        Some(yaca_provider::ReasoningEffort::Max)
+        Some(hya_provider::ReasoningEffort::Max)
     );
 }
 
@@ -280,12 +280,12 @@ fn model_reasoning_preserves_explicit_off() {
     let store = HistoryStore::new(root);
 
     store
-        .record_model_reasoning("openai", "gpt-5.5", yaca_provider::ReasoningEffort::Off)
+        .record_model_reasoning("openai", "gpt-5.5", hya_provider::ReasoningEffort::Off)
         .expect("record off");
 
     assert_eq!(
         store.last_model_reasoning("openai", "gpt-5.5").expect("read off"),
-        Some(yaca_provider::ReasoningEffort::Off)
+        Some(hya_provider::ReasoningEffort::Off)
     );
 }
 ```
@@ -295,14 +295,14 @@ fn model_reasoning_preserves_explicit_off() {
 Run:
 
 ```bash
-cargo test -p yaca-cli model_reasoning_ --lib
+cargo test -p hya-cli model_reasoning_ --lib
 ```
 
 Expected: compile failure because the methods do not exist.
 
 - [ ] **Step 3: Implement persistence**
 
-Add `use std::collections::BTreeMap;` and `use yaca_provider::ReasoningEffort;`.
+Add `use std::collections::BTreeMap;` and `use hya_provider::ReasoningEffort;`.
 
 Implement a private key helper and read/write methods. Keep helpers private unless tests need public access:
 
@@ -323,7 +323,7 @@ Read missing/corrupt files as an empty map for writes and as `Ok(None)` for look
 Run:
 
 ```bash
-cargo test -p yaca-cli model_reasoning_ --lib
+cargo test -p hya-cli model_reasoning_ --lib
 ```
 
 Expected: pass.
@@ -333,7 +333,7 @@ Expected: pass.
 ### Task 4: Dynamic `/think` choices and validation
 
 **Files:**
-- Modify: `crates/yaca-cli/src/tui/controller.rs`
+- Modify: `crates/hya-cli/src/tui/controller.rs`
 
 **Interfaces:**
 - Produces: a selected-model lookup that returns provider/id/reasoning variants.
@@ -408,7 +408,7 @@ fn think_dialog_selection_returns_selected_dynamic_level() {
 Run:
 
 ```bash
-cargo test -p yaca-cli think_dialog_ --lib
+cargo test -p hya-cli think_dialog_ --lib
 ```
 
 Expected: fail because dialog remains hardcoded and/or `ModelEntry` has no variants until prior tasks are complete.
@@ -448,7 +448,7 @@ or add a small controller-local struct if carrying the app config type through t
 Run:
 
 ```bash
-cargo test -p yaca-cli think_dialog_ --lib
+cargo test -p hya-cli think_dialog_ --lib
 ```
 
 Expected: pass.
@@ -458,8 +458,8 @@ Expected: pass.
 ### Task 5: Runtime resolution and persistence wiring
 
 **Files:**
-- Modify: `crates/yaca-cli/src/tui.rs`
-- Modify: `crates/yaca-cli/src/tui/harness.rs`
+- Modify: `crates/hya-cli/src/tui.rs`
+- Modify: `crates/hya-cli/src/tui/harness.rs`
 
 **Interfaces:**
 - Consumes: `resolve_default_reasoning`.
@@ -513,14 +513,14 @@ fn runtime_reasoning_preserves_last_used_off() {
 Run:
 
 ```bash
-cargo test -p yaca-cli runtime_reasoning_ --lib
+cargo test -p hya-cli runtime_reasoning_ --lib
 ```
 
 Expected: compile failure because helper does not exist.
 
 - [ ] **Step 3: Implement runtime helper**
 
-Implement helper in `tui.rs` that delegates to `yaca_provider::resolve_default_reasoning` with the model entry's variants. Keep it small and testable.
+Implement helper in `tui.rs` that delegates to `hya_provider::resolve_default_reasoning` with the model entry's variants. Keep it small and testable.
 
 - [ ] **Step 4: Wire startup**
 
@@ -559,9 +559,9 @@ Update `DummyHarness::new` and `apply_effect` to use `ModelEntry` variants and t
 Run targeted tests:
 
 ```bash
-cargo test -p yaca-cli runtime_reasoning_ --lib
-cargo test -p yaca-cli think_dialog_ --lib
-cargo test -p yaca-cli model_reasoning_ --lib
+cargo test -p hya-cli runtime_reasoning_ --lib
+cargo test -p hya-cli think_dialog_ --lib
+cargo test -p hya-cli model_reasoning_ --lib
 ```
 
 Expected: pass.
@@ -571,8 +571,8 @@ Expected: pass.
 ### Task 6: Compatibility tests for OpenCode no-signal behavior
 
 **Files:**
-- Modify only if needed: `crates/yaca-server/src/opencode/reasoning_options_tests.rs`
-- Modify only if needed: `crates/yaca-server/src/opencode/reasoning_options.rs`
+- Modify only if needed: `crates/hya-server/src/opencode/reasoning_options_tests.rs`
+- Modify only if needed: `crates/hya-server/src/opencode/reasoning_options.rs`
 
 **Interfaces:**
 - Preserves: `resolve_reasoning(None, empty_options, model, {}) == None`.
@@ -583,7 +583,7 @@ Expected: pass.
 Run:
 
 ```bash
-cargo test -p yaca-server reasoning_options --lib
+cargo test -p hya-server reasoning_options --lib
 ```
 
 Expected: existing tests pass unless the environment's known unrelated skill-order assertions are included by a broader filter. If they fail due to this task's changes, fix before proceeding.
@@ -608,7 +608,7 @@ fn empty_inputs_do_not_default_to_model_highest_reasoning() {
 
 - [ ] **Step 3: Avoid adding server preference I/O**
 
-Do not read `HistoryStore` or `model_reasoning.json` from `yaca-server` in this task.
+Do not read `HistoryStore` or `model_reasoning.json` from `hya-server` in this task.
 
 ---
 
@@ -645,11 +645,11 @@ Run:
 cargo test --workspace
 ```
 
-Expected: exit 0, except the pre-existing unrelated `yaca-server` skill-order assertion failures if still present in this environment. If those failures persist, report them explicitly and include the targeted test evidence for this task.
+Expected: exit 0, except the pre-existing unrelated `hya-server` skill-order assertion failures if still present in this environment. If those failures persist, report them explicitly and include the targeted test evidence for this task.
 
 - [ ] **Step 4: Manual TUI QA through tmux**
 
-Run the built binary or `cargo run -p yaca-cli --bin yaca` in `interactive_bash` with a temporary `YACA_HISTORY_DIR`.
+Run the built binary or `cargo run -p hya-cli --bin hya` in `interactive_bash` with a temporary `HYA_HISTORY_DIR`.
 
 Drive these paths:
 
@@ -665,7 +665,7 @@ If local provider config is unavailable, use the harness or fake/dev provider pa
 
 ## Rollback points
 
-- If resolver tests fail unexpectedly, revert only `crates/yaca-provider/src/lib.rs` changes and re-check `ReasoningEffort` ordering assumptions.
+- If resolver tests fail unexpectedly, revert only `crates/hya-provider/src/lib.rs` changes and re-check `ReasoningEffort` ordering assumptions.
 - If TUI controller changes spread too broadly, keep `TuiEffect::SelectModel(String)` and add a provider lookup helper in `tui.rs`; do not refactor unrelated controller behavior.
 - If session meta restoration gets noisy, defer optional `SessionMeta.reasoning_effort` and keep resume behavior to model-default resolution only.
 - If OpenCode tests start failing, back out server refactors; this task does not require OpenCode behavioral changes.

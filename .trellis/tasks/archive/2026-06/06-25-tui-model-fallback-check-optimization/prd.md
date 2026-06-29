@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make native `yaca --mini` model switching fail safely when a user types an
+Make native `hya --mini` model switching fail safely when a user types an
 unknown `/model <id>`, and tighten the terminal visual QA checker so valid TUI
 layouts with multiple independent frames do not report false border alignment
 failures.
@@ -54,7 +54,7 @@ User value:
       independent frame widths, expecting `borderMisaligned: false`.
 - [ ] Existing `tui-check` tests for real malformed CJK box alignment, overflow,
       ANSI stripping, and wide-character columns continue to pass.
-- [ ] Manual QA drives `./target/debug/yaca --mini`: select a known model, type
+- [ ] Manual QA drives `./target/debug/hya --mini`: select a known model, type
       an unknown `/model`, observe the system error, then send a prompt or inspect
       status to confirm the last valid model remains active.
 - [ ] Terminal QA runs `tui-check` on the prior false-positive style capture (or
@@ -63,11 +63,11 @@ User value:
 
 ## Notes
 
-- Confirmed `/model` root cause: `crates/yaca-cli/src/tui/controller.rs` currently
+- Confirmed `/model` root cause: `crates/hya-cli/src/tui/controller.rs` currently
   handles direct `/model <arguments>` by mutating `self.app.model` first, finding
   a matching `ModelEntry`, and falling back to a synthetic providerless entry
   when no catalog entry matches.
-- Confirmed runtime effect path: `crates/yaca-cli/src/tui.rs` handles
+- Confirmed runtime effect path: `crates/hya-cli/src/tui.rs` handles
   `TuiEffect::SelectModel(entry)` by resolving reasoning, assigning
   `agent.model = model_ref_for_entry(&entry)`, calling `engine.switch_model`, and
   updating the session model snapshot. Therefore the controller must reject
@@ -87,6 +87,6 @@ User value:
   `packages/shared-skills/skills/visual-qa/scripts/tui-grid.ts`, with matching
   tests at `packages/shared-skills/skills/visual-qa/scripts/tui-grid.test.ts`.
 - Out of scope unless explicitly approved: changing provider/router model
-  resolution semantics outside the native TUI command path; redesigning yaca TUI
+  resolution semantics outside the native TUI command path; redesigning hya TUI
   rendering; committing generated package-cache changes as the durable
   `tui-check` fix instead of patching or filing the upstream source change.

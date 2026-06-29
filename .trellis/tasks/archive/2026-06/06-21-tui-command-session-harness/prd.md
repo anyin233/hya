@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make the yaca TUI behave more like opencode for everyday interactive work: slash commands and keyboard shortcuts should drive the same command system, model switching must work, `Ctrl-C` must not accidentally kill the process, TUI behavior must be testable without real model calls, and previous conversations must be resumable.
+Make the hya TUI behave more like opencode for everyday interactive work: slash commands and keyboard shortcuts should drive the same command system, model switching must work, `Ctrl-C` must not accidentally kill the process, TUI behavior must be testable without real model calls, and previous conversations must be resumable.
 
 ## Requirements
 
@@ -49,5 +49,5 @@ Make the yaca TUI behave more like opencode for everyday interactive work: slash
 
 ## Notes
 
-- This task intentionally mimics opencode interaction patterns while keeping yaca's Rust/ratatui architecture.
+- This task intentionally mimics opencode interaction patterns while keeping hya's Rust/ratatui architecture.
 - The history storage correction from the user is a hard constraint: avoid a single central history DB as the canonical store.

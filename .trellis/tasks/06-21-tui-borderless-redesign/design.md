@@ -2,14 +2,14 @@
 
 ## 1. Architecture & boundaries
 
-The change is confined to the view crate `yaca-tui` and the CLI event-loop
-`yaca-cli/src/tui.rs`. No engine, provider, store, or proto APIs change.
+The change is confined to the view crate `hya-render-tui` and the CLI event-loop
+`hya-cli/src/tui.rs`. No engine, provider, store, or proto APIs change.
 
-- `yaca-tui` stays a **pure view**: it owns `AppState`, `Theme`, a new
+- `hya-render-tui` stays a **pure view**: it owns `AppState`, `Theme`, a new
   `InputState`, and the `draw` function.
-- `yaca-cli/src/tui.rs` stays the **event loop**: it translates crossterm keys
+- `hya-cli/src/tui.rs` stays the **event loop**: it translates crossterm keys
   into `InputState` method calls and folds engine events into `AppState`.
-- `yaca-provider` already exposes `DevProvider`; the mock "backend" is mostly
+- `hya-provider` already exposes `DevProvider`; the mock "backend" is mostly
   wiring, not new provider code.
 
 ## 2. Reference summary (opencode)
@@ -37,7 +37,7 @@ custom TypeScript/SolidJS renderer (`@opentui/core`). The design we port is:
 
 ## 3. Theme system
 
-Introduce a small `Theme` struct in `yaca-tui` (no file IO; the default dark
+Introduce a small `Theme` struct in `hya-render-tui` (no file IO; the default dark
 palette is compiled in). Use ratatui `Color::Rgb` values from the opencode
 palette.
 
@@ -177,20 +177,20 @@ The input area is rendered as a single `Paragraph` with inline spans:
 
 ### 6.1 Render preview harness
 
-Add `crates/yaca-tui/examples/preview.rs`. It constructs several `AppState`
+Add `crates/hya-render-tui/examples/preview.rs`. It constructs several `AppState`
 fixtures (empty, short chat, long message, tool call, permission overlay,
 picker, yolo mode, CJK text) and renders each to a `TestBackend`. Output is
 written to stdout so a developer can run:
 
 ```sh
-cargo run --example preview -p yaca-tui
+cargo run --example preview -p hya-render-tui
 ```
 
 and inspect the layout without launching the full engine.
 
 ### 6.2 `--mock` live loop
 
-Add a `--mock` global flag to `yaca-cli/src/main.rs`:
+Add a `--mock` global flag to `hya-cli/src/main.rs`:
 
 ```rust
 #[arg(long, global = true)]
@@ -234,7 +234,7 @@ Keep the existing overlay shapes but update their `Block` styling:
 
 - This is a visual-only change. Saved sessions, config files, and the CLI
   surface outside `--mock` are unaffected.
-- Existing tests in `crates/yaca-tui/tests/tui_render.rs` assert on border
+- Existing tests in `crates/hya-render-tui/tests/tui_render.rs` assert on border
   titles (`"conversation"`, `"message"`, `"permission required"`, etc.). These
   assertions are updated to match the new layout.
 
@@ -242,10 +242,10 @@ Keep the existing overlay shapes but update their `Block` styling:
 
 | Area | Tests |
 |---|---|
-| Editor | Unit tests in `crates/yaca-tui/tests/input_state.rs` for every operation: motion, word deletion, CJK width, visible slice/scroll, home/end. |
+| Editor | Unit tests in `crates/hya-render-tui/tests/input_state.rs` for every operation: motion, word deletion, CJK width, visible slice/scroll, home/end. |
 | Layout | Update `tui_render.rs` assertions: no `"conversation"` title, model inside input, status bar contents, footer hints. |
 | Theme | Snapshot-style `TestBackend` test verifying background colors of status/input/footer regions. |
-| Mock | `yaca --mock` integration smoke test (manual or script): launch, type, verify echo response. |
+| Mock | `hya --mock` integration smoke test (manual or script): launch, type, verify echo response. |
 | Regression | `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`. |
 
 ## 10. Risks & rollback
@@ -255,7 +255,7 @@ Keep the existing overlay shapes but update their `Block` styling:
 - **Cursor drift**: mitigated by computing cursor column from grapheme widths
   and clamping to the visible window after every operation.
 - **Broken existing tests**: expected; update assertions in the same PR.
-- **Rollback**: revert the two crates (`yaca-tui`, `yaca-cli`) to the previous
+- **Rollback**: revert the two crates (`hya-render-tui`, `hya-cli`) to the previous
   commit; no data or schema migrations are involved.
 
 ## Plan Review

@@ -61,9 +61,9 @@ Questions to answer:
 
 ### 2. Signatures
 
-- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `yaca-cli` package version.
-- Cargo command: `cargo build --release --locked --bin yaca --target x86_64-unknown-linux-gnu`.
-- Release archive: `yaca-<version>-x86_64-unknown-linux-gnu.tar.gz`.
+- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya-cli` package version.
+- Cargo command: `cargo build --release --locked --bin hya --target x86_64-unknown-linux-gnu`.
+- Release archive: `hya-<version>-x86_64-unknown-linux-gnu.tar.gz`.
 - Checksum file: `SHA256SUMS` generated beside the release archive.
 
 ### 3. Contracts
@@ -80,7 +80,7 @@ Questions to answer:
 
 - Missing `v` tag prefix -> fail before build.
 - Tag version is not semver-shaped -> fail before build.
-- Tag version differs from `cargo metadata` package version for `yaca-cli` -> fail before build.
+- Tag version differs from `cargo metadata` package version for `hya-cli` -> fail before build.
 - Missing or empty `CHANGELOG.md` -> fail before publishing.
 - `CHANGELOG.md` first heading differs from the tag version -> fail before build.
 - Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
@@ -97,7 +97,7 @@ Questions to answer:
 - Parse workflow YAML, run `actionlint`, and syntax-check every embedded shell `run` block.
 - Run the tag/version/changelog validation logic with a representative tag.
 - Run the release build command for the configured target.
-- Package the built binary, verify `SHA256SUMS`, extract the archive, and run packaged `yaca --version` plus `yaca --help`.
+- Package the built binary, verify `SHA256SUMS`, extract the archive, and run packaged `hya --version` plus `hya --help`.
 - Confirm third-party actions are pinned to commit SHAs and release publication uses the `release` environment.
 
 ### 7. Wrong vs Correct

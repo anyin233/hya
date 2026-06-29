@@ -5,7 +5,7 @@
 > Requirements: [./prd.md](./prd.md) (B-R1..B-R7, B-AC1..B-AC5).
 >
 > Scope: Child B consumes the locked parent protocol and Child A host. It owns
-> parent R5 only: translating plugin-declared tools into normal yaca `Tool`
+> parent R5 only: translating plugin-declared tools into normal hya `Tool`
 > instances during bootstrap. It does not redesign the protocol, hook host,
 > provider layer, or runtime loading model.
 
@@ -38,7 +38,7 @@ Child B starts after Child A has landed these contracts:
 - Each initialized plugin records the `tools` declared by the locked
   `initialize` response in parent design section 2.2.
 - `PluginClient::call(method, params, timeout)` behaves like
-  [`McpClient::call`](../../../crates/yaca-mcp/src/client.rs#L137): JSON-RPC id
+  [`McpClient::call`](../../../crates/hya-mcp/src/client.rs#L137): JSON-RPC id
   correlation, per-call timeout, pending-drain on EOF, and a typed error enum.
 - The locked tool-call wire shape is parent design section 2.5:
   `{ "method":"tool/call", "params": { "tool", "session", "call", "input" } }`
@@ -48,16 +48,16 @@ Child B must stop and coordinate with Child A if any implementation pressure
 requires changing that frame. A local Rust API change, such as adding metadata to
 `ToolCtx`, is allowed because it only lets Child B fill the already-locked frame.
 
-The precedent to mirror is `yaca-mcp`:
+The precedent to mirror is `hya-mcp`:
 
 | Concern | Existing precedent | Child B reuse |
 |---|---|---|
-| Proxy tool shape | [`McpTool`](../../../crates/yaca-mcp/src/bridge.rs#L12) | `PluginTool` with client, raw tool name, cached schema, timeout |
-| Schema gate | [`McpTool::try_new`](../../../crates/yaca-mcp/src/bridge.rs#L20) rejects non-object inputs | same gate for plugin-declared `inputSchema` |
-| Permission first | [`McpTool::execute`](../../../crates/yaca-mcp/src/bridge.rs#L59) asserts before IPC | same, with plugin-specific action/resource |
-| RPC call mapping | [`client.call(...).map_err(ToolError::Other)`](../../../crates/yaca-mcp/src/bridge.rs#L63) | same mapping for `PluginError` |
-| Tool collection | [`McpManager::tools`](../../../crates/yaca-mcp/src/manager.rs#L55) | `PluginHost` exposes declared plugin tools in deterministic load order |
-| Bootstrap insertion | [`build_session_engine`](../../../crates/yaca-cli/src/main.rs#L255) registers MCP before `Arc::new(registry)` | plugin tools register in that same window |
+| Proxy tool shape | [`McpTool`](../../../crates/hya-mcp/src/bridge.rs#L12) | `PluginTool` with client, raw tool name, cached schema, timeout |
+| Schema gate | [`McpTool::try_new`](../../../crates/hya-mcp/src/bridge.rs#L20) rejects non-object inputs | same gate for plugin-declared `inputSchema` |
+| Permission first | [`McpTool::execute`](../../../crates/hya-mcp/src/bridge.rs#L59) asserts before IPC | same, with plugin-specific action/resource |
+| RPC call mapping | [`client.call(...).map_err(ToolError::Other)`](../../../crates/hya-mcp/src/bridge.rs#L63) | same mapping for `PluginError` |
+| Tool collection | [`McpManager::tools`](../../../crates/hya-mcp/src/manager.rs#L55) | `PluginHost` exposes declared plugin tools in deterministic load order |
+| Bootstrap insertion | [`build_session_engine`](../../../crates/hya-cli/src/main.rs#L255) registers MCP before `Arc::new(registry)` | plugin tools register in that same window |
 
 The only intentional divergence from MCP is user-visible naming: MCP tools are
 namespaced because their servers are a parallel extension mechanism. Plugin tools
@@ -68,11 +68,11 @@ handled explicitly in section 6.
 ## 1. Registry registration (reuse the existing `register`)
 
 `ToolRegistry` is **already** mutable/extensible — it is NOT static. Current code
-builds builtins at [`tool.rs:74`](../../../crates/yaca-tool/src/tool.rs#L74),
+builds builtins at [`tool.rs:74`](../../../crates/hya-tool/src/tool.rs#L74),
 exposes the public `register(...) -> Result<(), DuplicateName>` at
-[`tool.rs:94`](../../../crates/yaca-tool/src/tool.rs#L94) (already used by MCP
+[`tool.rs:94`](../../../crates/hya-tool/src/tool.rs#L94) (already used by MCP
 bootstrap), and freezes the registry into `Arc<ToolRegistry>` at
-[`main.rs:264`](../../../crates/yaca-cli/src/main.rs#L264). Child B reuses
+[`main.rs:264`](../../../crates/hya-cli/src/main.rs#L264). Child B reuses
 `register` as-is — **no new registry primitive is required.**
 
 Registration is bootstrap-time only:
@@ -87,7 +87,7 @@ The smallest useful edit is a batch helper that preserves `builtins()` and
 loop over `register`, but it makes plugin/MCP/bootstrap code and tests less
 duplicative.
 
-Exact edit in [`crates/yaca-tool/src/tool.rs`](../../../crates/yaca-tool/src/tool.rs#L94):
+Exact edit in [`crates/hya-tool/src/tool.rs`](../../../crates/hya-tool/src/tool.rs#L94):
 
 ```diff
  impl ToolRegistry {
@@ -119,21 +119,21 @@ Exact edit in [`crates/yaca-tool/src/tool.rs`](../../../crates/yaca-tool/src/too
 ```
 
 No `builtins()` behavior changes. The existing duplicate semantics stay first-wins,
-as tested by [`registry_rejects_duplicate_tool_name`](../../../crates/yaca-tool/tests/tool.rs#L69).
+as tested by [`registry_rejects_duplicate_tool_name`](../../../crates/hya-tool/tests/tool.rs#L69).
 
 ## 2. Minimal `ToolCtx` Metadata For The Locked Frame
 
 Parent design section 2.5 requires `session` and `call` in every plugin
 `tool/call` request. Current `ToolCtx` has `parent_session` but not the current
-session or tool-call id ([`tool.rs:38`](../../../crates/yaca-tool/src/tool.rs#L38)).
+session or tool-call id ([`tool.rs:38`](../../../crates/hya-tool/src/tool.rs#L38)).
 `PluginTool::execute` cannot correctly fill the locked frame without those
 fields.
 
 Child B adds metadata to `ToolCtx` rather than changing the `Tool` trait:
 
 ```diff
--use yaca_proto::{SessionId, ToolName, ToolSchema};
-+use yaca_proto::{SessionId, ToolCallId, ToolName, ToolSchema};
+-use hya_proto::{SessionId, ToolName, ToolSchema};
++use hya_proto::{SessionId, ToolCallId, ToolName, ToolSchema};
 @@
  pub struct ToolCtx {
      pub permission: PermissionPlane,
@@ -148,7 +148,7 @@ Child B adds metadata to `ToolCtx` rather than changing the `Tool` trait:
 ```
 
 The engine fills those fields at the current tool loop site
-[`engine.rs:340`](../../../crates/yaca-core/src/engine.rs#L340):
+[`engine.rs:340`](../../../crates/hya-core/src/engine.rs#L340):
 
 ```diff
  let ctx = ToolCtx {
@@ -171,8 +171,8 @@ leaving builtin tools unaffected.
 
 ## 3. `PluginTool` Proxy
 
-Child B adds `crates/yaca-plugin/src/tool.rs` and re-exports it from
-`crates/yaca-plugin/src/lib.rs`.
+Child B adds `crates/hya-plugin/src/tool.rs` and re-exports it from
+`crates/hya-plugin/src/lib.rs`.
 
 The struct mirrors `McpTool`:
 
@@ -222,7 +222,7 @@ impl PluginTool {
 declared tools. If Child A uses a different name, use that type directly; do not
 create a parallel declaration type just for Child B.
 
-Execution mirrors [`McpTool::execute`](../../../crates/yaca-mcp/src/bridge.rs#L59)
+Execution mirrors [`McpTool::execute`](../../../crates/hya-mcp/src/bridge.rs#L59)
 with the locked plugin method and response:
 
 ```rust
@@ -291,16 +291,16 @@ struct ToolCallReply {
 ```
 
 `time_ms` is accepted but not used for engine accounting; the engine already
-records local elapsed time at [`engine.rs:337`](../../../crates/yaca-core/src/engine.rs#L337)
-and emits it in `Event::ToolResult` at [`engine.rs:353`](../../../crates/yaca-core/src/engine.rs#L353).
+records local elapsed time at [`engine.rs:337`](../../../crates/hya-core/src/engine.rs#L337)
+and emits it in `Event::ToolResult` at [`engine.rs:353`](../../../crates/hya-core/src/engine.rs#L353).
 
 Timeout and error mapping:
 
 - `timeout` is captured from the plugin config's `timeout_ms`, falling back to the
   same 30s default used by MCP
-  ([`DEFAULT_CALL_TIMEOUT`](../../../crates/yaca-mcp/src/client.rs#L15)).
+  ([`DEFAULT_CALL_TIMEOUT`](../../../crates/hya-mcp/src/client.rs#L15)).
 - `PluginClient::call` handles id correlation and timeout like
-  [`McpClient::call`](../../../crates/yaca-mcp/src/client.rs#L137).
+  [`McpClient::call`](../../../crates/hya-mcp/src/client.rs#L137).
 - Any `PluginError::{Closed, Timeout, Rpc, OversizedLine, Json, Io}` maps to
   `ToolError::Other` with prefix `plugin '<plugin_id>' tool '<tool_name>': ...`.
 - Permission failures remain `ToolError::Permission` via `#[from]`, preserving the
@@ -340,21 +340,21 @@ tokio::select! {
 }
 ```
 
-## 4. Registration Flow In `YacaRuntime` Bootstrap
+## 4. Registration Flow In `HyaRuntime` Bootstrap
 
 Child A's parent design section 6.3 replaces the current split helpers with a
-single `bootstrap(...) -> YacaRuntime`. Child B slots into that bootstrap after
+single `bootstrap(...) -> HyaRuntime`. Child B slots into that bootstrap after
 plugins connect and before `ToolRegistry` is frozen.
 
 Current MCP registration lives at
-[`main.rs:255`](../../../crates/yaca-cli/src/main.rs#L255):
+[`main.rs:255`](../../../crates/hya-cli/src/main.rs#L255):
 
 ```rust
 let mut registry = ToolRegistry::builtins();
 let mcp_manager = McpManager::connect_all(mcp).await;
 for tool in mcp_manager.tools() {
     if let Err(error) = registry.register(tool) {
-        eprintln!("yaca: skipping MCP tool ({error})");
+        eprintln!("hya: skipping MCP tool ({error})");
     }
 }
 let tools = Arc::new(registry);
@@ -405,7 +405,7 @@ are fixed:
 - Wrap each declaration into `PluginTool` during bootstrap.
 - Register plugin tools after builtins and MCP tools.
 - Freeze once with `Arc::new(registry)`.
-- Keep `PluginHost` alive in `YacaRuntime` so its clients outlive the engine.
+- Keep `PluginHost` alive in `HyaRuntime` so its clients outlive the engine.
 
 ## 5. Schema Advertisement
 
@@ -415,16 +415,16 @@ No provider changes are needed.
 the model through the existing engine path:
 
 1. Provider request is built by
-   [`request_from_messages`](../../../crates/yaca-core/src/engine.rs#L487).
+   [`request_from_messages`](../../../crates/hya-core/src/engine.rs#L487).
 2. That function sets `tools: tools.schemas()` at
-   [`engine.rs:496`](../../../crates/yaca-core/src/engine.rs#L496).
+   [`engine.rs:496`](../../../crates/hya-core/src/engine.rs#L496).
 3. `ToolRegistry::schemas()` simply maps every registered tool to its schema at
-   [`tool.rs:109`](../../../crates/yaca-tool/src/tool.rs#L109).
+   [`tool.rs:109`](../../../crates/hya-tool/src/tool.rs#L109).
 4. When the model calls a plugin tool, the existing engine lookup at
-   [`engine.rs:338`](../../../crates/yaca-core/src/engine.rs#L338) finds the
+   [`engine.rs:338`](../../../crates/hya-core/src/engine.rs#L338) finds the
    `PluginTool` by the declared name.
 
-This satisfies B-R3 and B-AC1 without touching `yaca-provider` encoders,
+This satisfies B-R3 and B-AC1 without touching `hya-provider` encoders,
 decoders, or router behavior.
 
 ## 6. Permission Mapping
@@ -437,7 +437,7 @@ Use one generic plugin-tool action and the existing command resource:
 | Resource | `Resource::Command("<plugin_id>:<tool_name>")` | Reuses glob matching and CLI/TUI permission infrastructure |
 | Assert site | first statement in `PluginTool::execute` | Denial prevents any plugin side effect |
 
-Exact enum edit in [`permission.rs`](../../../crates/yaca-tool/src/permission.rs#L10):
+Exact enum edit in [`permission.rs`](../../../crates/hya-tool/src/permission.rs#L10):
 
 ```diff
  pub enum Action {
@@ -465,12 +465,12 @@ pub fn plugin_tool_resource(plugin_id: &str, tool: &str) -> String {
 }
 ```
 
-CLI policy mirrors MCP in [`crates/yaca-cli/src/permission.rs`](../../../crates/yaca-cli/src/permission.rs#L69):
+CLI policy mirrors MCP in [`crates/hya-cli/src/permission.rs`](../../../crates/hya-cli/src/permission.rs#L69):
 
 - `Yolo` allows everything through the existing catch-all.
 - `ReadOnly` rejects `Action::Plugin`, like it rejects MCP today.
 - `Scoped` allows `Action::Plugin` once, matching the current external-tool stance
-  for `Action::Mcp` at [`permission.rs:74`](../../../crates/yaca-cli/src/permission.rs#L74).
+  for `Action::Mcp` at [`permission.rs:74`](../../../crates/hya-cli/src/permission.rs#L74).
 
 `permission.ask` interaction is inherited from Child A. If the permission plane is
 in `Ask`, Child A's `PermissionInterceptor` may answer first. `None`/defer falls

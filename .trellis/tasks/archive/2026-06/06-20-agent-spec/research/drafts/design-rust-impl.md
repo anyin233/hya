@@ -1,4 +1,4 @@
-# yaca — Design & Implementation Roadmap (Rust-engineer lens)
+# hya — Design & Implementation Roadmap (Rust-engineer lens)
 
 > **Lens**: bottom-up, type-driven, concrete. The job here is to make this
 > _buildable_. Every section answers "what crate, what type, what signature,
@@ -23,19 +23,19 @@
 
 ```
 +------------------------------------------------------------------+
-|  ratatui TUI (crate: yaca-tui)                                   |
+|  ratatui TUI (crate: hya-render-tui)                                   |
 |   - one process; renders SessionView + TeamView + GoalBar        |
 |   - HTTP/SSE client; no agent logic                              |
 +----------------------------^-------------------------------------+
                              | local HTTP + SSE (axum/hyper)
 +----------------------------v-------------------------------------+
-|  core server (crate: yaca-server)                                |
+|  core server (crate: hya-server)                                |
 |   axum router  ->  service layer  ->  domain                     |
 |     /sessions, /messages, /events (SSE), /tools, /team, /goal    |
 +----------------------------+-------------------------------------+
                              |
 +----------------------------v-------------------------------------+
-|  domain (crate: yaca-core)                                       |
+|  domain (crate: hya-core)                                       |
 |   SessionEngine -> AgentLoop -> ProviderRouter                   |
 |       |                |                |                        |
 |       v                v                v                        |
@@ -72,40 +72,40 @@ Workspace root `Cargo.toml` lists 8 crates. Boundaries chosen so each crate has
 **one** reason to change and a small, stable dependency surface.
 
 ```
-yaca/
+hya/
 ├── Cargo.toml                  # [workspace] members = [...]
 ├── crates/
-│   ├── yaca-proto/             # wire types: Event, ApiRequest/Response, ids
-│   ├── yaca-provider/          # Provider/Protocol/Route trait + impls
-│   ├── yaca-tool/              # Tool trait, schema, registry, permissions
-│   ├── yaca-core/              # domain: sessions, agent loop, orchestrator, goal
-│   ├── yaca-store/             # sqlx schema + event log + projector
-│   ├── yaca-server/            # axum HTTP/SSE server (binary lib)
-│   ├── yaca-tui/               # ratatui client binary
-│   └── yaca-cli/               # `yaca` umbrella binary (spawns server + tui)
+│   ├── hya-proto/             # wire types: Event, ApiRequest/Response, ids
+│   ├── hya-provider/          # Provider/Protocol/Route trait + impls
+│   ├── hya-tool/              # Tool trait, schema, registry, permissions
+│   ├── hya-core/              # domain: sessions, agent loop, orchestrator, goal
+│   ├── hya-store/             # sqlx schema + event log + projector
+│   ├── hya-server/            # axum HTTP/SSE server (binary lib)
+│   ├── hya-render-tui/               # ratatui client binary
+│   └── hya-cli/               # `hya` umbrella binary (spawns server + tui)
 └── xtask/                      # dev tooling (migrations, fake-provider runner)
 ```
 
 ### Dependency graph (acyclic, narrow)
 
 ```
-yaca-cli ──> yaca-server ──> yaca-core ──> yaca-store
+hya-cli ──> hya-server ──> hya-core ──> hya-store
                 │              │   │
-                │              │   └──> yaca-tool ──> yaca-proto
-                │              └──> yaca-provider ──> yaca-proto
-                │              └──> yaca-proto
-                ├──> yaca-tui ──> yaca-proto
-                └──> yaca-proto
+                │              │   └──> hya-tool ──> hya-proto
+                │              └──> hya-provider ──> hya-proto
+                │              └──> hya-proto
+                ├──> hya-render-tui ──> hya-proto
+                └──> hya-proto
 ```
 
-Critical: `yaca-proto` is **dependency-free** (only `serde`, `uuid`, `time`,
+Critical: `hya-proto` is **dependency-free** (only `serde`, `uuid`, `time`,
 `thiserror`). Every other crate depends on it but it depends on none of them.
 This is what lets the TUI and the server share types without dragging in sqlx
 or tokio into the TUI's compile graph.
 
-`yaca-core` is **runtime-agnostic** of HTTP. It exposes `SessionEngine`,
+`hya-core` is **runtime-agnostic** of HTTP. It exposes `SessionEngine`,
 `TeamOrchestrator`, `GoalEngine` as plain async types; the server only owns the
-axum routes that call them. This keeps `yaca-core` testable without spinning
+axum routes that call them. This keeps `hya-core` testable without spinning
 HTTP.
 
 ### Pinned crate choices (workspace `[workspace.dependencies]`)
@@ -151,7 +151,7 @@ bytes          = "1"
 
 ---
 
-## 2. `yaca-proto` — the wire-shared core types
+## 2. `hya-proto` — the wire-shared core types
 
 Everything that crosses a process or task boundary lives here. Two design rules:
 
@@ -164,7 +164,7 @@ Everything that crosses a process or task boundary lives here. Two design rules:
 ### 2.1 Ids
 
 ```rust
-// crates/yaca-proto/src/ids.rs
+// crates/hya-proto/src/ids.rs
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -203,7 +203,7 @@ id!(EventSeq,       "evt");   // monotonic per-session sequence is u64, not uuid
 ### 2.2 `Message` / `Part` — tagged enums
 
 ```rust
-// crates/yaca-proto/src/message.rs
+// crates/hya-proto/src/message.rs
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {
@@ -249,9 +249,9 @@ pub enum ToolPartState {
 ```
 
 Why `serde_json::Value` for tool input/output? Because tools come from a
-registry and their schemas vary. The _typed_ wrapper lives in `yaca-tool` and
+registry and their schemas vary. The _typed_ wrapper lives in `hya-tool` and
 project-validates input on entry / output on exit before persisting. Storing
-the validated JSON shape on the part keeps `yaca-proto` schema-free.
+the validated JSON shape on the part keeps `hya-proto` schema-free.
 
 ### 2.3 `Event` — the canonical streaming event
 
@@ -260,7 +260,7 @@ normalizes into this enum; the projector folds it; the SSE channel ships it;
 the TUI renders it.
 
 ```rust
-// crates/yaca-proto/src/event.rs
+// crates/hya-proto/src/event.rs
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -321,7 +321,7 @@ event-sourcing replay path.
 
 ---
 
-## 3. `yaca-provider` — Provider / Protocol / Route
+## 3. `hya-provider` — Provider / Protocol / Route
 
 Lifted from opencode's split (see research). The point is that the agent loop
 sees ONE event stream regardless of which vendor.
@@ -329,11 +329,11 @@ sees ONE event stream regardless of which vendor.
 ### 3.1 The traits
 
 ```rust
-// crates/yaca-provider/src/lib.rs
+// crates/hya-provider/src/lib.rs
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
-use yaca_proto::{Event, Message, ModelRef, ToolSchema};
+use hya_proto::{Event, Message, ModelRef, ToolSchema};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProviderId(pub String);          // "anthropic", "openai", "openrouter", "ollama"
@@ -449,7 +449,7 @@ Goal engine, team-mode member workers, and the lead agent **all** call
 ### 3.3 Auth & config
 
 ```rust
-// loaded from $XDG_CONFIG_HOME/yaca/config.toml + env override
+// loaded from $XDG_CONFIG_HOME/hya/config.toml + env override
 [providers.anthropic]
 api_key = "${env:ANTHROPIC_API_KEY}"
 
@@ -466,11 +466,11 @@ api_key      = "ollama"
 String`). Auth structs are per-provider (`AnthropicAuth { key: SecretString }`)
 and never logged — `SecretString` is `secrecy::SecretString` with a
 `Debug`-redacting impl. Keys live ONLY in `Provider` impls, never in
-`yaca-core`.
+`hya-core`.
 
 ---
 
-## 4. `yaca-tool` — canonical schema + typed runtime wrapper
+## 4. `hya-tool` — canonical schema + typed runtime wrapper
 
 Two layers exactly as opencode does it (see research §4), translated to Rust's
 type system.
@@ -478,7 +478,7 @@ type system.
 ### 4.1 The canonical layer
 
 ```rust
-// crates/yaca-tool/src/schema.rs
+// crates/hya-tool/src/schema.rs
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolSchema {
     pub name: ToolName,
@@ -505,7 +505,7 @@ pub struct ReadOutput { pub content: String, pub truncated: bool }
 ### 4.2 The typed runtime wrapper
 
 ```rust
-// crates/yaca-tool/src/tool.rs
+// crates/hya-tool/src/tool.rs
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn schema(&self) -> &ToolSchema;
@@ -620,7 +620,7 @@ worktree.
 
 ---
 
-## 5. `yaca-core` — sessions, agent loop, orchestrator, goal
+## 5. `hya-core` — sessions, agent loop, orchestrator, goal
 
 ### 5.1 SessionEngine
 
@@ -910,7 +910,7 @@ single-subagent dispatch. The **omo team-mode** model (lead + members + mailbox
 ### 6.1 Core types
 
 ```rust
-// crates/yaca-core/src/team/mod.rs
+// crates/hya-core/src/team/mod.rs
 pub struct TeamOrchestrator {
     runs:     Arc<DashMap<TeamRunId, Arc<TeamRunHandle>>>,
     mailbox:  Arc<dyn MailboxBackend>,
@@ -1167,8 +1167,8 @@ impl WorktreeManager {
             WorktreePolicy::None    => Ok(self.root.clone()),
             WorktreePolicy::Shared  => Ok(shared_dir(team)),
             WorktreePolicy::NewBranch { base } => {
-                let dir = self.root.join(".yaca/worktrees").join(format!("{}-{}", team, role));
-                let branch = format!("yaca/{}/{}", team, role);
+                let dir = self.root.join(".hya/worktrees").join(format!("{}-{}", team, role));
+                let branch = format!("hya/{}/{}", team, role);
                 run_git(&["worktree", "add", "-b", &branch, dir.as_str(), base]).await?;
                 self.runs.entry(*team).or_default().push(dir.clone());
                 Ok(dir)
@@ -1194,9 +1194,9 @@ impl TmuxPaneManager {
         let out = Command::new("tmux").args(["split-window", "-h", "-c", cwd.as_str(),
             "-P", "-F", "#{pane_id}", "-t", &self.session_name]).output().await?;
         let pane_id = String::from_utf8(out.stdout)?.trim().to_string();
-        // Pipe the member session's event stream into the pane via `tmux send-keys "yaca tail <ses>" Enter`.
+        // Pipe the member session's event stream into the pane via `tmux send-keys "hya tail <ses>" Enter`.
         Command::new("tmux").args(["send-keys", "-t", &pane_id,
-            &format!("yaca-cli tail-session {}", child_session_id), "Enter"]).status().await?;
+            &format!("hya-cli tail-session {}", child_session_id), "Enter"]).status().await?;
         Ok(TmuxPane { id: pane_id })
     }
 }
@@ -1344,13 +1344,13 @@ goal_status    {}                                                               
 goal_clear     {}                                                                    -> ()
 ```
 
-Non-interactive use: `yaca-cli -p "/goal cargo test exits 0"` runs `goal_set`
+Non-interactive use: `hya-cli -p "/goal cargo test exits 0"` runs `goal_set`
 and blocks on the engine until `GoalOutcome::Achieved | Capped | Cleared`,
 streaming events to stdout/stderr.
 
 ---
 
-## 8. `yaca-server` — transport layer
+## 8. `hya-server` — transport layer
 
 Axum router. Five route groups; SSE for the streaming firehose.
 
@@ -1397,12 +1397,12 @@ async fn sse_handler(
 ```
 
 Bind to `127.0.0.1:<port>` by default with `port = 0` ("ask OS"); the actual
-port is written to `$XDG_RUNTIME_DIR/yaca/port` so the TUI client can discover
+port is written to `$XDG_RUNTIME_DIR/hya/port` so the TUI client can discover
 it. No external network exposure unless the user passes `--bind 0.0.0.0:N`.
 
 ---
 
-## 9. `yaca-tui` — ratatui client
+## 9. `hya-render-tui` — ratatui client
 
 State management: a single `AppState` updated from a background task that
 consumes the SSE stream. The render loop is plain `crossterm` event polling.
@@ -1466,7 +1466,7 @@ TUI.
 Every crate has a typed error. No `anyhow` in libraries (only binaries).
 
 ```rust
-// yaca-provider
+// hya-provider
 #[derive(thiserror::Error, Debug)]
 pub enum ProviderError {
     #[error("http: {0}")] Http(#[from] reqwest::Error),
@@ -1477,7 +1477,7 @@ pub enum ProviderError {
     #[error("cancelled")]     Cancelled,
 }
 
-// yaca-tool
+// hya-tool
 #[derive(thiserror::Error, Debug)]
 pub enum ToolError {
     #[error("input invalid: {0}")] InputInvalid(String),
@@ -1489,7 +1489,7 @@ pub enum ToolError {
     #[error("other: {0}")] Other(String),
 }
 
-// yaca-core
+// hya-core
 #[derive(thiserror::Error, Debug)]
 pub enum CoreError {
     #[error(transparent)] Provider(#[from] ProviderError),
@@ -1512,19 +1512,19 @@ caller can distinguish "user hit ctrl-c" from "real error".
 
 ### 11.1 Unit tests
 
-Per-crate. Heaviest in `yaca-provider` (protocol encode/decode against
-recorded provider SSE fixtures) and `yaca-tool` (each tool's permission +
+Per-crate. Heaviest in `hya-provider` (protocol encode/decode against
+recorded provider SSE fixtures) and `hya-tool` (each tool's permission +
 schema + happy path).
 
 ### 11.2 Integration: the **fake provider** is the keystone
 
-`yaca-provider` ships `FakeProvider` (behind `cfg(any(test, feature =
+`hya-provider` ships `FakeProvider` (behind `cfg(any(test, feature =
 "test-utils"))`) that replays a scripted sequence of canonical `Event`s. The
 agent loop, goal engine, and team orchestrator are all driven against
 `FakeProvider` in `tests/`:
 
 ```rust
-// crates/yaca-core/tests/turn_loop.rs
+// crates/hya-core/tests/turn_loop.rs
 #[tokio::test]
 async fn tool_call_loop_round_trips() {
     let fake = FakeProvider::scripted(vec![
@@ -1567,7 +1567,7 @@ client side against an in-memory hyper.
 ## 12. Configuration
 
 ```toml
-# $XDG_CONFIG_HOME/yaca/config.toml
+# $XDG_CONFIG_HOME/hya/config.toml
 [server]
 bind = "127.0.0.1:0"                   # 0 -> os-assigned
 
@@ -1630,49 +1630,49 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 **Validate**: `cargo build --workspace`.
 **Rollback point**: tagged commit `phase0`.
 
-### Phase 1 — `yaca-proto` types + `yaca-store` migrations (≈ 1.5 days)
+### Phase 1 — `hya-proto` types + `hya-store` migrations (≈ 1.5 days)
 **Deliverables**
 - All ids, `Message`, `Part`, `Event`, `ToolPartState`, `ModelRef`, `Envelope`.
 - Migrations 0001 (schema above), 0002 (PRAGMAs).
 - `SessionStore::append_event` + `replay` + `project` + property tests.
-**Validate**: `cargo test -p yaca-store -- --include-ignored` (runs migrations against tempdir SQLite).
-**Rollback**: tag `phase1`. Deleting `yaca-store` and `yaca-proto` reverts cleanly.
+**Validate**: `cargo test -p hya-store -- --include-ignored` (runs migrations against tempdir SQLite).
+**Rollback**: tag `phase1`. Deleting `hya-store` and `hya-proto` reverts cleanly.
 
-### Phase 2 — `yaca-provider` skeleton + Fake + OpenAI Chat (≈ 2 days)
+### Phase 2 — `hya-provider` skeleton + Fake + OpenAI Chat (≈ 2 days)
 **Deliverables**
 - `Provider`/`Protocol`/`Route` traits.
 - `FakeProvider` (scripted Events; the keystone for all future tests).
 - `OpenAIChatRoute` + `OpenAIChatProtocol` (encode + SSE decode → canonical Events).
 - `ProviderRouter`.
-**Validate**: `cargo test -p yaca-provider` (fake roundtrip + recorded OpenAI fixtures).
+**Validate**: `cargo test -p hya-provider` (fake roundtrip + recorded OpenAI fixtures).
 **Rollback**: tag `phase2`. `OpenAIChat` is isolated; reverting only removes that provider.
 
-### Phase 3 — `yaca-tool` minimal set + permissions (≈ 2 days)
+### Phase 3 — `hya-tool` minimal set + permissions (≈ 2 days)
 **Deliverables**
 - `Tool` trait, `ToolCtx`, `ToolRegistry`.
 - Built-ins: `read`, `write`, `edit`, `glob`, `grep`, `shell`.
 - `PermissionPlane` with rules + ask-pending channel.
-**Validate**: `cargo test -p yaca-tool` (each tool happy + permission denied + cancelled).
+**Validate**: `cargo test -p hya-tool` (each tool happy + permission denied + cancelled).
 **Rollback**: tag `phase3`.
 
-### Phase 4 — `yaca-core` SessionEngine + AgentLoop (single agent) (≈ 3 days)
+### Phase 4 — `hya-core` SessionEngine + AgentLoop (single agent) (≈ 3 days)
 **Deliverables**
 - `SessionEngine::{create, admit_user_prompt, subscribe, cancel_turn}`.
 - `AgentLoop::run_turn` with parallel tool dispatch.
 - `EventBus` (broadcast) + projection via `SessionStore`.
 **Validate**:
-- `cargo test -p yaca-core --test turn_loop` (the tool-call round-trip above).
+- `cargo test -p hya-core --test turn_loop` (the tool-call round-trip above).
 - Manual: drive end-to-end against `FakeProvider` with a small binary in `xtask`.
 **Rollback**: tag `phase4`. From here on, server/TUI revertable independently.
 
-### Phase 5 — `yaca-server` HTTP + SSE + first wire-through (≈ 2 days)
+### Phase 5 — `hya-server` HTTP + SSE + first wire-through (≈ 2 days)
 **Deliverables**
 - Axum router with `/sessions`, `/messages`, `/events`.
 - SSE handler with replay + lag-resync.
-- Port discovery file under `$XDG_RUNTIME_DIR/yaca`.
+- Port discovery file under `$XDG_RUNTIME_DIR/hya`.
 **Validate**:
 - Integration test: `tower::ServiceExt::oneshot` create-session + admit-prompt + scrape SSE; assert events.
-- Manual: `yaca-cli serve --bind 127.0.0.1:0` + `curl /events/{ses}`.
+- Manual: `hya-cli serve --bind 127.0.0.1:0` + `curl /events/{ses}`.
 **Rollback**: tag `phase5`.
 
 ### Phase 6 — Anthropic + OpenAI-compatible providers (≈ 2 days)
@@ -1680,10 +1680,10 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 - `AnthropicMessagesRoute` + protocol (encode + SSE decode incl. tool_use).
 - `OpenAICompatibleRoute` (reuses `OpenAIChatProtocol`).
 - Recorded SSE fixtures + golden-file tests for each.
-**Validate**: `cargo test -p yaca-provider` covers all 3 providers including a parametrized "same canonical event sequence across providers" test (drives the round-trip).
+**Validate**: `cargo test -p hya-provider` covers all 3 providers including a parametrized "same canonical event sequence across providers" test (drives the round-trip).
 **Rollback**: tag `phase6`. Per-provider isolation means dropping any is local.
 
-### Phase 7 — `yaca-tui` ratatui client (≈ 3 days)
+### Phase 7 — `hya-render-tui` ratatui client (≈ 3 days)
 **Deliverables**
 - `AppState` + apply(`UiUpdate`).
 - Three-pane layout, message rendering with streamed text + tool cards.
@@ -1698,11 +1698,11 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 **Deliverables**
 - `GoalEngine::run` + `evaluate` + safety caps + composing directives.
 - `goal_*` tools.
-- Non-interactive runner in `yaca-cli`.
+- Non-interactive runner in `hya-cli`.
 - Goal evaluator system prompt file with the "no tools, judge transcript only" contract.
 **Validate**:
-- `cargo test -p yaca-core --test goal_loop`: scripted Fake evaluator, asserts exact turn count and final outcome on (`met=false`×3 → `met=true`).
-- Manual: `yaca-cli -p "/goal cargo test exits 0"` against a tiny fixture crate.
+- `cargo test -p hya-core --test goal_loop`: scripted Fake evaluator, asserts exact turn count and final outcome on (`met=false`×3 → `met=true`).
+- Manual: `hya-cli -p "/goal cargo test exits 0"` against a tiny fixture crate.
 **Rollback**: tag `phase8`. The goal engine has zero callers outside `goal_*` tools and CLI; can be feature-gated off.
 
 ### Phase 9 — Team orchestrator: in-memory mailbox + task board (≈ 3 days)
@@ -1713,7 +1713,7 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 - Member supervisor with panic isolation + cancellation propagation.
 - Watchdog over each member's `JoinHandle`.
 **Validate**:
-- `cargo test -p yaca-core --test team_orchestration`: 3-member scripted run with task claim, mail roundtrip, graceful shutdown, force shutdown.
+- `cargo test -p hya-core --test team_orchestration`: 3-member scripted run with task claim, mail roundtrip, graceful shutdown, force shutdown.
 - Lead transcript NEVER contains member assistant text (assert).
 **Rollback**: tag `phase9`. Team feature is gated behind `team` crate feature.
 
@@ -1723,7 +1723,7 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 - `TmuxPaneManager` (shell-out to `tmux split-window` + `send-keys`).
 - Cleanup on `team_delete` (also on force).
 **Validate**:
-- `cargo test -p yaca-core --test worktree_lifecycle -- --ignored` (requires git + tmux in PATH).
+- `cargo test -p hya-core --test worktree_lifecycle -- --ignored` (requires git + tmux in PATH).
 - Manual: spin a 2-member team in a real repo, observe two worktrees + two tmux panes; `team_delete` cleans both.
 **Rollback**: tag `phase10`. Worktree/tmux features gated; system still works without them.
 
@@ -1733,15 +1733,15 @@ ends in `cargo clippy --workspace --all-targets -- -D warnings && cargo test
 - `resolveCategoryExecution`-equivalent: category → model + fallback chain + prompt append.
 - Skill injection: load named skill content; append to member system prompt.
 **Validate**:
-- `cargo test -p yaca-core --test category_routing`: 4 members with 4 categories → 4 distinct provider/model calls observed via `FakeProvider`.
+- `cargo test -p hya-core --test category_routing`: 4 members with 4 categories → 4 distinct provider/model calls observed via `FakeProvider`.
 **Rollback**: tag `phase11`.
 
 ### Phase 12 — End-to-end manual QA + polish (≈ 1 day)
 **Deliverables**
-- `yaca-cli` umbrella: `yaca` (interactive TUI), `yaca serve`, `yaca -p "..."`, `yaca tail-session <id>`.
+- `hya-cli` umbrella: `hya` (interactive TUI), `hya serve`, `hya -p "..."`, `hya tail-session <id>`.
 - README + sample agent + sample category config.
 **Validate**:
-- Manual: start `yaca`, set a goal that requires a 3-member team, watch goal achieve.
+- Manual: start `hya`, set a goal that requires a 3-member team, watch goal achieve.
 - `cargo test --workspace --all-features` clean.
 
 ### Total estimate

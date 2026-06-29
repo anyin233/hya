@@ -6,7 +6,7 @@ starting implementation.
 
 ## Executive Position
 
-Loop mode is viable only if yaca treats the two-agent gate as a constrained state
+Loop mode is viable only if hya treats the two-agent gate as a constrained state
 machine, not as a conversation between two models. The verifier is the only
 success judge. The planner is only a next-directive generator. The engine owns
 budget, caps, cancellation, persistence, and stop authority. If any model can
@@ -221,7 +221,7 @@ Mitigation:
 
 Failure mode: process crashes after the worker finished but before verifier; or
 after verifier but before planner; or after planner produced a directive but
-before the next worker. On resume, yaca could duplicate model calls, skip a gate,
+before the next worker. On resume, hya could duplicate model calls, skip a gate,
 or generate a different directive.
 
 Mitigation:

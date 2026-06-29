@@ -4,24 +4,24 @@
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test -p yaca-cli`
-- `cargo test -p yaca-tui`
+- `cargo test -p hya-cli`
+- `cargo test -p hya-render-tui`
 - `cargo test --workspace`
 
 ## Task 1: Expose model inventory from config
 
-- Modify `crates/yaca-cli/src/config.rs`.
+- Modify `crates/hya-cli/src/config.rs`.
 - Add `models: Vec<String>` to `ResolvedConfig`.
 - Preserve current default model selection.
 - Add tests for sorted/deduplicated model ids and offline fallback model inventory.
 
 Expected checks:
 
-- `cargo test -p yaca-cli config`
+- `cargo test -p hya-cli config`
 
 ## Task 2: Split TUI key handling into semantic commands
 
-- Move `crates/yaca-cli/src/tui.rs` into `crates/yaca-cli/src/tui/mod.rs`.
+- Move `crates/hya-cli/src/tui.rs` into `crates/hya-cli/src/tui/mod.rs`.
 - Add `keymap.rs` and `controller.rs`.
 - Define `TuiCommand` and `TuiEffect`.
 - Port existing scroll/input/submit behavior into controller tests first.
@@ -36,7 +36,7 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli tui::controller`
+- `cargo test -p hya-cli tui::controller`
 
 ## Task 3: Add slash command registry and help dialog
 
@@ -44,7 +44,7 @@ Expected checks:
 - Implement `/model`, `/resume`, `/new`, `/help` command metadata.
 - Route submitted slash commands to controller effects instead of provider prompts.
 - Unknown slash commands produce a system/status message and do not call provider.
-- Add basic help dialog render state in `yaca-tui`.
+- Add basic help dialog render state in `hya-render-tui`.
 
 Required tests:
 
@@ -55,8 +55,8 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli slash`
-- `cargo test -p yaca-tui help`
+- `cargo test -p hya-cli slash`
+- `cargo test -p hya-render-tui help`
 
 ## Task 4: Add shared list dialog state and model selection
 
@@ -75,13 +75,13 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli model_dialog`
-- `cargo test -p yaca-tui dialog`
+- `cargo test -p hya-cli model_dialog`
+- `cargo test -p hya-render-tui dialog`
 
 ## Task 5: Implement per-session JSON/JSONL history
 
 - Add `history.rs`.
-- Add a history root resolver using `YACA_HISTORY_DIR`, then platform/user fallback.
+- Add a history root resolver using `HYA_HISTORY_DIR`, then platform/user fallback.
 - Implement session bundle layout:
   - `sessions/<uuid>/meta.json`
   - `sessions/<uuid>/events.jsonl`
@@ -100,7 +100,7 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli history`
+- `cargo test -p hya-cli history`
 
 ## Task 6: Wire `/resume` and `/new`
 
@@ -117,7 +117,7 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli resume`
+- `cargo test -p hya-cli resume`
 
 ## Task 7: Build dummy TUI harness
 
@@ -134,7 +134,7 @@ Required tests:
 
 Expected checks:
 
-- `cargo test -p yaca-cli tui_harness`
+- `cargo test -p hya-cli tui_harness`
 
 ## Task 8: Final integration and docs
 
