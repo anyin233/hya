@@ -1027,5 +1027,4 @@ mod tests {
             Some(ReasoningEffort::Max)
         );
     }
-
 }
