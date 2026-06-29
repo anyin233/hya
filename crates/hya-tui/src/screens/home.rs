@@ -318,3 +318,83 @@ fn node(id: NodeId, width: u16, height: u16) -> RenderNode {
 pub fn default_background(theme: &ResolvedTheme) -> Rgba {
     theme.background
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contracts::PromptDoc;
+    use crate::theme::{builtin_theme, resolve, Mode, DEFAULT_THEME};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn theme() -> crate::theme::ResolvedTheme {
+        resolve(&builtin_theme(DEFAULT_THEME).unwrap().unwrap(), Mode::Dark).unwrap()
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        (0..width).map(|col| buffer[(col, row)].symbol()).collect()
+    }
+
+    #[test]
+    fn draw_when_launch_prompt_wraps_expands_home_input_area() {
+        let theme = theme();
+        let row = |ch: char| std::iter::repeat_n(ch, 70).collect::<String>();
+        let text = [
+            row('0'),
+            row('1'),
+            row('2'),
+            row('3'),
+            row('4'),
+            row('5'),
+            row('6'),
+            row('7'),
+        ]
+        .concat();
+        let doc = PromptDoc {
+            cursor: text.len(),
+            text,
+            ..PromptDoc::default()
+        };
+        let width = 80;
+        let height = 24;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &HomeView {
+                        doc: &doc,
+                        agents: &[],
+                        active_agent: None,
+                        model_label: Some("dev"),
+                        provider_label: None,
+                        tip: None,
+                        placeholder: "Ask hya",
+                        mcp: None,
+                        logo_elapsed: std::time::Duration::ZERO,
+                        show_cursor: true,
+                        yolo: false,
+                    },
+                    &theme,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let prompt_top = (0..height)
+            .find(|row| row_text(buffer, *row, width).contains("222222222222222"))
+            .expect("wrapped tail should render in home prompt");
+        assert!(
+            row_text(buffer, prompt_top + 5, width).contains("777777777777777"),
+            "home prompt should show the capped six-row wrapped tail"
+        );
+        let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!(
+            cursor.y,
+            prompt_top + 5,
+            "cursor stays visible on the wrapped tail row"
+        );
+    }
+}
