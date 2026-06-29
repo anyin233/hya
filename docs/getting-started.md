@@ -57,8 +57,12 @@ Key controls:
 cargo run -p hya-backend -- exec "summarize this repository"
 ```
 
-`exec` creates an in-memory session, admits one user prompt, runs one assistant
-turn, and prints the transcript. Add `--json` to emit canonical event JSONL.
+`exec` creates a session using the global `--db <PATH>` SQLite store when
+supplied (otherwise in-memory), admits one user prompt, runs one assistant turn,
+and prints the transcript. With `--db`, hya stores the full canonical event log,
+which can include prompts, tool arguments, tool results, reasoning deltas,
+command metadata, and absolute workdir paths. Add `--json` to emit canonical
+event JSONL.
 
 OpenCode-compatible prompt execution is also accepted:
 
@@ -66,15 +70,25 @@ OpenCode-compatible prompt execution is also accepted:
 cargo run -p hya-backend -- run --format json "summarize this repository"
 ```
 
+To persist a headless session for replay, put `--db` before the subcommand:
+
+```sh
+cargo run -p hya-backend -- --db ./hya.db exec "summarize this repository"
+```
+
+Use a private path for persisted databases. They are plain SQLite files; hya does
+not encrypt them or override the process umask.
+
 ## Run Goal Mode
 
 ```sh
 cargo run -p hya-backend -- -p "make all tests pass" --max-iterations 6
 ```
 
-Goal mode iterates until an independent evaluator says the goal is met or a cap
-is reached. It is driven by `run_goal` in
-[`../crates/hya-core/src/completion.rs`](../crates/hya-core/src/completion.rs).
+Goal mode iterates with an in-memory store until an independent evaluator says
+the goal is met or a cap is reached. It is driven by `run_goal` in
+[`../crates/hya-core/src/completion.rs`](../crates/hya-core/src/completion.rs)
+and does not persist to the global `--db` database.
 
 ## Run the HTTP/SSE Server
 
@@ -98,12 +112,13 @@ permissions/questions, MCP, PTY, VCS, projects/worktrees, TUI control, and sync.
 ## Replay a Session
 
 ```sh
-cargo run -p hya-backend -- tail-session <session-uuid> --db hya.db
+cargo run -p hya-backend -- tail-session <session-id> --db hya.db
 ```
 
 `tail-session` reads the persisted event log and prints one JSON `Envelope` per
-line. It is useful for debugging because it shows the same canonical events that
-the server streams over SSE.
+line. The `<session-id>` can be a `hysec_...` id from `sessions --db`, a legacy
+`ses_...` display id, or a legacy raw UUID. It is useful for debugging because it
+shows the same canonical events that the server streams over SSE.
 
 ## From Offline to a Live Provider
 

@@ -16,12 +16,19 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `-p, --prompt <GOAL>` | Run headless goal mode instead of the TUI or a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
 | `--yolo` | Auto-approve every tool action. This applies to TUI, headless, and server composition. |
-| `--db <PATH>` | SQLite database for the interactive TUI. Empty string uses an in-memory store. |
-| `--resume <SESSION>` | Resume a session in the interactive TUI. Raw UUID and `ses_...` ids are accepted. |
+| `--db <PATH>` | SQLite database path. Empty string uses an in-memory store. Used by the TUI, `serve`, headless `exec`/`run`, `sessions`, and `tail-session`; goal mode and `rpc` stay in-memory. |
+| `--resume <SESSION>` | Resume a session in the interactive TUI. Accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID. |
 | `--mini` | OpenCode-compatible alias for the default TUI. Must be used without a subcommand. |
 | `--print-logs`, `--log-level`, `--pure` | Accepted OpenCode-compatible global flags. |
 
 When `--prompt` is present, it takes precedence over subcommand dispatch.
+
+When `--db <PATH>` is supplied, hya persists the canonical event log, not just
+the rendered transcript. The SQLite file can contain prompts, tool arguments,
+tool results, reasoning deltas, command metadata, absolute workdir paths, and
+other replay data. The file is plain SQLite; encryption and permissions are the
+caller’s responsibility and file mode follows the process umask, so place it in a
+private directory.
 
 ## `hya` frontend
 
@@ -83,9 +90,11 @@ hya-backend exec "summarize this repo"
 hya-backend exec --json "summarize this repo"
 ```
 
-Runs one headless turn and prints the rendered transcript. The command uses an
-in-memory store, so it does not persist the session. `--json` prints the
-canonical event stream as JSONL.
+Runs one headless turn and prints the rendered transcript. The command uses the
+global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
+store. With `--db`, the database stores the full canonical event log for replay,
+which can contain more sensitive data than the rendered transcript. `--json`
+prints the canonical event stream as JSONL.
 
 ## `hya-backend run`
 
@@ -95,6 +104,7 @@ hya-backend run --format json "summarize this repo"
 ```
 
 OpenCode-compatible alias for `exec`. Message words are joined with spaces.
+Like `exec`, `run` persists only when the global `--db <PATH>` is supplied.
 `--format json` and `--json` both emit event JSONL.
 
 ## `hya-backend -p`
@@ -103,9 +113,10 @@ OpenCode-compatible alias for `exec`. Message words are joined with spaces.
 hya-backend -p "make the workspace compile" --max-iterations 6
 ```
 
-Runs goal mode. Each iteration runs an agent turn, then an independent evaluator
-judges the transcript. The run stops when the evaluator returns `met=true`, a
-cap is reached, or cancellation is requested.
+Runs goal mode with an in-memory store. Each iteration runs an agent turn, then
+an independent evaluator judges the transcript. The run stops when the evaluator
+returns `met=true`, a cap is reached, or cancellation is requested. Goal mode
+does not persist to the global `--db` database.
 
 ## `hya-backend serve`
 
@@ -153,18 +164,20 @@ hya-backend sessions --db hya.db
 hya-backend rpc
 ```
 
-`sessions` lists persisted sessions in a SQLite database. `rpc` reads JSONL
-requests on stdin, accepts `{"type":"prompt","text":"..."}` and
-`{"type":"quit"}`, and emits new session events plus a `{"type":"done"}` marker.
+`sessions` lists persisted sessions in a SQLite database, including sessions
+created by `exec --db` and `exec --json --db`. `rpc` reads JSONL requests on
+stdin, accepts `{"type":"prompt","text":"..."}` and `{"type":"quit"}`, and
+emits new session events plus a `{"type":"done"}` marker using an in-memory
+store; `rpc` does not persist to the global `--db` database.
 
 ## `hya-backend tail-session`
 
 ```sh
-hya-backend tail-session <session-uuid> --db hya.db
+hya-backend tail-session <session-id> --db hya.db
 ```
 
-Replays a persisted session's event log as JSON lines. The `<session-uuid>` is
-the raw UUID portion, not the display form with the `ses_` prefix.
+Replays a persisted session's event log as JSON lines. The `<session-id>`
+accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID.
 
 This command intentionally exits cleanly on broken pipe, so shell filters such
 as `head` and `grep -q` can close stdout without causing a panic.

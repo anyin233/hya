@@ -17,9 +17,10 @@ It is shared by the engine, store, provider layer, server, client, and TUI.
 - loop runs
 - permission requests
 
-Each id wraps a UUIDv7 and displays with a prefix such as `ses_`, `msg_`, or
-`tc_`. The strong types keep different ids from being accidentally swapped at
-compile time.
+`SessionId` mints new `hysec_[A-Za-z0-9]{20}` ids and still parses legacy
+`ses_...`/raw UUID forms. Other ids wrap UUIDv7 values and display with
+prefixes such as `msg_` or `tc_`. The strong types keep different ids from being
+accidentally swapped at compile time.
 
 ## Events and Envelopes
 
