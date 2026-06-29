@@ -137,7 +137,7 @@ history. It mirrors each interactive session into its own bundle:
 <history-root>/
   index.json
   sessions/
-    <session-uuid>/
+    <session-id>/
       meta.json
       events.jsonl
 ```

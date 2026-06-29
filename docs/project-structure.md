@@ -57,7 +57,7 @@ Important modules:
 | --- | --- |
 | [`api.rs`](../crates/hya-proto/src/api.rs) | HTTP request/response DTOs for create session, prompt, events query. |
 | [`event.rs`](../crates/hya-proto/src/event.rs) | Canonical `Event` enum and ordered `Envelope`. |
-| [`ids.rs`](../crates/hya-proto/src/ids.rs) | Strongly typed UUIDv7 ids with display prefixes such as `ses_` and `msg_`. |
+| [`ids.rs`](../crates/hya-proto/src/ids.rs) | Strongly typed ids: new sessions use `hysec_...`; messages, parts, and tool calls keep UUID-backed display prefixes such as `msg_` and `tc_`. |
 | [`message.rs`](../crates/hya-proto/src/message.rs) | `Message`, `Part`, role, finish reason, token and cost structs. |
 | [`model.rs`](../crates/hya-proto/src/model.rs) | String newtypes for agents, models, tools, and model-facing tool schemas. |
 | [`projection.rs`](../crates/hya-proto/src/projection.rs) | Idempotent reducer from envelopes to `Projection`. |

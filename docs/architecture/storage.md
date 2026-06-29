@@ -15,9 +15,15 @@ and persists canonical events in SQLite.
 - up to eight pooled connections
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
-connection. The CLI uses in-memory stores for `exec`, `run`, goal mode, and the
-TUI default; `hya-backend --db <PATH>` and `hya-backend serve --db <PATH>` use file-backed
-SQLite.
+connection. The CLI uses in-memory stores for goal mode and `rpc`; `exec`,
+`run`, the TUI, `serve`, `tail-session`, and `sessions` use file-backed SQLite
+when `--db <PATH>` is supplied, otherwise they use in-memory stores where the
+command supports an empty database path.
+
+File-backed stores are plain SQLite. They are not encrypted and file permissions
+come from the process umask, so callers should place `--db` paths in private
+directories when transcripts, tool outputs, commands, or workdir paths are
+sensitive.
 
 ## Migrations
 
@@ -40,11 +46,16 @@ The current runtime read path is event-log based. Tables such as `message` and
 
 `append_event` inserts:
 
-- binary session id
+- session storage key bytes (`hysec_...` ASCII bytes for new sessions; 16-byte
+  UUID keys for legacy sessions)
 - serialized `Event` JSON
 - timestamp in Unix epoch milliseconds
 
 SQLite assigns the monotonic `seq`, which becomes `Envelope.seq`.
+
+This is a full replay log, not a rendered transcript cache. Persisted events can
+include prompts, tool-call inputs, tool outputs, reasoning deltas, command
+metadata, context file paths, absolute workdir paths, and token usage data.
 
 `replay(session)` loads all rows for one session ordered by `seq` and deserializes
 each payload into an `Envelope`.
