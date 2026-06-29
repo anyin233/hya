@@ -180,31 +180,6 @@ fn export_transcript(
     write_transcript_export(&export_root(), session, projection)
 }
 
-pub struct InitResult {
-    pub path: PathBuf,
-    pub created: bool,
-}
-
-fn init_project_instructions(workdir: &Path) -> anyhow::Result<InitResult> {
-    std::fs::create_dir_all(workdir).with_context(|| format!("create {}", workdir.display()))?;
-    let path = workdir.join("AGENTS.md");
-    if path.exists() {
-        return Ok(InitResult {
-            path,
-            created: false,
-        });
-    }
-    std::fs::write(
-        &path,
-        "# hya project instructions\n\n- Keep changes focused and verified.\n- Run the relevant Rust checks before reporting completion.\n- Prefer existing project patterns over new abstractions.\n",
-    )
-    .with_context(|| format!("write {}", path.display()))?;
-    Ok(InitResult {
-        path,
-        created: true,
-    })
-}
-
 fn compact_summary(projection: &hya_proto::Projection) -> String {
     const MAX_SUMMARY_BYTES: usize = 12 * 1024;
     let transcript = render_transcript(projection);
@@ -676,18 +651,6 @@ pub async fn run(
                                 let summary = compact_summary(&controller.app.projection);
                                 let _ = engine.compact_context(session, summary).await;
                             }
-                            TuiEffect::InitProject => {
-                                let message = match init_project_instructions(&agent.workdir) {
-                                    Ok(result) if result.created => {
-                                        format!("created {}", result.path.display())
-                                    }
-                                    Ok(result) => {
-                                        format!("{} already exists", result.path.display())
-                                    }
-                                    Err(e) => format!("init error: {e:#}"),
-                                };
-                                let _ = engine.inject_system_message(session, message).await;
-                            }
                             TuiEffect::ExportTranscript => {
                                 let message = match export_transcript(session, &controller.app.projection) {
                                     Ok(path) => format!("exported transcript to {}", path.display()),
@@ -1065,20 +1028,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn init_project_writes_agents_md_without_overwriting_existing_file() {
-        let root = std::env::temp_dir().join(format!(
-            "hya-init-test-{}-{}",
-            now_millis(),
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-
-        let created = init_project_instructions(&root).unwrap();
-        assert!(created.created);
-        assert!(root.join("AGENTS.md").exists());
-
-        let second = init_project_instructions(&root).unwrap();
-        assert!(!second.created);
-    }
 }
