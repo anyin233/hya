@@ -9,13 +9,13 @@ Implement hya session naming and SQLite persistence exactly within the user requ
 1. Planning and evidence: create Trellis task, gather hya/OpenCode context, write PRD/design/implementation artifacts.
    - Status: complete
 2. Plan review and task activation: merge parallel planner findings, run cross-model plan review, start Trellis task.
-   - Status: in_progress
-3. TDD implementation: add RED tests for ID shape, persistence, fallback/discard, naming replacement, and switch display.
-   - Status: pending
-4. Production changes: implement the smallest code changes that make RED tests pass.
-   - Status: pending
-5. Verification and manual QA: run diagnostics, formatting, tests, and real CLI/API surface checks; clean up QA resources.
-   - Status: pending
+   - Status: complete
+3. TDD implementation: add regression coverage for `hysec_` IDs, SQLite-backed headless persistence, exact session listing, and replay.
+   - Status: complete
+4. Production changes: route headless commands through the selected store and parse CLI session IDs with the shared parser.
+   - Status: complete
+5. Verification and manual QA: run focused and workspace gates plus real CLI surface checks.
+   - Status: complete
 
 ## Errors Encountered
 
