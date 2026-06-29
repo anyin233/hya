@@ -23,6 +23,17 @@ fn render_buffer(state: &mut AppState, width: u16, height: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
+fn render_cursor_position(
+    state: &mut AppState,
+    width: u16,
+    height: u16,
+) -> ratatui::layout::Position {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, state)).unwrap();
+    terminal.get_cursor_position().unwrap()
+}
+
 fn render(state: &mut AppState, width: u16, height: u16) -> String {
     let buffer = render_buffer(state, width, height);
     buffer_text(&buffer, width, height)
@@ -35,6 +46,14 @@ fn buffer_text(buffer: &Buffer, width: u16, height: u16) -> String {
             out.push_str(buffer[(x, y)].symbol());
         }
         out.push('\n');
+    }
+    out
+}
+
+fn buffer_row_text(buffer: &Buffer, width: u16, y: u16) -> String {
+    let mut out = String::new();
+    for x in 0..width {
+        out.push_str(buffer[(x, y)].symbol());
     }
     out
 }
@@ -427,6 +446,56 @@ fn yolo_and_exit_armed_states_are_visible() {
     );
 }
 
+#[test]
+fn long_prompt_expands_and_wraps_at_80_columns() {
+    let mut state = AppState {
+        input: "alpha ".repeat(30),
+        ..AppState::default()
+    };
+    let buffer = render_buffer(&mut state, 80, 24);
+    let first = find_rendered_text(&buffer, 80, 24, "> alpha").expect("prompt first row renders");
+    assert_eq!(
+        first.1, 19,
+        "three wrapped text rows plus border should raise prompt"
+    );
+    assert!(
+        buffer_row_text(&buffer, 80, first.1 + 1).contains("alpha"),
+        "wrapped prompt text should render below first row"
+    );
+}
+
+#[test]
+fn very_long_prompt_caps_visible_rows() {
+    let mut state = AppState {
+        input: "beta ".repeat(180),
+        ..AppState::default()
+    };
+    let buffer = render_buffer(&mut state, 80, 30);
+    let top = find_rendered_text(&buffer, 80, 30, "beta").expect("prompt tail renders");
+
+    assert_eq!(
+        top.1, 22,
+        "six visible text rows plus border is the max prompt height"
+    );
+    assert!(
+        buffer_row_text(&buffer, 80, top.1 + 5).contains("beta"),
+        "tail viewport should fill the capped prompt rows"
+    );
+}
+
+#[test]
+fn wrapped_prompt_cursor_stays_inside_prompt_area() {
+    let mut state = AppState {
+        input: "gamma ".repeat(40),
+        ..AppState::default()
+    };
+    let buffer = render_buffer(&mut state, 80, 24);
+    let first = find_rendered_text(&buffer, 80, 24, "> gamma").expect("prompt first row renders");
+    let cursor = render_cursor_position(&mut state, 80, 24);
+
+    assert!(cursor.y > first.1, "cursor should move to the wrapped row");
+    assert!(cursor.y < 23, "cursor should stay inside prompt border");
+}
 #[test]
 fn scroll_back_saturates() {
     let mut state = AppState::default();
