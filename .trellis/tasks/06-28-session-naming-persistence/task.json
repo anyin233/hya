@@ -15,7 +15,7 @@
   "branch": "finish/session-naming-persistence",
   "base_branch": "main",
   "worktree_path": ".worktrees/finish-session-naming-persistence",
-  "commit": "75e4534c0302fbc7181ebd06f834481f6eef8b4f",
+  "commit": "5dd6790f4c49495545af479da86eba0361e88881",
   "pr_url": null,
   "subtasks": [],
   "children": [],
