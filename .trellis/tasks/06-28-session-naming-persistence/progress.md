@@ -76,4 +76,4 @@ VERDICT: PASS
 - Marked this task complete in `task.json` with completed date `2026-06-29`, branch `finish/session-naming-persistence`, worktree path `.worktrees/finish-session-naming-persistence`, and commit `75e4534c0302fbc7181ebd06f834481f6eef8b4f`.
 
 - Full gate exposed an unrelated deterministic-test issue in `crates/hya-server/tests/opencode_agent_metadata_api.rs`: parallel tests could reuse the same tempdir when process id and nanosecond timestamp collided, letting project fixture agents leak into native-agent catalog assertions. Fixed with an atomic serial suffix in commit `5dd6790`; verified `cargo test -p hya-server --test opencode_agent_metadata_api -- --nocapture`, `cargo fmt --all --check`, `cargo test -p hya-backend --test opencode_agent_cli -- --nocapture`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` all pass.
-- Updated task completion commit to final branch head `5dd6790f4c49495545af479da86eba0361e88881`.
+- Recorded task completion commit as `5dd6790f4c49495545af479da86eba0361e88881`, the final code/test change before Trellis-only closeout metadata commits.
