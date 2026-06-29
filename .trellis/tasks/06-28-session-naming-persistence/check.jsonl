@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend/session-store quality expectations for review."}
+{"file":".trellis/spec/guides/index.md","reason":"Shared quality thinking guide index."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check that event/store/API/TUI data flow stays coherent."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated session metadata and title logic."}
+{"file":".trellis/tasks/06-28-session-naming-persistence/findings.md","reason":"Task-specific findings to validate against implementation."}
+{"file":".trellis/tasks/06-28-session-naming-persistence/design.md","reason":"Check implementation against accepted architecture and cleanup ownership."}
+{"file":".trellis/tasks/06-28-session-naming-persistence/implement.md","reason":"Check execution followed ordered RED/GREEN waves and exact gates."}
+{"file":"crates/hya-backend/src/tui.rs","reason":"Review that exit/new/resume cleanup uses one shared empty-session predicate and idempotent deletion."}
+{"file":"crates/hya-core/src/engine.rs","reason":"Review deletion and projection access remain event-store authoritative."}
+{"file":"crates/hya-core/src/engine/session_cleanup.rs","reason":"Review shared cleanup helper ownership if created during implementation."}
+{"file":"crates/hya-server/tests/opencode_session_v2_api.rs","reason":"Verify cleanup proves direct lookup/not-found, not list-only masking."}
+{"file":"crates/hya-server/tests/opencode_session_v2_list_api.rs","reason":"Verify empty unnamed sessions remain hidden in list/search surfaces."}

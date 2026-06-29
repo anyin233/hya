@@ -1,8 +1,8 @@
 # Runtime
 
-The runtime lives in [`../../crates/yaca-core`](../../crates/yaca-core). Its
+The runtime lives in [`../../crates/hya-core`](../../crates/hya-core). Its
 central type is `SessionEngine` in
-[`engine.rs`](../../crates/yaca-core/src/engine.rs).
+[`engine.rs`](../../crates/hya-core/src/engine.rs).
 
 ## `SessionEngine`
 
@@ -76,25 +76,25 @@ spawned Unix process group on cancellation.
 
 ## Compaction and Summaries
 
-Compaction lives in [`compaction.rs`](../../crates/yaca-core/src/compaction.rs)
-and [`engine/summary.rs`](../../crates/yaca-core/src/engine/summary.rs).
+Compaction lives in [`compaction.rs`](../../crates/hya-core/src/compaction.rs)
+and [`engine/summary.rs`](../../crates/hya-core/src/engine/summary.rs).
 `ModelSummarizer` asks the configured provider for a summary when token
-thresholds are exceeded. `compact_context` records a yaca-native system summary
+thresholds are exceeded. `compact_context` records a hya-native system summary
 and prunes older provider context for future requests. The CLI exposes this via
 `/compact`; legacy OpenCode summarize routes persist the same native summary
 shape.
 
 ## Hooks
 
-[`hooks.rs`](../../crates/yaca-core/src/hooks.rs) defines the runtime hook
-boundary used by `yaca-plugin`. Hookable surfaces include events, command/user
+[`hooks.rs`](../../crates/hya-core/src/hooks.rs) defines the runtime hook
+boundary used by `hya-plugin`. Hookable surfaces include events, command/user
 message admission, chat params/messages, text completion, permission asks, and
 tool before/after hooks. The CLI installs a `PluginHost` when `plugins:` are
 configured.
 
 ## Goal Mode
 
-Goal mode lives in [`completion.rs`](../../crates/yaca-core/src/completion.rs).
+Goal mode lives in [`completion.rs`](../../crates/hya-core/src/completion.rs).
 It uses three pieces:
 
 - `IterationDriver`: generic loop runner with safety caps.
@@ -113,7 +113,7 @@ rather than causing an unbounded loop.
 
 ## Loop Mode
 
-Loop mode lives in [`loop_mode.rs`](../../crates/yaca-core/src/loop_mode.rs).
+Loop mode lives in [`loop_mode.rs`](../../crates/hya-core/src/loop_mode.rs).
 It is a lower-level planner/verifier loop:
 
 - `LoopVerifier` grades transcript evidence.
@@ -136,19 +136,19 @@ runtime API.
 
 Team-related code is split across:
 
-- [`subagent.rs`](../../crates/yaca-core/src/subagent.rs)
-- [`team.rs`](../../crates/yaca-core/src/team.rs)
-- [`workspace.rs`](../../crates/yaca-core/src/workspace.rs)
-- [`category.rs`](../../crates/yaca-core/src/category.rs)
+- [`subagent.rs`](../../crates/hya-core/src/subagent.rs)
+- [`team.rs`](../../crates/hya-core/src/team.rs)
+- [`workspace.rs`](../../crates/hya-core/src/workspace.rs)
+- [`category.rs`](../../crates/hya-core/src/category.rs)
 
 `run_team` runs member specs in child sessions and returns bounded evidence
 summaries. It intentionally does not project full child transcripts into the
 lead session.
 
 `TeamControlPlane` models lifecycle transitions, mailbox messages, and task
-board state. `WorktreeManager` allocates git worktrees under `.yaca/worktrees`
+board state. `WorktreeManager` allocates git worktrees under `.hya/worktrees`
 and only cleans up paths it recorded as owned.
 
-These primitives are present in `yaca-core`; the shipped CLI exposes the main
+These primitives are present in `hya-core`; the shipped CLI exposes the main
 TUI, single-turn/run aliases, goal, server, replay, sessions, catalog/auth, and
 JSONL RPC surfaces.

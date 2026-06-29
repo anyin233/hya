@@ -1,0 +1,28 @@
+[package]
+name = "hya-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hya-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+libc = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+similar = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+hya-proto = { workspace = true }

@@ -936,13 +936,134 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 name = "hya"
 version = "0.28.0"
 dependencies = [
+ "hya-app",
+ "hya-native",
  "hya-sdk",
  "hya-tui",
- "hya-yaca",
  "reqwest",
  "serde_json",
  "tokio",
- "yaca-app",
+]
+
+[[package]]
+name = "hya-app"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "hya-core",
+ "hya-mcp",
+ "hya-plugin",
+ "hya-proto",
+ "hya-provider",
+ "hya-server",
+ "hya-store",
+ "hya-tool",
+ "serde",
+ "serde_norway",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "hya-backend"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "clap",
+ "crossterm",
+ "futures",
+ "hya-app",
+ "hya-core",
+ "hya-legacy-tui",
+ "hya-mcp",
+ "hya-plugin",
+ "hya-proto",
+ "hya-provider",
+ "hya-server",
+ "hya-store",
+ "hya-tool",
+ "ratatui 0.28.1",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "time",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "hya-client"
+version = "0.28.0"
+dependencies = [
+ "hya-proto",
+ "reqwest",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "hya-core"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "hya-proto",
+ "hya-provider",
+ "hya-store",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "hya-legacy-tui"
+version = "0.28.0"
+dependencies = [
+ "hya-proto",
+ "ratatui 0.28.1",
+ "serde_json",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "hya-mcp"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "hya-proto",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "hya-native"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "eventsource-stream",
+ "futures-util",
+ "http-body-util",
+ "hya-app",
+ "hya-sdk",
+ "hya-server",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -953,6 +1074,61 @@ dependencies = [
  "hya-tui",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "hya-plugin"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "hya-core",
+ "hya-proto",
+ "hya-provider",
+ "hya-tool",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "hya-plugin-example"
+version = "0.28.0"
+
+[[package]]
+name = "hya-plugin-opencode"
+version = "0.28.0"
+
+[[package]]
+name = "hya-proto"
+version = "0.28.0"
+dependencies = [
+ "rand_core 0.9.5",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "hya-provider"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "eventsource-stream",
+ "futures",
+ "hya-proto",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -968,6 +1144,67 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "hya-server"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "futures",
+ "http-body-util",
+ "hya-core",
+ "hya-mcp",
+ "hya-proto",
+ "hya-provider",
+ "hya-store",
+ "hya-tool",
+ "mime_guess",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "hya-store"
+version = "0.28.0"
+dependencies = [
+ "hya-proto",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "hya-tool"
+version = "0.28.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "hya-proto",
+ "libc",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -989,24 +1226,6 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "unicode-width 0.2.0",
-]
-
-[[package]]
-name = "hya-yaca"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "eventsource-stream",
- "futures-util",
- "http-body-util",
- "hya-sdk",
- "serde_json",
- "tokio",
- "tower",
- "yaca-app",
- "yaca-server",
 ]
 
 [[package]]
@@ -3464,222 +3683,11 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 [[package]]
 name = "xtask"
 version = "0.28.0"
-
-[[package]]
-name = "yaca-app"
-version = "0.28.0"
 dependencies = [
  "anyhow",
- "axum",
- "serde",
- "serde_norway",
- "time",
- "tokio",
- "yaca-core",
- "yaca-mcp",
- "yaca-plugin",
- "yaca-proto",
- "yaca-provider",
- "yaca-server",
- "yaca-store",
- "yaca-tool",
-]
-
-[[package]]
-name = "yaca-cli"
-version = "0.28.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "clap",
- "crossterm",
- "futures",
- "ratatui 0.28.1",
  "serde",
  "serde_json",
  "serde_norway",
- "time",
- "tokio",
- "tokio-util",
- "uuid",
- "yaca-app",
- "yaca-core",
- "yaca-mcp",
- "yaca-plugin",
- "yaca-proto",
- "yaca-provider",
- "yaca-server",
- "yaca-store",
- "yaca-tool",
- "yaca-tui",
-]
-
-[[package]]
-name = "yaca-client"
-version = "0.28.0"
-dependencies = [
- "reqwest",
- "thiserror 1.0.69",
- "yaca-proto",
-]
-
-[[package]]
-name = "yaca-core"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "yaca-proto",
- "yaca-provider",
- "yaca-store",
- "yaca-tool",
-]
-
-[[package]]
-name = "yaca-mcp"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
- "yaca-proto",
- "yaca-tool",
-]
-
-[[package]]
-name = "yaca-plugin"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "serde_norway",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "yaca-core",
- "yaca-proto",
- "yaca-provider",
- "yaca-tool",
-]
-
-[[package]]
-name = "yaca-plugin-example"
-version = "0.28.0"
-
-[[package]]
-name = "yaca-plugin-opencode"
-version = "0.28.0"
-
-[[package]]
-name = "yaca-proto"
-version = "0.28.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "yaca-provider"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "base64",
- "eventsource-stream",
- "futures",
- "reqwest",
- "secrecy",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "yaca-proto",
-]
-
-[[package]]
-name = "yaca-server"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "axum",
- "base64",
- "futures",
- "http-body-util",
- "mime_guess",
- "regex",
- "serde",
- "serde_json",
- "serde_norway",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "uuid",
- "yaca-core",
- "yaca-mcp",
- "yaca-proto",
- "yaca-provider",
- "yaca-store",
- "yaca-tool",
-]
-
-[[package]]
-name = "yaca-store"
-version = "0.28.0"
-dependencies = [
- "serde_json",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
- "yaca-proto",
-]
-
-[[package]]
-name = "yaca-tool"
-version = "0.28.0"
-dependencies = [
- "async-trait",
- "base64",
- "libc",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "similar",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tokio-util",
- "yaca-proto",
-]
-
-[[package]]
-name = "yaca-tui"
-version = "0.28.0"
-dependencies = [
- "ratatui 0.28.1",
- "serde_json",
- "unicode-segmentation",
- "unicode-width 0.1.14",
- "yaca-proto",
 ]
 
 [[package]]

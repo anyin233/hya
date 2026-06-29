@@ -1,6 +1,6 @@
 # Server and Client
 
-The server lives in [`../../crates/yaca-server`](../../crates/yaca-server). It
+The server lives in [`../../crates/hya-server`](../../crates/hya-server). It
 wraps `SessionEngine` with Axum routes, native SSE streams, and
 OpenCode-compatible HTTP/SSE route groups.
 
@@ -33,10 +33,11 @@ projection, run registry, and pending queues.
 | `GET` | `/sessions/:id/events` | optional `since_seq` query | `Vec<Envelope>` |
 | `GET` | `/sessions/:id/stream` | none | SSE stream of envelopes |
 
-Session ids in native URL paths are raw UUIDs. Invalid ids return
-`400 Bad Request`. Busy sessions return `409 Conflict`. Runtime errors are
-returned as `500 Internal Server Error` unless a compatibility route maps the
-error into a typed OpenCode body.
+Session ids in native URL paths accept any valid shared `SessionId` form:
+`hysec_...`, `ses_...`, or legacy raw UUID. Invalid ids return `400 Bad
+Request`. Busy sessions return `409 Conflict`. Runtime errors are returned as
+`500 Internal Server Error` unless a compatibility route maps the error into a
+typed OpenCode body.
 
 ## Native Session Calls
 
@@ -81,12 +82,12 @@ include:
 
 | Group | Examples | Backing implementation |
 | --- | --- | --- |
-| Sessions | `/session`, `/session/:id`, `/api/session`, `/api/session/:id/context`, `/api/session/:id/message`, prompt/command/shell/abort/fork/share/update/delete/revert/summarize routes | yaca event log, projection, run registry, switch/session-state events, pending queues |
-| Events | `/event`, `/api/event`, `/global/event` | translated live yaca envelopes plus OpenCode heartbeat/connected/status/error frames |
+| Sessions | `/session`, `/session/:id`, `/api/session`, `/api/session/:id/context`, `/api/session/:id/message`, prompt/command/shell/abort/fork/share/update/delete/revert/summarize routes | hya event log, projection, run registry, switch/session-state events, pending queues |
+| Events | `/event`, `/api/event`, `/global/event` | translated live hya envelopes plus OpenCode heartbeat/connected/status/error frames |
 | Files/search | `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, `/api/fs/read/*path`, `/api/fs/list`, `/api/fs/find` | filesystem reads, ignore matching, MIME sniffing, fuzzy path search, optional `LspPlane` |
 | Catalogs/metadata | `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill` | built-in catalog sources, prompt directories, local skills, formatter/LSP planes |
-| Provider/auth | `/config`, `/config/providers`, `/provider`, `/provider/auth`, `/auth/:providerID`, `/api/provider`, `/api/model`, credential/integration routes | resolved yaca provider catalog and local auth token store |
-| Permissions/questions | `/permission`, `/question`, `/api/permission/*`, `/api/question/*`, session-scoped pending queues | yaca ask/question channels and SQLite-backed saved permissions |
+| Provider/auth | `/config`, `/config/providers`, `/provider`, `/provider/auth`, `/auth/:providerID`, `/api/provider`, `/api/model`, credential/integration routes | resolved hya provider catalog and local auth token store |
+| Permissions/questions | `/permission`, `/question`, `/api/permission/*`, `/api/question/*`, session-scoped pending queues | hya ask/question channels and SQLite-backed saved permissions |
 | MCP | `/mcp`, `/mcp/:name/connect`, `/mcp/:name/disconnect`, auth routes | configured MCP manager plus dynamic in-process status compatibility |
 | PTY | `/pty/*`, `/api/pty/*` | in-process PTY metadata and websocket shell attach lifecycle |
 | VCS/project/worktree | `/vcs/*`, `/project/*`, `/experimental/project/*/copy`, `/experimental/worktree/*` | git commands, project state, git worktree helpers |
@@ -105,12 +106,12 @@ full request/response schemas.
 
 ## Client Crate
 
-[`../../crates/yaca-client/src/lib.rs`](../../crates/yaca-client/src/lib.rs)
+[`../../crates/hya-client/src/lib.rs`](../../crates/hya-client/src/lib.rs)
 provides a typed reqwest wrapper for the native API:
 
 - `create_session`
 - `prompt`
 - `events`
 
-The interactive TUI runs in-process through `yaca-cli`; the client crate is the
-integration surface for code that talks to a running yaca server process.
+The interactive TUI runs in-process through `hya-backend`; the client crate is the
+integration surface for code that talks to a running hya server process.

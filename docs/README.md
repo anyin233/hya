@@ -1,6 +1,6 @@
-# yaca Documentation
+# hya Documentation
 
-yaca is a Rust workspace for a terminal-first coding agent. It runs an
+hya is a Rust workspace for a terminal-first coding agent. It runs an
 event-sourced session engine, normalizes model providers into one event stream,
 executes tools behind a permission plane, and exposes the same core through an
 interactive TUI, headless CLI commands, and an HTTP/SSE server.
@@ -10,7 +10,7 @@ architecture notes.
 
 ## Reading Paths
 
-If you want to run yaca:
+If you want to run hya:
 
 1. [Getting Started](getting-started.md)
 2. [Configuration](configuration.md)
@@ -35,8 +35,8 @@ If you want to understand the codebase:
 | Page | Purpose |
 | --- | --- |
 | [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
-| [Configuration](configuration.md) | Explain yaca config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
-| [CLI Reference](cli.md) | Document shipped `yaca` commands and flags. |
+| [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
+| [CLI Reference](cli.md) | Document shipped `hya` commands and flags. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |
@@ -52,14 +52,14 @@ If you want to understand the codebase:
 ## Source Entrypoints
 
 - Workspace manifest: [`../Cargo.toml`](../Cargo.toml)
-- CLI binary: [`../crates/yaca-cli/src/main.rs`](../crates/yaca-cli/src/main.rs)
-- Core engine: [`../crates/yaca-core/src/engine.rs`](../crates/yaca-core/src/engine.rs)
-- Protocol types: [`../crates/yaca-proto/src/lib.rs`](../crates/yaca-proto/src/lib.rs)
-- Providers: [`../crates/yaca-provider/src/lib.rs`](../crates/yaca-provider/src/lib.rs)
-- Tools: [`../crates/yaca-tool/src/lib.rs`](../crates/yaca-tool/src/lib.rs)
-- MCP: [`../crates/yaca-mcp/src/lib.rs`](../crates/yaca-mcp/src/lib.rs)
-- Plugin host: [`../crates/yaca-plugin/src/lib.rs`](../crates/yaca-plugin/src/lib.rs)
-- OpenCode adapter: [`../crates/yaca-plugin-opencode/README.md`](../crates/yaca-plugin-opencode/README.md)
-- Store: [`../crates/yaca-store/src/lib.rs`](../crates/yaca-store/src/lib.rs)
-- Server: [`../crates/yaca-server/src/lib.rs`](../crates/yaca-server/src/lib.rs)
-- TUI renderer: [`../crates/yaca-tui/src/lib.rs`](../crates/yaca-tui/src/lib.rs)
+- CLI binary: [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs)
+- Core engine: [`../crates/hya-core/src/engine.rs`](../crates/hya-core/src/engine.rs)
+- Protocol types: [`../crates/hya-proto/src/lib.rs`](../crates/hya-proto/src/lib.rs)
+- Providers: [`../crates/hya-provider/src/lib.rs`](../crates/hya-provider/src/lib.rs)
+- Tools: [`../crates/hya-tool/src/lib.rs`](../crates/hya-tool/src/lib.rs)
+- MCP: [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs)
+- Plugin host: [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs)
+- OpenCode adapter: [`../crates/hya-plugin-opencode/README.md`](../crates/hya-plugin-opencode/README.md)
+- Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
+- Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
+- TUI renderer: [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs)

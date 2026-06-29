@@ -341,7 +341,7 @@ pub fn draw(
         (area, None)
     };
 
-    let prompt_rows = prompt_box::box_height(&prompt.text);
+    let prompt_rows = prompt_box::box_height(&prompt.text, main_area.width);
     let subagent_rows = u16::from(subagent.is_some());
     let chunks = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Min(1),
@@ -1032,6 +1032,8 @@ mod tests {
     use super::*;
     use crate::theme::{builtin_theme, resolve, Mode, DEFAULT_THEME};
     use hya_sdk::GlobalEvent;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     fn theme() -> ResolvedTheme {
         resolve(&builtin_theme(DEFAULT_THEME).unwrap().unwrap(), Mode::Dark).unwrap()
@@ -1048,6 +1050,17 @@ mod tests {
         text.0
             .iter()
             .flat_map(|line| line.0.iter().map(|span| span.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        (0..width).map(|col| buffer[(col, row)].symbol()).collect()
+    }
+
+    fn rows_text(buffer: &ratatui::buffer::Buffer, start: u16, end: u16, width: u16) -> String {
+        (start..end)
+            .map(|row| row_text(buffer, row, width))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -1262,6 +1275,82 @@ mod tests {
         assert!(
             rendered.contains("hello back"),
             "assistant line: {rendered}"
+        );
+    }
+
+    #[test]
+    fn draw_when_prompt_soft_wraps_reserves_parent_layout_height() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": { "id": "msg_1", "sessionID": "ses_1", "role": "assistant", "time": { "created": 1 } } }),
+        ));
+        store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": { "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1", "type": "text", "text": "transcript-visible" } }),
+        ));
+
+        let theme = theme();
+        let agents = vec!["build".to_owned()];
+        let prompt_text = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
+        let prompt = PromptDoc {
+            text: prompt_text.to_owned(),
+            cursor: prompt_text.len(),
+            ..PromptDoc::default()
+        };
+        let width = 60;
+        let height = 20;
+        let prompt_top = height - prompt_box::box_height(&prompt.text, width);
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut scroll = ScrollState::default();
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &SessionView {
+                        store: &store,
+                        session_id: "ses_1",
+                        pending: &[],
+                        prompt: &prompt,
+                        agents: &agents,
+                        model_names: &[],
+                        active_agent: Some("build"),
+                        model_label: Some("dev"),
+                        provider_label: None,
+                        context_limit: None,
+                        spinner: "",
+                        show_timestamps: false,
+                        sidebar_visible: false,
+                        subagent: None,
+                        show_cursor: true,
+                        yolo: false,
+                    },
+                    &mut scroll,
+                    &theme,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let timeline_text = rows_text(buffer, 0, prompt_top, width);
+        let prompt_text = rows_text(buffer, prompt_top, height, width);
+        assert!(
+            timeline_text.contains("transcript-visible"),
+            "transcript should remain in the timeline region"
+        );
+        assert!(
+            !prompt_text.contains("transcript-visible"),
+            "transcript should not overlap the reserved prompt region"
+        );
+        assert!(
+            row_text(buffer, prompt_top + 1, width).contains("abcdefghijklmnopqrstuvwxyz"),
+            "prompt body should begin in the reserved prompt region"
+        );
+        assert!(
+            row_text(buffer, height - 1, width).contains("commands"),
+            "soft-wrapped prompt should reserve enough parent height for the hints row"
         );
     }
 
