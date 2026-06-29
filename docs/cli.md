@@ -50,7 +50,7 @@ TUI slash commands include:
 | Command | Meaning |
 | --- | --- |
 | `/model`, `/models` | Open the model selector. |
-| `/resume`, `/sessions` | Resume a prior JSONL-backed TUI session. |
+| `/resume`, `/sessions` | Resume a prior persisted TUI session from the active store. |
 | `/new`, `/clear` | Start a fresh session. |
 | `/compact` | Compact older transcript context for future provider requests. |
 | `/init` | Create a starter `AGENTS.md` if one does not already exist. |
