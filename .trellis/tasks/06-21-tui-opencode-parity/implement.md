@@ -166,14 +166,61 @@ cargo test --workspace
   MCP gap.
 - Applied opencode custom command `agent` and `model` frontmatter when a custom
   slash command is submitted.
+- Projected real `Event::Error` values into stable synthetic system rows, using
+  event-sequence-derived ids so replayed projections remain deterministic.
+- Rendered protocol error rows with the same OpenCode-style error label/color as
+  classified turn/input system errors, without duplicating the internal
+  `error:` marker in the visible row.
+- Verified the installed system binary with a resumed session containing a real
+  protocol error event at 120 and 80 columns via tmux capture plus `tui-check`.
+- Added transcript spacing tests for assistant prose followed by tool rows and
+  for railed tool-error detail blocks.
+- Inserted an empty row between assistant prose/reasoning and a following tool
+  row while keeping consecutive tool rows compact, and gave tool-error detail
+  rows a visible error rail.
+- Added completed-tool output block rendering for projected `stdout`, `stderr`,
+  `output`, `diff`, `diagnostics`, and `message` fields while keeping metadata
+  payloads such as `{ "ok": true }` compact.
+- Added render tests for completed tool stdout blocks and a narrow-width budget
+  test so long tool inputs do not push duration text onto a standalone terminal
+  line.
+- Switched completed-output detail rows to a borderless tonal rail, preserving
+  OpenCode-style block readability without triggering box-border alignment
+  checks in wide side-by-side layouts.
+- Replaced generic `⚙ tool ...` transcript rows with OpenCode-style action
+  rows such as `→ Read README.md [limit=30, offset=240]`, `← Edit DESIGN.md`,
+  and `→ Shell ...`, while keeping explicit status suffixes for accessibility.
+- Added tool input summarization for common projected input shapes (`path`,
+  `cmd`/`command`, `pattern`, and read `limit`/`offset`) so tool rows read like
+  actions instead of raw JSON payloads.
+- Verified the installed system binary with a replayed session containing Read,
+  Edit, and Shell tool calls at 80 and 120 columns via tmux capture plus
+  `tui-check`.
+- Fixed prompt cursor placement for CJK/wide-character composer input by using
+  Unicode display columns instead of Rust `char` count.
+- Added a focused regression test showing `你好` advances the prompt cursor by
+  four terminal columns after the OpenCode-style prompt rail.
+- Verified the installed system binary in an 80-column tmux session by typing
+  `你好`; tmux reported cursor position `6 20`, and `tui-check` reported max
+  width `77/80`, no overflow lines, and no border misalignment.
+- Split selected-block `r` and `b` behavior: `b` keeps branching from the
+  selected block, while `r` now rewinds to before the selected user block and
+  restores that prompt text into the composer for editing, matching OpenCode's
+  undo/retry flow.
+- Added a harness regression that drives a completed turn, selects the original
+  user block, presses `r`, and asserts the transcript is rewound while the
+  composer contains the original prompt.
+- Verified the installed system binary in a 100-column tmux session by sending
+  `hello from revert qa`, selecting the user block, observing `r revert · b
+  branch`, pressing `r`, and confirming the composer shows `▌ hello from
+  revert qa`; `tui-check` reported max width `97/100` for the selected state
+  and `77/100` after revert, with no overflow or border misalignment.
 
 ## Deferred Follow-Ups
 
 - True clipboard image bytes are not available through `crossterm::Event::Paste`;
   this pass supports the terminal-compatible path/Markdown/tag forms and keeps
   attachment metadata ready for a later clipboard/provider bridge.
-- Tool block rendering remains compact inline for this pass, with error styling
-  preserved through the existing tool status path.
 - A deeper display-row view-model refactor can follow now that widget modules
   and render-buffer tests are in place.
 

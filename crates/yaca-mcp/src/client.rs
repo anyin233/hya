@@ -80,6 +80,7 @@ async fn terminate_child(child: &mut Child) {
         let _ = Command::new("kill")
             .arg("-TERM")
             .arg(id.to_string())
+            .stderr(Stdio::null())
             .status()
             .await;
     }

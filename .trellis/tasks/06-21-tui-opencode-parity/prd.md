@@ -71,9 +71,9 @@ error highlighting while keeping the existing yaca event-sourced architecture.
       transcript/message rows, tool rows, error rows, prompt, and dialogs.
 - [x] Render tests prove wide layout shows an enriched sidebar and narrow layout
       keeps prompt/transcript readable without sidebar loss.
-- [ ] Render tests prove conversation spacing: user cards, assistant text,
+- [x] Render tests prove conversation spacing: user cards, assistant text,
       tool rows, and system/error rows are separated intentionally.
-- [ ] Render tests prove tool errors and session/turn errors are highlighted
+- [x] Render tests prove tool errors and session/turn errors are highlighted
       with error styling and readable labels/messages.
 - [x] Existing controller behavior for input, slash completion, permission
       prompt, model switching, resume, and scrolling still passes.
@@ -83,7 +83,7 @@ error highlighting while keeping the existing yaca event-sourced architecture.
       handling tests.
 - [x] Paste placeholder expansion, double-paste reveal, and image placeholder
       handling are covered by pure input-state tests.
-- [ ] Final verification runs:
+- [x] Final verification runs:
       `cargo fmt --all --check`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       and `cargo test --workspace`.
