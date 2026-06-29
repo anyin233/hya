@@ -1,5 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+use crate::widgets::prompt_height;
+
 pub struct AppLayout {
     pub status: Rect,
     pub timeline: Rect,
@@ -9,13 +11,14 @@ pub struct AppLayout {
 }
 
 #[must_use]
-pub fn app_layout(area: Rect) -> AppLayout {
+pub fn app_layout(area: Rect, input: &str) -> AppLayout {
+    let prompt_height = prompt_height(input, area.width);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(3),
+            Constraint::Length(prompt_height),
             Constraint::Length(1),
         ])
         .split(area);
