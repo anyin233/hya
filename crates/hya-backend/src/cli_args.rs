@@ -33,8 +33,9 @@ pub(crate) struct Cli {
     /// Start the minimal interactive interface.
     #[arg(long)]
     pub(crate) mini: bool,
-    /// SQLite database for the interactive TUI (empty = in-memory).
-    #[arg(long, default_value = "")]
+    /// SQLite database path. Empty string uses an in-memory store. Applies to
+    /// the interactive TUI, headless exec/run persistence, serve, sessions, and replay.
+    #[arg(long, global = true, default_value = "")]
     pub(crate) db: String,
     /// Resume an existing session id in the interactive TUI.
     #[arg(long)]
@@ -93,17 +94,17 @@ pub(crate) enum Command {
         /// Accepted for OpenCode CLI compatibility; hya mirrors CORS origins globally.
         #[arg(long)]
         cors: Vec<String>,
-        /// SQLite database path. Empty string uses an in-memory store.
-        #[arg(long, default_value = "")]
-        db: String,
+        /// Override global SQLite database path for this server.
+        #[arg(long)]
+        db: Option<String>,
     },
     /// Replay a session's event log from a database as JSON lines.
     TailSession {
-        /// Session id (UUID).
+        /// Session id (`hysec_...`, `ses_...`, or legacy raw UUID).
         id: String,
-        /// SQLite database path the session was written to.
+        /// Override global SQLite database path for replay.
         #[arg(long)]
-        db: String,
+        db: Option<String>,
     },
     /// Save an auth token for a provider id (used instead of an inline api_key).
     Login {
@@ -136,9 +137,9 @@ pub(crate) enum Command {
     },
     /// List sessions stored in a database.
     Sessions {
-        /// SQLite database path.
+        /// Override global SQLite database path for listing.
         #[arg(long)]
-        db: String,
+        db: Option<String>,
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
