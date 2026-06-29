@@ -9,10 +9,8 @@ pub enum CommandKind {
     Resume,
     NewSession,
     Compact,
-    Init,
     Agent,
     Tools,
-    Yolo,
     Think,
     Export,
     Quit,
@@ -80,13 +78,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         kind: CommandKind::Compact,
     },
     CommandSpec {
-        name: "init",
-        aliases: &[],
-        description: "Create AGENTS.md project instructions",
-        key_hint: "leader i",
-        kind: CommandKind::Init,
-    },
-    CommandSpec {
         name: "agent",
         aliases: &["agents"],
         description: "Select the active agent profile",
@@ -106,13 +97,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Show MCP and builtin tool status",
         key_hint: "leader t",
         kind: CommandKind::Tools,
-    },
-    CommandSpec {
-        name: "yolo",
-        aliases: &[],
-        description: "Toggle or set auto-approve mode",
-        key_hint: "tab",
-        kind: CommandKind::Yolo,
     },
     CommandSpec {
         name: "think",
@@ -337,12 +321,11 @@ mod tests {
         assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
         assert_eq!(resolve_slash("clear"), Some(CommandKind::NewSession));
-        assert_eq!(resolve_slash("compact"), Some(CommandKind::Compact));
-        assert_eq!(resolve_slash("init"), Some(CommandKind::Init));
+        assert_eq!(resolve_slash("init"), None);
         assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
         assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
         assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
-        assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
+        assert_eq!(resolve_slash("yolo"), None);
         assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
         assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
         assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
@@ -365,6 +348,8 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "/export"));
         assert!(items.iter().any(|item| item.label == "/quit"));
         assert!(items.iter().any(|item| item.label == "/help"));
+        assert!(!items.iter().any(|item| item.label == "/init"));
+        assert!(!items.iter().any(|item| item.label == "/yolo"));
     }
 
     #[test]
@@ -379,6 +364,16 @@ mod tests {
                 .any(|item| item.label == "/resume")
         );
         assert!(completion_items("/model with args").is_empty());
+        assert!(
+            !completion_items("/in")
+                .iter()
+                .any(|item| item.label == "/init")
+        );
+        assert!(
+            !completion_items("/yo")
+                .iter()
+                .any(|item| item.label == "/yolo")
+        );
     }
 
     #[test]

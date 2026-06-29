@@ -228,7 +228,6 @@ impl DummyHarness {
             | TuiEffect::Interrupt
             | TuiEffect::ResumeSession(_)
             | TuiEffect::CompactTranscript
-            | TuiEffect::InitProject
             | TuiEffect::ExportTranscript
             | TuiEffect::NewSession => {}
         }
