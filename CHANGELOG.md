@@ -1,3 +1,3 @@
-# 0.28.1
+# 0.28.2
 
-- Bumped the Rust workspace crates to 0.28.1.
+- Fixed prompt composer soft wrapping and capped auto-height coverage for both `hya-backend` and `hya` TUI paths.
