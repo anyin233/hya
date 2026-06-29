@@ -20,6 +20,12 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 <!-- TRELLIS:END -->
 
+## Commit Rule
+
+- When the user explicitly asks for commits, create one git commit per atomic change before reporting done.
+- Stage only the files for that atomic change; never sweep in unrelated workspace changes.
+- Use one-line semantic commit messages with no agent or AI attribution.
+
 ## Release & Changelog Rule
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
