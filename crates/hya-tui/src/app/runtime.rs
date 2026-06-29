@@ -2786,13 +2786,14 @@ mod tests {
 
     #[test]
     fn palette_tui_commands_include_yolo_switch_action() {
-        let (_, command, _, category, _) = PALETTE_TUI_COMMANDS
+        let (_, command, _, category, enabled) = PALETTE_TUI_COMMANDS
             .iter()
             .find(|(title, _, _, _, _)| *title == "Switch YOLO")
             .expect("YOLO should be exposed as an internal switch command");
 
         assert_eq!(*command, "permission.yolo.switch");
         assert_eq!(*category, "Permission");
+        assert!(*enabled);
     }
 
     #[test]
@@ -2847,6 +2848,7 @@ mod tests {
         assert_eq!(builtin_client_command("/review"), None);
         assert_eq!(builtin_client_command("/init"), None);
         assert_eq!(builtin_client_command("/yolo"), None);
+        assert_eq!(builtin_client_command("/yolo on"), None);
         assert_eq!(builtin_client_command("/bogus"), None);
         assert_eq!(builtin_client_command("/usr/bin/x"), None);
         assert_eq!(builtin_client_command("plain prompt"), None);

@@ -30,7 +30,6 @@ pub enum TuiEffect {
     ResumeSession(String),
     NewSession,
     CompactTranscript,
-    InitProject,
     ExportTranscript,
     SystemMessage(String),
 }
@@ -480,7 +479,6 @@ impl Controller {
             }
             Some(CommandKind::NewSession) => TuiEffect::NewSession,
             Some(CommandKind::Compact) => TuiEffect::CompactTranscript,
-            Some(CommandKind::Init) => TuiEffect::InitProject,
             Some(CommandKind::Agent) => {
                 self.open_agent_dialog();
                 TuiEffect::None
@@ -1605,15 +1603,15 @@ mod tests {
     }
 
     #[test]
-    fn slash_init_requests_project_initialization() {
+    fn slash_init_is_not_local_builtin() {
         let mut controller = Controller::new(AppState::default());
 
         type_text(&mut controller, "/init");
 
-        assert_eq!(
+        assert!(matches!(
             controller.handle_key(key(KeyCode::Enter)),
-            TuiEffect::InitProject
-        );
+            TuiEffect::SystemMessage(message) if message.contains("unknown command")
+        ));
     }
 
     #[test]
@@ -1643,6 +1641,53 @@ mod tests {
         assert_eq!(dialog.title, "tools");
         assert!(dialog.items.iter().any(|item| item.label == "read"));
         assert!(dialog.items.iter().any(|item| item.label == "mcp"));
+    }
+
+    #[test]
+    fn slash_mcp_opens_tool_status_dialog() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/mcp");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let dialog = controller.app.dialog.as_ref().expect("tools dialog");
+        assert_eq!(dialog.title, "tools");
+        assert!(dialog.items.iter().any(|item| item.label == "mcp"));
+    }
+
+    #[test]
+    fn slash_help_alias_opens_help_dialog() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/?");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let dialog = controller.app.dialog.as_ref().expect("help dialog");
+        assert_eq!(dialog.title, "commands");
+        assert!(dialog.items.iter().any(|item| item.label == "/model"));
+    }
+
+    #[test]
+    fn slash_exit_aliases_request_exit() {
+        for command in ["/exit", "/q"] {
+            let mut controller = Controller::new(AppState::default());
+            type_text(&mut controller, command);
+
+            assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::Exit);
+        }
+    }
+
+    #[test]
+    fn slash_yolo_is_not_local_builtin() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/yolo on");
+
+        assert!(matches!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SystemMessage(message) if message.contains("unknown command")
+        ));
+        assert!(!controller.app.yolo);
     }
 
     #[test]
