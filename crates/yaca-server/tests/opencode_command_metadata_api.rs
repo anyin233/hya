@@ -76,6 +76,14 @@ fn find_command<'a>(commands: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing command {name}: {commands}"))
 }
 
+fn has_command(commands: &Value, name: &str) -> bool {
+    commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["name"] == name)
+}
+
 #[tokio::test]
 async fn opencode_command_route_includes_native_init_and_review_commands() {
     // Given: a server exposing the OpenCode-compatible instance routes.
@@ -84,8 +92,10 @@ async fn opencode_command_route_includes_native_init_and_review_commands() {
     // When: the OpenCode /command route is listed.
     let (status, commands) = get_json(app, "/command").await;
 
-    // Then: OpenCode's native init and review commands are advertised.
+    // Then: OpenCode's native init and review commands are advertised, but the
+    // interactive-only YOLO switch is not exposed as command metadata.
     assert_eq!(status, StatusCode::OK);
+    assert!(!has_command(&commands, "yolo"));
 
     let init = find_command(&commands, "init");
     assert_eq!(init["description"], "guided AGENTS.md setup");

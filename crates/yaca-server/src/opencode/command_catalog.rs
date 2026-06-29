@@ -67,13 +67,6 @@ pub(in crate::opencode) fn list(workdir: &Path) -> Vec<CommandInfo> {
             None,
         ),
         command_info(
-            "yolo",
-            "toggle auto-approval",
-            "/yolo $ARGUMENTS".to_string(),
-            vec!["$ARGUMENTS"],
-            None,
-        ),
-        command_info(
             "think",
             "set reasoning effort",
             "/think $ARGUMENTS".to_string(),

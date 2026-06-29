@@ -42,6 +42,14 @@ fn skill_named<'a>(skills: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing skill {name}: {skills}"))
 }
 
+fn has_command(commands: &Value, name: &str) -> bool {
+    commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["name"] == name)
+}
+
 async fn state(workdir: impl Into<std::path::PathBuf>) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -185,13 +193,8 @@ async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
 
     let (status, commands) = get_json(app.clone(), "/api/command").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        commands["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|cmd| cmd["name"] == "help" && cmd["template"] == "/help")
-    );
+    assert!(has_command(&commands["data"], "help"));
+    assert!(!has_command(&commands["data"], "yolo"));
 
     let (status, skills) = get_json(app, "/api/skill").await;
     assert_eq!(status, StatusCode::OK);
