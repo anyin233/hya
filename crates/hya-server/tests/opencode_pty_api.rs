@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -14,9 +17,23 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-pty-api";
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-async fn state() -> AppState {
+fn tempdir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "hya-opencode-pty-api-{nanos}-{serial}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir).unwrap()
+}
+
+async fn state(workdir: &Path) -> AppState {
     let provider = Arc::new(FakeProvider::scripted(vec![]));
     let router = Arc::new(ProviderRouter::new().with(provider));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -29,7 +46,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir.to_path_buf(),
             reasoning: None,
         }),
     )
@@ -105,7 +122,9 @@ async fn request_token_with_origin(
 
 #[tokio::test]
 async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let workdir_text = workdir.to_string_lossy().into_owned();
+    let app = router(state(&workdir).await);
 
     let (status, shells) = request(app.clone(), "GET", "/api/pty/shells", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -138,7 +157,7 @@ async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(created["title"], "HTTP API PTY");
     assert_eq!(created["command"], "/bin/sh");
-    assert_eq!(created["cwd"], WORKDIR);
+    assert_eq!(created["cwd"], workdir_text.as_str());
     assert_eq!(created["status"], "running");
     let id = created["id"].as_str().expect("pty id");
 
@@ -203,12 +222,14 @@ async fn opencode_pty_routes_report_shells_and_manage_session_metadata() {
 
 #[tokio::test]
 async fn opencode_v2_pty_routes_wrap_location_and_manage_session_metadata() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let workdir_text = workdir.to_string_lossy().into_owned();
+    let app = router(state(&workdir).await);
 
     let (status, empty) = request(app.clone(), "GET", "/api/pty", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty["data"], json!([]));
-    assert_eq!(empty["location"]["directory"], WORKDIR);
+    assert_eq!(empty["location"]["directory"], workdir_text.as_str());
 
     let (status, created) = request(
         app.clone(),
@@ -244,7 +265,8 @@ async fn opencode_v2_pty_routes_wrap_location_and_manage_session_metadata() {
 
 #[tokio::test]
 async fn opencode_pty_connect_token_rejects_cross_origin_requests() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let app = router(state(&workdir).await);
     let (status, created) = request(
         app.clone(),
         "POST",
@@ -271,7 +293,8 @@ async fn opencode_pty_connect_token_rejects_cross_origin_requests() {
 
 #[tokio::test]
 async fn opencode_pty_connect_reports_missing_session_before_ticket_validation() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let app = router(state(&workdir).await);
 
     let (status, missing) = request(app.clone(), "GET", "/pty/pty_missing/connect", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

@@ -38,6 +38,27 @@ fn agent_list_prints_opencode_native_agent_shape() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-backend-first-run-config")?;
+    let path = env.xdg_config.join("hya/config.yaml");
+    assert!(!path.exists(), "test should start without hya config");
+
+    let output = hya_command(&env).arg("models").output()?;
+
+    assert_success("models", &output);
+    let config = std::fs::read_to_string(&path)?;
+    assert!(
+        config.contains("default_model: offline"),
+        "created config should contain the offline starter model:\n{config}"
+    );
+    assert!(
+        config.contains("providers: {}"),
+        "created config should contain an empty providers map:\n{config}"
+    );
+    Ok(())
+}
+
+#[test]
 fn rendered_exec_db_persists_and_tail_replays_hysec_session()
 -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-backend-rendered-exec-db")?;

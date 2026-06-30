@@ -960,6 +960,7 @@ dependencies = [
  "hya-store",
  "hya-tool",
  "serde",
+ "serde_json",
  "serde_norway",
  "time",
  "tokio",

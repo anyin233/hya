@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_core::{
@@ -19,12 +19,16 @@ use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistr
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("hya-hooks-{nanos}-{}", std::process::id()));
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("hya-hooks-{nanos}-{serial}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
