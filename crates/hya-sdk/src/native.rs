@@ -236,15 +236,17 @@ async fn read_loop(
                     let _ = tx.send(outcome);
                 }
             }
-            Some("rpc.event") => {
-                if message.get("event").and_then(Value::as_str) == Some("global.event") {
-                    if let Some(data) = message.get("data") {
-                        if let Ok(event) = serde_json::from_value::<GlobalEvent>(data.clone()) {
-                            if events.send(event).is_err() {
-                                break;
-                            }
-                        }
-                    }
+            Some("rpc.event")
+                if message.get("event").and_then(Value::as_str) == Some("global.event") =>
+            {
+                let Some(data) = message.get("data") else {
+                    continue;
+                };
+                let Ok(event) = serde_json::from_value::<GlobalEvent>(data.clone()) else {
+                    continue;
+                };
+                if events.send(event).is_err() {
+                    break;
                 }
             }
             _ => {}

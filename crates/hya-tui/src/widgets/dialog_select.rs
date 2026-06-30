@@ -136,7 +136,7 @@ impl<T> DialogSelect<T> {
             .filter(|item| !item.unfiltered_only)
             .filter_map(|item| fuzzy_score(&matcher, &needle, item).map(|score| (score, item)))
             .collect::<Vec<_>>();
-        scored.sort_by(|left, right| right.0.cmp(&left.0));
+        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         scored.into_iter().map(|(_, item)| item).collect()
     }
 
