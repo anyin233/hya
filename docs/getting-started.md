@@ -16,6 +16,9 @@ backend CLI/API binary is `hya-backend`.
 cargo build --workspace
 ```
 
+Building does not create `~/.config/hya`; the starter config is created on the
+first `hya` or `hya-backend` startup that needs runtime config.
+
 Install the frontend from [`../crates/hya`](../crates/hya) and the backend CLI
 from [`../crates/hya-backend`](../crates/hya-backend):
 
@@ -128,8 +131,16 @@ id shows as `offline` and replies are prefixed `(hya dev provider)`. This is
 intentional, not an error — see
 [Configuration → First-Run / Offline Behavior](configuration.md#first-run--offline-behavior).
 
-To switch to a live model, create `~/.config/hya/config.yaml` (or
-`$XDG_CONFIG_HOME/hya/config.yaml`):
+hya creates a starter `~/.config/hya/config.yaml` (or
+`$XDG_CONFIG_HOME/hya/config.yaml`) the first time a command needs runtime
+config. Interactive startup also offers to import provider/model entries from
+your OpenCode config. You can run the same model-only import explicitly:
+
+```sh
+hya --import opencode
+```
+
+To switch to a live model manually, edit the starter file:
 
 ```yaml
 default_model: claude-sonnet-4-6

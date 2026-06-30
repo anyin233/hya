@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
@@ -15,7 +15,17 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-provider-model-api";
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("hya-opencode-provider-model-api");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    })
+}
 
 fn tempdir() -> std::path::PathBuf {
     let nanos = SystemTime::now()
@@ -133,12 +143,12 @@ async fn request_json(
 
 #[tokio::test]
 async fn opencode_v2_provider_and_model_routes_return_active_catalog() {
-    let app = router(state(WORKDIR).await);
+    let app = router(state(workdir()).await);
 
     let (status, providers) = get_json(app.clone(), "/api/provider").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(providers["location"]["directory"], WORKDIR);
-    assert_eq!(providers["location"]["project"]["directory"], WORKDIR);
+    assert_eq!(providers["location"]["directory"], workdir());
+    assert_eq!(providers["location"]["project"]["directory"], workdir());
     assert_eq!(providers["data"][0]["id"], "openai");
     assert_eq!(providers["data"][0]["name"], "openai");
     assert_eq!(providers["data"][0]["api"]["type"], "native");
@@ -206,7 +216,7 @@ async fn opencode_v2_metadata_routes_return_location_wrapped_data() {
 
 #[tokio::test]
 async fn opencode_legacy_provider_routes_return_active_catalog_and_reject_bad_oauth() {
-    let app = router(state(WORKDIR).await);
+    let app = router(state(workdir()).await);
 
     let (status, providers) = get_json(app.clone(), "/provider").await;
     assert_eq!(status, StatusCode::OK);
@@ -241,7 +251,7 @@ async fn opencode_legacy_provider_routes_return_active_catalog_and_reject_bad_oa
 
 #[tokio::test]
 async fn opencode_legacy_config_routes_return_active_provider_data() {
-    let app = router(state(WORKDIR).await);
+    let app = router(state(workdir()).await);
 
     let (status, config) = get_json(app.clone(), "/config").await;
     assert_eq!(status, StatusCode::OK);

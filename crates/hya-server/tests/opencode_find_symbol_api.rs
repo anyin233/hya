@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -20,6 +21,8 @@ use hya_tool::{
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tower::ServiceExt;
+
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 struct FakeLsp {
@@ -44,8 +47,9 @@ fn tempdir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "hya-opencode-find-symbol-{nanos}-{}",
+        "hya-opencode-find-symbol-{nanos}-{serial}-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
@@ -118,6 +122,6 @@ async fn opencode_find_symbol_returns_lsp_workspace_symbols() {
     let calls = requests.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].operation, LspOperation::WorkspaceSymbol);
-    assert_eq!(calls[0].file, workdir);
+    assert_eq!(calls[0].file, std::fs::canonicalize(workdir).unwrap());
     assert_eq!(calls[0].query.as_deref(), Some("main"));
 }
