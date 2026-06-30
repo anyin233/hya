@@ -151,10 +151,10 @@ impl OfflineNotice {
     pub fn render(&self) -> String {
         let path = self.config_path.display();
         format!(
-            "hya: no config file found at {path}\n\
+            "hya: no usable provider config found at {path}\n\
              hya: running in OFFLINE mode — the built-in provider only echoes input, \
              so models cannot reason or use tools.\n\
-             hya: to connect a real model, create {path} (see docs/configuration.md)\n\
+             hya: to connect a real model, edit {path} (see docs/configuration.md)\n\
              hya:   and/or save a provider token with `hya login <provider> <token>`."
         )
     }
@@ -530,6 +530,8 @@ mod tests {
             std::env::set_var("XDG_CONFIG_HOME", &dir);
             std::env::set_var("HOME", &dir);
         }
+        let config_path = dir.join("hya/config.yaml");
+        let _ = std::fs::remove_file(&config_path);
 
         let runtime = resolve_runtime(None);
 

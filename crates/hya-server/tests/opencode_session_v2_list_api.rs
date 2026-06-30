@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -20,11 +20,27 @@ use tower::ServiceExt;
 
 mod support;
 
-const WORKDIR: &str = "/tmp/hya-opencode-session-v2-list-api";
-const OTHER_WORKDIR: &str = "/tmp/hya-opencode-session-v2-list-api-other";
+fn canonical_temp(label: &str) -> String {
+    let dir = std::env::temp_dir().join(label);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| canonical_temp("hya-opencode-session-v2-list-api"))
+}
+
+fn other_workdir() -> &'static str {
+    static OTHER_WORKDIR: OnceLock<String> = OnceLock::new();
+    OTHER_WORKDIR.get_or_init(|| canonical_temp("hya-opencode-session-v2-list-api-other"))
+}
 
 async fn state() -> AppState {
-    state_for(WORKDIR.into()).await
+    state_for(workdir().into()).await
 }
 
 async fn state_for(workdir: PathBuf) -> AppState {
@@ -61,7 +77,7 @@ fn session_ids(body: &Value) -> Vec<&str> {
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
-    create_session_in(app, parent, WORKDIR).await
+    create_session_in(app, parent, workdir()).await
 }
 
 async fn create_session_in(app: axum::Router, parent: Option<&str>, workdir: &str) -> String {
@@ -103,7 +119,7 @@ async fn create_visible_session_in(
 }
 
 async fn create_visible_session(app: axum::Router, parent: Option<&str>, title: &str) -> String {
-    create_visible_session_in(app, parent, WORKDIR, title).await
+    create_visible_session_in(app, parent, workdir(), title).await
 }
 
 async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -193,11 +209,12 @@ async fn opencode_v2_session_list_shows_non_empty_unnamed_sessions_with_fallback
 #[tokio::test]
 async fn opencode_v2_session_list_filters_directory() {
     let app = router(state().await);
-    let included = create_visible_session_in(app.clone(), None, WORKDIR, "Included session").await;
+    let included =
+        create_visible_session_in(app.clone(), None, workdir(), "Included session").await;
     let excluded =
-        create_visible_session_in(app.clone(), None, OTHER_WORKDIR, "Excluded session").await;
+        create_visible_session_in(app.clone(), None, other_workdir(), "Excluded session").await;
 
-    let (status, body) = get_json(app, &format!("/api/session?directory={WORKDIR}")).await;
+    let (status, body) = get_json(app, &format!("/api/session?directory={}", workdir())).await;
     assert_eq!(status, StatusCode::OK);
     let ids = session_ids(&body);
     assert!(ids.contains(&included.as_str()));
@@ -321,7 +338,10 @@ async fn opencode_v2_session_list_cursor_preserves_query_shape() {
 
     let (status, first) = get_json(
         app.clone(),
-        &format!("/api/session?limit=1&order=asc&search=Untitled&directory={WORKDIR}"),
+        &format!(
+            "/api/session?limit=1&order=asc&search=Untitled&directory={}",
+            workdir()
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -331,7 +351,7 @@ async fn opencode_v2_session_list_cursor_preserves_query_shape() {
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(cursor).expect("cursor b64")).unwrap();
     assert_eq!(decoded["order"], "asc");
     assert_eq!(decoded["search"], "Untitled");
-    assert_eq!(decoded["directory"], WORKDIR);
+    assert_eq!(decoded["directory"], workdir());
     assert_eq!(decoded["anchor"]["id"], session);
     assert_eq!(decoded["anchor"]["direction"], "next");
     assert!(decoded["anchor"]["time"].as_u64().is_some());

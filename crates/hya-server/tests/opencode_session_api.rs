@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -16,7 +16,17 @@ use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistr
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-session-api";
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("hya-opencode-session-api");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    })
+}
 
 async fn state() -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
@@ -34,7 +44,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
@@ -74,14 +84,14 @@ async fn todo_state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
 }
 
 async fn shell_state() -> AppState {
-    std::fs::create_dir_all(WORKDIR).unwrap();
+    std::fs::create_dir_all(workdir()).unwrap();
     let provider = FakeProvider::scripted(vec![]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -98,15 +108,15 @@ async fn shell_state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
 }
 
 async fn edit_state() -> AppState {
-    std::fs::create_dir_all(WORKDIR).unwrap();
-    std::fs::write(format!("{WORKDIR}/diff-target.txt"), "old\n").unwrap();
+    std::fs::create_dir_all(workdir()).unwrap();
+    std::fs::write(format!("{}/diff-target.txt", workdir()), "old\n").unwrap();
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
@@ -139,16 +149,16 @@ async fn edit_state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
 }
 
 async fn two_edit_state() -> AppState {
-    std::fs::create_dir_all(WORKDIR).unwrap();
-    std::fs::write(format!("{WORKDIR}/first-target.txt"), "first old\n").unwrap();
-    std::fs::write(format!("{WORKDIR}/second-target.txt"), "second old\n").unwrap();
+    std::fs::create_dir_all(workdir()).unwrap();
+    std::fs::write(format!("{}/first-target.txt", workdir()), "first old\n").unwrap();
+    std::fs::write(format!("{}/second-target.txt", workdir()), "second old\n").unwrap();
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
@@ -189,7 +199,7 @@ async fn two_edit_state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
@@ -201,7 +211,7 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
-    let mut body = json!({"agent": "build", "model": "fake", "workdir": WORKDIR});
+    let mut body = json!({"agent": "build", "model": "fake", "workdir": workdir()});
     if let Some(parent) = parent {
         body["parent"] = json!(parent.trim_start_matches("ses_"));
     }
@@ -380,7 +390,7 @@ async fn opencode_session_routes_list_get_and_messages() {
     assert_eq!(list_body[0]["agent"], "build");
     assert_eq!(list_body[0]["model"]["id"], "fake");
     assert_eq!(list_body[0]["model"]["providerID"], "hya");
-    assert_eq!(list_body[0]["directory"], WORKDIR);
+    assert_eq!(list_body[0]["directory"], workdir());
     let created = list_body[0]["time"]["created"].as_u64().expect("created");
     let updated = list_body[0]["time"]["updated"].as_u64().expect("updated");
     assert!(updated >= created);

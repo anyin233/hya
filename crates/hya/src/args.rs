@@ -4,6 +4,7 @@ pub(crate) struct Args {
     pub(crate) http: bool,
     pub(crate) opencode: bool,
     pub(crate) backend_bin: Option<String>,
+    pub(crate) import_source: Option<String>,
     pub(crate) version: bool,
     pub(crate) help: bool,
 }
@@ -29,6 +30,14 @@ impl Args {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             "--backend-bin requires a path",
+                        )
+                    })?);
+                }
+                "--import" => {
+                    parsed.import_source = Some(args.next().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "--import requires a source name",
                         )
                     })?);
                 }
@@ -61,6 +70,7 @@ pub(crate) fn print_usage() {
     println!(
         "  --backend-bin <path>  hya-backend binary to spawn for --http (else $HYA_BACKEND_BIN, sibling build, or PATH)"
     );
+    println!("  --import <source>  import model config from a source (currently: opencode)");
     println!("  --opencode         use the opencode backend (native bun bridge) instead of hya");
     println!("  --version, -v      print version");
     println!("  --help, -h         print this help");
