@@ -1,3 +1,4 @@
-# 0.28.2
+# 0.28.3
 
-- Fixed prompt composer soft wrapping and capped auto-height coverage for both `hya-backend` and `hya` TUI paths.
+- Fixed GitHub CI on Rust 1.96 by updating SDK event parsing for the new clippy lint.
+- Fixed the release workflow after the binary/package rename from `yaca` to `hya`.

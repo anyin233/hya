@@ -19,7 +19,7 @@ pub fn draw(
     let area = frame.area();
 
     let mut sorted: Vec<&(KeyEvent, BindingId)> = entries.iter().collect();
-    sorted.sort_by(|left, right| format_key(&left.0).cmp(&format_key(&right.0)));
+    sorted.sort_by_key(|entry| format_key(&entry.0));
 
     let spans: Vec<Span> = sorted
         .iter()
