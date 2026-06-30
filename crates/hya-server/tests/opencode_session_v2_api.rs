@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -14,7 +14,17 @@ use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistr
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-session-v2-api";
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("hya-opencode-session-v2-api");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    })
+}
 
 async fn state() -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
@@ -32,14 +42,14 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
 }
 
 async fn shell_state() -> AppState {
-    std::fs::create_dir_all(WORKDIR).unwrap();
+    std::fs::create_dir_all(workdir()).unwrap();
     let provider = FakeProvider::scripted(vec![]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
@@ -56,7 +66,7 @@ async fn shell_state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
@@ -169,7 +179,7 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
             "id": requested,
             "agent": "plan",
             "model": {"providerID": "anthropic", "id": "claude-sonnet"},
-            "location": {"directory": WORKDIR}
+            "location": {"directory": workdir()}
         }),
     )
     .await;
@@ -178,7 +188,7 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     assert_eq!(created["data"]["agent"], "plan");
     assert_eq!(created["data"]["model"]["providerID"], "anthropic");
     assert_eq!(created["data"]["model"]["id"], "claude-sonnet");
-    assert_eq!(created["data"]["directory"], WORKDIR);
+    assert_eq!(created["data"]["directory"], workdir());
     assert_eq!(created["data"]["path"], "");
     assert_eq!(created["data"]["cost"], 0);
     assert_eq!(
@@ -218,7 +228,7 @@ async fn opencode_v2_session_routes_create_get_and_list_wrapped_data() {
     let (status, _) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -237,7 +247,7 @@ async fn opencode_v2_session_update_sets_title_metadata_permission_archive_and_s
     let (status, _) = post_json(
         app.clone(),
         "/api/session",
-        json!({"id": requested, "location": {"directory": WORKDIR}}),
+        json!({"id": requested, "location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -296,7 +306,7 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -319,7 +329,7 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
     let (status, created) = post_json(
         shell_app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -352,7 +362,7 @@ async fn opencode_v2_session_delete_removes_session() {
     let (status, _) = post_json(
         app.clone(),
         "/api/session",
-        json!({"id": requested, "location": {"directory": WORKDIR}}),
+        json!({"id": requested, "location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -381,7 +391,7 @@ async fn opencode_v2_session_init_records_requested_command_message() {
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -419,7 +429,7 @@ async fn opencode_v2_session_compact_reports_unavailable_and_wait_returns_when_i
     let (status, _) = post_json(
         app.clone(),
         "/api/session",
-        json!({"id": requested, "location": {"directory": WORKDIR}}),
+        json!({"id": requested, "location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -448,7 +458,7 @@ async fn opencode_v2_session_context_returns_v2_messages() {
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -474,7 +484,7 @@ async fn opencode_v2_session_prompt_admits_without_resume() {
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -506,7 +516,7 @@ async fn opencode_v2_session_prompt_preserves_files_and_agents_in_context() {
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": WORKDIR}}),
+        json!({"location": {"directory": workdir()}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

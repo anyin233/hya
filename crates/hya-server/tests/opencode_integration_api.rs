@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -14,9 +17,23 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::Value;
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-integration-api";
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-async fn state() -> AppState {
+fn tempdir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "hya-opencode-integration-api-{nanos}-{serial}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir).unwrap()
+}
+
+async fn state(workdir: &Path) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
@@ -28,7 +45,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir.to_path_buf(),
             reasoning: None,
         }),
     )
@@ -106,16 +123,18 @@ async fn request_json(
 
 #[tokio::test]
 async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let app = router(state(&workdir).await);
+    let expected = workdir.to_string_lossy();
 
     let (status, references) = get_json(app.clone(), "/api/reference").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(references["location"]["directory"], WORKDIR);
+    assert_eq!(references["location"]["directory"], expected.as_ref());
     assert_eq!(references["data"], serde_json::json!([]));
 
     let (status, integrations) = get_json(app.clone(), "/api/integration").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(integrations["location"]["directory"], WORKDIR);
+    assert_eq!(integrations["location"]["directory"], expected.as_ref());
     assert_eq!(integrations["data"], serde_json::json!([]));
 
     let (status, integration) = get_json(app, "/api/integration/github").await;
@@ -125,8 +144,9 @@ async fn opencode_v2_reference_and_integration_routes_return_empty_discovery() {
 
 #[tokio::test]
 async fn opencode_v2_reference_route_lists_configured_local_references() {
-    std::fs::create_dir_all(format!("{WORKDIR}/docs")).unwrap();
-    let app = router(state().await);
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join("docs")).unwrap();
+    let app = router(state(&workdir).await);
 
     let (status, _config) = request_json(
         app.clone(),
@@ -172,7 +192,8 @@ async fn opencode_v2_reference_route_lists_configured_local_references() {
 
 #[tokio::test]
 async fn opencode_v2_integration_mutation_routes_match_empty_backend() {
-    let app = router(state().await);
+    let workdir = tempdir();
+    let app = router(state(&workdir).await);
 
     let (status, error) = request_json(
         app.clone(),

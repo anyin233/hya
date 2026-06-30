@@ -21,11 +21,13 @@ fn workdir() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir()
-        .join(format!(
-            "hya-opencode-reference-git-{nanos}-{}",
-            std::process::id()
-        ))
+    let dir = std::env::temp_dir().join(format!(
+        "hya-opencode-reference-git-{nanos}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir)
+        .unwrap()
         .to_string_lossy()
         .into_owned()
 }

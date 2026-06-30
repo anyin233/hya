@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -15,7 +15,17 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-legacy-message-shape-api";
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("hya-opencode-legacy-message-shape-api");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    })
+}
 
 async fn state() -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
@@ -33,7 +43,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
@@ -79,7 +89,7 @@ async fn create_session(app: axum::Router) -> String {
     let (status, created) = post_json(
         app,
         "/sessions".to_string(),
-        json!({"agent": "build", "model": "fake", "workdir": WORKDIR}),
+        json!({"agent": "build", "model": "fake", "workdir": workdir()}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -115,7 +125,10 @@ async fn legacy_message_info_matches_opencode_required_shape() {
     assert_eq!(assistant["providerID"], "hya");
     assert_eq!(assistant["mode"], "build");
     assert_eq!(assistant["agent"], "build");
-    assert_eq!(assistant["path"], json!({"cwd": WORKDIR, "root": WORKDIR}));
+    assert_eq!(
+        assistant["path"],
+        json!({"cwd": workdir(), "root": workdir()})
+    );
     assert_eq!(assistant["cost"], 0);
     assert_eq!(
         assistant["tokens"],
@@ -138,7 +151,7 @@ async fn legacy_session_post_creates_opencode_session_info() {
         json!({
             "agent": "build",
             "model": {"providerID": "hya", "id": "fake"},
-            "location": {"directory": WORKDIR}
+            "location": {"directory": workdir()}
         }),
     )
     .await;
@@ -146,7 +159,7 @@ async fn legacy_session_post_creates_opencode_session_info() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["agent"], "build");
     assert_eq!(body["model"]["id"], "fake");
-    assert_eq!(body["directory"], WORKDIR);
+    assert_eq!(body["directory"], workdir());
     assert!(body["id"].as_str().is_some_and(|id| {
         let suffix = id.strip_prefix("hysec_");
         suffix.is_some_and(|suffix| {

@@ -20,6 +20,7 @@ hya-plugin = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_norway = { workspace = true }
 anyhow = { workspace = true }
 time = { workspace = true }

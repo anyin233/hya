@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -14,7 +14,17 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-const WORKDIR: &str = "/tmp/hya-opencode-sync-projection-api";
+fn workdir() -> &'static str {
+    static WORKDIR: OnceLock<String> = OnceLock::new();
+    WORKDIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("hya-opencode-sync-projection-api");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    })
+}
 
 async fn state() -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
@@ -28,7 +38,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir().into(),
             reasoning: None,
         }),
     )
@@ -69,7 +79,7 @@ async fn opencode_sync_replay_projects_created_session() {
         "POST",
         "/sync/replay",
         Some(json!({
-            "directory": WORKDIR,
+            "directory": workdir(),
             "events": [{
                 "id": "evt_00000000000000000000000000",
                 "aggregateID": session,
@@ -81,7 +91,7 @@ async fn opencode_sync_replay_projects_created_session() {
                         "id": session,
                         "slug": session,
                         "projectID": "local",
-                        "directory": WORKDIR,
+                        "directory": workdir(),
                         "title": "Remote session",
                         "agent": "build",
                         "model": {"providerID": "fake", "id": "fake"},
@@ -101,5 +111,5 @@ async fn opencode_sync_replay_projects_created_session() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session_body["id"], session);
     assert_eq!(session_body["title"], "Remote session");
-    assert_eq!(session_body["directory"], WORKDIR);
+    assert_eq!(session_body["directory"], workdir());
 }
