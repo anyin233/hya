@@ -13,15 +13,42 @@ The same config file also drives MCP servers, plugins, and formatter status.
 
 On startup, hya tries to load `config.yaml` (see
 [`../crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) `load()`
-and `config_path()`). A missing, empty, or provider-less config is **not an
-error** — hya silently falls back to the offline `DevProvider` so the whole
-stack stays runnable without API keys. hya runs offline when any of these hold:
+and `config_path()`). `cargo build` only compiles the workspace and does not
+write user config. When the `hya` frontend or a `hya-backend` command starts
+and no file exists, hya creates the config directory and writes a starter
+`config.yaml` before resolving runtime config:
 
-- No `config.yaml` exists at either search path.
+```yaml
+default_model: offline
+providers: {}
+mcp: {}
+plugins: {}
+```
+
+A missing, empty, or provider-less config is **not an error** — hya falls back
+to the offline `DevProvider` so the whole stack stays runnable without API keys.
+hya runs offline when any of these hold:
+
+- No usable provider route exists in `config.yaml`.
 - The file exists but is empty.
 - It declares no usable provider routes, MCP servers, or plugins.
 - A provider has models but no resolvable key (no inline `api_key` and no saved
   `hya-backend login` token), so it is dropped.
+
+When an interactive TUI startup creates the starter file for the first time, it
+prompts before doing anything else:
+
+```text
+hya: import OpenCode model config now? [y/N]
+```
+
+Answering yes imports provider base URLs, model IDs, and API key values or
+templates from the first discovered OpenCode config (`$OPENCODE_CONFIG`,
+`$XDG_CONFIG_HOME/opencode/{opencode.json,config.json,opencode.jsonc}`,
+`$HOME/.config/opencode/{...}`, then `$HOME/.opencode/{...}`). The import is
+local and does not print secret values. If no importable OpenCode provider has
+both a base URL and at least one model, hya keeps the starter config and
+continues offline.
 
 How to tell you are offline:
 
@@ -30,9 +57,10 @@ How to tell you are offline:
 - Assistant replies are prefixed `(hya dev provider)` and just echo your
   prompt back, e.g. `(hya dev provider) You said: "..."`.
 
-The fallback is silent. The only message hya prints is when a config file is
-present but fails to parse — then it logs to stderr and still continues
-offline:
+Non-interactive commands create the starter file without prompting and keep
+machine-readable stdout clean. The only runtime config message they print is
+when a config file is present but fails to parse — then hya logs to stderr and
+still continues offline:
 
 ```text
 hya: config error (...); using the offline provider
@@ -219,6 +247,20 @@ new tools into an already running engine.
 
 ### OpenCode migration into hya
 
+Interactive first-run startup can import OpenCode provider/model config into
+`config.yaml`. You can also run the model import explicitly without starting a
+TUI:
+
+```sh
+hya --import opencode
+```
+
+The explicit import currently supports only OpenCode and only model/provider
+config. It replaces `default_model` and `providers` in `config.yaml`, while
+preserving existing non-model sections such as `mcp`, `plugins`, and
+`default_agent`. The command prints TODO placeholders for skills and MCP import;
+future sources such as Codex and Claude are reserved but not implemented yet.
+
 To mirror OpenCode-owned MCP and skill surfaces into the default hya runtime,
 use the workspace xtask migration entrypoint:
 
@@ -238,7 +280,8 @@ The first-pass migration contract is intentionally narrow:
 - The migration writes a managed-state lock file at
   `~/.config/hya/opencode-sync-lock.json` so rerun and prune operations can be
   safe and idempotent.
-- OpenCode provider/auth sections are not migrated.
+- OpenCode provider/model sections are handled by the first-run import prompt,
+  not this xtask. The xtask focuses on MCP and skills.
 
 Typical workflow:
 

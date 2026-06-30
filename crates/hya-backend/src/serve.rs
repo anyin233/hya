@@ -13,6 +13,7 @@ pub(crate) async fn cmd_serve(
     model_override: Option<String>,
     yolo: bool,
 ) -> anyhow::Result<()> {
+    super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
     let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
@@ -68,6 +69,7 @@ pub(crate) async fn cmd_tui_hya(
         return Ok(());
     }
 
+    super::first_run_config_bootstrap(true)?;
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
     // Interactive startup (stdout is a terminal, checked above): explain the

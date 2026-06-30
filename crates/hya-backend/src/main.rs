@@ -39,6 +39,10 @@ pub use hya_app::{
     resolve_runtime, skill_dirs, spawn_team_supervisor, today,
 };
 
+pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
+    config::first_run_config_bootstrap(interactive)
+}
+
 async fn cmd_exec(
     prompt: String,
     model_override: Option<String>,
@@ -46,6 +50,7 @@ async fn cmd_exec(
     yolo: bool,
     json: bool,
 ) -> anyhow::Result<()> {
+    first_run_config_bootstrap(false)?;
     let store = open_store(db).await?;
     let runtime = resolve_runtime(model_override);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
@@ -94,6 +99,7 @@ async fn cmd_exec(
 
 async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<()> {
     use std::io::BufRead as _;
+    first_run_config_bootstrap(false)?;
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
@@ -154,6 +160,7 @@ async fn cmd_goal(
     model_override: Option<String>,
     yolo: bool,
 ) -> anyhow::Result<()> {
+    first_run_config_bootstrap(false)?;
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
@@ -219,6 +226,7 @@ async fn cmd_tui(
         );
         return Ok(());
     }
+    first_run_config_bootstrap(true)?;
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override);
     // Interactive startup (stdout is a terminal, checked above): explain the
@@ -356,6 +364,7 @@ async fn main() -> anyhow::Result<()> {
             verbose,
             refresh,
         }) => {
+            first_run_config_bootstrap(false)?;
             let runtime = resolve_runtime(model);
             models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
         }

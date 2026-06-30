@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,8 @@ use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 struct RecordingProvider {
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
@@ -59,11 +62,14 @@ fn workdir() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir()
-        .join(format!(
-            "hya-opencode-reference-guidance-{nanos}-{}",
-            std::process::id()
-        ))
+    let serial = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "hya-opencode-reference-guidance-{nanos}-{serial}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir)
+        .unwrap()
         .to_string_lossy()
         .into_owned()
 }

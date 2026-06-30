@@ -1,18 +1,24 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_proto::{Event, Projection, Role, SessionId};
 use hya_store::{LedgerEntry, SavedPermission, SessionStore};
 
 fn temp_db() -> String {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
-        .join(format!("hya-persist-{nanos}-{}.db", std::process::id()))
+        .join(format!(
+            "hya-persist-{nanos}-{}-{id}.db",
+            std::process::id()
+        ))
         .to_string_lossy()
         .into_owned()
 }

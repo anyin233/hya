@@ -31,7 +31,7 @@ fn tempdir(label: &str) -> PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    std::fs::canonicalize(&dir).unwrap()
 }
 
 fn git(repo: &Path, args: &[&str]) {
