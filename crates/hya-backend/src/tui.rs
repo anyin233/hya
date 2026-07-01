@@ -50,6 +50,7 @@ mod prompt;
 mod reference;
 mod session_cleanup;
 mod session_summaries;
+mod skill_mentions;
 
 /// Restores the terminal on unwind or early return; the panic hook below covers
 /// the message-printing path so a panic stays readable in cooked mode.
@@ -135,15 +136,23 @@ fn reference_items(workdir: &Path) -> Vec<hya_legacy_tui::DialogItem> {
 
 fn all_reference_items(
     workdir: &Path,
-    profiles: &[agents::AgentProfile],
+    _profiles: &[agents::AgentProfile],
 ) -> Vec<hya_legacy_tui::DialogItem> {
-    let mut items = agents::reference_items(profiles);
-    items.extend(reference_items(workdir));
-    items
+    reference_items(workdir)
 }
 
 fn custom_commands(workdir: &Path) -> Vec<commands::CustomCommand> {
     commands::load_markdown_commands(workdir).unwrap_or_default()
+}
+
+fn skill_items() -> Vec<hya_legacy_tui::DialogItem> {
+    hya_app::skills::discover_skills(&hya_app::skill_dirs())
+        .into_iter()
+        .map(|skill| hya_legacy_tui::DialogItem {
+            label: skill.name,
+            detail: skill.description,
+        })
+        .collect()
 }
 
 fn export_root() -> PathBuf {
@@ -379,6 +388,7 @@ fn spawn_turn(
     let done_tx = done_tx.clone();
     let cancel = cancel.clone();
     tokio::spawn(async move {
+        let prompt = skill_mentions::expand_skill_mentions(&prompt);
         let prompt = reference::expand_mentions(&agent.workdir, &prompt)
             .unwrap_or_else(|e| format!("{prompt}\n\n[reference expansion error: {e}]"));
         let admitted = match command {
@@ -479,6 +489,7 @@ pub async fn run(
     );
     controller.set_agents(agents::dialog_items(&profiles));
     controller.set_references(all_reference_items(&agent.workdir, &profiles));
+    controller.set_skills(skill_items());
     controller.set_custom_commands(custom_commands(&agent.workdir));
 
     install_panic_hook();
@@ -700,6 +711,7 @@ pub async fn run(
                                 );
                                 controller.set_agents(agents::dialog_items(&profiles));
                                 controller.set_references(all_reference_items(&agent.workdir, &profiles));
+                                controller.set_skills(skill_items());
                                 controller.set_custom_commands(custom_commands(&agent.workdir));
                             }
                             TuiEffect::ResumeSession(id) => {
@@ -745,6 +757,7 @@ pub async fn run(
                                         let workdir = PathBuf::from(meta.workdir);
                                         controller.set_agents(agents::dialog_items(&profiles));
                                         controller.set_references(all_reference_items(&workdir, &profiles));
+                                        controller.set_skills(skill_items());
                                         controller.set_custom_commands(custom_commands(&workdir));
                                     }
                                     controller.app.projection = engine

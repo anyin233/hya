@@ -1,0 +1,18 @@
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/prd.md", "reason": "Source requirements and acceptance criteria for the prompt composer feature."}
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/design.md", "reason": "Technical design for @ source choice, skill/file insertion, slash semantics, and permission/yolo commands."}
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/research/opencode-prompt-composer.md", "reason": "OpenCode docs/source research that anchors slash, mention, skill, and prompt submission behavior."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "This task crosses TUI controller, skill loading, file reference expansion, and runtime prompt submission boundaries."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing command registry, reference expansion, skill discovery/loading, and renderer primitives rather than duplicating flows."}
+{"file": "DESIGN.md", "reason": "Native TUI design system and render-layer rules to preserve while changing prompt dialogs."}
+{"file": "crates/hya-backend/src/tui/controller.rs", "reason": "Primary implementation target for input state, dialogs, @ completion, slash dispatch, permission dialog, and yolo command behavior."}
+{"file": "crates/hya-backend/src/tui/commands.rs", "reason": "Slash command catalog and completion source for built-in and custom commands."}
+{"file": "crates/hya-backend/src/tui/prompt.rs", "reason": "Existing paste placeholder state and mention trigger helper to extend/test."}
+{"file": "crates/hya-backend/src/tui/reference.rs", "reason": "Existing bounded file/directory @ mention materialization that file completion must preserve."}
+{"file": "crates/hya-backend/src/tui.rs", "reason": "Native TUI runtime bridge that refreshes catalogs and submits prompts to the engine."}
+{"file": "crates/hya-server/src/opencode/command_catalog.rs", "reason": "Already implemented OpenCode-compatible command catalog, including init/review/config/disk/skill command sources that native slash inventory must account for."}
+{"file": "crates/hya-server/src/opencode/command_sources.rs", "reason": "Config and recursive disk command source behavior to compare against native TUI custom command loading."}
+{"file": "crates/hya-tool/src/skill.rs", "reason": "Runtime skill loading and permission plane that skill picker candidates must match."}
+{"file": "crates/hya-app/src/skills.rs", "reason": "Skill frontmatter parsing and metadata discovery used for prompt/system context."}
+{"file": "crates/hya-app/src/runtime.rs", "reason": "Native runtime skill directory list and system prompt skill section."}
+{"file": "crates/hya-legacy-tui/src/widgets/overlays.rs", "reason": "Pure dialog rendering path used by source/file/skill/permission popups."}
+{"file": "docs/cli.md", "reason": "Documented TUI slash-command reference; implementation must reconcile docs with code, especially init/review/permission/yolo."}

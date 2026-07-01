@@ -86,6 +86,9 @@ fn parse_mention(raw: &str) -> Option<Mention> {
         Some((path, range)) => (path, parse_line_range(range)),
         None => (trimmed, None),
     };
+    if path.starts_with("skill:") {
+        return None;
+    }
     if path.is_empty() || path.starts_with('/') {
         return None;
     }
@@ -272,5 +275,16 @@ mod tests {
         assert!(expanded.contains("<directory path=\"docs\">"));
         assert!(expanded.contains("docs/README.md"));
         assert!(expanded.contains("</directory>"));
+    }
+
+    #[test]
+    fn skill_mentions_are_not_treated_as_file_paths() {
+        let root = temp_root();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("skill:release"), "do not inline this\n").unwrap();
+
+        let expanded = super::expand_mentions(&root, "Use @skill:release").unwrap();
+
+        assert_eq!(expanded, "Use @skill:release");
     }
 }

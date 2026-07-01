@@ -50,6 +50,7 @@ Key controls:
 | `PgUp` / `PgDn` | Scroll the conversation. |
 | `Up` / `Down` | Scroll one line. |
 | `Tab` on `/` input | Complete slash commands or open the command picker. |
+| `@` | Choose a skill or workspace file to insert into the prompt. |
 | `F2` | Open the model selector. |
 | `Ctrl-P` | Open command/help. |
 | `Ctrl-C` | Close dialogs, clear input, interrupt a running turn, or exit when idle. |

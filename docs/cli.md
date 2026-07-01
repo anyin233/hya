@@ -42,8 +42,8 @@ short help message and exits successfully.
 The TUI uses the same `SessionEngine` as the rest of the binary. It uses an
 in-memory store unless `--db <PATH>` is supplied. Read-only tools are
 auto-allowed; mutating tools ask through the permission panel unless `--yolo` is
-set. In the `hya` frontend, use the command palette's **Switch YOLO** action to
-toggle auto-approval interactively.
+set. In the `hya` frontend, use Tab, `/permission`, or `/yolo` to toggle
+auto-approval interactively.
 
 TUI slash commands include:
 
@@ -53,9 +53,12 @@ TUI slash commands include:
 | `/resume`, `/sessions` | Resume a prior persisted TUI session from the active store. |
 | `/new`, `/clear` | Start a fresh session. |
 | `/compact` | Compact older transcript context for future provider requests. |
-| `/init` | Create a starter `AGENTS.md` if one does not already exist. |
+| `/init` | Run the guided project-instructions setup prompt. |
+| `/review [target]` | Review changes, defaulting to the current workspace state. |
 | `/agent`, `/agents` | Select a built-in agent profile. |
 | `/tools`, `/mcp` | Show builtin tools and MCP status. |
+| `/permission`, `/permissions` | Show permission mode and quick actions. |
+| `/yolo [on\|off\|toggle]` | Change automatic permission approval mode. |
 | `/think` | Set reasoning effort for future turns. |
 | `/export` | Write the current transcript as Markdown. |
 | `/quit`, `/exit`, `/q` | Exit the TUI. |
@@ -77,11 +80,13 @@ Their bodies support `$ARGUMENTS` and positional `$1`...`$9` replacement;
 optional `description`, `agent`, and `model` frontmatter is applied when the
 command is submitted.
 
-`@path` mentions in TUI prompts are expanded into bounded context blocks before
-submission. `@file#Lx-y` includes only the requested line range; `@directory`
-includes a short listing. A leading built-in agent mention, for example
-`@explore trace this path`, switches that submitted turn to the matching
-profile.
+Type `@` at a prompt token boundary to choose between a skill and a workspace
+file. File selections insert `@path` mentions, which are expanded into bounded
+context blocks before submission. `@file#Lx-y` includes only the requested line
+range; `@directory` includes a short listing. Skill selections insert
+`@skill:name` and ask the assistant to load that skill through the `skill` tool.
+A leading built-in agent mention, for example `@explore trace this path`,
+switches that submitted turn to the matching profile.
 
 ## `hya-backend exec`
 

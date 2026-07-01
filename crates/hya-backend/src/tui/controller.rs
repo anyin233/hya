@@ -49,8 +49,11 @@ enum DialogMode {
     Help,
     Tools,
     Think,
+    Permission,
     CommandCompletion,
-    ReferenceCompletion,
+    AtSourceChoice,
+    FileCompletion,
+    SkillCompletion,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,12 +71,14 @@ pub struct Controller {
     active_model: Option<ModelEntry>,
     sessions: Vec<SessionSummary>,
     references: Vec<DialogItem>,
+    skills: Vec<DialogItem>,
     agents: Vec<DialogItem>,
     custom_commands: Vec<CustomCommand>,
     dialog_mode: Option<DialogMode>,
     input_history: Vec<String>,
     history_cursor: Option<usize>,
     prompt: PromptState,
+    suppressed_mention_trigger: Option<usize>,
     last_ctrl_c: Option<Instant>,
 }
 
@@ -122,12 +127,14 @@ impl Controller {
             active_model,
             sessions,
             references: Vec::new(),
+            skills: Vec::new(),
             agents: Vec::new(),
             custom_commands: Vec::new(),
             dialog_mode: None,
             input_history: Vec::new(),
             history_cursor: None,
             prompt: PromptState::default(),
+            suppressed_mention_trigger: None,
             last_ctrl_c: None,
         }
     }
@@ -225,6 +232,10 @@ impl Controller {
         self.references = references;
     }
 
+    pub fn set_skills(&mut self, skills: Vec<DialogItem>) {
+        self.skills = skills;
+    }
+
     pub fn set_agents(&mut self, agents: Vec<DialogItem>) {
         self.agents = agents;
     }
@@ -273,7 +284,11 @@ impl Controller {
         if self.app.dialog.is_some() {
             if matches!(
                 self.dialog_mode,
-                Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+                Some(
+                    DialogMode::CommandCompletion
+                        | DialogMode::FileCompletion
+                        | DialogMode::SkillCompletion
+                )
             ) && !self.app.input.is_empty()
             {
                 self.clear_prompt();
@@ -301,7 +316,11 @@ impl Controller {
     fn handle_dialog_key(&mut self, key: KeyEvent) -> TuiEffect {
         if matches!(
             self.dialog_mode,
-            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+            Some(
+                DialogMode::CommandCompletion
+                    | DialogMode::FileCompletion
+                    | DialogMode::SkillCompletion
+            )
         ) {
             return self.handle_completion_popup_key(key);
         }
@@ -310,8 +329,19 @@ impl Controller {
         };
         match key.code {
             KeyCode::Esc => {
+                if self.dialog_mode == Some(DialogMode::AtSourceChoice) {
+                    self.suppressed_mention_trigger = mention_trigger_index(&self.app.input);
+                }
                 self.app.dialog = None;
                 self.dialog_mode = None;
+                TuiEffect::None
+            }
+            KeyCode::Char('f' | 'F') if self.dialog_mode == Some(DialogMode::AtSourceChoice) => {
+                self.open_file_completion_dialog();
+                TuiEffect::None
+            }
+            KeyCode::Char('s' | 'S') if self.dialog_mode == Some(DialogMode::AtSourceChoice) => {
+                self.open_skill_completion_dialog();
                 TuiEffect::None
             }
             KeyCode::Tab
@@ -382,12 +412,27 @@ impl Controller {
                         .get(selected)
                         .map(|level| TuiEffect::SelectReasoning(level.clone()))
                         .unwrap_or(TuiEffect::None),
+                    Some(DialogMode::Permission) => {
+                        self.apply_permission_selection(selected);
+                        TuiEffect::None
+                    }
                     Some(DialogMode::CommandCompletion) => {
                         self.apply_command_completion(selected);
                         TuiEffect::None
                     }
+                    Some(DialogMode::AtSourceChoice) => {
+                        if selected == 1 {
+                            self.open_skill_completion_dialog();
+                        } else {
+                            self.open_file_completion_dialog();
+                        }
+                        TuiEffect::None
+                    }
                     Some(
-                        DialogMode::Help | DialogMode::Tools | DialogMode::ReferenceCompletion,
+                        DialogMode::Help
+                        | DialogMode::Tools
+                        | DialogMode::FileCompletion
+                        | DialogMode::SkillCompletion,
                     )
                     | None => TuiEffect::None,
                 }
@@ -402,14 +447,15 @@ impl Controller {
             .expanded_input(&self.app.input)
             .trim_end()
             .to_string();
-        self.clear_prompt();
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
+        if input.trim().is_empty() {
+            self.clear_prompt();
             return TuiEffect::None;
         }
-        if let Some(command) = trimmed.strip_prefix('/') {
+        if let Some(command) = input.strip_prefix('/') {
+            self.clear_prompt();
             return self.dispatch_slash(command);
         }
+        self.clear_prompt();
         self.app.scroll_back = 0;
         self.input_history.push(input.clone());
         self.history_cursor = None;
@@ -459,6 +505,18 @@ impl Controller {
         let name = pieces.next().unwrap_or_default();
         let arguments = pieces.next().unwrap_or_default().trim();
         match commands::resolve_slash(command) {
+            Some(CommandKind::Init) => TuiEffect::SubmitCommand {
+                prompt: commands::expand_builtin_prompt(CommandKind::Init, arguments)
+                    .unwrap_or_default(),
+                command: name.to_string(),
+                arguments: arguments.to_string(),
+            },
+            Some(CommandKind::Review) => TuiEffect::SubmitCommand {
+                prompt: commands::expand_builtin_prompt(CommandKind::Review, arguments)
+                    .unwrap_or_default(),
+                command: name.to_string(),
+                arguments: arguments.to_string(),
+            },
             Some(CommandKind::Model) if !arguments.is_empty() => {
                 match self.resolve_model_command(arguments) {
                     Ok(entry) => {
@@ -487,6 +545,11 @@ impl Controller {
                 self.open_tools_dialog();
                 TuiEffect::None
             }
+            Some(CommandKind::Permission) => {
+                self.open_permission_dialog();
+                TuiEffect::None
+            }
+            Some(CommandKind::Yolo) => self.set_yolo_from_command(arguments),
             Some(CommandKind::Think) if !arguments.is_empty() => {
                 TuiEffect::SelectReasoning(arguments.to_string())
             }
@@ -566,6 +629,24 @@ impl Controller {
         }
     }
 
+    fn set_yolo_from_command(&mut self, arguments: &str) -> TuiEffect {
+        let next = match arguments {
+            "" | "toggle" => Some(!self.app.yolo),
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        };
+        let Some(enabled) = next else {
+            return TuiEffect::SystemMessage("usage: /yolo [on|off|toggle]".to_string());
+        };
+        self.app.yolo = enabled;
+        if enabled {
+            TuiEffect::SystemMessage("YOLO mode enabled".to_string())
+        } else {
+            TuiEffect::SystemMessage("YOLO mode disabled".to_string())
+        }
+    }
+
     fn open_command_completion_dialog(&mut self, items: Vec<DialogItem>) {
         self.app.dialog = Some(DialogView {
             title: "commands".to_string(),
@@ -576,14 +657,74 @@ impl Controller {
         self.dialog_mode = Some(DialogMode::CommandCompletion);
     }
 
-    fn open_reference_completion_dialog(&mut self, items: Vec<DialogItem>) {
+    fn open_at_source_choice_dialog(&mut self) {
         self.app.dialog = Some(DialogView {
-            title: "references".to_string(),
-            subtitle: "select a file or reference".to_string(),
+            title: "insert @ reference".to_string(),
+            subtitle: "choose what @ should insert".to_string(),
+            items: vec![
+                DialogItem {
+                    label: "file".to_string(),
+                    detail: "cite a workspace file or directory".to_string(),
+                },
+                DialogItem {
+                    label: "skill".to_string(),
+                    detail: "ask the assistant to load a skill".to_string(),
+                },
+            ],
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::AtSourceChoice);
+    }
+
+    fn open_file_completion_dialog(&mut self) {
+        let Some(idx) = mention_trigger_index(&self.app.input) else {
+            return;
+        };
+        let prefix = self.app.input[idx + 1..].to_string();
+        self.refresh_file_completion_dialog(&prefix);
+    }
+
+    fn refresh_file_completion_dialog(&mut self, prefix: &str) {
+        let items = self
+            .references
+            .iter()
+            .filter(|item| {
+                let label = item.label.strip_prefix('@').unwrap_or(&item.label);
+                label.starts_with(prefix)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.app.dialog = Some(DialogView {
+            title: "files".to_string(),
+            subtitle: "cite a workspace file or directory".to_string(),
             items,
             selected: 0,
         });
-        self.dialog_mode = Some(DialogMode::ReferenceCompletion);
+        self.dialog_mode = Some(DialogMode::FileCompletion);
+    }
+
+    fn open_skill_completion_dialog(&mut self) {
+        let Some(idx) = mention_trigger_index(&self.app.input) else {
+            return;
+        };
+        let prefix = self.app.input[idx + 1..].to_string();
+        self.refresh_skill_completion_dialog(&prefix);
+    }
+
+    fn refresh_skill_completion_dialog(&mut self, prefix: &str) {
+        let items = self
+            .skills
+            .iter()
+            .filter(|item| item.label.starts_with(prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.app.dialog = Some(DialogView {
+            title: "skills".to_string(),
+            subtitle: "ask the assistant to load a skill".to_string(),
+            items,
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::SkillCompletion);
     }
 
     fn handle_completion_popup_key(&mut self, key: KeyEvent) -> TuiEffect {
@@ -626,6 +767,7 @@ impl Controller {
             }
             KeyCode::Backspace => {
                 self.app.input.pop();
+                self.suppressed_mention_trigger = None;
                 self.refresh_inline_popup();
                 TuiEffect::None
             }
@@ -647,7 +789,7 @@ impl Controller {
                 self.app.dialog = None;
                 self.dialog_mode = None;
             }
-            Some(DialogMode::ReferenceCompletion) => {
+            Some(DialogMode::FileCompletion) => {
                 let label = self
                     .app
                     .dialog
@@ -656,6 +798,19 @@ impl Controller {
                     .map(|item| item.label.clone());
                 if let Some(label) = label {
                     self.complete_reference(&label);
+                }
+                self.app.dialog = None;
+                self.dialog_mode = None;
+            }
+            Some(DialogMode::SkillCompletion) => {
+                let label = self
+                    .app
+                    .dialog
+                    .as_ref()
+                    .and_then(|dialog| dialog.items.get(selected))
+                    .map(|item| item.label.clone());
+                if let Some(label) = label {
+                    self.complete_skill(&label);
                 }
                 self.app.dialog = None;
                 self.dialog_mode = None;
@@ -673,6 +828,16 @@ impl Controller {
         self.app.input.push(' ');
     }
 
+    fn complete_skill(&mut self, label: &str) {
+        let Some(idx) = mention_trigger_index(&self.app.input) else {
+            return;
+        };
+        self.app.input.truncate(idx);
+        self.app.input.push_str("@skill:");
+        self.app.input.push_str(label);
+        self.app.input.push(' ');
+    }
+
     fn refresh_inline_popup(&mut self) {
         if self.app.input.starts_with('/') && !self.app.input.contains(char::is_whitespace) {
             let items =
@@ -686,27 +851,39 @@ impl Controller {
             return;
         }
         if let Some(idx) = mention_trigger_index(&self.app.input) {
-            let prefix = &self.app.input[idx + 1..];
-            let items = self
-                .references
-                .iter()
-                .filter(|item| {
-                    let label = item.label.strip_prefix('@').unwrap_or(&item.label);
-                    label.starts_with(prefix)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if items.is_empty() {
-                self.app.dialog = None;
-                self.dialog_mode = None;
-            } else {
-                self.open_reference_completion_dialog(items);
+            if self.suppressed_mention_trigger == Some(idx) {
+                if matches!(
+                    self.dialog_mode,
+                    Some(
+                        DialogMode::AtSourceChoice
+                            | DialogMode::FileCompletion
+                            | DialogMode::SkillCompletion
+                    )
+                ) {
+                    self.app.dialog = None;
+                    self.dialog_mode = None;
+                }
+                return;
+            }
+            self.suppressed_mention_trigger = None;
+            let prefix = self.app.input[idx + 1..].to_string();
+            match self.dialog_mode {
+                Some(DialogMode::FileCompletion) => self.refresh_file_completion_dialog(&prefix),
+                Some(DialogMode::SkillCompletion) => self.refresh_skill_completion_dialog(&prefix),
+                Some(DialogMode::AtSourceChoice) => {}
+                _ => self.open_at_source_choice_dialog(),
             }
             return;
         }
+        self.suppressed_mention_trigger = None;
         if matches!(
             self.dialog_mode,
-            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+            Some(
+                DialogMode::CommandCompletion
+                    | DialogMode::AtSourceChoice
+                    | DialogMode::FileCompletion
+                    | DialogMode::SkillCompletion
+            )
         ) {
             self.app.dialog = None;
             self.dialog_mode = None;
@@ -716,9 +893,15 @@ impl Controller {
     fn clear_prompt(&mut self) {
         self.prompt.clear(&mut self.app);
         self.disarm_exit();
+        self.suppressed_mention_trigger = None;
         if matches!(
             self.dialog_mode,
-            Some(DialogMode::CommandCompletion | DialogMode::ReferenceCompletion)
+            Some(
+                DialogMode::CommandCompletion
+                    | DialogMode::AtSourceChoice
+                    | DialogMode::FileCompletion
+                    | DialogMode::SkillCompletion
+            )
         ) {
             self.app.dialog = None;
             self.dialog_mode = None;
@@ -851,6 +1034,42 @@ impl Controller {
             selected: 0,
         });
         self.dialog_mode = Some(DialogMode::Tools);
+    }
+
+    fn open_permission_dialog(&mut self) {
+        let yolo = if self.app.yolo { "on" } else { "off" };
+        self.app.dialog = Some(DialogView {
+            title: "permissions".to_string(),
+            subtitle: "current mode and quick actions".to_string(),
+            items: vec![
+                DialogItem {
+                    label: format!("YOLO: {yolo}"),
+                    detail: "Enter toggles automatic permission approval".to_string(),
+                },
+                DialogItem {
+                    label: "tools".to_string(),
+                    detail: "Show builtin tools and MCP status".to_string(),
+                },
+                DialogItem {
+                    label: "help".to_string(),
+                    detail: "Show slash commands and shortcuts".to_string(),
+                },
+            ],
+            selected: 0,
+        });
+        self.dialog_mode = Some(DialogMode::Permission);
+    }
+
+    fn apply_permission_selection(&mut self, selected: usize) {
+        match selected {
+            0 => {
+                self.app.yolo = !self.app.yolo;
+                self.open_permission_dialog();
+            }
+            1 => self.open_tools_dialog(),
+            2 => self.open_help_dialog(),
+            _ => {}
+        }
     }
 
     fn active_reasoning_levels(&self) -> Vec<String> {
@@ -1357,21 +1576,72 @@ mod tests {
     }
 
     #[test]
-    fn at_popup_completes_reference_items() {
+    fn at_popup_opens_source_choice() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "@");
+
+        let dialog = controller.app.dialog.as_ref().expect("source dialog");
+        assert_eq!(dialog.title, "insert @ reference");
+        assert_eq!(dialog.items[0].label, "file");
+        assert_eq!(dialog.items[1].label, "skill");
+    }
+
+    #[test]
+    fn source_choice_escape_suppresses_current_at_token() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "@");
+        let _ = controller.handle_key(key(KeyCode::Esc));
+        type_text(&mut controller, "literal");
+
+        assert!(controller.app.dialog.is_none());
+        assert_eq!(controller.app.input, "@literal");
+    }
+
+    #[test]
+    fn source_choice_file_branch_completes_reference() {
         let mut controller = Controller::new(AppState::default());
         controller.set_references(vec![DialogItem {
-            label: "@README.md".to_string(),
+            label: "@crates/hya-backend/src/tui/controller.rs".to_string(),
             detail: "file".to_string(),
         }]);
 
-        type_text(&mut controller, "read @");
+        type_text(&mut controller, "@");
+        let _ = controller.handle_key(key(KeyCode::Enter));
+        type_text(&mut controller, "crates");
+        let _ = controller.handle_key(key(KeyCode::Enter));
 
-        let dialog = controller.app.dialog.as_ref().expect("reference popup");
-        assert_eq!(dialog.title, "references");
-        assert_eq!(dialog.items[0].label, "@README.md");
+        assert_eq!(
+            controller.app.input,
+            "@crates/hya-backend/src/tui/controller.rs "
+        );
+    }
 
+    #[test]
+    fn source_choice_skill_branch_completes_skill() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_skills(vec![DialogItem {
+            label: "release".to_string(),
+            detail: "prepare release notes".to_string(),
+        }]);
+
+        type_text(&mut controller, "@");
+        let _ = controller.handle_key(key(KeyCode::Down));
         assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
-        assert_eq!(controller.app.input, "read @README.md ");
+        type_text(&mut controller, "rel");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        assert_eq!(controller.app.input, "@skill:release ");
+    }
+
+    #[test]
+    fn email_like_at_does_not_open_popup() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "email@example.com");
+
+        assert!(controller.app.dialog.is_none());
     }
 
     #[test]
@@ -1558,6 +1828,67 @@ mod tests {
     }
 
     #[test]
+    fn slash_help_lists_every_native_builtin_command() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/help");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let labels = controller
+            .app
+            .dialog
+            .as_ref()
+            .expect("help dialog")
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+
+        for expected in [
+            "/model",
+            "/resume",
+            "/new",
+            "/compact",
+            "/init",
+            "/review",
+            "/agent",
+            "/tools",
+            "/mcp",
+            "/think",
+            "/permission",
+            "/yolo",
+            "/export",
+            "/quit",
+            "/help",
+        ] {
+            assert!(
+                labels.contains(&expected),
+                "missing native slash command {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_catalog_commands_are_accounted_for_in_native_tui() {
+        let native = commands::COMMANDS
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+
+        for expected in [
+            "init", "review", "help", "model", "clear", "sessions", "think",
+        ] {
+            assert!(
+                native.contains(&expected)
+                    || commands::COMMANDS
+                        .iter()
+                        .any(|spec| spec.aliases.contains(&expected)),
+                "OpenCode catalog command /{expected} needs native TUI coverage or an explicit alias"
+            );
+        }
+    }
+
+    #[test]
     fn slash_new_requests_new_session() {
         let mut controller = Controller::new(AppState::default());
 
@@ -1603,14 +1934,27 @@ mod tests {
     }
 
     #[test]
-    fn slash_init_is_not_local_builtin() {
+    fn slash_init_is_native_command_or_prompt_template() {
         let mut controller = Controller::new(AppState::default());
 
         type_text(&mut controller, "/init");
 
-        assert!(matches!(
+        assert!(!matches!(
             controller.handle_key(key(KeyCode::Enter)),
             TuiEffect::SystemMessage(message) if message.contains("unknown command")
+        ));
+    }
+
+    #[test]
+    fn slash_review_submits_review_prompt_template() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/review HEAD~1");
+
+        assert!(matches!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SubmitCommand { command, arguments, .. }
+                if command == "review" && arguments == "HEAD~1"
         ));
     }
 
@@ -1678,16 +2022,81 @@ mod tests {
     }
 
     #[test]
-    fn slash_yolo_is_not_local_builtin() {
+    fn slash_yolo_sets_modes_from_arguments() {
         let mut controller = Controller::new(AppState::default());
 
         type_text(&mut controller, "/yolo on");
 
-        assert!(matches!(
+        assert_eq!(
             controller.handle_key(key(KeyCode::Enter)),
-            TuiEffect::SystemMessage(message) if message.contains("unknown command")
-        ));
+            TuiEffect::SystemMessage("YOLO mode enabled".to_string())
+        );
+        assert!(controller.app.yolo);
+
+        type_text(&mut controller, "/yolo off");
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SystemMessage("YOLO mode disabled".to_string())
+        );
         assert!(!controller.app.yolo);
+    }
+
+    #[test]
+    fn slash_yolo_unknown_argument_returns_usage() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/yolo sometimes");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SystemMessage("usage: /yolo [on|off|toggle]".to_string())
+        );
+    }
+
+    #[test]
+    fn permission_command_opens_permission_dialog() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/permission");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        let dialog = controller.app.dialog.as_ref().expect("permission dialog");
+        assert_eq!(dialog.title, "permissions");
+        assert!(dialog.items.iter().any(|item| item.label == "YOLO: off"));
+    }
+
+    #[test]
+    fn permission_dialog_toggles_yolo() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, "/permission");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+
+        assert!(controller.app.yolo);
+        let dialog = controller.app.dialog.as_ref().expect("permission dialog");
+        assert!(dialog.items.iter().any(|item| item.label == "YOLO: on"));
+    }
+
+    #[test]
+    fn slash_dispatch_requires_raw_first_character() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, " /model");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::Submit(" /model".to_string())
+        );
+    }
+
+    #[test]
+    fn slash_completion_requires_raw_first_character() {
+        let mut controller = Controller::new(AppState::default());
+
+        type_text(&mut controller, " /");
+
+        assert!(controller.app.dialog.is_none());
     }
 
     #[test]

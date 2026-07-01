@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/prd.md", "reason": "Verify every acceptance criterion is covered by tests or manual validation evidence."}
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/design.md", "reason": "Check implementation matches the selected architecture and does not introduce structured prompt-parts churn."}
+{"file": ".trellis/tasks/07-01-tui-prompt-composer-skill-file-slash/research/opencode-prompt-composer.md", "reason": "Verify user-visible behavior remains aligned with researched OpenCode slash, mention, and skill behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust backend quality gate including no unwrap/expect in library code and no suppressed errors."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Check data flow is consistent across controller, skill loading, reference expansion, and runtime submission."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check the change reuses existing registries/planes and avoids duplicate parsers where shared helpers exist."}
+{"file": "DESIGN.md", "reason": "Confirm TUI renderer purity and dialog styling are preserved."}
+{"file": "crates/hya-backend/src/tui/controller.rs", "reason": "Verify @ source choice, strict slash dispatch, permission dialog, and yolo command tests and behavior."}
+{"file": "crates/hya-backend/src/tui/commands.rs", "reason": "Verify slash help/completion/dispatch preserves every existing native command and reconciles init/review/permission/yolo."}
+{"file": "crates/hya-server/src/opencode/command_catalog.rs", "reason": "Compare native TUI slash inventory against already implemented OpenCode-compatible command sources so supported commands are not silently omitted."}
+{"file": "crates/hya-backend/src/tui/reference.rs", "reason": "Verify file citation expansion remains bounded and ignores skill mentions."}
+{"file": "crates/hya-tool/src/skill.rs", "reason": "Verify listed skill directories are loadable by the runtime skill tool."}
+{"file": "docs/cli.md", "reason": "Verify the final slash command reference matches actual native TUI behavior."}

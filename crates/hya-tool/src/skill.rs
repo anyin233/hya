@@ -19,15 +19,24 @@ pub struct SkillPlane {
 
 impl Default for SkillPlane {
     fn default() -> Self {
-        let mut dirs = vec![PathBuf::from(".hya/skills")];
-        if let Some(home) = std::env::var_os("HOME") {
-            dirs.push(PathBuf::from(home).join(".config/hya/skills"));
-        }
-        Self::new(dirs)
+        Self::new(Self::default_dirs())
     }
 }
 
 impl SkillPlane {
+    #[must_use]
+    pub fn default_dirs() -> Vec<PathBuf> {
+        let mut dirs = vec![
+            PathBuf::from(".opencode/skill"),
+            PathBuf::from(".opencode/skills"),
+            PathBuf::from(".hya/skills"),
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join(".config/hya/skills"));
+        }
+        dirs
+    }
+
     #[must_use]
     pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
@@ -190,4 +199,29 @@ fn collect_files(dir: &Path, limit: usize, files: &mut Vec<PathBuf>) {
 
 fn canonical_or_self(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::SkillPlane;
+
+    #[test]
+    fn default_dirs_include_hya_and_opencode_project_roots() {
+        let dirs = SkillPlane::default_dirs();
+
+        assert!(
+            dirs.iter()
+                .any(|path| path == &PathBuf::from(".hya/skills"))
+        );
+        assert!(
+            dirs.iter()
+                .any(|path| path == &PathBuf::from(".opencode/skill"))
+        );
+        assert!(
+            dirs.iter()
+                .any(|path| path == &PathBuf::from(".opencode/skills"))
+        );
+    }
 }

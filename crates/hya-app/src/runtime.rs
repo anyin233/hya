@@ -60,11 +60,7 @@ pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
 }
 
 pub fn skill_dirs() -> Vec<PathBuf> {
-    let mut v = vec![PathBuf::from(".hya/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        v.push(PathBuf::from(home).join(".config/hya/skills"));
-    }
-    v
+    hya_tool::SkillPlane::default_dirs()
 }
 
 pub fn host_info() -> HostInfo {

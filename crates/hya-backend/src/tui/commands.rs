@@ -3,14 +3,23 @@ use std::path::{Path, PathBuf};
 
 use hya_legacy_tui::DialogItem;
 
+const INIT_TEMPLATE: &str =
+    include_str!("../../../hya-server/src/opencode/command_templates/initialize.txt");
+const REVIEW_TEMPLATE: &str =
+    include_str!("../../../hya-server/src/opencode/command_templates/review.txt");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandKind {
     Model,
     Resume,
     NewSession,
     Compact,
+    Init,
+    Review,
     Agent,
     Tools,
+    Permission,
+    Yolo,
     Think,
     Export,
     Quit,
@@ -78,6 +87,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         kind: CommandKind::Compact,
     },
     CommandSpec {
+        name: "init",
+        aliases: &[],
+        description: "Create or update project instructions",
+        key_hint: "init",
+        kind: CommandKind::Init,
+    },
+    CommandSpec {
+        name: "review",
+        aliases: &[],
+        description: "Review code changes",
+        key_hint: "review",
+        kind: CommandKind::Review,
+    },
+    CommandSpec {
         name: "agent",
         aliases: &["agents"],
         description: "Select the active agent profile",
@@ -97,6 +120,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Show MCP and builtin tool status",
         key_hint: "leader t",
         kind: CommandKind::Tools,
+    },
+    CommandSpec {
+        name: "permission",
+        aliases: &["permissions"],
+        description: "Show or change permission mode",
+        key_hint: "perm",
+        kind: CommandKind::Permission,
+    },
+    CommandSpec {
+        name: "yolo",
+        aliases: &[],
+        description: "Toggle automatic permission approval",
+        key_hint: "tab",
+        kind: CommandKind::Yolo,
     },
     CommandSpec {
         name: "think",
@@ -186,6 +223,28 @@ pub fn completion_items_with_custom(input: &str, custom: &[CustomCommand]) -> Ve
 #[must_use]
 pub fn find_custom<'a>(custom: &'a [CustomCommand], name: &str) -> Option<&'a CustomCommand> {
     custom.iter().find(|command| command.name == name)
+}
+
+#[must_use]
+pub fn expand_builtin_prompt(kind: CommandKind, arguments: &str) -> Option<String> {
+    match kind {
+        CommandKind::Init => {
+            Some(expand_template(INIT_TEMPLATE, arguments).replace("${path}", "."))
+        }
+        CommandKind::Review => Some(expand_template(REVIEW_TEMPLATE, arguments)),
+        _ => None,
+    }
+}
+
+fn expand_template(template: &str, arguments: &str) -> String {
+    let command = CustomCommand {
+        name: String::new(),
+        description: String::new(),
+        template: template.to_string(),
+        agent: None,
+        model: None,
+    };
+    command.expand(arguments)
 }
 
 pub fn load_markdown_commands(workdir: &Path) -> std::io::Result<Vec<CustomCommand>> {
@@ -315,17 +374,20 @@ mod tests {
 
     #[test]
     fn resolves_slash_commands_and_aliases() {
+        assert_eq!(resolve_slash("init"), Some(CommandKind::Init));
+        assert_eq!(resolve_slash("review"), Some(CommandKind::Review));
         assert_eq!(resolve_slash("model"), Some(CommandKind::Model));
         assert_eq!(resolve_slash("models"), Some(CommandKind::Model));
         assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
         assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
         assert_eq!(resolve_slash("clear"), Some(CommandKind::NewSession));
-        assert_eq!(resolve_slash("init"), None);
         assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
         assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
         assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
-        assert_eq!(resolve_slash("yolo"), None);
+        assert_eq!(resolve_slash("permission"), Some(CommandKind::Permission));
+        assert_eq!(resolve_slash("permissions"), Some(CommandKind::Permission));
+        assert_eq!(resolve_slash("yolo"), Some(CommandKind::Yolo));
         assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
         assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
         assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
@@ -342,14 +404,16 @@ mod tests {
     #[test]
     fn help_items_come_from_registered_commands() {
         let items = help_items();
+        assert!(items.iter().any(|item| item.label == "/init"));
+        assert!(items.iter().any(|item| item.label == "/review"));
         assert!(items.iter().any(|item| item.label == "/model"));
         assert!(items.iter().any(|item| item.label == "/resume"));
         assert!(items.iter().any(|item| item.label == "/new"));
+        assert!(items.iter().any(|item| item.label == "/permission"));
+        assert!(items.iter().any(|item| item.label == "/yolo"));
         assert!(items.iter().any(|item| item.label == "/export"));
         assert!(items.iter().any(|item| item.label == "/quit"));
         assert!(items.iter().any(|item| item.label == "/help"));
-        assert!(!items.iter().any(|item| item.label == "/init"));
-        assert!(!items.iter().any(|item| item.label == "/yolo"));
     }
 
     #[test]
@@ -364,21 +428,58 @@ mod tests {
                 .any(|item| item.label == "/resume")
         );
         assert!(
-            !completion_items("/")
+            completion_items("/")
                 .iter()
                 .any(|item| item.label == "/yolo")
         );
         assert!(completion_items("/model with args").is_empty());
         assert!(
-            !completion_items("/in")
+            completion_items("/in")
                 .iter()
                 .any(|item| item.label == "/init")
         );
         assert!(
-            !completion_items("/yo")
+            completion_items("/yo")
                 .iter()
                 .any(|item| item.label == "/yolo")
         );
+    }
+
+    #[test]
+    fn markdown_command_dirs_include_hya_and_opencode_sources() {
+        let root = PathBuf::from("/tmp/project");
+        let dirs = super::markdown_command_dirs(&root);
+        let rendered = dirs
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|path| path.ends_with(".config/opencode/commands"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|path| path.ends_with(".config/opencode/command"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|path| path.ends_with(".config/hya/prompts"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|path| path.ends_with(".opencode/commands"))
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|path| path.ends_with(".opencode/command"))
+        );
+        assert!(rendered.iter().any(|path| path.ends_with(".hya/prompts")));
     }
 
     #[test]

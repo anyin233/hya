@@ -69,18 +69,6 @@ pub fn dialog_items(profiles: &[AgentProfile]) -> Vec<DialogItem> {
 }
 
 #[must_use]
-pub fn reference_items(profiles: &[AgentProfile]) -> Vec<DialogItem> {
-    profiles
-        .iter()
-        .filter(|profile| profile.name != "build")
-        .map(|profile| DialogItem {
-            label: format!("@{}", profile.name),
-            detail: format!("agent · {}", profile.description),
-        })
-        .collect()
-}
-
-#[must_use]
 pub fn strip_leading_agent_mention(input: &str) -> Option<RoutedPrompt> {
     let trimmed = input.trim_start();
     let (first, rest) = trimmed.split_once(char::is_whitespace)?;
