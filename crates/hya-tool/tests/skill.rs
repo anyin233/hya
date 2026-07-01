@@ -1,7 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_tool::{
@@ -10,6 +11,41 @@ use hya_tool::{
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+
+static ENV_LOCK: AtomicBool = AtomicBool::new(false);
+
+struct HomeGuard {
+    previous: Option<OsString>,
+}
+
+impl HomeGuard {
+    fn set(home: &Path) -> Self {
+        while ENV_LOCK
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            std::thread::yield_now();
+        }
+        let previous = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("HOME", previous);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+        ENV_LOCK.store(false, Ordering::Release);
+    }
+}
 
 fn allow(action: Action, pat: &str) -> Rule {
     Rule::new(action, pat, Mode::Allow)
@@ -52,6 +88,12 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),
     }
+}
+
+fn ctx_with_workdir(rules: Vec<Rule>, skills: SkillPlane, workdir: PathBuf) -> ToolCtx {
+    let mut ctx = ctx_with(rules, skills);
+    ctx.workdir = workdir;
+    ctx
 }
 
 #[tokio::test]
@@ -213,4 +255,37 @@ async fn skill_prefers_first_matching_root_when_multiple_roots_define_same_name(
     let output = out["output"].as_str().unwrap();
     assert!(output.contains("First root content."));
     assert!(!output.contains("Second root content."));
+}
+
+#[tokio::test]
+async fn default_skill_plane_loads_from_toolctx_workdir() {
+    // Given
+    let home = tempdir();
+    let workdir = tempdir();
+    let _home = HomeGuard::set(&home);
+    let dir = workdir.join(".hya/skills/writer");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: writer\ndescription: Writes from workspace\n---\nWorkspace skill body.\n",
+    )
+    .unwrap();
+
+    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let ctx = ctx_with_workdir(
+        vec![allow(Action::Skill, "writer")],
+        SkillPlane::default(),
+        workdir,
+    );
+
+    // When
+    let out = tool
+        .execute(&ctx, json!({ "name": "writer" }))
+        .await
+        .unwrap();
+
+    // Then
+    assert_eq!(out["metadata"]["name"], "writer");
+    let output = out["output"].as_str().unwrap();
+    assert!(output.contains("Workspace skill body."));
 }

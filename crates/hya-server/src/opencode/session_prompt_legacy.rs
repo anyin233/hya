@@ -58,7 +58,7 @@ async fn prompt(
             return Ok(super::errors::session_busy(session));
         };
         let agent = super::reference::session_agent_with_guidance(&st, session).await;
-        let external_dirs = super::reference::external_directories(&st).await;
+        let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
         let _finish = st
             .engine
             .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)

@@ -8,7 +8,7 @@ use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
     FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane,
+    SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane, discover_skills, skills_section,
 };
 
 use crate::bus::EventBus;
@@ -237,4 +237,30 @@ impl SessionEngine {
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
         Ok(self.store.delete_session(session).await?)
     }
+}
+
+pub(crate) fn effective_agent_for_projection(
+    agent: &AgentSpec,
+    projection: &Projection,
+) -> AgentSpec {
+    let mut effective = agent.clone();
+    effective.workdir = session_workdir(agent, projection);
+    if let Some(section) = skills_section(&discover_skills(&effective.workdir)) {
+        let prompt = effective.system_prompt.trim_end();
+        effective.system_prompt = if prompt.is_empty() {
+            section
+        } else {
+            format!("{prompt}\n\n{section}")
+        };
+    }
+    effective
+}
+
+pub(crate) fn session_workdir(agent: &AgentSpec, projection: &Projection) -> PathBuf {
+    projection
+        .session
+        .workdir
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| agent.workdir.clone())
 }

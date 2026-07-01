@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hya_core::AgentSpec;
 use hya_proto::{ModelRef, SessionId};
@@ -14,6 +14,9 @@ pub(super) fn apply_agent_entry(
     active_model: &ModelRef,
     config: &Value,
 ) {
+    if let Some(prompt) = &entry.prompt {
+        agent.system_prompt = prompt.clone();
+    }
     if let Some(reasoning) = super::reasoning_options::resolve_reasoning(
         entry.variant.as_deref(),
         &entry.options,
@@ -25,17 +28,25 @@ pub(super) fn apply_agent_entry(
 }
 
 pub(in crate::opencode) async fn agent_with_guidance(st: &ServerState) -> AgentSpec {
-    let mut agent = (*st.agent).clone();
     let workdir = super::location::workdir(st);
-    let config = super::reasoning_options::load_opencode_config(&workdir);
-    if let Some(entry) = super::agent_catalog::list(&workdir, st)
+    agent_with_guidance_at(st, &workdir).await
+}
+
+pub(in crate::opencode) async fn agent_with_guidance_at(
+    st: &ServerState,
+    workdir: &Path,
+) -> AgentSpec {
+    let mut agent = (*st.agent).clone();
+    agent.workdir = workdir.to_path_buf();
+    let config = super::reasoning_options::load_opencode_config(workdir);
+    if let Some(entry) = super::agent_catalog::list(workdir, st)
         .into_iter()
         .find(|entry| entry.name.as_str() == agent.name.as_str())
     {
         let active_model = agent.model.clone();
         apply_agent_entry(&mut agent, &entry, &active_model, &config);
     }
-    if let Some(guidance) = guidance(st).await {
+    if let Some(guidance) = guidance_at(st, workdir).await {
         agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
     }
     agent
@@ -47,55 +58,56 @@ pub(in crate::opencode) async fn session_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
 ) -> AgentSpec {
+    let Ok(projection) = st.engine.store().read_projection(session).await else {
+        return agent_with_guidance(st).await;
+    };
+    let workdir = projection
+        .session
+        .workdir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| super::location::workdir(st));
     let mut agent = (*st.agent).clone();
-    let workdir = super::location::workdir(st);
+    agent.workdir = workdir.clone();
+    let active_name = projection
+        .session
+        .agent
+        .clone()
+        .unwrap_or_else(|| agent.name.clone());
+    let active_model = projection
+        .session
+        .model
+        .clone()
+        .unwrap_or_else(|| agent.model.clone());
+    agent.name = active_name.clone();
     let config = super::reasoning_options::load_opencode_config(&workdir);
-    if let Ok(projection) = st.engine.store().read_projection(session).await {
-        let active_name = projection
-            .session
-            .agent
-            .clone()
-            .unwrap_or_else(|| agent.name.clone());
-        let active_model = projection
-            .session
-            .model
-            .clone()
-            .unwrap_or_else(|| agent.model.clone());
-        if let Some(entry) = super::agent_catalog::list(&workdir, st)
-            .into_iter()
-            .find(|entry| entry.name.as_str() == active_name.as_str())
-        {
-            if projection
-                .session
-                .agent
-                .as_ref()
-                .is_some_and(|name| name.as_str() != agent.name.as_str())
-            {
-                if let Some(prompt) = entry.prompt.clone() {
-                    agent.system_prompt = prompt;
-                }
-                agent.name = active_name;
-            }
-            apply_agent_entry(&mut agent, &entry, &active_model, &config);
-        }
+    if let Some(entry) = super::agent_catalog::list(&workdir, st)
+        .into_iter()
+        .find(|entry| entry.name.as_str() == active_name.as_str())
+    {
+        apply_agent_entry(&mut agent, &entry, &active_model, &config);
     }
-    if let Some(guidance) = guidance(st).await {
+    if let Some(guidance) = guidance_at(st, &workdir).await {
         agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
     }
     agent
 }
 
 pub(in crate::opencode) async fn list(st: &ServerState) -> Vec<Value> {
+    let workdir = super::location::workdir(st);
+    list_at(st, &workdir).await
+}
+
+pub(in crate::opencode) async fn list_at(st: &ServerState, workdir: &Path) -> Vec<Value> {
     let config = st.global.config().await;
     let Some(entries) = super::reference_entries::reference_entries(&config) else {
         return Vec::new();
     };
-    let base = super::location::workdir(st);
     let references = entries
         .iter()
         .filter_map(|(name, entry)| {
             super::reference_entries::valid_alias(name)
-                .then(|| super::reference_entries::reference(name, entry, &base))
+                .then(|| super::reference_entries::reference(name, entry, workdir))
                 .flatten()
         })
         .collect::<Vec<_>>();
@@ -103,8 +115,11 @@ pub(in crate::opencode) async fn list(st: &ServerState) -> Vec<Value> {
     references
 }
 
-pub(in crate::opencode) async fn external_directories(st: &ServerState) -> Vec<PathBuf> {
-    list(st)
+pub(in crate::opencode) async fn external_directories_at(
+    st: &ServerState,
+    workdir: &Path,
+) -> Vec<PathBuf> {
+    list_at(st, workdir)
         .await
         .into_iter()
         .filter_map(|reference| {
@@ -116,8 +131,8 @@ pub(in crate::opencode) async fn external_directories(st: &ServerState) -> Vec<P
         .collect()
 }
 
-async fn guidance(st: &ServerState) -> Option<String> {
-    let mut references: Vec<_> = list(st)
+async fn guidance_at(st: &ServerState, workdir: &Path) -> Option<String> {
+    let mut references: Vec<_> = list_at(st, workdir)
         .await
         .into_iter()
         .filter(|reference| {
