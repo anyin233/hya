@@ -11,9 +11,7 @@ use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
 fn workdir() -> &'static str {
@@ -27,18 +25,31 @@ fn workdir() -> &'static str {
             .into_owned()
     })
 }
-static NEXT_TEMP_WORKDIR_ID: AtomicU64 = AtomicU64::new(0);
 
-fn temp_workdir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn isolated_workdir(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let serial = NEXT_TEMP_WORKDIR_ID.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("{prefix}-{nanos}-{serial}-{}", std::process::id()));
+    let serial = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hya-{prefix}-{nanos}-{serial}"));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::canonicalize(&dir).unwrap()
+    std::fs::canonicalize(&dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn write_skill(workdir: &str, name: &str, body: &str) {
+    let dir = std::path::Path::new(workdir).join(".hya/skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Run {name}\n---\n{body}"),
+    )
+    .unwrap();
 }
 
 async fn state() -> AppState {
@@ -376,20 +387,16 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
 
 #[tokio::test]
 async fn opencode_v2_session_command_without_text_uses_skill_template_body() {
-    let workdir = temp_workdir("hya-opencode-session-v2-skill-command");
-    std::fs::create_dir_all(workdir.join(".opencode/skills/deploy")).unwrap();
-    std::fs::write(
-        workdir.join(".opencode/skills/deploy/SKILL.md"),
-        "---\nname: deploy\ndescription: Deploy the current project\n---\nDeploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
-    )
-    .unwrap();
-    let app = router(state_with_workdir(workdir.clone()).await);
+    let workdir = isolated_workdir("opencode-v2-session-skill-command");
+    write_skill(
+        &workdir,
+        "deploy",
+        "Deploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
+    );
+    let app = router(state().await);
 
-    let (status, commands) = get_json(
-        app.clone(),
-        format!("/api/command?directory={}", workdir.display()),
-    )
-    .await;
+    let (status, commands) =
+        get_json(app.clone(), format!("/api/command?directory={workdir}")).await;
     assert_eq!(status, StatusCode::OK);
     let deploy = commands["data"]
         .as_array()
@@ -406,7 +413,7 @@ async fn opencode_v2_session_command_without_text_uses_skill_template_body() {
     let (status, created) = post_json(
         app.clone(),
         "/api/session",
-        json!({"location": {"directory": workdir.display().to_string()}}),
+        json!({"location": {"directory": workdir}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -424,6 +431,7 @@ async fn opencode_v2_session_command_without_text_uses_skill_template_body() {
     let expected = "Deploy web into production.\nFull prompt: web production\n";
     assert_eq!(status, StatusCode::OK);
     assert_eq!(command["data"]["info"]["role"], "user");
+    assert_eq!(command["data"]["parts"][0]["type"], "text");
     assert_eq!(command["data"]["parts"][0]["text"], expected);
     assert_ne!(
         command["data"]["parts"][0]["text"],

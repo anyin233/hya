@@ -37,12 +37,41 @@ pub struct CustomCommand {
 impl CustomCommand {
     #[must_use]
     pub fn expand(&self, arguments: &str) -> String {
-        let mut out = self.template.replace("$ARGUMENTS", arguments);
         let positional = split_arguments(arguments);
-        for idx in 1..=9 {
-            let needle = format!("${idx}");
-            let replacement = positional.get(idx - 1).cloned().unwrap_or_default();
-            out = out.replace(&needle, &replacement);
+        let mut out = String::with_capacity(self.template.len().saturating_add(arguments.len()));
+        let mut chars = self.template.char_indices().peekable();
+        while let Some((idx, ch)) = chars.next() {
+            if ch != '$' {
+                out.push(ch);
+                continue;
+            }
+            if self.template[idx..].starts_with("$ARGUMENTS") {
+                out.push_str(arguments);
+                for _ in 0.."ARGUMENTS".len() {
+                    chars.next();
+                }
+                continue;
+            }
+            let mut position = 0usize;
+            let mut has_digits = false;
+            while let Some((_, next)) = chars.peek().copied() {
+                if let Some(digit) = next.to_digit(10) {
+                    has_digits = true;
+                    position = position.saturating_mul(10).saturating_add(digit as usize);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if has_digits {
+                if let Some(replacement) =
+                    position.checked_sub(1).and_then(|idx| positional.get(idx))
+                {
+                    out.push_str(replacement);
+                }
+            } else {
+                out.push('$');
+            }
         }
         out
     }
@@ -221,41 +250,44 @@ pub fn load_markdown_commands_from_dirs(dirs: &[PathBuf]) -> std::io::Result<Vec
 }
 
 pub fn load_skill_commands_from_dirs(dirs: &[PathBuf]) -> Vec<CustomCommand> {
-    let mut commands = BTreeMap::new();
-    for skill in hya_app::skills::discover_skills(dirs) {
-        commands.insert(
-            skill.name.clone(),
-            CustomCommand {
-                name: skill.name,
-                description: skill.description,
-                template: skill.content,
-                agent: None,
-                model: None,
-            },
-        );
-    }
-    commands.into_values().collect()
+    hya_tool::discover_skills_from_dirs(dirs)
+        .into_iter()
+        .map(|skill| CustomCommand {
+            name: skill.name,
+            description: skill.description,
+            template: skill.content,
+            agent: None,
+            model: None,
+        })
+        .collect()
 }
 
 pub fn load_custom_commands(workdir: &Path) -> std::io::Result<Vec<CustomCommand>> {
-    load_custom_commands_from_dirs(
-        &markdown_command_dirs(workdir),
-        &hya_app::skills::skill_dirs_for_workdir(workdir),
-    )
+    let mut commands = load_markdown_commands_from_dirs(&markdown_command_dirs(workdir))?;
+    append_missing_skill_commands(&mut commands, load_skill_commands(workdir));
+    Ok(commands)
 }
 
+pub fn load_skill_commands(workdir: &Path) -> Vec<CustomCommand> {
+    load_skill_commands_from_dirs(&hya_tool::skill_dirs_for_workdir(workdir))
+}
+
+#[cfg(test)]
 pub fn load_custom_commands_from_dirs(
     markdown_dirs: &[PathBuf],
     skill_dirs: &[PathBuf],
 ) -> std::io::Result<Vec<CustomCommand>> {
-    let mut commands = BTreeMap::new();
-    for command in load_skill_commands_from_dirs(skill_dirs) {
-        commands.insert(command.name.clone(), command);
+    let mut commands = load_markdown_commands_from_dirs(markdown_dirs)?;
+    append_missing_skill_commands(&mut commands, load_skill_commands_from_dirs(skill_dirs));
+    Ok(commands)
+}
+
+fn append_missing_skill_commands(commands: &mut Vec<CustomCommand>, skills: Vec<CustomCommand>) {
+    for skill in skills {
+        if commands.iter().all(|command| command.name != skill.name) {
+            commands.push(skill);
+        }
     }
-    for command in load_markdown_commands_from_dirs(markdown_dirs)? {
-        commands.insert(command.name.clone(), command);
-    }
-    Ok(commands.into_values().collect())
 }
 
 fn command_item(spec: &CommandSpec) -> DialogItem {
@@ -355,6 +387,48 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(home: &std::path::Path) -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            let previous = std::env::var_os("HOME");
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var("HOME", previous);
+                } else {
+                    std::env::remove_var("HOME");
+                }
+            }
+        }
+    }
+
+    fn write_skill(dir: &std::path::Path, name: &str, description: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn resolves_every_builtin_slash_command_and_alias() {
@@ -483,6 +557,23 @@ All args: $ARGUMENTS
     }
 
     #[test]
+    fn custom_command_expands_multi_digit_placeholders_without_reexpanding_arguments() {
+        let command = CustomCommand {
+            name: "deploy".to_string(),
+            description: "Deploy target".to_string(),
+            template: "first=$1 tenth=$10 missing=$11 all=$ARGUMENTS".to_string(),
+            agent: None,
+            model: None,
+        };
+        let arguments = "one two three four five six seven eight nine-literal-$1 ten";
+
+        assert_eq!(
+            command.expand(arguments),
+            "first=one tenth=ten missing= all=one two three four five six seven eight nine-literal-$1 ten"
+        );
+    }
+
+    #[test]
     fn skill_commands_load_app_skill_content_as_template() {
         let root = temp_root();
         let skill_dir = root.join("skills").join("reviewer");
@@ -528,6 +619,84 @@ All args: $ARGUMENTS
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].description, "Prompt reviewer");
         assert_eq!(commands[0].expand("file"), "Prompt file\n");
+    }
+
+    #[test]
+    fn skill_commands_preserve_catalog_order_and_first_winner() {
+        let root = temp_root();
+        let home = temp_root();
+        let _home = HomeGuard::set(&home);
+        write_skill(
+            &root.join(".hya/skills/z-local"),
+            "z-local",
+            "Local Z",
+            "Local Z $ARGUMENTS\n",
+        );
+        write_skill(
+            &root.join(".hya/skills/shared"),
+            "shared",
+            "Local",
+            "Local $ARGUMENTS\n",
+        );
+        write_skill(
+            &home.join(".config/hya/skills/a-home"),
+            "a-home",
+            "Home A",
+            "Home A $ARGUMENTS\n",
+        );
+        write_skill(
+            &home.join(".config/hya/skills/shared"),
+            "shared",
+            "Home",
+            "Home $ARGUMENTS\n",
+        );
+
+        let commands = load_custom_commands(&root).unwrap();
+
+        let names = commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>();
+        let z_local = names.iter().position(|name| *name == "z-local").unwrap();
+        let a_home = names.iter().position(|name| *name == "a-home").unwrap();
+        assert!(
+            z_local < a_home,
+            "catalog order should beat alphabetical order: {names:?}"
+        );
+        let shared = commands
+            .iter()
+            .find(|command| command.name == "shared")
+            .unwrap();
+        assert_eq!(shared.description, "Local");
+        assert_eq!(shared.expand("file"), "Local file\n");
+        let completion = completion_items_with_custom("/", &commands);
+        let completion_z = completion
+            .iter()
+            .position(|item| item.label == "/z-local")
+            .unwrap();
+        let completion_a = completion
+            .iter()
+            .position(|item| item.label == "/a-home")
+            .unwrap();
+        assert!(
+            completion_z < completion_a,
+            "custom completion order should preserve catalog order: {completion:?}"
+        );
+        let help = help_items_with_custom(&commands);
+        let help_z = help
+            .iter()
+            .position(|item| item.label == "/z-local")
+            .unwrap();
+        let help_a = help
+            .iter()
+            .position(|item| item.label == "/a-home")
+            .unwrap();
+        assert!(
+            help_z < help_a,
+            "custom help order should preserve catalog order: {help:?}"
+        );
+        assert!(completion.iter().any(|item| item.label == "/shared"));
+        assert!(help.iter().any(|item| item.label == "/shared"));
     }
 
     #[test]

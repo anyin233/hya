@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use hya_core::AgentSpec;
 use hya_proto::api::{CommandRequest, ShellRequest};
 use hya_proto::{Event, MessageId, ModelRef, Projection, SessionId};
 use serde::Deserialize;
@@ -96,7 +97,7 @@ async fn command(
     Json(req): Json<CommandRequest>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    let snapshot = match load_session(&st, session, None).await {
+    let _snapshot = match load_session(&st, session, None).await {
         Ok(snapshot) => snapshot,
         Err(error) if error.status == StatusCode::NOT_FOUND => {
             return Ok(super::errors::legacy_session_not_found(session));
@@ -106,19 +107,19 @@ async fn command(
     let Some(run) = st.runs.start(session) else {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     };
-    let text = req.text.unwrap_or_else(|| {
-        command_prompt_text(
-            std::path::Path::new(snapshot.info.directory()),
-            &req.command,
-            &req.arguments,
-        )
-    });
+    let workdir = super::reference::session_workdir(&st, session).await;
+    let CommandRequest {
+        command,
+        arguments,
+        text,
+    } = req;
+    let text = text.unwrap_or_else(|| command_prompt_text(&workdir, &command, &arguments));
     let message = st
         .engine
-        .admit_command_prompt(session, req.command, req.arguments, text)
+        .admit_command_prompt(session, command, arguments, text)
         .await?;
     let agent = super::reference::session_agent_with_guidance(&st, session).await;
-    let external_dirs = super::reference::external_directories(&st).await;
+    let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
     let _finish = st
         .engine
         .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
@@ -163,6 +164,13 @@ pub(in crate::opencode) async fn load_message(
         .ok_or_else(|| ApiError::not_found("message not found"))
 }
 
+pub(in crate::opencode) async fn init_agent_with_guidance(
+    st: &ServerState,
+    session: SessionId,
+) -> AgentSpec {
+    super::reference::session_agent_with_guidance(st, session).await
+}
+
 pub(in crate::opencode) async fn run_session_init(
     st: &ServerState,
     session: SessionId,
@@ -180,7 +188,7 @@ pub(in crate::opencode) async fn run_session_init(
         .runs
         .start(session)
         .ok_or_else(|| ApiError::bad_request("Bad request"))?;
-    let mut agent = super::reference::agent_with_guidance(st).await;
+    let mut agent = init_agent_with_guidance(st, session).await;
     agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
     st.engine
         .admit_command_prompt_with_id(
@@ -191,7 +199,7 @@ pub(in crate::opencode) async fn run_session_init(
             "/init".to_string(),
         )
         .await?;
-    let external_dirs = super::reference::external_directories(st).await;
+    let external_dirs = super::reference::external_directories_at(st, &agent.workdir).await;
     let _finish = st
         .engine
         .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)

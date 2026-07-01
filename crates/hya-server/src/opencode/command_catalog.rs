@@ -100,12 +100,39 @@ pub(in crate::opencode) fn expand_prompt(
 }
 
 fn expand_template(template: &str, arguments: &str) -> String {
-    let mut out = template.replace("$ARGUMENTS", arguments);
     let positional = split_arguments(arguments);
-    for idx in 1..=9 {
-        let needle = format!("${idx}");
-        let replacement = positional.get(idx - 1).cloned().unwrap_or_default();
-        out = out.replace(&needle, &replacement);
+    let mut out = String::with_capacity(template.len().saturating_add(arguments.len()));
+    let mut chars = template.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch != '$' {
+            out.push(ch);
+            continue;
+        }
+        if template[idx..].starts_with("$ARGUMENTS") {
+            out.push_str(arguments);
+            for _ in 0.."ARGUMENTS".len() {
+                chars.next();
+            }
+            continue;
+        }
+        let mut position = 0usize;
+        let mut has_digits = false;
+        while let Some((_, next)) = chars.peek().copied() {
+            if let Some(digit) = next.to_digit(10) {
+                has_digits = true;
+                position = position.saturating_mul(10).saturating_add(digit as usize);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if has_digits {
+            if let Some(replacement) = position.checked_sub(1).and_then(|idx| positional.get(idx)) {
+                out.push_str(replacement);
+            }
+        } else {
+            out.push('$');
+        }
     }
     out
 }
@@ -209,5 +236,20 @@ fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: &Path) {
             skill.description,
             skill.content,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_template;
+
+    #[test]
+    fn expands_full_numeric_placeholder_without_reexpanding_arguments() {
+        let arguments = "one two three four five six seven eight nine-literal-$1 ten";
+
+        assert_eq!(
+            expand_template("first=$1 tenth=$10 missing=$11 all=$ARGUMENTS", arguments),
+            "first=one tenth=ten missing= all=one two three four five six seven eight nine-literal-$1 ten"
+        );
     }
 }
