@@ -15,6 +15,8 @@ pub(in crate::opencode) struct CommandInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     source: &'static str,
+    #[serde(skip)]
+    expandable: bool,
     template: String,
     hints: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +88,50 @@ pub(in crate::opencode) fn list(workdir: &Path) -> Vec<CommandInfo> {
     commands
 }
 
+pub(in crate::opencode) fn expand_prompt(
+    workdir: &Path,
+    command: &str,
+    arguments: &str,
+) -> Option<String> {
+    list(workdir)
+        .into_iter()
+        .find(|item| item.name == command && item.expandable)
+        .map(|item| expand_template(&item.template, arguments))
+}
+
+fn expand_template(template: &str, arguments: &str) -> String {
+    let mut out = template.replace("$ARGUMENTS", arguments);
+    let positional = split_arguments(arguments);
+    for idx in 1..=9 {
+        let needle = format!("${idx}");
+        let replacement = positional.get(idx - 1).cloned().unwrap_or_default();
+        out = out.replace(&needle, &replacement);
+    }
+    out
+}
+
+fn split_arguments(arguments: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in arguments.chars() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
 fn command_info(
     name: impl Into<String>,
     description: impl Into<String>,
@@ -99,6 +145,7 @@ fn command_info(
         agent: None,
         model: None,
         source: "command",
+        expandable: false,
         template,
         hints: hints.into_iter().map(str::to_string).collect(),
         subtask,
@@ -120,6 +167,7 @@ impl CommandInfo {
             agent,
             model,
             source: "command",
+            expandable: true,
             hints: super::command_sources::command_hints(&template),
             template,
             subtask,
@@ -133,6 +181,7 @@ impl CommandInfo {
             agent: None,
             model: None,
             source: "skill",
+            expandable: true,
             template,
             hints: Vec::new(),
             subtask: None,

@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -27,8 +29,25 @@ fn workdir() -> &'static str {
             .into_owned()
     })
 }
+static NEXT_TEMP_WORKDIR_ID: AtomicU64 = AtomicU64::new(0);
+
+fn temp_workdir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_WORKDIR_ID.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("{prefix}-{nanos}-{serial}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir).unwrap()
+}
 
 async fn state() -> AppState {
+    state_with_workdir(PathBuf::from(workdir())).await
+}
+
+async fn state_with_workdir(workdir: PathBuf) -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("assistant answer".to_string()),
         FakeStep::Finish(FinishReason::Stop),
@@ -44,7 +63,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: workdir().into(),
+            workdir,
             reasoning: None,
         }),
     )
@@ -211,7 +230,15 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
-    let mut body = json!({"agent": "build", "model": "fake", "workdir": workdir()});
+    create_session_in(app, parent, Path::new(workdir())).await
+}
+
+async fn create_session_in(app: axum::Router, parent: Option<&str>, workdir: &Path) -> String {
+    let mut body = json!({
+        "agent": "build",
+        "model": "fake",
+        "workdir": workdir.display().to_string()
+    });
     if let Some(parent) = parent {
         body["parent"] = json!(parent.trim_start_matches("ses_"));
     }
@@ -589,6 +616,60 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
         shell["parts"][0]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_session_command_without_text_uses_skill_template_body() {
+    let workdir = temp_workdir("hya-opencode-session-skill-command");
+    std::fs::create_dir_all(workdir.join(".opencode/skills/deploy")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/skills/deploy/SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy the current project\n---\nDeploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
+    )
+    .unwrap();
+    let app = router(state_with_workdir(workdir.clone()).await);
+
+    let (status, commands) = get_json(
+        app.clone(),
+        format!("/command?directory={}", workdir.display()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let deploy = commands
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|command| command["name"] == "deploy")
+        .expect("deploy command");
+    assert_eq!(deploy["source"], "skill");
+    assert_eq!(
+        deploy["template"],
+        "Deploy $1 into $2.\nFull prompt: $ARGUMENTS\n"
+    );
+
+    let session = create_session_in(app.clone(), None, &workdir).await;
+    let (status, command) = post_json(
+        app.clone(),
+        format!("/session/{session}/command"),
+        json!({
+            "command": "deploy",
+            "arguments": "web production"
+        }),
+    )
+    .await;
+    let expected = "Deploy web into production.\nFull prompt: web production\n";
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["info"]["role"], "user");
+    assert_eq!(command["parts"][0]["type"], "text");
+    assert_eq!(command["parts"][0]["text"], expected);
+    assert_ne!(command["parts"][0]["text"], "/deploy web production");
+
+    let (status, messages) = get_json(app, format!("/session/{session}/message")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        messages.as_array().expect("messages")[0]["parts"][0]["text"],
+        expected
     );
 }
 
