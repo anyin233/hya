@@ -1,16 +1,15 @@
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Skill {
     pub name: String,
     pub description: String,
+    pub content: String,
 }
 
 #[must_use]
 pub fn parse_skill(content: &str) -> Option<Skill> {
-    let after = content.strip_prefix("---")?;
-    let end = after.find("\n---")?;
-    let front = &after[..end];
+    let (front, body) = content.strip_prefix("---")?.split_once("\n---")?;
     let mut name = None;
     let mut description = None;
     for line in front.lines() {
@@ -23,7 +22,21 @@ pub fn parse_skill(content: &str) -> Option<Skill> {
     Some(Skill {
         name: name?,
         description: description?,
+        content: body.strip_prefix('\n').unwrap_or(body).to_string(),
     })
+}
+
+#[must_use]
+pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        workdir.join(".opencode/skill"),
+        workdir.join(".opencode/skills"),
+        workdir.join(".hya/skills"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(home).join(".config/hya/skills"));
+    }
+    dirs
 }
 
 #[must_use]
@@ -77,17 +90,33 @@ mod tests {
     }
 
     #[test]
-    fn parses_valid_frontmatter() {
+    fn parses_valid_frontmatter_and_content() {
         let md = "---\nname: committer\ndescription: writes commits\n---\nbody here";
-        let s = parse_skill(md).unwrap();
-        assert_eq!(s.name, "committer");
-        assert_eq!(s.description, "writes commits");
+
+        let skill = parse_skill(md).unwrap();
+
+        assert_eq!(skill.name, "committer");
+        assert_eq!(skill.description, "writes commits");
+        assert_eq!(skill.content, "body here");
     }
 
     #[test]
     fn rejects_missing_fields_or_frontmatter() {
         assert!(parse_skill("---\nname: x\n---\n").is_none());
         assert!(parse_skill("no frontmatter").is_none());
+    }
+
+    #[test]
+    fn skill_dirs_for_workdir_include_current_hya_and_opencode_project_roots() {
+        let root = tempdir();
+        let dirs = skill_dirs_for_workdir(&root);
+
+        assert!(dirs.contains(&root.join(".opencode/skill")));
+        assert!(dirs.contains(&root.join(".opencode/skills")));
+        assert!(dirs.contains(&root.join(".hya/skills")));
+        if let Some(home) = std::env::var_os("HOME") {
+            assert!(dirs.contains(&PathBuf::from(home).join(".config/hya/skills")));
+        }
     }
 
     #[test]
