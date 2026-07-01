@@ -1,3 +1,3 @@
-# 0.28.8
+# 0.28.9
 
-- Fixed OpenCode command routes so skill and custom command templates expand when command text is omitted.
+- Added a source install script that installs both `hya` and `hya-backend`, verifies PATH availability, and prints provider API setup guidance.
