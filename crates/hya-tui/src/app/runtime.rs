@@ -92,7 +92,7 @@ const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
         "Agent",
         true,
     ),
-    ("Switch YOLO", COMMAND_YOLO_SWITCH, "", "Permission", true),
+    ("YOLO mode", COMMAND_YOLO_SWITCH, "", "Permission", true),
     (
         "Switch variant",
         COMMAND_VARIANT_LIST,
@@ -128,9 +128,9 @@ const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
         "Session",
         false,
     ),
-    ("Toggle theme mode", COMMAND_THEME_MODE, "", "System", false),
+    ("Theme mode", COMMAND_THEME_MODE, "", "System", false),
     (
-        "Toggle timestamps",
+        "Timestamps",
         COMMAND_TOGGLE_TIMESTAMPS,
         "",
         "Session",
@@ -144,6 +144,80 @@ const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
         false,
     ),
 ];
+
+fn command_palette_items(
+    yolo: bool,
+    theme_mode: Mode,
+    show_timestamps: bool,
+    command_names: &[String],
+) -> Vec<DialogSelectItem<String>> {
+    let suggested = PALETTE_TUI_COMMANDS
+        .iter()
+        .filter(|(_, _, _, _, suggested)| *suggested)
+        .map(|(title, id, keybind, _, _)| {
+            DialogSelectItem::new(
+                palette_command_title(title, id, yolo, theme_mode, show_timestamps),
+                (*id).to_owned(),
+            )
+            .with_description((*keybind).to_owned())
+            .with_category("Suggested")
+            .unfiltered_only()
+        });
+    let commands = PALETTE_TUI_COMMANDS
+        .iter()
+        .map(|(title, id, keybind, category, _)| {
+            DialogSelectItem::new(
+                palette_command_title(title, id, yolo, theme_mode, show_timestamps),
+                (*id).to_owned(),
+            )
+            .with_description((*keybind).to_owned())
+            .with_category((*category).to_owned())
+        });
+    let slash = command_names
+        .iter()
+        .map(|name| DialogSelectItem::new(name.clone(), name.clone()).with_category("Command"));
+    suggested.chain(commands).chain(slash).collect()
+}
+
+fn palette_command_title(
+    title: &str,
+    id: &str,
+    yolo: bool,
+    theme_mode: Mode,
+    show_timestamps: bool,
+) -> String {
+    match id {
+        COMMAND_YOLO_SWITCH => {
+            if yolo {
+                "Disable YOLO mode"
+            } else {
+                "Enable YOLO mode"
+            }
+        }
+        COMMAND_THEME_MODE => match theme_mode {
+            Mode::Dark => "Switch to light mode",
+            Mode::Light => "Switch to dark mode",
+        },
+        COMMAND_TOGGLE_TIMESTAMPS => {
+            if show_timestamps {
+                "Hide timestamps"
+            } else {
+                "Show timestamps"
+            }
+        }
+        _ => title,
+    }
+    .to_owned()
+}
+
+fn toggle_yolo(yolo: &mut bool) -> &'static str {
+    *yolo = !*yolo;
+    if *yolo {
+        "yolo mode enabled"
+    } else {
+        "yolo mode disabled"
+    }
+}
 
 pub struct RunTuiInput {
     pub tui: Tui,
@@ -393,7 +467,6 @@ enum DialogKind {
     CommandPalette,
     AgentSwitch,
     ModelSwitch,
-    YoloSwitch,
     VariantList,
     SessionList,
     Timeline,
@@ -407,7 +480,6 @@ impl DialogKind {
             DialogKind::CommandPalette => "Commands",
             DialogKind::AgentSwitch => "Agents",
             DialogKind::ModelSwitch => "Select model",
-            DialogKind::YoloSwitch => "Switch YOLO",
             DialogKind::VariantList => "Select variant",
             DialogKind::SessionList => "Sessions",
             DialogKind::Timeline => "Timeline",
@@ -1652,29 +1724,12 @@ impl Runtime {
 
     fn open_dialog(&mut self, kind: DialogKind) {
         let items = match kind {
-            DialogKind::CommandPalette => {
-                let suggested = PALETTE_TUI_COMMANDS
-                    .iter()
-                    .filter(|(_, _, _, _, suggested)| *suggested)
-                    .map(|(title, id, keybind, _, _)| {
-                        DialogSelectItem::new((*title).to_owned(), (*id).to_owned())
-                            .with_description((*keybind).to_owned())
-                            .with_category("Suggested")
-                            .unfiltered_only()
-                    });
-                let commands =
-                    PALETTE_TUI_COMMANDS
-                        .iter()
-                        .map(|(title, id, keybind, category, _)| {
-                            DialogSelectItem::new((*title).to_owned(), (*id).to_owned())
-                                .with_description((*keybind).to_owned())
-                                .with_category((*category).to_owned())
-                        });
-                let slash = self.command_names.iter().map(|name| {
-                    DialogSelectItem::new(name.clone(), name.clone()).with_category("Command")
-                });
-                suggested.chain(commands).chain(slash).collect()
-            }
+            DialogKind::CommandPalette => command_palette_items(
+                self.yolo,
+                self.theme_mode,
+                self.show_timestamps,
+                &self.command_names,
+            ),
             DialogKind::AgentSwitch => self
                 .input
                 .agent_names
@@ -1688,12 +1743,6 @@ impl Runtime {
                     DialogSelectItem::new(format!("{title}  {provider}"), value.clone())
                 })
                 .collect(),
-            DialogKind::YoloSwitch => vec![
-                DialogSelectItem::new("Enable YOLO".to_owned(), "enabled".to_owned())
-                    .with_description("auto-approve permission requests"),
-                DialogSelectItem::new("Disable YOLO".to_owned(), "disabled".to_owned())
-                    .with_description("ask before tool actions"),
-            ],
             DialogKind::VariantList => std::iter::once(DialogSelectItem::new(
                 "Default".to_owned(),
                 "default".to_owned(),
@@ -1942,18 +1991,6 @@ impl Runtime {
                     self.active_variant = None;
                 }
             }
-            DialogKind::YoloSwitch => {
-                match value.as_str() {
-                    "enabled" => self.yolo = true,
-                    "disabled" => self.yolo = false,
-                    _ => {}
-                }
-                let state = if self.yolo { "enabled" } else { "disabled" };
-                self.toast = Some((
-                    format!("yolo mode {state}"),
-                    Instant::now() + TOAST_DURATION,
-                ));
-            }
             DialogKind::VariantList => {
                 self.active_variant = (value != "default").then_some(value);
             }
@@ -2198,7 +2235,10 @@ impl Runtime {
             COMMAND_COMMAND_PALETTE => self.open_dialog(DialogKind::CommandPalette),
             COMMAND_AGENT_LIST => self.open_dialog(DialogKind::AgentSwitch),
             COMMAND_MODEL_LIST => self.open_dialog(DialogKind::ModelSwitch),
-            COMMAND_YOLO_SWITCH => self.open_dialog(DialogKind::YoloSwitch),
+            COMMAND_YOLO_SWITCH => {
+                let message = toggle_yolo(&mut self.yolo).to_owned();
+                self.toast = Some((message, Instant::now() + TOAST_DURATION));
+            }
             COMMAND_VARIANT_LIST => self.open_variant_dialog(),
             COMMAND_VARIANT_CYCLE => self.cycle_variant(),
             COMMAND_SESSION_LIST => self.request_session_list(),
@@ -2755,9 +2795,11 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         base64_encode, builtin_client_command, builtin_quit_command, command_like_name,
-        normalize_editor_content, parse_editor_command, slash_command, trailing_mention,
-        PALETTE_TUI_COMMANDS,
+        command_palette_items, normalize_editor_content, parse_editor_command, slash_command,
+        toggle_yolo, trailing_mention, COMMAND_THEME_MODE, COMMAND_TOGGLE_TIMESTAMPS,
+        COMMAND_YOLO_SWITCH,
     };
+    use crate::theme::Mode;
 
     #[test]
     fn trailing_mention_extracts_partial_after_last_at() {
@@ -2785,15 +2827,71 @@ mod tests {
     }
 
     #[test]
-    fn palette_tui_commands_include_yolo_switch_action() {
-        let (_, command, _, category, enabled) = PALETTE_TUI_COMMANDS
+    fn command_palette_yolo_title_reflects_current_state() {
+        assert_eq!(
+            command_titles(COMMAND_YOLO_SWITCH, false, Mode::Dark, false),
+            ["Enable YOLO mode", "Enable YOLO mode"]
+        );
+        assert_eq!(
+            command_titles(COMMAND_YOLO_SWITCH, true, Mode::Dark, false),
+            ["Disable YOLO mode", "Disable YOLO mode"]
+        );
+        assert!(!command_palette_items(false, Mode::Dark, false, &[])
             .iter()
-            .find(|(title, _, _, _, _)| *title == "Switch YOLO")
-            .expect("YOLO should be exposed as an internal switch command");
+            .any(|item| item.title == "Switch YOLO"));
+    }
 
-        assert_eq!(*command, "permission.yolo.switch");
-        assert_eq!(*category, "Permission");
-        assert!(*enabled);
+    #[test]
+    fn command_palette_theme_mode_title_reflects_current_state() {
+        assert_eq!(
+            command_titles(COMMAND_THEME_MODE, false, Mode::Dark, false),
+            ["Switch to light mode"]
+        );
+        assert_eq!(
+            command_titles(COMMAND_THEME_MODE, false, Mode::Light, false),
+            ["Switch to dark mode"]
+        );
+        assert!(!command_palette_items(false, Mode::Dark, false, &[])
+            .iter()
+            .any(|item| item.title == "Toggle theme mode"));
+    }
+
+    #[test]
+    fn command_palette_timestamp_title_reflects_current_state() {
+        assert_eq!(
+            command_titles(COMMAND_TOGGLE_TIMESTAMPS, false, Mode::Dark, false),
+            ["Show timestamps"]
+        );
+        assert_eq!(
+            command_titles(COMMAND_TOGGLE_TIMESTAMPS, false, Mode::Dark, true),
+            ["Hide timestamps"]
+        );
+        assert!(!command_palette_items(false, Mode::Dark, false, &[])
+            .iter()
+            .any(|item| item.title == "Toggle timestamps"));
+    }
+
+    fn command_titles(
+        command: &str,
+        yolo: bool,
+        theme_mode: Mode,
+        show_timestamps: bool,
+    ) -> Vec<String> {
+        command_palette_items(yolo, theme_mode, show_timestamps, &[])
+            .into_iter()
+            .filter(|item| item.value == command)
+            .map(|item| item.title)
+            .collect()
+    }
+
+    #[test]
+    fn toggle_yolo_flips_mode_and_reports_state() {
+        let mut yolo = false;
+
+        assert_eq!(toggle_yolo(&mut yolo), "yolo mode enabled");
+        assert!(yolo);
+        assert_eq!(toggle_yolo(&mut yolo), "yolo mode disabled");
+        assert!(!yolo);
     }
 
     #[test]
