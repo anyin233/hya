@@ -1045,6 +1045,18 @@ mod tests {
     }
 
     #[test]
+    fn slash_think_with_argument_returns_select_reasoning_without_dialog() {
+        let mut controller = Controller::new(AppState::default());
+        type_text(&mut controller, "/think high");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SelectReasoning("high".to_string())
+        );
+        assert!(controller.app.dialog.is_none());
+    }
+
+    #[test]
     fn model_dialog_enter_returns_selected_entry() {
         let mut controller = Controller::with_models_and_sessions(
             AppState {
@@ -1070,6 +1082,29 @@ mod tests {
             ))
         );
         assert_eq!(controller.app.model, "beta");
+    }
+
+    #[test]
+    fn escape_cancels_model_switch_without_mutating_active_model() {
+        let alpha = model_entry("alpha", "openai", &["low"]);
+        let beta = model_entry("beta", "openai", &["low"]);
+        let mut controller = Controller::with_models_and_sessions(
+            AppState {
+                model: alpha.model_ref(),
+                ..AppState::default()
+            },
+            vec![alpha.clone(), beta],
+            Vec::new(),
+        );
+
+        type_text(&mut controller, "/model");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        assert_eq!(controller.handle_key(key(KeyCode::Down)), TuiEffect::None);
+        assert_eq!(controller.handle_key(key(KeyCode::Esc)), TuiEffect::None);
+
+        assert_eq!(controller.app.model, alpha.model_ref());
+        assert_eq!(controller.active_model(), Some(alpha));
+        assert!(controller.app.dialog.is_none());
     }
 
     #[test]
@@ -1738,6 +1773,57 @@ mod tests {
     }
 
     #[test]
+    fn skill_backed_slash_command_submits_skill_body_template() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_custom_commands(vec![CustomCommand {
+            name: "reviewer".to_string(),
+            description: "Review skill".to_string(),
+            template: "Read SKILL.md instructions, then review $ARGUMENTS.\n".to_string(),
+            agent: None,
+            model: None,
+        }]);
+
+        type_text(&mut controller, "/reviewer src/tui.rs");
+
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::SubmitCommand {
+                prompt: "Read SKILL.md instructions, then review src/tui.rs.\n".to_string(),
+                command: "reviewer".to_string(),
+                arguments: "src/tui.rs".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn skill_backed_slash_command_appears_in_completion_and_help() {
+        let mut controller = Controller::new(AppState::default());
+        controller.set_custom_commands(vec![CustomCommand {
+            name: "reviewer".to_string(),
+            description: "Review skill".to_string(),
+            template: "Review $ARGUMENTS".to_string(),
+            agent: None,
+            model: None,
+        }]);
+
+        type_text(&mut controller, "/rev");
+        let completion = controller.app.dialog.as_ref().expect("slash completion");
+        assert!(
+            completion
+                .items
+                .iter()
+                .any(|item| item.label == "/reviewer")
+        );
+
+        controller.app.input.clear();
+        controller.app.dialog = None;
+        type_text(&mut controller, "/help");
+        assert_eq!(controller.handle_key(key(KeyCode::Enter)), TuiEffect::None);
+        let help = controller.app.dialog.as_ref().expect("help dialog");
+        assert!(help.items.iter().any(|item| item.label == "/reviewer"));
+    }
+
+    #[test]
     fn slash_resume_opens_resume_dialog_and_selects_session() {
         let mut controller = Controller::with_sessions(
             AppState::default(),
@@ -1776,6 +1862,62 @@ mod tests {
         controller.app.dialog = None;
 
         assert_eq!(controller.handle_key(ctrl('n')), TuiEffect::NewSession);
+    }
+
+    #[test]
+    fn shortcuts_cover_resume_scroll_and_dialog_ownership() {
+        let mut controller = Controller::with_sessions(
+            AppState::default(),
+            vec![SessionSummary {
+                id: "sess-1".to_string(),
+                title: "Earlier".to_string(),
+                detail: "fake".to_string(),
+            }],
+        );
+
+        assert_eq!(controller.handle_key(ctrl('r')), TuiEffect::None);
+        assert_eq!(
+            controller.app.dialog.as_ref().expect("resume dialog").title,
+            "resume session"
+        );
+        assert_eq!(controller.handle_key(ctrl('n')), TuiEffect::None);
+        assert!(controller.app.dialog.is_some(), "dialog should own Ctrl-N");
+        assert_eq!(controller.handle_key(key(KeyCode::Esc)), TuiEffect::None);
+
+        assert_eq!(controller.handle_key(key(KeyCode::PageUp)), TuiEffect::None);
+        assert_eq!(controller.app.scroll_back, 5);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::PageDown)),
+            TuiEffect::None
+        );
+        assert_eq!(controller.app.scroll_back, 0);
+    }
+
+    #[test]
+    fn long_input_preserves_draft_and_trims_on_submit() {
+        let mut controller = Controller::new(AppState::default());
+        let draft = "alpha ".repeat(30);
+        let submitted = draft.trim_end().to_string();
+        type_text(&mut controller, &draft);
+
+        assert_eq!(controller.app.input, draft);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::Submit(submitted)
+        );
+    }
+
+    #[test]
+    fn multiline_paste_preserves_newlines_on_submit() {
+        let mut controller = Controller::new(AppState::default());
+        let draft = "first line\nsecond line";
+
+        assert_eq!(controller.handle_paste(draft), TuiEffect::None);
+        assert_eq!(controller.app.input, draft);
+        assert_eq!(
+            controller.handle_key(key(KeyCode::Enter)),
+            TuiEffect::Submit(draft.to_string())
+        );
     }
 
     #[test]

@@ -143,7 +143,7 @@ fn all_reference_items(
 }
 
 fn custom_commands(workdir: &Path) -> Vec<commands::CustomCommand> {
-    commands::load_markdown_commands(workdir).unwrap_or_default()
+    commands::load_custom_commands(workdir).unwrap_or_default()
 }
 
 fn export_root() -> PathBuf {
@@ -892,6 +892,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use hya_tool::{Decision, QuestionAnswer};
 
     #[test]
     fn export_writes_markdown_transcript_file() {
@@ -908,6 +909,161 @@ mod tests {
         let text = std::fs::read_to_string(path).unwrap();
         assert!(text.starts_with("# hya session "));
         assert!(text.contains("```text"));
+    }
+
+    #[test]
+    fn custom_commands_merge_markdown_prompts_and_skill_commands() {
+        let root = std::env::temp_dir().join(format!(
+            "hya-custom-command-{}-{}",
+            now_millis(),
+            std::process::id()
+        ));
+        let prompt_dir = root.join(".hya/prompts");
+        let skill_dir = root.join(".hya/skills/reviewer");
+        std::fs::create_dir_all(&prompt_dir).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            prompt_dir.join("component.md"),
+            "---\ndescription: Build component\n---\nComponent $ARGUMENTS\n",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: reviewer\ndescription: Review skill\n---\nReview $ARGUMENTS\n",
+        )
+        .unwrap();
+
+        let commands = custom_commands(&root);
+
+        let component = commands
+            .iter()
+            .find(|command| command.name == "component")
+            .unwrap();
+        let reviewer = commands
+            .iter()
+            .find(|command| command.name == "reviewer")
+            .unwrap();
+        assert_eq!(component.expand("Button"), "Component Button\n");
+        assert_eq!(reviewer.expand("src/lib.rs"), "Review src/lib.rs\n");
+    }
+
+    #[test]
+    fn permission_overlay_keys_select_reply_confirm_and_cancel() {
+        let mut app = AppState {
+            permission: Some(PermissionPrompt {
+                title: "bash".to_string(),
+                detail: "cargo test".to_string(),
+                selected: 0,
+                reply: String::new(),
+            }),
+            ..AppState::default()
+        };
+
+        assert!(
+            handle_permission_key(
+                KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+                &mut app
+            )
+            .is_none()
+        );
+        assert_eq!(app.permission.as_ref().unwrap().selected, 1);
+        assert!(
+            handle_permission_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()), &mut app)
+                .is_none()
+        );
+        assert_eq!(app.permission.as_ref().unwrap().selected, 2);
+        assert!(
+            handle_permission_key(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()),
+                &mut app
+            )
+            .is_none()
+        );
+        assert_eq!(app.permission.as_ref().unwrap().reply, "n");
+        assert!(
+            matches!(handle_permission_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()), &mut app), Some(Decision::Reject { feedback: Some(reply) }) if reply == "n")
+        );
+
+        let mut app = AppState {
+            permission: Some(PermissionPrompt {
+                title: "bash".to_string(),
+                detail: "cargo test".to_string(),
+                selected: 0,
+                reply: String::new(),
+            }),
+            ..AppState::default()
+        };
+        assert!(matches!(
+            handle_permission_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()), &mut app),
+            Some(Decision::Reject { feedback: None })
+        ));
+    }
+
+    #[test]
+    fn question_overlay_keys_select_custom_text_confirm_and_cancel() {
+        let mut app = AppState {
+            question: Some(QuestionPrompt {
+                prompt: "Pick one".to_string(),
+                options: vec!["a".to_string(), "b".to_string()],
+                selected: 0,
+                input: String::new(),
+                allow_custom: true,
+            }),
+            ..AppState::default()
+        };
+
+        assert!(
+            handle_question_key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+                &mut app
+            )
+            .is_none()
+        );
+        assert_eq!(app.question.as_ref().unwrap().selected, 1);
+        assert!(
+            handle_question_key(
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()),
+                &mut app
+            )
+            .is_none()
+        );
+        assert_eq!(app.question.as_ref().unwrap().input, "x");
+        assert!(
+            matches!(handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()), &mut app), Some(QuestionAnswer::FreeText(value)) if value == "x")
+        );
+
+        let mut app = AppState {
+            question: Some(QuestionPrompt {
+                prompt: "Pick one".to_string(),
+                options: vec!["a".to_string()],
+                selected: 0,
+                input: String::new(),
+                allow_custom: false,
+            }),
+            ..AppState::default()
+        };
+        assert!(matches!(
+            handle_question_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+                &mut app
+            ),
+            Some(QuestionAnswer::Selected(0))
+        ));
+
+        let mut app = AppState {
+            question: Some(QuestionPrompt {
+                prompt: "Pick one".to_string(),
+                options: vec!["a".to_string()],
+                selected: 0,
+                input: String::new(),
+                allow_custom: false,
+            }),
+            ..AppState::default()
+        };
+        assert!(matches!(
+            handle_question_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()), &mut app),
+            Some(QuestionAnswer::Cancelled)
+        ));
     }
 
     fn entry(id: &str, provider: &str, variants: &[&str]) -> ModelEntry {
