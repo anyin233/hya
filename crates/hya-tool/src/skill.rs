@@ -8,22 +8,27 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::permission::{Action, Resource};
+use crate::skill_catalog::{discover_skills, discover_skills_from_dirs};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
 const FILE_SAMPLE_LIMIT: usize = 10;
 
 #[derive(Clone)]
 pub struct SkillPlane {
-    dirs: Arc<Vec<PathBuf>>,
+    roots: SkillRoots,
+}
+
+#[derive(Clone)]
+enum SkillRoots {
+    DefaultForWorkdir,
+    ExplicitDirs(Arc<Vec<PathBuf>>),
 }
 
 impl Default for SkillPlane {
     fn default() -> Self {
-        let mut dirs = vec![PathBuf::from(".hya/skills")];
-        if let Some(home) = std::env::var_os("HOME") {
-            dirs.push(PathBuf::from(home).join(".config/hya/skills"));
+        Self {
+            roots: SkillRoots::DefaultForWorkdir,
         }
-        Self::new(dirs)
     }
 }
 
@@ -31,35 +36,23 @@ impl SkillPlane {
     #[must_use]
     pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
-            dirs: Arc::new(dirs),
+            roots: SkillRoots::ExplicitDirs(Arc::new(dirs)),
         }
     }
 
-    fn require(&self, name: &str) -> Result<SkillInfo, SkillError> {
-        for root in self.dirs.iter() {
-            let Ok(entries) = std::fs::read_dir(root) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path().join("SKILL.md");
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                if let Some(parsed) = parse_skill(&content)
-                    && parsed.name == name
-                {
-                    let dir = path
-                        .parent()
-                        .map_or_else(|| entry.path(), std::path::Path::to_path_buf);
-                    return Ok(SkillInfo {
-                        name: parsed.name,
-                        dir: canonical_or_self(&dir),
-                        content,
-                    });
-                }
-            }
-        }
-        Err(SkillError::NotFound(name.to_string()))
+    fn require(&self, workdir: &Path, name: &str) -> Result<SkillInfo, SkillError> {
+        let skills = match &self.roots {
+            SkillRoots::DefaultForWorkdir => discover_skills(workdir),
+            SkillRoots::ExplicitDirs(dirs) => discover_skills_from_dirs(dirs),
+        };
+        let Some(skill) = skills.into_iter().find(|skill| skill.name == name) else {
+            return Err(SkillError::NotFound(name.to_string()));
+        };
+        Ok(SkillInfo {
+            name: skill.name,
+            dir: canonical_or_self(&skill.dir),
+            content: skill.content,
+        })
     }
 }
 
@@ -67,10 +60,6 @@ impl SkillPlane {
 enum SkillError {
     #[error("skill not found: {0}")]
     NotFound(String),
-}
-
-struct ParsedSkill {
-    name: String,
 }
 
 struct SkillInfo {
@@ -118,7 +107,7 @@ impl Tool for SkillTool {
             .await?;
         let info = ctx
             .skills
-            .require(&input.name)
+            .require(&ctx.workdir, &input.name)
             .map_err(|e| ToolError::Other(e.to_string()))?;
         let files = sample_files(&info.dir, FILE_SAMPLE_LIMIT);
         let output = format!(
@@ -142,20 +131,6 @@ impl Tool for SkillTool {
             },
         }))
     }
-}
-
-fn parse_skill(content: &str) -> Option<ParsedSkill> {
-    let after = content.strip_prefix("---")?;
-    let end = after.find("\n---")?;
-    let front = &after[..end];
-    for line in front.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            return Some(ParsedSkill {
-                name: value.trim().trim_matches('"').to_string(),
-            });
-        }
-    }
-    None
 }
 
 fn sample_files(dir: &Path, limit: usize) -> Vec<PathBuf> {

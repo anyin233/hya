@@ -22,6 +22,7 @@ mod read_media;
 mod read_text;
 mod shell;
 mod skill;
+mod skill_catalog;
 pub mod spawn;
 mod task;
 pub mod todo;
@@ -46,6 +47,10 @@ pub use permission::{
     PermissionRules, Resource, Rule, glob_match,
 };
 pub use skill::SkillPlane;
+pub use skill_catalog::{
+    ParsedSkill, SkillCatalogEntry, discover_skills, discover_skills_from_dirs, parse_skill,
+    skill_dirs_for_workdir, skills_section,
+};
 pub use spawn::{MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{DuplicateName, Tool, ToolCtx, ToolError, ToolRegistry};

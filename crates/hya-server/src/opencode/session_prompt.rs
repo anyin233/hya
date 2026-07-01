@@ -111,7 +111,7 @@ async fn prompt(
     if let Some(run) = run {
         let engine = st.engine.clone();
         let agent = super::reference::session_agent_with_guidance(&st, session).await;
-        let external_dirs = super::reference::external_directories(&st).await;
+        let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
             let _guard = run;
@@ -140,24 +140,26 @@ async fn command(
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let session = parse_session(&id)?;
-    let snapshot = super::load_session(&st, session, None).await?;
+    let _snapshot = super::load_session(&st, session, None).await?;
     let run = st
         .runs
         .start(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let text = req.text.unwrap_or_else(|| {
-        super::session_legacy::command_prompt_text(
-            std::path::Path::new(snapshot.info.directory()),
-            &req.command,
-            &req.arguments,
-        )
+    let workdir = super::reference::session_workdir(&st, session).await;
+    let CommandRequest {
+        command,
+        arguments,
+        text,
+    } = req;
+    let text = text.unwrap_or_else(|| {
+        super::session_legacy::command_prompt_text(&workdir, &command, &arguments)
     });
     let message = st
         .engine
-        .admit_command_prompt(session, req.command, req.arguments, text)
+        .admit_command_prompt(session, command, arguments, text)
         .await?;
     let agent = super::reference::session_agent_with_guidance(&st, session).await;
-    let external_dirs = super::reference::external_directories(&st).await;
+    let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
     let _finish = st
         .engine
         .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)

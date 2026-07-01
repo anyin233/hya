@@ -284,6 +284,41 @@ async fn opencode_project_git_init_creates_repository_and_returns_project() {
 }
 
 #[tokio::test]
+async fn opencode_project_git_init_creates_repository_inside_parent_worktree() {
+    if !git_available() {
+        eprintln!("skipping: git is not available");
+        return;
+    }
+    let parent = init_repo();
+    let workdir = parent.join("nested-project");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    let initialized = request(app, "POST", "/project/git/init", None).await;
+
+    assert_eq!(initialized.status(), StatusCode::OK);
+    assert!(workdir.join(".git").exists());
+}
+
+#[tokio::test]
+async fn opencode_project_git_init_repairs_empty_git_marker_directory() {
+    if !git_available() {
+        eprintln!("skipping: git is not available");
+        return;
+    }
+    let workdir = tempdir("project-git-empty-marker");
+    std::fs::create_dir_all(workdir.join(".git")).unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    let initialized = request(app, "POST", "/project/git/init", None).await;
+
+    assert_eq!(initialized.status(), StatusCode::OK);
+    let body = body_json(initialized).await;
+    assert_eq!(body["vcs"], "git");
+    git(&workdir, &["rev-parse", "--is-inside-work-tree"]);
+}
+
+#[tokio::test]
 async fn opencode_project_update_persists_runtime_metadata() {
     let workdir = tempdir("project-update");
     let app = router(state(workdir).await);

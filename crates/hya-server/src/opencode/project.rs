@@ -130,7 +130,7 @@ async fn current(State(st): State<ServerState>) -> Json<ProjectInfo> {
 
 async fn init_git(State(st): State<ServerState>) -> Result<Json<ProjectInfo>, ApiError> {
     let worktree = location::workdir(&st);
-    if !is_git_worktree(&worktree) {
+    if !has_git_repository_at(&worktree) {
         let output = Command::new("git")
             .args(["init", "--quiet"])
             .current_dir(&worktree)
@@ -198,6 +198,27 @@ fn is_git_worktree(worktree: &std::path::Path) -> bool {
         .current_dir(worktree)
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+fn has_git_repository_at(worktree: &std::path::Path) -> bool {
+    let Ok(output) = StdCommand::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(worktree)
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let root = String::from_utf8_lossy(&output.stdout);
+    let root = root.trim();
+    if root.is_empty() {
+        return false;
+    }
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| std::path::PathBuf::from(root));
+    let worktree = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    root == worktree
 }
 
 fn git_error(prefix: &str, output: &std::process::Output) -> String {

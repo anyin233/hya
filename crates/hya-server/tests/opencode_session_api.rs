@@ -1,9 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -29,18 +28,31 @@ fn workdir() -> &'static str {
             .into_owned()
     })
 }
-static NEXT_TEMP_WORKDIR_ID: AtomicU64 = AtomicU64::new(0);
 
-fn temp_workdir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn isolated_workdir(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let serial = NEXT_TEMP_WORKDIR_ID.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("{prefix}-{nanos}-{serial}-{}", std::process::id()));
+    let serial = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hya-{prefix}-{nanos}-{serial}"));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::canonicalize(&dir).unwrap()
+    std::fs::canonicalize(&dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn write_skill(workdir: &str, name: &str, body: &str) {
+    let dir = std::path::Path::new(workdir).join(".hya/skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Run {name}\n---\n{body}"),
+    )
+    .unwrap();
 }
 
 async fn state() -> AppState {
@@ -249,6 +261,25 @@ async fn create_session_in(app: axum::Router, parent: Option<&str>, workdir: &Pa
                 .uri("/sessions")
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created: CreateSessionResponse = serde_json::from_value(body_json(resp).await).unwrap();
+    created.session.to_string()
+}
+
+async fn create_session_with_workdir(app: axum::Router, workdir: &str) -> String {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"agent": "build", "model": "fake", "workdir": workdir}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -621,20 +652,15 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
 
 #[tokio::test]
 async fn opencode_session_command_without_text_uses_skill_template_body() {
-    let workdir = temp_workdir("hya-opencode-session-skill-command");
-    std::fs::create_dir_all(workdir.join(".opencode/skills/deploy")).unwrap();
-    std::fs::write(
-        workdir.join(".opencode/skills/deploy/SKILL.md"),
-        "---\nname: deploy\ndescription: Deploy the current project\n---\nDeploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
-    )
-    .unwrap();
-    let app = router(state_with_workdir(workdir.clone()).await);
+    let workdir = isolated_workdir("opencode-session-skill-command");
+    write_skill(
+        &workdir,
+        "deploy",
+        "Deploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
+    );
+    let app = router(state().await);
 
-    let (status, commands) = get_json(
-        app.clone(),
-        format!("/command?directory={}", workdir.display()),
-    )
-    .await;
+    let (status, commands) = get_json(app.clone(), format!("/command?directory={workdir}")).await;
     assert_eq!(status, StatusCode::OK);
     let deploy = commands
         .as_array()
@@ -648,7 +674,7 @@ async fn opencode_session_command_without_text_uses_skill_template_body() {
         "Deploy $1 into $2.\nFull prompt: $ARGUMENTS\n"
     );
 
-    let session = create_session_in(app.clone(), None, &workdir).await;
+    let session = create_session_with_workdir(app.clone(), &workdir).await;
     let (status, command) = post_json(
         app.clone(),
         format!("/session/{session}/command"),
