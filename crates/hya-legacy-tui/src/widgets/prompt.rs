@@ -193,3 +193,30 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::layout::Rect;
+
+    use super::*;
+    use crate::AppState;
+
+    #[test]
+    fn prompt_height_wraps_long_input_and_caps_visible_rows() {
+        assert_eq!(prompt_height("short", 12), 3);
+        assert!(prompt_height("alpha beta gamma", 12) > 3);
+        assert_eq!(prompt_height(&"x".repeat(200), 12), 8);
+        assert_eq!(prompt_height("one\ntwo\nthree", 12), 5);
+    }
+
+    #[test]
+    fn prompt_cursor_tracks_wrapped_viewport_bottom() {
+        let area = Rect::new(5, 7, 8, 8);
+        let state = AppState {
+            input: "x".repeat(40),
+            ..AppState::default()
+        };
+
+        assert_eq!(prompt_cursor(&state, area), Some((11, 13)));
+    }
+}

@@ -124,11 +124,21 @@ fn with_user_message(state: &mut AppState, text: &str) {
 }
 
 fn with_tool_message(state: &mut AppState, base_seq: u64, path: &str, time_ms: u64) {
+    with_named_tool_message(state, base_seq, "read", json!({ "path": path }), time_ms);
+}
+
+fn with_named_tool_message(
+    state: &mut AppState,
+    base_seq: u64,
+    tool_name: &str,
+    input: serde_json::Value,
+    time_ms: u64,
+) {
     let session = SessionId::new();
     let message = MessageId::new();
     let part = PartId::new();
     let call = ToolCallId::new();
-    let name = ToolName::new("read");
+    let name = ToolName::new(tool_name);
     state.apply(&env(
         base_seq,
         Event::MessageStarted {
@@ -155,7 +165,7 @@ fn with_tool_message(state: &mut AppState, base_seq: u64, path: &str, time_ms: u
             part,
             call,
             name,
-            input: json!({ "path": path }),
+            input,
         },
     ));
     state.apply(&env(
@@ -517,4 +527,169 @@ fn tool_call_renders_as_one_compact_line() {
     assert!(text.contains("Cargo.toml"), "brief input renders");
     assert!(text.contains("7ms"), "completion time renders");
     assert_eq!(text.matches('⚙').count(), 1, "exactly one tool line");
+}
+
+#[test]
+fn running_tool_call_renders_pending_status_before_result() {
+    let mut state = AppState::default();
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let call = ToolCallId::new();
+    let name = ToolName::new("bash");
+    state.apply(&env(
+        1,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        },
+    ));
+    state.apply(&env(
+        2,
+        Event::ToolInputStart {
+            session,
+            message,
+            part,
+            call,
+            name: name.clone(),
+        },
+    ));
+    state.apply(&env(
+        3,
+        Event::ToolCallRequested {
+            session,
+            message,
+            part,
+            call,
+            name,
+            input: json!({ "command": "cargo test" }),
+        },
+    ));
+
+    let text = render(&mut state, 100, 12);
+    assert!(text.contains("⚙ bash"));
+    assert!(text.contains("tool bash running"));
+    assert!(text.contains("cargo test"));
+}
+
+#[test]
+fn tool_error_row_renders_status_message_and_error_color() {
+    let mut state = AppState::default();
+    with_tool_error_message(&mut state, 1, "README.md", "permission denied");
+
+    let buffer = render_buffer(&mut state, 100, 12);
+    let text = buffer_text(&buffer, 100, 12);
+    assert!(text.contains("⚙ read"));
+    assert!(text.contains("tool read error"));
+    assert!(text.contains("permission denied"));
+    let (x, y) = find_rendered_text(&buffer, 100, 12, "tool read error").unwrap();
+    assert_eq!(buffer[(x, y)].fg, Color::Rgb(224, 108, 117));
+}
+
+#[test]
+fn mcp_tool_call_renders_through_compact_tool_row() {
+    let mut state = AppState::default();
+    with_named_tool_message(
+        &mut state,
+        1,
+        "mcp__filesystem__read_file",
+        json!({ "path": "README.md" }),
+        9,
+    );
+
+    let text = render(&mut state, 160, 12);
+    assert!(text.contains("⚙ mcp__filesystem__read_file"));
+    assert!(text.contains("tool mcp__filesystem__read_file completed"));
+    assert!(text.contains("README.md"));
+    assert!(text.contains("9ms"));
+}
+
+#[test]
+fn subagent_permission_view_names_origin_session() {
+    let mut state = AppState {
+        permission: Some(PermissionPrompt {
+            title: "bash · subagent abc12345".to_string(),
+            detail: "cargo test -p hya-core".to_string(),
+            selected: 0,
+            reply: String::new(),
+        }),
+        ..AppState::default()
+    };
+
+    let text = render(&mut state, 100, 20);
+    assert!(text.contains("permission required"));
+    assert!(text.contains("bash · subagent abc12345"));
+    assert!(text.contains("cargo test -p hya-core"));
+}
+
+#[test]
+fn multiline_prompt_wraps_and_preserves_line_order() {
+    let mut state = AppState {
+        input: format!("first line\n{}", "second ".repeat(20)),
+        ..AppState::default()
+    };
+
+    let buffer = render_buffer(&mut state, 80, 24);
+    let text = buffer_text(&buffer, 80, 24);
+    let first = find_rendered_text(&buffer, 80, 24, "> first line").expect("first line");
+    let second = find_rendered_text(&buffer, 80, 24, "second").expect("second line");
+
+    assert!(
+        second.1 > first.1,
+        "explicit newline should render below first line"
+    );
+    assert!(text.contains("second"));
+}
+
+#[test]
+fn switch_states_are_visible_in_prompt_footer_and_sidebar() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        yolo: true,
+        running: true,
+        reasoning_effort: Some("high".to_string()),
+        ..AppState::default()
+    };
+    let text = render(&mut state, 120, 24);
+    assert!(text.contains("YOLO"));
+    assert!(text.contains("Tab yolo off") || text.contains("Tab disables auto-allow"));
+    assert!(
+        text.contains("● streaming"),
+        "status bar should show streaming switch state"
+    );
+    assert!(
+        text.contains("state streaming"),
+        "sidebar should show streaming state"
+    );
+    assert!(
+        text.contains("think:high"),
+        "status bar should show reasoning effort"
+    );
+    assert!(
+        text.contains("think high"),
+        "sidebar should show reasoning effort"
+    );
+}
+
+#[test]
+fn sidebar_displays_attachments_and_reasoning_state() {
+    let mut state = AppState {
+        model: "fake".to_string(),
+        session_label: "sess-1".to_string(),
+        reasoning_effort: Some("max".to_string()),
+        attachments: vec![hya_legacy_tui::PromptAttachment {
+            placeholder: "[Image #1]".to_string(),
+            source_path: Some("/tmp/screenshot.png".to_string()),
+            mime: "image/png".to_string(),
+        }],
+        ..AppState::default()
+    };
+    with_user_message(&mut state, "see image");
+
+    let text = render(&mut state, 120, 24);
+    assert!(text.contains("attachments 1"));
+    assert!(text.contains("[Image #1]"));
+    assert!(text.contains("think max"));
 }

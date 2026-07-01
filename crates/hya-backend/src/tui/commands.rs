@@ -161,7 +161,12 @@ pub fn completion_items(input: &str) -> Vec<DialogItem> {
 #[must_use]
 pub fn help_items_with_custom(custom: &[CustomCommand]) -> Vec<DialogItem> {
     let mut items = help_items();
-    items.extend(custom.iter().map(custom_command_item));
+    items.extend(
+        custom
+            .iter()
+            .filter(|command| !shadows_builtin(command))
+            .map(custom_command_item),
+    );
     items
 }
 
@@ -177,19 +182,19 @@ pub fn completion_items_with_custom(input: &str, custom: &[CustomCommand]) -> Ve
     items.extend(
         custom
             .iter()
-            .filter(|command| command.name.starts_with(rest))
+            .filter(|command| command.name.starts_with(rest) && !shadows_builtin(command))
             .map(custom_command_item),
     );
     items
 }
 
+fn shadows_builtin(command: &CustomCommand) -> bool {
+    resolve_slash(&command.name).is_some()
+}
+
 #[must_use]
 pub fn find_custom<'a>(custom: &'a [CustomCommand], name: &str) -> Option<&'a CustomCommand> {
     custom.iter().find(|command| command.name == name)
-}
-
-pub fn load_markdown_commands(workdir: &Path) -> std::io::Result<Vec<CustomCommand>> {
-    load_markdown_commands_from_dirs(&markdown_command_dirs(workdir))
 }
 
 pub fn load_markdown_commands_from_dirs(dirs: &[PathBuf]) -> std::io::Result<Vec<CustomCommand>> {
@@ -211,6 +216,44 @@ pub fn load_markdown_commands_from_dirs(dirs: &[PathBuf]) -> std::io::Result<Vec
             let command = parse_markdown_command(name, &text);
             commands.insert(command.name.clone(), command);
         }
+    }
+    Ok(commands.into_values().collect())
+}
+
+pub fn load_skill_commands_from_dirs(dirs: &[PathBuf]) -> Vec<CustomCommand> {
+    let mut commands = BTreeMap::new();
+    for skill in hya_app::skills::discover_skills(dirs) {
+        commands.insert(
+            skill.name.clone(),
+            CustomCommand {
+                name: skill.name,
+                description: skill.description,
+                template: skill.content,
+                agent: None,
+                model: None,
+            },
+        );
+    }
+    commands.into_values().collect()
+}
+
+pub fn load_custom_commands(workdir: &Path) -> std::io::Result<Vec<CustomCommand>> {
+    load_custom_commands_from_dirs(
+        &markdown_command_dirs(workdir),
+        &hya_app::skills::skill_dirs_for_workdir(workdir),
+    )
+}
+
+pub fn load_custom_commands_from_dirs(
+    markdown_dirs: &[PathBuf],
+    skill_dirs: &[PathBuf],
+) -> std::io::Result<Vec<CustomCommand>> {
+    let mut commands = BTreeMap::new();
+    for command in load_skill_commands_from_dirs(skill_dirs) {
+        commands.insert(command.name.clone(), command);
+    }
+    for command in load_markdown_commands_from_dirs(markdown_dirs)? {
+        commands.insert(command.name.clone(), command);
     }
     Ok(commands.into_values().collect())
 }
@@ -314,24 +357,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_slash_commands_and_aliases() {
-        assert_eq!(resolve_slash("model"), Some(CommandKind::Model));
-        assert_eq!(resolve_slash("models"), Some(CommandKind::Model));
-        assert_eq!(resolve_slash("resume"), Some(CommandKind::Resume));
-        assert_eq!(resolve_slash("sessions"), Some(CommandKind::Resume));
-        assert_eq!(resolve_slash("new"), Some(CommandKind::NewSession));
-        assert_eq!(resolve_slash("clear"), Some(CommandKind::NewSession));
+    fn resolves_every_builtin_slash_command_and_alias() {
+        for spec in COMMANDS {
+            assert_eq!(resolve_slash(spec.name), Some(spec.kind), "{}", spec.name);
+            for alias in spec.aliases {
+                assert_eq!(resolve_slash(alias), Some(spec.kind), "alias {alias}");
+            }
+        }
         assert_eq!(resolve_slash("init"), None);
-        assert_eq!(resolve_slash("agent"), Some(CommandKind::Agent));
-        assert_eq!(resolve_slash("tools"), Some(CommandKind::Tools));
-        assert_eq!(resolve_slash("mcp"), Some(CommandKind::Tools));
         assert_eq!(resolve_slash("yolo"), None);
-        assert_eq!(resolve_slash("think"), Some(CommandKind::Think));
-        assert_eq!(resolve_slash("export"), Some(CommandKind::Export));
-        assert_eq!(resolve_slash("quit"), Some(CommandKind::Quit));
-        assert_eq!(resolve_slash("exit"), Some(CommandKind::Quit));
-        assert_eq!(resolve_slash("q"), Some(CommandKind::Quit));
-        assert_eq!(resolve_slash("help"), Some(CommandKind::Help));
     }
 
     #[test]
@@ -382,6 +416,38 @@ mod tests {
     }
 
     #[test]
+    fn custom_commands_matching_builtin_names_are_hidden_from_help_and_completion() {
+        let custom = vec![CustomCommand {
+            name: "model".to_string(),
+            description: "Unreachable custom model".to_string(),
+            template: "custom".to_string(),
+            agent: None,
+            model: None,
+        }];
+
+        let help = help_items_with_custom(&custom);
+        assert_eq!(help.iter().filter(|item| item.label == "/model").count(), 1);
+        assert!(
+            help.iter()
+                .all(|item| !item.detail.contains("Unreachable custom model"))
+        );
+
+        let completion = completion_items_with_custom("/model", &custom);
+        assert_eq!(
+            completion
+                .iter()
+                .filter(|item| item.label == "/model")
+                .count(),
+            1
+        );
+        assert!(
+            completion
+                .iter()
+                .all(|item| !item.detail.contains("Unreachable custom model"))
+        );
+    }
+
+    #[test]
     fn markdown_commands_load_frontmatter_and_expand_arguments() {
         let root = temp_root();
         let commands_dir = root.join(".opencode").join("commands");
@@ -414,6 +480,54 @@ All args: $ARGUMENTS
             commands[0].expand("Button src/components"),
             "Create Button in src/components.\n\nAll args: Button src/components\n"
         );
+    }
+
+    #[test]
+    fn skill_commands_load_app_skill_content_as_template() {
+        let root = temp_root();
+        let skill_dir = root.join("skills").join("reviewer");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: reviewer\ndescription: Review code carefully\n---\nUse this skill on $ARGUMENTS.\n",
+        )
+        .unwrap();
+
+        let commands = load_skill_commands_from_dirs(&[root.join("skills")]);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "reviewer");
+        assert_eq!(commands[0].description, "Review code carefully");
+        assert_eq!(
+            commands[0].expand("src/main.rs"),
+            "Use this skill on src/main.rs.\n"
+        );
+    }
+
+    #[test]
+    fn markdown_commands_override_skill_commands_with_same_name() {
+        let root = temp_root();
+        let prompt_dir = root.join("prompts");
+        let skill_root = root.join("skills");
+        let skill_dir = skill_root.join("reviewer");
+        std::fs::create_dir_all(&prompt_dir).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            prompt_dir.join("reviewer.md"),
+            "---\ndescription: Prompt reviewer\n---\nPrompt $ARGUMENTS\n",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: reviewer\ndescription: Skill reviewer\n---\nSkill $ARGUMENTS\n",
+        )
+        .unwrap();
+
+        let commands = load_custom_commands_from_dirs(&[prompt_dir], &[skill_root]).unwrap();
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].description, "Prompt reviewer");
+        assert_eq!(commands[0].expand("file"), "Prompt file\n");
     }
 
     #[test]
