@@ -96,19 +96,23 @@ async fn command(
     Json(req): Json<CommandRequest>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    match load_session(&st, session, None).await {
-        Ok(_) => {}
+    let snapshot = match load_session(&st, session, None).await {
+        Ok(snapshot) => snapshot,
         Err(error) if error.status == StatusCode::NOT_FOUND => {
             return Ok(super::errors::legacy_session_not_found(session));
         }
         Err(error) => return Err(error),
-    }
+    };
     let Some(run) = st.runs.start(session) else {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     };
-    let text = req
-        .text
-        .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
+    let text = req.text.unwrap_or_else(|| {
+        command_prompt_text(
+            std::path::Path::new(snapshot.info.directory()),
+            &req.command,
+            &req.arguments,
+        )
+    });
     let message = st
         .engine
         .admit_command_prompt(session, req.command, req.arguments, text)
@@ -239,10 +243,16 @@ async fn message_exists(
     }))
 }
 
-pub(in crate::opencode) fn command_prompt_text(command: &str, arguments: &str) -> String {
-    if arguments.trim().is_empty() {
-        format!("/{command}")
-    } else {
-        format!("/{command} {arguments}")
-    }
+pub(in crate::opencode) fn command_prompt_text(
+    workdir: &std::path::Path,
+    command: &str,
+    arguments: &str,
+) -> String {
+    super::command_catalog::expand_prompt(workdir, command, arguments).unwrap_or_else(|| {
+        if arguments.trim().is_empty() {
+            format!("/{command}")
+        } else {
+            format!("/{command} {arguments}")
+        }
+    })
 }

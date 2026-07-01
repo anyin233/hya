@@ -140,13 +140,17 @@ async fn command(
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     let session = parse_session(&id)?;
-    super::load_session(&st, session, None).await?;
+    let snapshot = super::load_session(&st, session, None).await?;
     let run = st
         .runs
         .start(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
     let text = req.text.unwrap_or_else(|| {
-        super::session_legacy::command_prompt_text(&req.command, &req.arguments)
+        super::session_legacy::command_prompt_text(
+            std::path::Path::new(snapshot.info.directory()),
+            &req.command,
+            &req.arguments,
+        )
     });
     let message = st
         .engine

@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::{Arc, OnceLock};
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -12,6 +10,10 @@ use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
 fn workdir() -> &'static str {
@@ -25,8 +27,25 @@ fn workdir() -> &'static str {
             .into_owned()
     })
 }
+static NEXT_TEMP_WORKDIR_ID: AtomicU64 = AtomicU64::new(0);
+
+fn temp_workdir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_WORKDIR_ID.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("{prefix}-{nanos}-{serial}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir).unwrap()
+}
 
 async fn state() -> AppState {
+    state_with_workdir(PathBuf::from(workdir())).await
+}
+
+async fn state_with_workdir(workdir: PathBuf) -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("assistant answer".to_string()),
         FakeStep::Finish(FinishReason::Stop),
@@ -42,7 +61,7 @@ async fn state() -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: workdir().into(),
+            workdir,
             reasoning: None,
         }),
     )
@@ -352,6 +371,73 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
         shell["data"]["parts"][0]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-v2-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_v2_session_command_without_text_uses_skill_template_body() {
+    let workdir = temp_workdir("hya-opencode-session-v2-skill-command");
+    std::fs::create_dir_all(workdir.join(".opencode/skills/deploy")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/skills/deploy/SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy the current project\n---\nDeploy $1 into $2.\nFull prompt: $ARGUMENTS\n",
+    )
+    .unwrap();
+    let app = router(state_with_workdir(workdir.clone()).await);
+
+    let (status, commands) = get_json(
+        app.clone(),
+        format!("/api/command?directory={}", workdir.display()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let deploy = commands["data"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|command| command["name"] == "deploy")
+        .expect("deploy command");
+    assert_eq!(deploy["source"], "skill");
+    assert_eq!(
+        deploy["template"],
+        "Deploy $1 into $2.\nFull prompt: $ARGUMENTS\n"
+    );
+
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": workdir.display().to_string()}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, command) = post_json(
+        app.clone(),
+        &format!("/api/session/{session}/command"),
+        json!({
+            "command": "deploy",
+            "arguments": "web production"
+        }),
+    )
+    .await;
+    let expected = "Deploy web into production.\nFull prompt: web production\n";
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["data"]["info"]["role"], "user");
+    assert_eq!(command["data"]["parts"][0]["text"], expected);
+    assert_ne!(
+        command["data"]["parts"][0]["text"],
+        "/deploy web production"
+    );
+
+    let (status, context) = get_json(app, format!("/api/session/{session}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        context["data"]
+            .as_array()
+            .expect("context")
+            .iter()
+            .any(|item| item["type"] == "user" && item["text"] == expected)
     );
 }
 

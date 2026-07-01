@@ -13,7 +13,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.28.0`,
+hya is under active development (workspace version `0.28.8`,
 `MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
 crates.io — build it from source as described below. APIs, config, and command
 surface may still change between versions.
