@@ -116,3 +116,101 @@ async fn skill_requires_skill_permission_before_loading_content() {
     // Then
     assert!(matches!(result, Err(ToolError::Permission(_))));
 }
+
+#[tokio::test]
+async fn skill_returns_not_found_error_for_unknown_name() {
+    // Given
+    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let ctx = ctx_with(
+        vec![allow(Action::Skill, "missing")],
+        SkillPlane::new(vec![]),
+    );
+
+    // When
+    let result = tool.execute(&ctx, json!({ "name": "missing" })).await;
+
+    // Then
+    match result {
+        Err(ToolError::Other(message)) => assert!(message.contains("skill not found")),
+        other => panic!("expected missing skill error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn skill_falls_back_to_later_root_when_first_root_has_no_match() {
+    // Given
+    let first_root = tempdir();
+    let second_root = tempdir();
+    let second_dir = second_root.join("writer");
+    std::fs::create_dir_all(&second_dir).unwrap();
+    std::fs::write(
+        second_dir.join("SKILL.md"),
+        "---\nname: writer\ndescription: Writes concise text\n---\nSecond root content.\n",
+    )
+    .unwrap();
+    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let ctx = ctx_with(
+        vec![allow(Action::Skill, "writer")],
+        SkillPlane::new(vec![first_root, second_root]),
+    );
+
+    // When
+    let out = tool
+        .execute(&ctx, json!({ "name": "writer" }))
+        .await
+        .unwrap();
+
+    // Then
+    let expected_dir = std::fs::canonicalize(&second_dir).unwrap();
+    assert_eq!(out["metadata"]["name"], "writer");
+    assert_eq!(
+        out["metadata"]["dir"].as_str(),
+        Some(expected_dir.to_string_lossy().as_ref())
+    );
+    let output = out["output"].as_str().unwrap();
+    assert!(output.contains("Second root content."));
+}
+
+#[tokio::test]
+async fn skill_prefers_first_matching_root_when_multiple_roots_define_same_name() {
+    // Given
+    let first_root = tempdir();
+    let first_dir = first_root.join("writer");
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::write(
+        first_dir.join("SKILL.md"),
+        "---\nname: writer\ndescription: Writes concise text\n---\nFirst root content.\n",
+    )
+    .unwrap();
+
+    let second_root = tempdir();
+    let second_dir = second_root.join("writer");
+    std::fs::create_dir_all(&second_dir).unwrap();
+    std::fs::write(
+        second_dir.join("SKILL.md"),
+        "---\nname: writer\ndescription: Writes concise text\n---\nSecond root content.\n",
+    )
+    .unwrap();
+
+    let tool = ToolRegistry::builtins().get("skill").unwrap();
+    let ctx = ctx_with(
+        vec![allow(Action::Skill, "writer")],
+        SkillPlane::new(vec![first_root, second_root]),
+    );
+
+    // When
+    let out = tool
+        .execute(&ctx, json!({ "name": "writer" }))
+        .await
+        .unwrap();
+
+    // Then
+    let expected_dir = std::fs::canonicalize(&first_dir).unwrap();
+    assert_eq!(
+        out["metadata"]["dir"].as_str(),
+        Some(expected_dir.to_string_lossy().as_ref())
+    );
+    let output = out["output"].as_str().unwrap();
+    assert!(output.contains("First root content."));
+    assert!(!output.contains("Second root content."));
+}

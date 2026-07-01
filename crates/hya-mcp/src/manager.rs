@@ -133,6 +133,8 @@ async fn connect_server(name: String, config: McpServerConfig) -> Result<McpServ
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
 
     fn server_command() -> Vec<String> {
         vec![
@@ -152,6 +154,96 @@ for line in sys.stdin:
 "#
             .to_string(),
         ]
+    }
+    fn server_config(command: Vec<String>) -> McpServerConfig {
+        McpServerConfig {
+            command,
+            timeout_ms: Some(1000),
+            ..McpServerConfig::default()
+        }
+    }
+
+    fn server_command_initialize_error() -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if req["method"] == "initialize":
+        response = {"jsonrpc":"2.0", "id": req["id"], "error": {"code": -32000, "message": "init failed"}}
+    else:
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {}}
+    print(json.dumps(response), flush=True)
+"#
+            .to_string(),
+        ]
+    }
+
+    fn server_command_tools_list_error() -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if req["method"] == "initialize":
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {"capabilities": {}}}
+    elif req["method"] == "tools/list":
+        response = {"jsonrpc":"2.0", "id": req["id"], "error": {"code": -32000, "message": "tools failed"}}
+    else:
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {"content": {"ok": True}, "isError": False}}
+    print(json.dumps(response), flush=True)
+"#
+            .to_string(),
+        ]
+    }
+
+    fn server_command_resources_list_error() -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if req["method"] == "initialize":
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {"capabilities": {}}}
+    elif req["method"] == "tools/list":
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {"tools": [{"name": "ping", "description": "Ping", "inputSchema": {"type": "object"}}]}}
+    elif req["method"] == "resources/list":
+        response = {"jsonrpc":"2.0", "id": req["id"], "error": {"code": -32000, "message": "resources failed"}}
+    else:
+        response = {"jsonrpc":"2.0", "id": req["id"], "result": {"content": {"pong": True}, "isError": False}}
+    print(json.dumps(response), flush=True)
+"#
+            .to_string(),
+        ]
+    }
+
+    fn ctx_allowing_mcp(resource: &str) -> hya_tool::ToolCtx {
+        let (permission, _rx) =
+            hya_tool::PermissionPlane::new(hya_tool::PermissionRules::new(vec![
+                hya_tool::Rule::new(hya_tool::Action::Mcp, resource, hya_tool::Mode::Allow),
+            ]));
+        let (interaction, _irx) = hya_tool::InteractionPlane::new();
+        let (spawner, _srx) = hya_tool::SpawnerPlane::new();
+        hya_tool::ToolCtx {
+            permission,
+            interaction,
+            spawner,
+            session: None,
+            parent_session: None,
+            todo: hya_tool::TodoPlane::default(),
+            skills: hya_tool::SkillPlane::default(),
+            websearch: hya_tool::WebSearchPlane::default(),
+            lsp: hya_tool::LspPlane::default(),
+            formatter: hya_tool::FormatterPlane::default(),
+            workdir: std::path::PathBuf::from("."),
+            cancel: CancellationToken::new(),
+        }
     }
 
     #[tokio::test]
@@ -265,5 +357,101 @@ for line in sys.stdin:
                 "client": "docs/server"
             })
         );
+    }
+    #[tokio::test]
+    async fn connect_all_exposes_callable_namespaced_tool_after_successful_initialize() {
+        let mut configs = BTreeMap::new();
+        configs.insert("good".to_string(), server_config(server_command()));
+
+        let manager = McpManager::connect_all(configs).await;
+        let tool = manager
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name() == "mcp__good__ping")
+            .unwrap();
+
+        let out = tool
+            .execute(&ctx_allowing_mcp("mcp__good__ping"), json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(out["content"], json!([{"ok": true}]));
+        assert!(
+            out["output"]
+                .as_str()
+                .is_some_and(|text| text.contains("ok"))
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_all_marks_server_failed_when_initialize_rpc_errors() {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "bad".to_string(),
+            server_config(server_command_initialize_error()),
+        );
+        configs.insert("good".to_string(), server_config(server_command()));
+
+        let manager = McpManager::connect_all(configs).await;
+        let status = manager.status();
+
+        assert!(matches!(
+            status.get("bad"),
+            Some(McpStatus::Failed { error }) if !error.is_empty()
+        ));
+        assert_eq!(status.get("good"), Some(&McpStatus::Connected));
+        assert!(
+            manager
+                .tools()
+                .into_iter()
+                .any(|tool| tool.name() == "mcp__good__ping")
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_all_marks_server_failed_when_tools_list_rpc_errors_but_keeps_others_connected()
+    {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "bad".to_string(),
+            server_config(server_command_tools_list_error()),
+        );
+        configs.insert("good".to_string(), server_config(server_command()));
+
+        let manager = McpManager::connect_all(configs).await;
+        let status = manager.status();
+
+        assert!(matches!(
+            status.get("bad"),
+            Some(McpStatus::Failed { error }) if error.contains("tools failed")
+        ));
+        assert_eq!(status.get("good"), Some(&McpStatus::Connected));
+        assert!(
+            manager
+                .tools()
+                .into_iter()
+                .any(|tool| tool.name() == "mcp__good__ping")
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_all_keeps_connected_status_when_resources_list_errors() {
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "good".to_string(),
+            server_config(server_command_resources_list_error()),
+        );
+
+        let manager = McpManager::connect_all(configs).await;
+        let status = manager.status();
+
+        assert_eq!(status.get("good"), Some(&McpStatus::Connected));
+        assert!(
+            manager
+                .tools()
+                .into_iter()
+                .any(|tool| tool.name() == "mcp__good__ping")
+        );
+        assert!(manager.resources().is_empty());
     }
 }
