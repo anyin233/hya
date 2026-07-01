@@ -5,7 +5,7 @@ use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine};
+use super::{AgentSpec, SessionEngine, effective_agent_for_projection};
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
@@ -95,7 +95,8 @@ impl SessionEngine {
             }
 
             let projection = self.store.read_projection(session).await?;
-            let messages = projection_to_messages(agent, &projection);
+            let agent = effective_agent_for_projection(agent, &projection);
+            let messages = projection_to_messages(&agent, &projection);
             let messages = if let Some(summarizer) = &self.summarizer {
                 match crate::compaction::compact_with(
                     messages,
@@ -105,13 +106,13 @@ impl SessionEngine {
                 .await
                 {
                     Ok(compacted) => compacted,
-                    Err(_) => projection_to_messages(agent, &projection),
+                    Err(_) => projection_to_messages(&agent, &projection),
                 }
             } else {
                 messages
             };
             let request =
-                request_from_messages(agent, &projection, messages, &self.tools, &self.providers);
+                request_from_messages(&agent, &projection, messages, &self.tools, &self.providers);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {

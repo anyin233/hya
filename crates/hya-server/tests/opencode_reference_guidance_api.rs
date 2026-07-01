@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,10 +11,10 @@ use axum::http::{Method, Request, StatusCode};
 use futures::stream;
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
-use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
+use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, Role};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
-    ProviderRouter,
+    ProviderRouter, ReasoningEffort,
 };
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
@@ -36,6 +37,7 @@ impl Provider for RecordingProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
+            reasoning_request: true,
             ..Capabilities::default()
         })
     }
@@ -72,6 +74,21 @@ fn workdir() -> String {
         .unwrap()
         .to_string_lossy()
         .into_owned()
+}
+
+fn child_dir(root: &str, name: &str) -> String {
+    let dir = PathBuf::from(root).join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn sibling_dir(root: &str, name: &str) -> PathBuf {
+    let dir = PathBuf::from(root).join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(dir).unwrap()
 }
 
 async fn state(workdir: &str, requests: Arc<Mutex<Vec<CompletionRequest>>>) -> AppState {
@@ -258,5 +275,151 @@ async fn opencode_reference_directories_allow_external_tool_reads() {
             .as_str()
             .unwrap()
             .contains("reference body")
+    );
+}
+
+#[tokio::test]
+async fn opencode_prompt_reference_guidance_uses_session_workdir() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_root = workdir();
+    let session_root = workdir();
+    let server_dir = child_dir(&server_root, "project");
+    let session_dir = child_dir(&session_root, "project");
+    let server_ref = sibling_dir(&server_root, "refs");
+    let session_ref = sibling_dir(&session_root, "refs");
+    let app = router(state(&server_dir, Arc::clone(&requests)).await);
+
+    let (status, _config) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        json!({
+            "references": {
+                "docs": { "path": "../refs", "description": "Session docs" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let session = create_session(app.clone(), &session_dir).await;
+    let (status, _message) = request_json(
+        app,
+        Method::POST,
+        &format!("/session/{session}/message"),
+        json!({"text": "read session refs"}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let requests = requests.lock().unwrap();
+    let system = requests[0].system.as_deref().unwrap();
+    assert!(system.contains(session_ref.to_str().unwrap()));
+    assert!(!system.contains(server_ref.to_str().unwrap()));
+}
+
+#[tokio::test]
+async fn opencode_reference_external_dirs_use_session_workdir() {
+    let server_root = workdir();
+    let session_root = workdir();
+    let server_dir = child_dir(&server_root, "project");
+    let session_dir = child_dir(&session_root, "project");
+    let session_ref = sibling_dir(&session_root, "refs");
+    let app = router(read_reference_state(&server_dir, session_ref.to_str().unwrap()).await);
+
+    let (status, _config) = request_json(
+        app.clone(),
+        Method::PATCH,
+        "/global/config",
+        json!({
+            "references": {
+                "docs": { "path": "../refs" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let session = create_session(app.clone(), &session_dir).await;
+    let (status, _message) = request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session}/message"),
+        json!({"text": "read the session reference"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, messages) = request_json(
+        app,
+        Method::GET,
+        &format!("/session/{session}/message"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tool = messages[1]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["type"] == "tool" && part["tool"] == "read")
+        .unwrap();
+    assert_eq!(tool["state"]["status"], "completed");
+    assert!(
+        tool["state"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("reference body")
+    );
+}
+
+#[tokio::test]
+async fn opencode_init_uses_session_workdir_agent_catalog() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_dir = workdir();
+    let session_dir = workdir();
+    std::fs::create_dir_all(format!("{server_dir}/.opencode/agents")).unwrap();
+    std::fs::write(
+        format!("{server_dir}/.opencode/agents/build.md"),
+        "---\noptions:\n  reasoningEffort: low\n---\nServer prompt\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(format!("{session_dir}/.opencode/agents")).unwrap();
+    std::fs::write(
+        format!("{session_dir}/.opencode/agents/build.md"),
+        "---\noptions:\n  reasoningEffort: high\n---\nSession prompt\n",
+    )
+    .unwrap();
+    let app = router(state(&server_dir, Arc::clone(&requests)).await);
+    let session = create_session(app.clone(), &session_dir).await;
+
+    let (status, _body) = request_json(
+        app,
+        Method::POST,
+        &format!("/session/{session}/init"),
+        json!({
+            "messageID": MessageId::new().to_string(),
+            "providerID": "fake",
+            "modelID": "fake",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests[0].reasoning, Some(ReasoningEffort::High));
+    assert!(
+        requests[0]
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("Session prompt")
+    );
+    assert!(
+        !requests[0]
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("Server prompt")
     );
 }

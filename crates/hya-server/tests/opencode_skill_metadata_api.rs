@@ -72,6 +72,102 @@ fn find_named<'a>(items: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing {name}: {items}"))
 }
 
+static ENV_LOCK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct HomeGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl HomeGuard {
+    fn set(home: &std::path::Path) -> Self {
+        while ENV_LOCK
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::Acquire,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            std::thread::yield_now();
+        }
+        let previous = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", home);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("HOME", previous);
+            } else {
+                std::env::remove_var("HOME");
+            }
+        }
+        ENV_LOCK.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn write_skill(root: &std::path::Path, rel: &str, name: &str, description: &str, body: &str) {
+    let dir = root.join(rel);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn opencode_skill_and_command_routes_keep_project_hya_before_home_duplicate() {
+    let workdir = tempdir();
+    let home = tempdir();
+    let _home = HomeGuard::set(&home);
+    write_skill(
+        &workdir,
+        ".hya/skills/project-home-dupe",
+        "project-home-dupe",
+        "Project duplicate",
+        "Project duplicate body\n",
+    );
+    write_skill(
+        &home,
+        ".config/hya/skills/project-home-dupe",
+        "project-home-dupe",
+        "Home duplicate",
+        "Home duplicate body\n",
+    );
+    let app = router(state(workdir.clone()).await);
+
+    let (skill_status, skills) = get_json(
+        app.clone(),
+        &format!("/skill?directory={}", workdir.display()),
+    )
+    .await;
+    let (command_status, commands) =
+        get_json(app, &format!("/command?directory={}", workdir.display())).await;
+
+    assert_eq!(skill_status, StatusCode::OK);
+    let skill = find_named(&skills, "project-home-dupe");
+    assert_eq!(skill["description"], "Project duplicate");
+    assert_eq!(skill["content"], "Project duplicate body\n");
+    assert!(
+        !skills
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|skill| skill["content"] == "Home duplicate body\n")
+    );
+    assert_eq!(command_status, StatusCode::OK);
+    let command = find_named(&commands, "project-home-dupe");
+    assert_eq!(command["source"], "skill");
+    assert_eq!(command["template"], "Project duplicate body\n");
+}
+
 #[tokio::test]
 async fn opencode_skill_and_command_routes_include_builtin_customize_skill() {
     // Given: a server with no workspace skills on disk.

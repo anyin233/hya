@@ -16,7 +16,7 @@ mod rpc;
 mod serve;
 mod tui;
 
-pub use hya_app::{auth, config, formatter_config, permission, plugins, skills};
+pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -36,7 +36,7 @@ use cli_args::{Cli, Command};
 pub use hya_app::{
     RuntimeConfig, agent_with_model, build_session_engine, compaction_config,
     discover_context_files, headless_policy, host_info, offline_router, open_store,
-    resolve_runtime, skill_dirs, spawn_team_supervisor, today,
+    resolve_runtime, spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {

@@ -4,7 +4,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine};
+use super::{AgentSpec, SessionEngine, session_workdir};
 use crate::error::CoreError;
 use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 
@@ -140,6 +140,7 @@ impl SessionEngine {
         .await?;
 
         let projection = self.store.read_projection(session).await?;
+        let workdir = session_workdir(agent, &projection);
         let input_for_after = self.hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
         let result = match self.tools.get(&tool) {
@@ -155,7 +156,7 @@ impl SessionEngine {
                     websearch: self.websearch.clone(),
                     lsp: self.lsp.clone(),
                     formatter: self.formatter.clone(),
-                    workdir: agent.workdir.clone(),
+                    workdir,
                     cancel,
                 };
                 shell.execute(&ctx, input).await

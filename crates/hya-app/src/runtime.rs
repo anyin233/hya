@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use crate::config;
 use crate::permission::{PermissionPolicy, spawn_auto_responder};
-use crate::{formatter_config, plugins, skills};
+use crate::{formatter_config, plugins};
 
 pub fn today() -> String {
     let now = time::OffsetDateTime::now_utc();
@@ -57,14 +57,6 @@ pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
         }
     }
     files
-}
-
-pub fn skill_dirs() -> Vec<PathBuf> {
-    let mut v = vec![PathBuf::from(".hya/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        v.push(PathBuf::from(home).join(".config/hya/skills"));
-    }
-    v
 }
 
 pub fn host_info() -> HostInfo {
@@ -117,11 +109,7 @@ pub fn agent_with_model(model: &str) -> AgentSpec {
         platform: std::env::consts::OS.to_string(),
         date: today(),
     };
-    let mut context = discover_context_files(&workdir);
-    let skills = skills::discover_skills(&skill_dirs());
-    if let Some(section) = skills::skills_section(&skills) {
-        context.push(("Available skills".to_string(), section));
-    }
+    let context = discover_context_files(&workdir);
     let system_prompt = build_system_prompt("You are hya, a coding agent.", &env, &context);
     AgentSpec {
         name: AgentName::new("build"),
@@ -504,6 +492,77 @@ mod tests {
 
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: Option<std::ffi::OsString>,
+        xdg_config_home: Option<std::ffi::OsString>,
+        current_dir: PathBuf,
+    }
+
+    impl EnvGuard {
+        fn set(home: &Path, cwd: &Path) -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            let guard = Self {
+                _lock: lock,
+                home: std::env::var_os("HOME"),
+                xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
+                current_dir: std::env::current_dir().unwrap(),
+            };
+            std::fs::create_dir_all(home).unwrap();
+            std::fs::create_dir_all(cwd).unwrap();
+            unsafe {
+                std::env::set_var("HOME", home);
+                std::env::set_var("XDG_CONFIG_HOME", home);
+            }
+            std::env::set_current_dir(cwd).unwrap();
+            guard
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.current_dir);
+            unsafe {
+                if let Some(home) = &self.home {
+                    std::env::set_var("HOME", home);
+                } else {
+                    std::env::remove_var("HOME");
+                }
+                if let Some(xdg_config_home) = &self.xdg_config_home {
+                    std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
+                } else {
+                    std::env::remove_var("XDG_CONFIG_HOME");
+                }
+            }
+        }
+    }
+
+    fn tempdir() -> PathBuf {
+        static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let serial = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "hya-app-runtime-test-{nanos}-{serial}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_skill(dir: &Path, name: &str, description: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn offline_notice_names_path_offline_mode_and_the_fix() {
         let notice = OfflineNotice {
@@ -522,14 +581,8 @@ mod tests {
 
     #[test]
     fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
-        // Point config discovery at an empty temp dir so no config file is found.
-        // SAFETY: single-threaded mutation; this is the only test in the crate
-        // that reads or writes HOME / XDG_CONFIG_HOME, so it cannot race.
-        let dir = std::env::temp_dir().join(format!("hya-no-config-{}", std::process::id()));
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &dir);
-            std::env::set_var("HOME", &dir);
-        }
+        let dir = tempdir();
+        let _env = EnvGuard::set(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         let _ = std::fs::remove_file(&config_path);
 
@@ -545,10 +598,29 @@ mod tests {
             .expect("missing-config path must carry an offline notice");
         assert!(notice.config_path.ends_with("hya/config.yaml"));
         assert!(notice.render().contains("OFFLINE"));
+    }
 
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
-            std::env::remove_var("HOME");
-        }
+    #[test]
+    fn agent_with_model_omits_process_cwd_skill_index() {
+        let home = tempdir();
+        let workdir = tempdir();
+        let _env = EnvGuard::set(&home, &workdir);
+        write_skill(
+            &workdir.join(".hya/skills/baseline"),
+            "baseline-skill",
+            "Baseline skill",
+            "baseline body",
+        );
+
+        let agent = agent_with_model("fake");
+
+        assert!(!agent.system_prompt.contains("Available skills"));
+        assert!(
+            !agent
+                .system_prompt
+                .contains("These skills are available on demand")
+        );
+        assert!(!agent.system_prompt.contains("baseline-skill"));
+        assert!(!agent.system_prompt.contains("Baseline skill"));
     }
 }
