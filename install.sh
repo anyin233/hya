@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+prefix=/usr/local
+bin_dir=""
+profile=release
+dry_run=0
+
+usage() {
+  cat <<'USAGE'
+Usage: ./install.sh [OPTIONS]
+
+Build and install hya from this source checkout.
+
+Options:
+  --prefix DIR                 Install into DIR/bin (default: /usr/local)
+  --bin-dir DIR                Install directly into DIR; overrides --prefix
+  --profile release|dev|debug  Cargo build profile (default: release)
+  --dry-run                    Print actions without building or installing
+  -h, --help                   Show this help
+
+Installs both binaries:
+  hya          user-facing TUI/frontend with native in-process hya backend
+  hya-backend  backend CLI/API for login, exec, serve, and models
+USAGE
+}
+
+say() {
+  printf '%s\n' "$*"
+}
+
+run() {
+  say "+ $*"
+  if [[ "$dry_run" -eq 0 ]]; then
+    "$@"
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prefix)
+      [[ $# -ge 2 ]] || { echo "--prefix requires DIR" >&2; exit 2; }
+      prefix=$2
+      shift 2
+      ;;
+    --bin-dir)
+      [[ $# -ge 2 ]] || { echo "--bin-dir requires DIR" >&2; exit 2; }
+      bin_dir=$2
+      shift 2
+      ;;
+    --profile)
+      [[ $# -ge 2 ]] || { echo "--profile requires release, dev, or debug" >&2; exit 2; }
+      profile=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$profile" in
+  release)
+    build_cmd=(cargo build --locked --profile release -p hya -p hya-backend --bins)
+    target_dir=target/release
+    ;;
+  dev|debug)
+    build_cmd=(cargo build --locked -p hya -p hya-backend --bins)
+    target_dir=target/debug
+    ;;
+  *)
+    echo "unsupported profile '$profile'; use release, dev, or debug" >&2
+    exit 2
+    ;;
+esac
+
+if [[ -z "$bin_dir" ]]; then
+  bin_dir=${prefix%/}/bin
+fi
+
+cd "$(dirname "$0")"
+if [[ "$bin_dir" != /* ]]; then
+  bin_dir="$(pwd -P)/$bin_dir"
+fi
+
+tmp_hya="$bin_dir/.hya.tmp.$$"
+tmp_backend="$bin_dir/.hya-backend.tmp.$$"
+bak_hya="$bin_dir/.hya.bak.$$"
+bak_backend="$bin_dir/.hya-backend.bak.$$"
+rollback_enabled=0
+install_complete=0
+had_hya=0
+had_backend=0
+placed_hya=0
+placed_backend=0
+
+cleanup_leftovers() {
+  rm -f "$tmp_hya" "$tmp_backend"
+  [[ -d "$bin_dir" ]] || return 0
+  if [[ "$install_complete" -eq 1 ]]; then
+    rm -f "$bak_hya" "$bak_backend"
+  fi
+}
+
+restore_install() {
+  if [[ "$rollback_enabled" -eq 0 || "$install_complete" -eq 1 ]]; then
+    return 0
+  fi
+
+  [[ "$placed_hya" -eq 1 ]] && rm -f "$bin_dir/hya"
+  [[ "$placed_backend" -eq 1 ]] && rm -f "$bin_dir/hya-backend"
+  if [[ "$had_hya" -eq 1 && -e "$bak_hya" ]]; then
+    mv -f "$bak_hya" "$bin_dir/hya"
+  fi
+  if [[ "$had_backend" -eq 1 && -e "$bak_backend" ]]; then
+    mv -f "$bak_backend" "$bin_dir/hya-backend"
+  fi
+}
+
+on_error() {
+  local status=$?
+  restore_install
+  cleanup_leftovers
+  exit "$status"
+}
+
+preflight_permissions() {
+  say "Permission preflight: $bin_dir"
+  if [[ "$dry_run" -ne 0 ]]; then
+    return 0
+  fi
+
+  local probe=$bin_dir
+  while [[ ! -e "$probe" ]]; do
+    probe=$(dirname "$probe")
+  done
+
+  if [[ ! -d "$probe" || ! -w "$probe" ]]; then
+    echo "Cannot write to $bin_dir." >&2
+    echo "Rerun with: sudo ./install.sh" >&2
+    echo "Or use a user-writable directory: ./install.sh --bin-dir \"$HOME/.local/bin\"" >&2
+    exit 1
+  fi
+}
+
+say "Installing hya to $bin_dir"
+say "Rollback backup path: $bak_hya"
+say "Rollback backup path: $bak_backend"
+preflight_permissions
+run "${build_cmd[@]}"
+run mkdir -p "$bin_dir"
+trap on_error ERR INT TERM
+run install -m 0755 "$target_dir/hya" "$tmp_hya"
+run install -m 0755 "$target_dir/hya-backend" "$tmp_backend"
+rollback_enabled=1
+if [[ -e "$bin_dir/hya" ]]; then
+  run mv -f "$bin_dir/hya" "$bak_hya"
+  had_hya=1
+fi
+if [[ -e "$bin_dir/hya-backend" ]]; then
+  run mv -f "$bin_dir/hya-backend" "$bak_backend"
+  had_backend=1
+fi
+placed_hya=1
+run mv -f "$tmp_hya" "$bin_dir/hya"
+placed_backend=1
+run mv -f "$tmp_backend" "$bin_dir/hya-backend"
+
+if [[ "$dry_run" -eq 0 ]]; then
+  "$bin_dir/hya" --version >/dev/null
+  "$bin_dir/hya-backend" --help >/dev/null
+  resolved=$(command -v hya 2>/dev/null || true)
+  if [[ "$resolved" != "$bin_dir/hya" ]]; then
+    echo "hya is not first on PATH. Add this to your shell profile: export PATH=\"$bin_dir:\$PATH\"" >&2
+    echo "expected: $bin_dir/hya" >&2
+    echo "resolved: ${resolved:-<missing>}" >&2
+    false
+  fi
+  install_complete=1
+  cleanup_leftovers
+  say "hya is on PATH: $resolved"
+else
+  say "+ $bin_dir/hya --version"
+  say "+ $bin_dir/hya-backend --help"
+  say "+ PATH check: command -v hya must resolve to $bin_dir/hya"
+fi
+
+cat <<'GUIDANCE'
+
+API setup:
+  hya works offline by default. To use a live provider, create:
+    $XDG_CONFIG_HOME/hya/config.yaml
+  or, if XDG_CONFIG_HOME is unset:
+    ~/.config/hya/config.yaml
+
+  Minimal Anthropic config:
+    default_model: claude-sonnet-4-6
+    providers:
+      anthropic:
+        kind: anthropic
+        base_url: https://api.anthropic.com/v1
+        api_key: "{env:ANTHROPIC_API_KEY}"
+        models: [claude-sonnet-4-6]
+
+  Then run:
+    hya-backend login anthropic "$ANTHROPIC_API_KEY"
+    hya-backend models
+    hya
+GUIDANCE
