@@ -22,13 +22,21 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 ## Commit Rule
 
-- When the user explicitly asks for commits, create one git commit per atomic change before reporting done.
+- When the user explicitly asks for commits, create one git commit per atomic change before reporting done; for verified feature work, commit and push the atomic change before reporting done.
 - Stage only the files for that atomic change; never sweep in unrelated workspace changes.
 - Use one-line semantic commit messages with no agent or AI attribution.
+- Do not commit or push feature work until its required TDD test and verification gate have passed.
+
+## Feature Workflow Rule
+
+- For every user-requested feature, follow TDD: add one atomic failing test first, verify it fails for the expected missing behavior, implement the smallest change that passes, then run the required verification gate for the touched area.
+- After the implementation is verified, the agent must commit and push the atomic feature change.
+- If the feature cannot be verified, do not commit or push; report the blocker and the commands or checks that failed.
 
 ## Release & Changelog Rule
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
+- Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml`; keep the release tag and changelog aligned when publishing.
 - Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
 - When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
 - Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.
