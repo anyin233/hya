@@ -17,6 +17,10 @@ If you want to run hya:
 3. [CLI Reference](cli.md)
 4. [Troubleshooting](troubleshooting.md)
 
+If you want to compare hya with adjacent coding agents:
+
+1. [hya, Pi, and OpenCode Feature Comparison](hya-pi-opencode-comparison.md)
+
 If you want to understand the codebase:
 
 1. [Project Structure](project-structure.md)
@@ -46,6 +50,7 @@ If you want to understand the codebase:
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, OpenCode-compatible route groups, and the typed client crate. |
 | [TUI](architecture/tui.md) | Explain the split between terminal event loop and pure ratatui rendering. |
+| [hya, Pi, and OpenCode Feature Comparison](hya-pi-opencode-comparison.md) | Compare hya with upstream stock Pi and current OpenCode across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
 
@@ -62,4 +67,6 @@ If you want to understand the codebase:
 - OpenCode adapter: [`../crates/hya-plugin-opencode/README.md`](../crates/hya-plugin-opencode/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
 - Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
-- TUI renderer: [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs)
+- TUI frontend: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
+- TUI renderer (new): [`../crates/hya-tui/src/lib.rs`](../crates/hya-tui/src/lib.rs)
+- TUI renderer (legacy): [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs)

@@ -95,6 +95,7 @@ the full environment-variable reference, and a fully-commented sample config.
 | [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
 | [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, server/client, and TUI internals. |
 | [docs/opencode-parity.md](docs/opencode-parity.md) | OpenCode compatibility status. |
+| [docs/hya-pi-opencode-comparison.md](docs/hya-pi-opencode-comparison.md) | Feature comparison across hya, upstream stock Pi, and current OpenCode. |
 
 ## License
 
