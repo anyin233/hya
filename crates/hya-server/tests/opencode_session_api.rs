@@ -28,6 +28,32 @@ fn workdir() -> &'static str {
     })
 }
 
+static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn isolated_workdir(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hya-{prefix}-{nanos}-{serial}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn write_skill(workdir: &str, name: &str, body: &str) {
+    let dir = std::path::Path::new(workdir).join(".hya/skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Run {name}\n---\n{body}"),
+    )
+    .unwrap();
+}
+
 async fn state() -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("assistant answer".to_string()),
@@ -222,6 +248,25 @@ async fn create_session(app: axum::Router, parent: Option<&str>) -> String {
                 .uri("/sessions")
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created: CreateSessionResponse = serde_json::from_value(body_json(resp).await).unwrap();
+    created.session.to_string()
+}
+
+async fn create_session_with_workdir(app: axum::Router, workdir: &str) -> String {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"agent": "build", "model": "fake", "workdir": workdir}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -589,6 +634,32 @@ async fn opencode_session_command_and_shell_routes_return_created_messages() {
         shell["parts"][0]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_session_command_expands_skill_template_without_client_text() {
+    let workdir = isolated_workdir("opencode-session-skill-command");
+    write_skill(&workdir, "deploy", "Deploy $1 with all args: $ARGUMENTS\n");
+    let app = router(state().await);
+    let session = create_session_with_workdir(app.clone(), &workdir).await;
+
+    let (status, command) = post_json(
+        app,
+        format!("/session/{session}/command"),
+        json!({
+            "command": "deploy",
+            "arguments": "prod --force"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["info"]["role"], "user");
+    assert_eq!(command["parts"][0]["type"], "text");
+    assert_eq!(
+        command["parts"][0]["text"],
+        "Deploy prod with all args: prod --force\n"
     );
 }
 

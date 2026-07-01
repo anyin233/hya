@@ -52,6 +52,16 @@ pub(in crate::opencode) async fn agent_with_guidance_at(
     agent
 }
 
+pub(in crate::opencode) async fn session_workdir(st: &ServerState, session: SessionId) -> PathBuf {
+    st.engine
+        .store()
+        .read_projection(session)
+        .await
+        .ok()
+        .and_then(|projection| projection.session.workdir.map(PathBuf::from))
+        .unwrap_or_else(|| super::location::workdir(st))
+}
+
 // Run a turn under the session's switched agent, not the server default (the
 // engine already resolves the model per session; this overrides agent identity).
 pub(in crate::opencode) async fn session_agent_with_guidance(
