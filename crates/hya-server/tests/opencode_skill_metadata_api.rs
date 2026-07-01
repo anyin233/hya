@@ -138,3 +138,33 @@ async fn opencode_skill_and_command_routes_discover_opencode_project_skills() {
     assert_eq!(command["source"], "skill");
     assert_eq!(command["template"], "Check version, changelog, and tag.\n");
 }
+
+#[tokio::test]
+async fn opencode_skill_command_does_not_override_existing_command_name() {
+    // Given: a workspace skill collides with the built-in help command.
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".opencode/skills/help")).unwrap();
+    std::fs::write(
+        workdir.join(".opencode/skills/help/SKILL.md"),
+        "---\nname: help\ndescription: Workspace help skill\n---\nDisk help skill body.\n",
+    )
+    .unwrap();
+    let app = router(state(workdir.clone()).await);
+
+    // When: skill and command metadata are requested for that workspace.
+    let uri = format!("/skill?directory={}", workdir.display());
+    let (skill_status, skills) = get_json(app.clone(), &uri).await;
+    let uri = format!("/command?directory={}", workdir.display());
+    let (command_status, commands) = get_json(app, &uri).await;
+
+    // Then: the disk skill is listed without overriding the built-in help command.
+    assert_eq!(skill_status, StatusCode::OK);
+    let skill = find_named(&skills, "help");
+    assert_eq!(skill["description"], "Workspace help skill");
+    assert_eq!(skill["content"], "Disk help skill body.\n");
+
+    assert_eq!(command_status, StatusCode::OK);
+    let command = find_named(&commands, "help");
+    assert_eq!(command["source"], "command");
+    assert_eq!(command["template"], "/help");
+}

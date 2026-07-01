@@ -340,6 +340,22 @@ async fn delete_json(app: axum::Router, uri: String) -> (StatusCode, Value) {
     (status, body)
 }
 
+async fn get_text(app: axum::Router, uri: String) -> (StatusCode, String) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
 #[tokio::test]
 async fn opencode_session_read_delete_missing_session_returns_not_found() {
     let app = router(state().await);
@@ -1020,6 +1036,35 @@ async fn opencode_session_routes_page_message_and_children() {
 }
 
 #[tokio::test]
+async fn opencode_session_message_invalid_cursor_returns_bad_request() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, body) = get_text(
+        app,
+        format!("/session/{session}/message?limit=1&before=not-base64"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!body.trim().is_empty());
+    assert!(body.contains("invalid cursor") || body.contains("Invalid cursor"));
+}
+
+#[tokio::test]
+async fn opencode_session_message_missing_message_returns_not_found() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, body) = get_text(
+        app,
+        format!("/session/{session}/message/{}", MessageId::new()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("message not found"));
+}
+
+#[tokio::test]
 async fn opencode_session_deletes_messages_and_parts() {
     let app = router(state().await);
     let session = create_session(app.clone(), None).await;
@@ -1635,4 +1680,14 @@ async fn opencode_session_todo_returns_todowrite_state() {
             { "content": "Document remaining gaps", "status": "pending", "priority": "medium" }
         ])
     );
+}
+
+#[tokio::test]
+async fn opencode_session_todo_returns_empty_array_for_fresh_session() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+
+    let (status, body) = get_json(app, format!("/session/{session}/todo")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!([]));
 }

@@ -1,15 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use hya_proto::{
-    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
+    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId,
     TokenUsage, ToolCallId, ToolName, ToolPartState, ToolSchema,
 };
 use hya_provider::{
-    AnthropicMessagesProtocol, CompletionRequest, FakeProvider, FakeStep, GoogleProtocol,
-    OpenAiChatProtocol, Protocol, ProviderRouter, ReasoningEffort,
+    AnthropicMessagesProtocol, Capabilities, CompletionRequest, EventStream, FakeProvider,
+    FakeStep, GoogleProtocol, OpenAiChatProtocol, Protocol, Provider, ProviderError,
+    ProviderRouter, ReasoningEffort,
 };
 use serde_json::json;
 
@@ -20,6 +22,9 @@ fn summarize(events: &[Event]) -> Vec<String> {
             Event::TextStart { .. } => "text_start".to_string(),
             Event::TextDelta { delta, .. } => format!("text_delta:{delta}"),
             Event::TextEnd { .. } => "text_end".to_string(),
+            Event::ReasoningStart { .. } => "reasoning_start".to_string(),
+            Event::ReasoningDelta { delta, .. } => format!("reasoning_delta:{delta}"),
+            Event::ReasoningEnd { .. } => "reasoning_end".to_string(),
             Event::ToolInputStart { name, .. } => format!("tool_start:{name}"),
             Event::ToolInputDelta { .. } => "tool_input_delta".to_string(),
             Event::ToolCallRequested { name, input, .. } => format!("tool_call:{name}:{input}"),
@@ -27,6 +32,49 @@ fn summarize(events: &[Event]) -> Vec<String> {
             other => format!("other:{other:?}"),
         })
         .collect()
+}
+
+struct RecordingProvider {
+    capabilities: Capabilities,
+    recorded: Mutex<Option<CompletionRequest>>,
+}
+
+impl RecordingProvider {
+    fn new(capabilities: Capabilities) -> Self {
+        Self {
+            capabilities,
+            recorded: Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+    fn id(&self) -> &str {
+        "recording"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(self.capabilities.clone())
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        *self.recorded.lock().unwrap() = Some(req);
+        Ok(Box::pin(futures::stream::iter(vec![Ok(
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Stop,
+                tokens: None,
+            },
+        )])))
+    }
 }
 
 fn decode_all(protocol: &OpenAiChatProtocol, lines: &[&str]) -> Vec<Event> {
@@ -82,6 +130,33 @@ async fn fake_provider_round_trips_canonical_events() {
             "finish:Stop",
         ]
     );
+}
+
+#[tokio::test]
+async fn router_clears_reasoning_for_provider_without_reasoning_request() {
+    let provider = Arc::new(RecordingProvider::new(Capabilities {
+        reasoning_request: false,
+        ..Capabilities::default()
+    }));
+    let router = ProviderRouter::new().with(provider.clone());
+    let req = CompletionRequest {
+        model: ModelRef::new("recording"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+
+    let _stream = router
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap();
+
+    let recorded = provider.recorded.lock().unwrap();
+    assert_eq!(recorded.as_ref().unwrap().reasoning, None);
 }
 
 #[tokio::test]
@@ -216,6 +291,52 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
         reasoning: None,
         headers: Default::default(),
     }
+}
+
+#[test]
+fn fake_provider_materializes_reasoning_tool_usage_and_finish() {
+    let events = FakeProvider::materialize(
+        &[
+            FakeStep::Reasoning("think".to_string()),
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: json!({ "path": "a" }),
+            },
+            FakeStep::Usage(TokenUsage {
+                input: 1,
+                output: 2,
+                reasoning: 3,
+                cache_read: 0,
+                cache_write: 0,
+            }),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        SessionId::new(),
+        MessageId::new(),
+    );
+
+    assert_eq!(
+        summarize(&events),
+        vec![
+            "reasoning_start",
+            "reasoning_delta:think",
+            "reasoning_end",
+            "tool_start:read",
+            "tool_input_delta",
+            "tool_call:read:{\"path\":\"a\"}",
+            "finish:Stop",
+        ]
+    );
+    assert_eq!(
+        finished_tokens(&events),
+        Some(TokenUsage {
+            input: 1,
+            output: 2,
+            reasoning: 3,
+            cache_read: 0,
+            cache_write: 0,
+        })
+    );
 }
 
 #[test]
@@ -467,6 +588,16 @@ fn openai_null_tool_input_becomes_empty_object_string() {
         .unwrap();
     let msgs = body["messages"].as_array().unwrap();
     assert_eq!(msgs[1]["tool_calls"][0]["function"]["arguments"], "{}");
+}
+
+#[test]
+fn anthropic_null_tool_input_becomes_empty_object() {
+    let body = AnthropicMessagesProtocol
+        .encode(&assistant_tool_request(serde_json::Value::Null))
+        .unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(msgs[1]["content"][1]["type"], "tool_use");
+    assert_eq!(msgs[1]["content"][1]["input"], json!({}));
 }
 
 #[test]

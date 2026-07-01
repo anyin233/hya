@@ -265,3 +265,28 @@ async fn opencode_v2_fs_routes_honor_location_query_and_headers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"scoped\n");
 }
+
+#[tokio::test]
+async fn opencode_v2_fs_read_rejects_escape_from_scoped_location() {
+    let workdir = tempdir();
+    let scoped = workdir.join("scoped dir");
+    std::fs::create_dir_all(&scoped).unwrap();
+    let scoped = std::fs::canonicalize(scoped).unwrap();
+    let encoded_scoped = scoped.to_string_lossy().replace(' ', "%20");
+    let app = router(state(workdir).await);
+
+    let (status, _, body) = get_bytes_with_headers(
+        app,
+        "/api/fs/read/../hello.txt",
+        &[("x-opencode-directory", &encoded_scoped)],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body = String::from_utf8_lossy(&body);
+    assert!(
+        body.contains("path escapes workdir")
+            || body.contains("BadRequest")
+            || body.contains("Bad request"),
+        "unexpected body: {body}"
+    );
+}

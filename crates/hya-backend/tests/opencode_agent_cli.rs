@@ -138,6 +138,100 @@ fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
     Ok(())
 }
 
+#[test]
+fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-backend-empty-sessions-db")?;
+    let db = env.root.join("empty.db");
+    let expected = format!("no sessions found in {}\n", db.display());
+
+    let sessions = hya_command(&env)
+        .args(["sessions", "--db"])
+        .arg(&db)
+        .output()?;
+    assert_success("sessions --db", &sessions);
+    assert_eq!(String::from_utf8(sessions.stdout)?, expected);
+
+    let global_sessions = hya_command(&env)
+        .args(["--db"])
+        .arg(&db)
+        .arg("sessions")
+        .output()?;
+    assert_success("--db sessions", &global_sessions);
+    assert_eq!(String::from_utf8(global_sessions.stdout)?, expected);
+
+    Ok(())
+}
+
+#[test]
+fn tail_session_json_replays_only_requested_session_when_multiple_sessions_exist()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-backend-tail-selected-session")?;
+    let db = env.root.join("tail.db");
+
+    let first = exec_json_session(&env, &db, "first offline session")?;
+    let second = exec_json_session(&env, &db, "second offline session")?;
+    assert_ne!(first, second, "expected two distinct sessions");
+
+    let sessions = hya_command(&env)
+        .args(["sessions", "--db"])
+        .arg(&db)
+        .output()?;
+    assert_success("sessions --db", &sessions);
+    let sessions_stdout = String::from_utf8(sessions.stdout)?;
+    assert_listed_session(&sessions_stdout, &first);
+    assert_listed_session(&sessions_stdout, &second);
+
+    let tail = hya_command(&env)
+        .arg("tail-session")
+        .arg(&second)
+        .args(["--db"])
+        .arg(&db)
+        .output()?;
+    assert_success("tail-session --db", &tail);
+    assert_tail_replays_session(&String::from_utf8(tail.stdout)?, &second)?;
+
+    Ok(())
+}
+
+#[test]
+fn subcommand_db_overrides_global_db_for_sessions_and_tail()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-backend-subcommand-db-override")?;
+    let db_a = env.root.join("a.db");
+    let db_b = env.root.join("b.db");
+
+    let session_a = exec_json_session(&env, &db_a, "session in db a")?;
+    let session_b = exec_json_session(&env, &db_b, "session in db b")?;
+    assert_ne!(
+        session_a, session_b,
+        "expected each database to contain its own session"
+    );
+
+    let sessions = hya_command(&env)
+        .args(["--db"])
+        .arg(&db_a)
+        .args(["sessions", "--db"])
+        .arg(&db_b)
+        .output()?;
+    assert_success("--db sessions --db", &sessions);
+    let sessions_stdout = String::from_utf8(sessions.stdout)?;
+    assert_listed_session(&sessions_stdout, &session_b);
+    assert_session_not_listed(&sessions_stdout, &session_a);
+
+    let tail = hya_command(&env)
+        .args(["--db"])
+        .arg(&db_a)
+        .arg("tail-session")
+        .arg(&session_b)
+        .args(["--db"])
+        .arg(&db_b)
+        .output()?;
+    assert_success("--db tail-session --db", &tail);
+    assert_tail_replays_session(&String::from_utf8(tail.stdout)?, &session_b)?;
+
+    Ok(())
+}
+
 struct IsolatedEnv {
     root: PathBuf,
     home: PathBuf,
@@ -227,6 +321,32 @@ fn assert_listed_session(output: &str, expected: &str) {
             .any(|line| line.split_whitespace().next() == Some(expected)),
         "expected sessions output to list {expected}, got:\n{output}"
     );
+}
+
+fn assert_session_not_listed(output: &str, unexpected: &str) {
+    assert!(
+        !output
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some(unexpected)),
+        "expected sessions output not to list {unexpected}, got:\n{output}"
+    );
+}
+
+fn exec_json_session(
+    env: &IsolatedEnv,
+    db: &PathBuf,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let exec = hya_command(env)
+        .args(["--db"])
+        .arg(db)
+        .args(["exec", "--json", prompt])
+        .output()?;
+    assert_success("exec --json --db", &exec);
+    let session = session_created_id(&String::from_utf8(exec.stdout)?)?
+        .ok_or("missing session_created event")?;
+    assert!(is_hysec_id(&session), "invalid session id: {session}");
+    Ok(session)
 }
 
 fn session_created_id(output: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
