@@ -26,6 +26,32 @@ fn workdir() -> &'static str {
     })
 }
 
+static NEXT_TEMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn isolated_workdir(prefix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let serial = NEXT_TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("hya-{prefix}-{nanos}-{serial}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::canonicalize(&dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn write_skill(workdir: &str, name: &str, body: &str) {
+    let dir = std::path::Path::new(workdir).join(".hya/skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Run {name}\n---\n{body}"),
+    )
+    .unwrap();
+}
+
 async fn state() -> AppState {
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("assistant answer".to_string()),
@@ -352,6 +378,39 @@ async fn opencode_v2_session_command_and_shell_routes_return_wrapped_messages() 
         shell["data"]["parts"][0]["state"]["output"]
             .as_str()
             .is_some_and(|output| output.contains("opencode-v2-shell-ok"))
+    );
+}
+
+#[tokio::test]
+async fn opencode_v2_session_command_expands_skill_template_without_client_text() {
+    let workdir = isolated_workdir("opencode-v2-session-skill-command");
+    write_skill(&workdir, "deploy", "Deploy $1 with all args: $ARGUMENTS\n");
+    let app = router(state().await);
+    let (status, created) = post_json(
+        app.clone(),
+        "/api/session",
+        json!({"location": {"directory": workdir}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let session = created["data"]["id"].as_str().expect("session id");
+
+    let (status, command) = post_json(
+        app,
+        &format!("/api/session/{session}/command"),
+        json!({
+            "command": "deploy",
+            "arguments": "prod --force"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(command["data"]["info"]["role"], "user");
+    assert_eq!(command["data"]["parts"][0]["type"], "text");
+    assert_eq!(
+        command["data"]["parts"][0]["text"],
+        "Deploy prod with all args: prod --force\n"
     );
 }
 

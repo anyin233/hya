@@ -1,5 +1,6 @@
-# 0.28.7
+# 0.28.8
 
-- Fixed skill discovery to search project `.hya/skills` before user and agent-runtime skill directories, keeping the first duplicate found.
-- Added session-workdir skill indexes for model prompts, skill loading, OpenCode skill/command metadata, and skill-backed slash command surfaces.
-- Fixed OpenCode session/init agent catalogs, reference guidance, and external reference permissions to use the active session workdir.
+- Fixed OpenCode command execution to expand skill-backed slash command templates when clients post `/session/:id/command` or `/api/session/:id/command` without pre-expanded text.
+- Preserved native OpenCode command fallback behavior while using each session's effective workdir for skill/custom command lookup.
+- Fixed multi-digit slash command placeholders without re-expanding replacement arguments.
+- Fixed `/project/git/init` to initialize nested project directories and stale `.git` markers instead of treating an outer or invalid parent repository as the target project repo.

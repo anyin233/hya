@@ -145,12 +145,19 @@ async fn command(
         .runs
         .start(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let text = req.text.unwrap_or_else(|| {
-        super::session_legacy::command_prompt_text(&req.command, &req.arguments)
+    let workdir = super::reference::session_workdir(&st, session).await;
+    let CommandRequest {
+        command,
+        arguments,
+        text,
+    } = req;
+    let text = text.unwrap_or_else(|| {
+        super::command_catalog::expanded_prompt_text(&workdir, &command, &arguments)
+            .unwrap_or_else(|| super::session_legacy::command_prompt_text(&command, &arguments))
     });
     let message = st
         .engine
-        .admit_command_prompt(session, req.command, req.arguments, text)
+        .admit_command_prompt(session, command, arguments, text)
         .await?;
     let agent = super::reference::session_agent_with_guidance(&st, session).await;
     let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
