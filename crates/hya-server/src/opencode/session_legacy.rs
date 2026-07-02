@@ -26,6 +26,7 @@ pub(super) fn router() -> Router<ServerState> {
             "/session/:id/children",
             get(super::session_legacy_basic::children),
         )
+        .route("/session/:id/tree", get(super::session_legacy_basic::tree))
         .route("/session/:id/todo", get(super::session_legacy_basic::todo))
         .route("/session/:id/diff", get(super::session_diff::diff))
         .route(

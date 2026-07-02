@@ -1027,6 +1027,29 @@ async fn opencode_session_init_records_requested_command_message() {
 }
 
 #[tokio::test]
+async fn opencode_session_tree_returns_root_node() {
+    let app = router(state().await);
+    let parent = create_session(app.clone(), None).await;
+
+    let tree = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/session/{parent}/tree"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tree.status(), StatusCode::OK);
+    let body = body_json(tree).await;
+    // A session with no spawned subagents is the root with no children.
+    assert_eq!(body["session"], parent);
+    assert!(body["children"].as_array().is_none_or(|c| c.is_empty()));
+}
+
+#[tokio::test]
 async fn opencode_session_routes_page_message_and_children() {
     let app = router(state().await);
     let parent = create_session(app.clone(), None).await;
