@@ -386,12 +386,12 @@ pub async fn build_session_engine(
     let (spawner, spawn_rx) = SpawnerPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
-    let mut engine_builder =
-        SessionEngine::new(store, router, tools, permission, EventBus::default())
-            .with_compaction(summarizer, compaction_config())
-            .with_formatter(formatter_config::load_plane())
-            .with_interaction(interaction)
-            .with_spawner(spawner);
+    let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
+    let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
+        .with_compaction(summarizer, compaction_config())
+        .with_formatter(formatter_config::load_plane())
+        .with_interaction(interaction)
+        .with_spawner(spawner);
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
