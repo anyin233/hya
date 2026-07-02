@@ -80,6 +80,7 @@ impl DummyHarness {
             model,
             std::collections::BTreeMap::new(),
             Vec::new(),
+            true,
         )
         .await;
         let agent = crate::agent_with_model(model);

@@ -59,6 +59,7 @@ async fn cmd_exec(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
@@ -110,6 +111,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
@@ -172,6 +174,7 @@ async fn cmd_goal(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
@@ -240,6 +243,7 @@ async fn cmd_tui(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
@@ -275,7 +279,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
     let (engine, _asks, _, _mcp_manager, _plugin_host) =
-        build_session_engine(store, router, &model, BTreeMap::new(), Vec::new()).await;
+        build_session_engine(store, router, &model, BTreeMap::new(), Vec::new(), true).await;
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

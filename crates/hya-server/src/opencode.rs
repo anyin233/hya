@@ -88,6 +88,7 @@ mod session_v2_workspace;
 mod session_wait;
 mod skill_catalog;
 mod sse;
+pub(crate) mod subagent_resolve;
 mod sync_projector;
 mod tui;
 mod workspace_id;

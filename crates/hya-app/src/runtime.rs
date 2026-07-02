@@ -240,6 +240,7 @@ pub fn spawn_team_supervisor(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<SpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
+    include_global_agents: bool,
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
@@ -256,6 +257,12 @@ pub fn spawn_team_supervisor(
                     let mut started = Vec::new();
                     for member in members {
                         let id = MemberId::new();
+                        let agent = hya_server::resolve_subagent_agent(
+                            &base,
+                            &member.subagent_type,
+                            &base.workdir,
+                            include_global_agents,
+                        );
                         let session = match member
                             .task_id
                             .as_deref()
@@ -266,9 +273,9 @@ pub fn spawn_team_supervisor(
                                 match engine
                                     .create(CreateSession {
                                         parent: Some(parent),
-                                        agent: base.name.clone(),
-                                        model: base.model.clone(),
-                                        workdir: base.workdir.to_string_lossy().into_owned(),
+                                        agent: agent.name.clone(),
+                                        model: agent.model.clone(),
+                                        workdir: agent.workdir.to_string_lossy().into_owned(),
                                     })
                                     .await
                                 {
@@ -293,7 +300,7 @@ pub fn spawn_team_supervisor(
                         });
                         specs.push(MemberSpec {
                             id,
-                            agent: base.clone(),
+                            agent,
                             directive: member.prompt,
                             session: Some(session),
                         });
@@ -305,14 +312,22 @@ pub fn spawn_team_supervisor(
                 } else {
                     members
                         .into_iter()
-                        .map(|m| MemberSpec {
-                            id: MemberId::new(),
-                            agent: base.clone(),
-                            directive: m.prompt,
-                            session: m
-                                .task_id
-                                .as_deref()
-                                .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                        .map(|m| {
+                            let agent = hya_server::resolve_subagent_agent(
+                                &base,
+                                &m.subagent_type,
+                                &base.workdir,
+                                include_global_agents,
+                            );
+                            MemberSpec {
+                                id: MemberId::new(),
+                                agent,
+                                directive: m.prompt,
+                                session: m
+                                    .task_id
+                                    .as_deref()
+                                    .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                            }
                         })
                         .collect()
                 };
@@ -347,6 +362,7 @@ pub async fn build_session_engine(
     model: &str,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
+    include_global_agents: bool,
 ) -> (
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
@@ -398,7 +414,12 @@ pub async fn build_session_engine(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
-    spawn_team_supervisor(spawn_rx, engine.clone(), agent_with_model(model));
+    spawn_team_supervisor(
+        spawn_rx,
+        engine.clone(),
+        agent_with_model(model),
+        include_global_agents,
+    );
     (engine, asks, questions, mcp_manager, plugin_host)
 }
 
@@ -446,6 +467,7 @@ impl HyaRuntime {
             &runtime.model,
             runtime.mcp,
             runtime.plugins,
+            opts.include_global_agents,
         )
         .await;
         let mut state =

@@ -25,6 +25,7 @@ mod state;
 
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
+pub use opencode::subagent_resolve::resolve_subagent_agent;
 pub use state::AppState;
 pub(crate) use state::ServerState;
 
