@@ -75,15 +75,50 @@ async fn run_member(
     Ok((child, summarize_member(&projection)))
 }
 
+fn rejected_evidence(id: MemberId, reason: &str) -> MemberEvidence {
+    MemberEvidence {
+        member: id.to_string(),
+        session: "-".to_string(),
+        status: MemberStatus::Failed,
+        summary: reason.to_string(),
+    }
+}
+
 /// Spawn each member as a supervised task in its own child session, run them in
 /// parallel, and collect evidence. A panicking or failing member becomes a
 /// `Failed` entry; it never takes down the supervisor or its peers.
+///
+/// When the engine has a [`SubagentGovernor`](crate::orchestrator::SubagentGovernor),
+/// two bounds are enforced before spawning: a member that would exceed
+/// `max_depth` is rejected, and members beyond the top-level run's remaining
+/// budget are rejected. Rejected members surface as `Failed` evidence (in input
+/// order) so the calling model gets a clean error instead of an unbounded fan-out.
+/// The per-round streaming-concurrency cap is applied inside the turn loop.
 pub async fn run_team(
     engine: Arc<SessionEngine>,
     lead: SessionId,
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
+    let mut rejected: Vec<MemberEvidence> = Vec::new();
+    let specs: Vec<MemberSpec> = if let Some(gov) = engine.governor() {
+        let (root, lead_depth) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
+        if lead_depth.saturating_add(1) > gov.max_depth() {
+            return specs
+                .into_iter()
+                .map(|s| rejected_evidence(s.id, "max recursion depth reached"))
+                .collect();
+        }
+        let want = u64::try_from(specs.len()).unwrap_or(u64::MAX);
+        let granted = usize::try_from(gov.reserve(root, want)).unwrap_or(usize::MAX);
+        let mut iter = specs.into_iter();
+        let granted_specs: Vec<MemberSpec> = iter.by_ref().take(granted).collect();
+        rejected.extend(iter.map(|s| rejected_evidence(s.id, "run agent budget exhausted")));
+        granted_specs
+    } else {
+        specs
+    };
+
     let mut handles = Vec::new();
     for spec in specs {
         let engine = engine.clone();
@@ -122,6 +157,7 @@ pub async fn run_team(
         };
         evidence.push(entry);
     }
+    evidence.extend(rejected);
     evidence
 }
 

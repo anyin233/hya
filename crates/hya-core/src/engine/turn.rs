@@ -64,6 +64,14 @@ impl SessionEngine {
                 )
                 .await;
         }
+        // A completed top-level (depth-0) turn ends the "run": release its per-run
+        // subagent budget so long-lived root sessions do not leak budget entries and
+        // the next top-level turn starts with a fresh budget.
+        if let Some(gov) = &self.governor
+            && let Ok((root, 0)) = self.session_lineage(session).await
+        {
+            gov.release(root);
+        }
         outcome
     }
 
@@ -78,6 +86,17 @@ impl SessionEngine {
         const MAX_TOOL_ROUNDS: u32 = 25;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
+        // Depth in the subagent tree, derived from the parent chain. Only subagents
+        // (depth > 0) are subject to the streaming-concurrency semaphore; the
+        // interactive lead (depth 0) never waits behind background subagents.
+        let depth = match &self.governor {
+            Some(_) => self
+                .session_lineage(session)
+                .await
+                .map(|(_, d)| d)
+                .unwrap_or(0),
+            None => 0,
+        };
         loop {
             if cancel.is_cancelled() {
                 self.emit(
@@ -127,6 +146,14 @@ impl SessionEngine {
             } else {
                 request
             };
+            // Hold a global streaming permit ONLY around provider streaming, and only
+            // for subagents. Acquired here and dropped before tool execution, so a
+            // member blocked in the `task` tool (awaiting its children) holds no
+            // permit — guaranteeing nested spawns can always make progress.
+            let stream_permit = match (depth > 0, &self.governor) {
+                (true, Some(gov)) => gov.acquire_stream().await,
+                _ => None,
+            };
             let stream = self.providers.stream(request, session, message).await?;
             let step = rounds;
             self.emit(
@@ -150,6 +177,9 @@ impl SessionEngine {
                 },
             )
             .await?;
+            // Release the streaming slot before running tools (which may spawn and
+            // await child subagents that need permits of their own).
+            drop(stream_permit);
 
             if stream_round.tool_calls.is_empty() {
                 self.emit(

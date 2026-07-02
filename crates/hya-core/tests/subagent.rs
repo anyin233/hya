@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use futures::stream;
 use hya_core::{
-    AgentSpec, CreateSession, EventBus, MemberSpec, MemberStatus, SessionEngine,
-    TeamEvidenceEnvelope, project_envelope, run_team,
+    AgentSpec, CreateSession, EventBus, MemberSpec, MemberStatus, SessionEngine, SubagentGovernor,
+    SubagentLimits, TeamEvidenceEnvelope, project_envelope, run_team,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MemberId, MessageId, ModelRef, PartProjection, Role, SessionId,
@@ -17,6 +17,7 @@ use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
 
 struct SelectiveFakeProvider;
@@ -77,6 +78,208 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
         reasoning: None,
     };
     (engine, agent)
+}
+
+/// A provider that records how many streams run concurrently, so a test can prove
+/// the streaming-concurrency semaphore actually caps parallelism.
+struct ConcurrencyProbeProvider {
+    current: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Provider for ConcurrencyProbeProvider {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        (model.as_str() == "fake").then_some(Capabilities {
+            streaming_tool_calls: true,
+            parallel_tool_calls: true,
+            usage_reporting: true,
+            max_context: 200_000,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        self.current.fetch_sub(1, Ordering::SeqCst);
+        let events = FakeProvider::materialize(
+            &[
+                FakeStep::Text("MEMBERTEXT".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            session,
+            message,
+        );
+        Ok(Box::pin(stream::iter(
+            events.into_iter().map(Ok::<Event, ProviderError>),
+        )))
+    }
+}
+
+async fn governed_engine(
+    limits: SubagentLimits,
+    provider: Arc<dyn Provider>,
+) -> (Arc<SessionEngine>, AgentSpec) {
+    let router = Arc::new(ProviderRouter::new().with(provider));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = Arc::new(
+        SessionEngine::new(store, router, tools, perm, EventBus::default())
+            .with_governor(SubagentGovernor::new(limits)),
+    );
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: PathBuf::from("/tmp"),
+        reasoning: None,
+    };
+    (engine, agent)
+}
+
+fn member(agent: &AgentSpec, directive: &str) -> MemberSpec {
+    MemberSpec {
+        id: MemberId::new(),
+        agent: agent.clone(),
+        directive: directive.to_string(),
+        session: None,
+    }
+}
+
+#[tokio::test]
+async fn governor_caps_streaming_concurrency() {
+    let current = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(ConcurrencyProbeProvider {
+        current: current.clone(),
+        peak: peak.clone(),
+    });
+    let (engine, agent) = governed_engine(
+        SubagentLimits {
+            max_depth: 5,
+            max_concurrency: 2,
+            per_run_budget: 100,
+        },
+        provider,
+    )
+    .await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let specs: Vec<MemberSpec> = (0..6).map(|i| member(&agent, &format!("m{i}"))).collect();
+    let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
+    assert_eq!(evidence.len(), 6);
+    assert!(evidence.iter().all(|e| e.status == MemberStatus::Done));
+    assert!(
+        peak.load(Ordering::SeqCst) <= 2,
+        "peak concurrent streams {} exceeded max_concurrency 2",
+        peak.load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
+async fn governor_rejects_members_beyond_budget() {
+    let (engine, agent) = governed_engine(
+        SubagentLimits {
+            max_depth: 5,
+            max_concurrency: 8,
+            per_run_budget: 1,
+        },
+        Arc::new(SelectiveFakeProvider),
+    )
+    .await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let specs = vec![
+        member(&agent, "a"),
+        member(&agent, "b"),
+        member(&agent, "c"),
+    ];
+    let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
+    assert_eq!(evidence.len(), 3);
+    let done = evidence
+        .iter()
+        .filter(|e| e.status == MemberStatus::Done)
+        .count();
+    let failed = evidence
+        .iter()
+        .filter(|e| e.status == MemberStatus::Failed)
+        .count();
+    assert_eq!(done, 1, "only the budgeted member runs");
+    assert_eq!(failed, 2, "the rest are rejected");
+    assert!(
+        evidence
+            .iter()
+            .any(|e| e.summary.contains("budget exhausted")),
+        "rejected members explain the budget"
+    );
+}
+
+#[tokio::test]
+async fn governor_rejects_spawn_beyond_max_depth() {
+    let (engine, agent) = governed_engine(
+        SubagentLimits {
+            max_depth: 1,
+            max_concurrency: 8,
+            per_run_budget: 100,
+        },
+        Arc::new(SelectiveFakeProvider),
+    )
+    .await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    // A depth-1 child; its member would be depth 2 > max_depth 1.
+    let child = engine
+        .create(CreateSession {
+            parent: Some(lead),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let evidence = run_team(
+        engine.clone(),
+        child,
+        vec![member(&agent, "too deep")],
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].status, MemberStatus::Failed);
+    assert!(evidence[0].summary.contains("depth"));
 }
 
 #[tokio::test]
