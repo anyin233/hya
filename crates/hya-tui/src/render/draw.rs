@@ -1,30 +1,10 @@
-use ratatui::style::{Color, Modifier, Style};
+pub use hya_tui_lib::render::draw::{layout_rect_to_ratatui, rect_to_ratatui, rgba_to_color};
+use ratatui::style::{Modifier, Style};
 use ratatui::text as rt;
 
-use crate::contracts::{LayoutResult, NodeId, Rect, Rgba};
+use crate::contracts::Rgba;
 
 use super::text::{Attrs, Line, Span, Text};
-
-#[must_use]
-pub fn rgba_to_color(color: Rgba, background: Rgba) -> Color {
-    let flat = color.over(background);
-    Color::Rgb(flat.r, flat.g, flat.b)
-}
-
-#[must_use]
-pub const fn rect_to_ratatui(rect: Rect) -> ratatui::layout::Rect {
-    ratatui::layout::Rect {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-    }
-}
-
-#[must_use]
-pub fn layout_rect_to_ratatui(layout: &LayoutResult, id: NodeId) -> Option<ratatui::layout::Rect> {
-    layout.get(id).map(rect_to_ratatui)
-}
 
 #[must_use]
 pub fn style(fg: Option<Rgba>, bg: Option<Rgba>, attrs: Attrs, background: Rgba) -> Style {

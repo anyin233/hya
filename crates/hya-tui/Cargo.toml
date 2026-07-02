@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 hya-sdk = { path = "../hya-sdk" }
+hya-tui-lib = { workspace = true }
 fuzzy-matcher = "0.3"
 pulldown-cmark = "0.13"
 ratatui = "0.29"
