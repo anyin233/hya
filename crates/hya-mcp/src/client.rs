@@ -131,7 +131,38 @@ impl McpClient {
     }
 
     pub async fn initialize(&self) -> Result<Value, McpError> {
-        self.call("initialize", json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "hya", "version": "0.0.0" } }), INITIALIZE_TIMEOUT).await
+        self.call(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "hya", "version": env!("CARGO_PKG_VERSION") }
+            }),
+            INITIALIZE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Send a JSON-RPC notification (no `id`, no response awaited). Used for the
+    /// spec-required `notifications/initialized` handshake and other client → server
+    /// notifications.
+    pub async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
+        let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let line = serde_json::to_vec(&message).map_err(|e| McpError::Json(e.to_string()))?;
+        let mut writer = self.inner.writer.lock().await;
+        writer
+            .write_all(&line)
+            .await
+            .map_err(|e| McpError::Io(e.to_string()))?;
+        writer
+            .write_all(b"\n")
+            .await
+            .map_err(|e| McpError::Io(e.to_string()))?;
+        writer
+            .flush()
+            .await
+            .map_err(|e| McpError::Io(e.to_string()))?;
+        Ok(())
     }
 
     pub async fn call(
@@ -266,6 +297,27 @@ mod tests {
         assert_eq!(first.unwrap(), json!({"first": true}));
         assert_eq!(second.unwrap(), json!({"second": true}));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_sends_notification_without_id() {
+        let (client_io, server_io) = duplex(4096);
+        let (client_read, client_write) = tokio::io::split(client_io);
+        let (server_read, _server_write) = tokio::io::split(server_io);
+        let client = McpClient::new(client_read, client_write);
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_read).lines();
+            lines.next_line().await.unwrap().unwrap()
+        });
+        client
+            .notify("notifications/initialized", json!({}))
+            .await
+            .unwrap();
+        let line = server.await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["method"], "notifications/initialized");
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert!(value.get("id").is_none(), "notifications carry no id");
     }
 
     #[tokio::test]
