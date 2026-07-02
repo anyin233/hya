@@ -757,6 +757,20 @@ fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits 
     limits
 }
 
+/// Resolve the live EventBus capacity: `HYA_EVENT_BUS_CAPACITY` if set and valid,
+/// otherwise the raised [`hya_core::bus::DEFAULT_BUS_CAPACITY`]. A larger buffer keeps
+/// 100+ concurrently-streaming subagents from lagging subscribers into a resync.
+#[must_use]
+pub fn resolve_event_bus_capacity() -> usize {
+    if let Ok(v) = std::env::var("HYA_EVENT_BUS_CAPACITY")
+        && let Ok(parsed) = v.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
+    }
+    hya_core::bus::DEFAULT_BUS_CAPACITY
+}
+
 /// Resolve subagent caps independent of provider config, so the offline path
 /// (where [`load`] returns `None`) still honors configured/env limits.
 #[must_use]
