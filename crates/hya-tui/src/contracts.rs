@@ -2,108 +2,14 @@
 //!
 //! These shapes are locked in W0 so parallel agents in later waves compose without churn
 //! (PLAN.md "Permanent lanes"). Solvers/behaviors that depend on these (the flex layout
-//! solver, the keymap dispatcher, the full prompt) land in their waves; here we freeze the
-//! data shapes plus the few behaviors that are fully determinable now (color, alpha blend).
+//! solver, the keymap dispatcher, the full prompt) land in their waves; this module keeps
+//! app-specific contracts local and compatibility-re-exports shared primitives from `hya_tui_lib`.
 
-// ---------------------------------------------------------------------------
-// Color: alpha-aware RGBA with terminal-correct compositing.
-// Terminals cannot composite alpha, so we blend against a resolved background AT RENDER TIME.
-// ---------------------------------------------------------------------------
-
-/// An 8-bit-per-channel RGBA color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Rgba {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl Rgba {
-    /// Opaque color.
-    #[must_use]
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b, a: 255 }
-    }
-
-    /// Color with explicit alpha.
-    #[must_use]
-    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self { r, g, b, a }
-    }
-
-    /// Fully transparent.
-    pub const TRANSPARENT: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
-
-    /// Parse `#RGB`, `#RRGGBB`, or `#RRGGBBAA` (leading `#` optional). Also accepts
-    /// `transparent`/`none` → fully transparent (matches theme schema).
-    #[must_use]
-    pub fn from_hex(input: &str) -> Option<Self> {
-        let s = input.trim();
-        if s.eq_ignore_ascii_case("transparent") || s.eq_ignore_ascii_case("none") {
-            return Some(Self::TRANSPARENT);
-        }
-        let h = s.strip_prefix('#').unwrap_or(s);
-        let hex = |slice: &str| u8::from_str_radix(slice, 16).ok();
-        match h.len() {
-            3 => {
-                let d = |i: usize| {
-                    let c = &h[i..=i];
-                    hex(&format!("{c}{c}"))
-                };
-                Some(Self::rgb(d(0)?, d(1)?, d(2)?))
-            }
-            6 => Some(Self::rgb(hex(&h[0..2])?, hex(&h[2..4])?, hex(&h[4..6])?)),
-            8 => Some(Self::new(
-                hex(&h[0..2])?,
-                hex(&h[2..4])?,
-                hex(&h[4..6])?,
-                hex(&h[6..8])?,
-            )),
-            _ => None,
-        }
-    }
-
-    /// Composite `self` over an opaque `bg`, returning an opaque color. This is how the
-    /// terminal must render alpha (no real compositing exists in a terminal cell).
-    #[must_use]
-    pub fn over(self, bg: Self) -> Self {
-        match self.a {
-            255 => Self { a: 255, ..self },
-            0 => Self { a: 255, ..bg },
-            a => {
-                let af = f32::from(a) / 255.0;
-                let mix = |fg: u8, bg: u8| {
-                    (f32::from(fg).mul_add(af, f32::from(bg) * (1.0 - af))).round() as u8
-                };
-                Self {
-                    r: mix(self.r, bg.r),
-                    g: mix(self.g, bg.g),
-                    b: mix(self.b, bg.b),
-                    a: 255,
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Geometry
-// ---------------------------------------------------------------------------
-
-/// A rectangle in terminal cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Rect {
-    pub x: u16,
-    pub y: u16,
-    pub width: u16,
-    pub height: u16,
-}
+// Shared geometry, color, and flex-layout primitives live in `hya_tui_lib`.
+pub use hya_tui_lib::{
+    Align, FlexDirection, FlexSpec, Justify, LayoutResult, NodeId, Rect, RenderNode, Rgba,
+    SizeHint, Wrap,
+};
 
 // ---------------------------------------------------------------------------
 // Input model (shared by keymap dispatch and the prompt input layer).
@@ -425,133 +331,9 @@ impl PromptDoc {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Render tree + flex layout contract (the solver is W3a).
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FlexDirection {
-    #[default]
-    Column,
-    Row,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Justify {
-    #[default]
-    Start,
-    Center,
-    End,
-    SpaceBetween,
-    SpaceAround,
-    SpaceEvenly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Align {
-    #[default]
-    Start,
-    Center,
-    End,
-    Stretch,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Wrap {
-    #[default]
-    NoWrap,
-    Wrap,
-}
-
-/// A size hint: fixed cells or percentage of the parent's main axis.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum SizeHint {
-    #[default]
-    Auto,
-    Cells(u16),
-    Percent(f32),
-}
-
-/// Flexbox-equivalent layout spec for a `RenderNode` (mirrors opentui's Yoga subset
-/// that the TUI actually uses). The supported/UNsupported matrix is frozen in W3a.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct FlexSpec {
-    pub direction: FlexDirection,
-    pub justify: Justify,
-    pub align: Align,
-    pub wrap: Wrap,
-    pub grow: f32,
-    pub shrink: f32,
-    pub gap: u16,
-    pub width: SizeHint,
-    pub height: SizeHint,
-}
-
-/// Identifier assigned to a node so layout results can reference it paint-independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeId(pub u64);
-
-/// A retained render-tree node (paint happens elsewhere; this is layout input).
-#[derive(Debug, Clone, Default)]
-pub struct RenderNode {
-    pub id: Option<NodeId>,
-    pub flex: FlexSpec,
-    pub children: Vec<RenderNode>,
-}
-
-/// Paint-independent layout output: the computed rect for each identified node.
-/// W3a's property test asserts this table directly (no ratatui paint involved).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct LayoutResult {
-    pub rects: Vec<(NodeId, Rect)>,
-}
-
-impl LayoutResult {
-    #[must_use]
-    pub fn get(&self, id: NodeId) -> Option<Rect> {
-        self.rects.iter().find(|(n, _)| *n == id).map(|(_, r)| *r)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn from_hex_parses_all_forms() {
-        assert_eq!(Rgba::from_hex("#fff"), Some(Rgba::rgb(255, 255, 255)));
-        assert_eq!(Rgba::from_hex("000000"), Some(Rgba::rgb(0, 0, 0)));
-        assert_eq!(Rgba::from_hex("#fab283"), Some(Rgba::rgb(0xfa, 0xb2, 0x83)));
-        assert_eq!(
-            Rgba::from_hex("#2a1a1599"),
-            Some(Rgba::new(0x2a, 0x1a, 0x15, 0x99))
-        );
-        assert_eq!(Rgba::from_hex("transparent"), Some(Rgba::TRANSPARENT));
-        assert_eq!(Rgba::from_hex("none"), Some(Rgba::TRANSPARENT));
-        assert_eq!(Rgba::from_hex("zzz"), None);
-    }
-
-    #[test]
-    fn opaque_over_is_identity() {
-        let c = Rgba::rgb(10, 20, 30);
-        assert_eq!(c.over(Rgba::rgb(200, 200, 200)), c);
-    }
-
-    #[test]
-    fn transparent_over_is_background() {
-        let bg = Rgba::rgb(200, 100, 50);
-        assert_eq!(Rgba::TRANSPARENT.over(bg), bg);
-    }
-
-    #[test]
-    fn half_alpha_blends_midpoint() {
-        // 0x80 ~= 50%. white over black -> ~ (128,128,128).
-        let blended = Rgba::new(255, 255, 255, 0x80).over(Rgba::rgb(0, 0, 0));
-        assert_eq!(blended.a, 255);
-        assert!((127..=129).contains(&blended.r));
-        assert!((127..=129).contains(&blended.g));
-        assert!((127..=129).contains(&blended.b));
-    }
 
     fn doc(text: &str, cursor: usize) -> PromptDoc {
         PromptDoc {
