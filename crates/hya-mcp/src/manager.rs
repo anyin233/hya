@@ -109,6 +109,10 @@ async fn connect_server(name: String, config: McpServerConfig) -> Result<McpServ
         .unwrap_or(DEFAULT_CALL_TIMEOUT);
     let (client, guard) = McpClient::spawn(&config.command, config.env.as_ref())?;
     client.initialize().await?;
+    // Spec-required post-initialize handshake before issuing further requests.
+    client
+        .notify("notifications/initialized", serde_json::json!({}))
+        .await?;
     let value = client
         .call("tools/list", serde_json::json!({}), timeout)
         .await?;
@@ -144,6 +148,8 @@ mod tests {
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         result = {"capabilities": {}}
     elif req["method"] == "tools/list":
@@ -171,6 +177,8 @@ for line in sys.stdin:
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         response = {"jsonrpc":"2.0", "id": req["id"], "error": {"code": -32000, "message": "init failed"}}
     else:
@@ -189,6 +197,8 @@ for line in sys.stdin:
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         response = {"jsonrpc":"2.0", "id": req["id"], "result": {"capabilities": {}}}
     elif req["method"] == "tools/list":
@@ -209,6 +219,8 @@ for line in sys.stdin:
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         response = {"jsonrpc":"2.0", "id": req["id"], "result": {"capabilities": {}}}
     elif req["method"] == "tools/list":
@@ -323,6 +335,8 @@ for line in sys.stdin:
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         result = {"capabilities": {"resources": {}}}
     elif req["method"] == "tools/list":
