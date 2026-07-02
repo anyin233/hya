@@ -103,8 +103,8 @@ pub(super) fn command_hints(template: &str) -> Vec<String> {
 
 fn config_paths(workdir: &Path) -> [PathBuf; 4] {
     [
-        workdir.join("opencode.json"),
-        workdir.join("opencode.jsonc"),
+        workdir.join(super::external_protocol::CONFIG_FILE_JSON),
+        workdir.join(super::external_protocol::CONFIG_FILE_JSONC),
         workdir.join(".opencode/opencode.json"),
         workdir.join(".opencode/opencode.jsonc"),
     ]

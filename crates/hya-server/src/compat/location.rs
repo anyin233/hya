@@ -38,13 +38,16 @@ impl LocationRef {
             .get("directory")
             .or_else(|| query.get("location[directory]"))
             .cloned()
-            .or_else(|| header_text(headers, "x-opencode-directory").map(|value| decode(&value)))
+            .or_else(|| {
+                header_text(headers, super::external_protocol::DIRECTORY_HEADER)
+                    .map(|value| decode(&value))
+            })
             .map(PathBuf::from);
         let workspace_id = query
             .get("workspace")
             .or_else(|| query.get("location[workspace]"))
             .cloned()
-            .or_else(|| header_text(headers, "x-opencode-workspace"));
+            .or_else(|| header_text(headers, super::external_protocol::WORKSPACE_HEADER));
         Self {
             directory,
             workspace_id,
