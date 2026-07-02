@@ -6,16 +6,25 @@
 
 ## Overview
 
-TUI changes must be covered by render tests using `ratatui::backend::TestBackend`.
-Tests should assert stable semantics and important layout behavior across terminal
-sizes rather than brittle full-frame snapshots.
+TUI changes must be covered by semantic render/layout tests. Use
+`ratatui::backend::TestBackend` when output rendering matters, and assert stable
+geometry, text, or validation behavior instead of brittle full-frame snapshots.
+Reusable `hya-tui-lib` layout/component/layer changes need direct crate tests in
+addition to any `hya-tui` compatibility checks.
 
-The normal project gate applies:
+The normal project gate applies after Rust frontend changes:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo build -p hya
+```
+
+For new `hya-tui-lib` public API, also run:
+
+```sh
+cargo rustdoc -p hya-tui-lib -- -D warnings
 ```
 
 ---
@@ -23,36 +32,44 @@ cargo test --workspace
 ## Forbidden Patterns
 
 - Non-Rust TUI renderers in this crate.
-- Terminal I/O, async streaming, or crossterm event loops inside `yaca-tui`.
+- Terminal I/O, async streaming, or crossterm event loops inside `hya-tui` or
+  `hya-tui-lib`.
 - Raw color literals inside widgets when a semantic theme field can express the role.
 - Layout code that indexes optional sidebar columns eagerly; use explicit `if`
   branches when a rectangle may not exist.
+- Silent same-layer component overlap; library layouts must return typed
+  `LayerError`/`ComponentError` results.
 
 ---
 
 ## Required Patterns
 
-- Write failing render tests before changing TUI behavior.
+- Write failing render/layout tests before changing TUI behavior.
 - Use saturating geometry math for terminal dimensions.
 - Keep `AppState` application idempotent and projection-driven.
 - Preserve prompt visibility on narrow terminals.
+- Keep `hya-tui-lib` app-neutral: no Hya runtime crates, app state, prompt/keymap
+  behavior, themes, screens, SDK, terminal I/O, or async runtime.
 
 ---
 
 ## Testing Requirements
 
-Every TUI layout change should include at least one focused render test. Responsive
-changes should cover narrow and wide widths, currently represented by 80-column
-and 120-column tests.
+Every TUI layout change should include at least one focused render or layout
+test. Responsive changes should cover narrow and wide widths, currently
+represented by 80-column and 120-column tests. `hya-tui-lib` component/layer
+changes should assert both accepted cases and typed rejection cases.
 
 ---
 
 ## Code Review Checklist
 
-- Does `crates/yaca-cli/src/tui.rs` still own terminal/event-loop behavior?
+- Does terminal/event-loop behavior still live outside presentation crates?
 - Does the TUI remain readable at 80 columns?
 - Are status labels understandable without color?
 - Do new tests fail on the old behavior and pass on the new behavior?
+- Do reusable primitives belong in `hya-tui-lib`, and are app-specific prompt,
+  keymap, theme, screen, SDK, and runtime dependencies kept out of that crate?
 - If `tui-check` reports `borderMisaligned=true` on a capture with multiple independent valid frames, verify manually and track the durable fix upstream in `oh-my-openagent`; do not patch the installed generated package cache.
 
 ---
@@ -62,7 +79,7 @@ and 120-column tests.
 ### 1. Scope / Trigger
 
 - Trigger: any native `--mini` TUI change that selects models, displays the active model, resolves reasoning effort, or persists per-model reasoning preferences.
-- Applies to `crates/yaca-app/src/config.rs`, `crates/yaca-cli/src/tui.rs`, `crates/yaca-cli/src/tui/controller.rs`, and `crates/yaca-cli/src/tui/history.rs`.
+- Applies to `crates/hya-app/src/config.rs`, `crates/hya-backend/src/tui.rs`, `crates/hya-backend/src/tui/controller.rs`, and `crates/hya-backend/src/tui/history.rs`.
 
 ### 2. Signatures
 
@@ -105,7 +122,7 @@ and 120-column tests.
 - Unit: `/think` dialog tests for provider-specific variants including `minimal`, `xhigh`, and `max`.
 - Unit: `/think` dialog test that `reasoning_effort: "none"` selects and marks the `off` row current.
 - Runtime/helper: selected `ModelEntry` converts to provider-prefixed `ModelRef` before engine switch.
-- Manual QA: run native `./target/debug/yaca --mini` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
+- Manual QA: run native `./target/debug/hya --mini` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
 
 ### 7. Wrong vs Correct
 

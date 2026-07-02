@@ -6,19 +6,26 @@
 
 ## Overview
 
-TUI components are ratatui rendering helpers, not stateful UI objects. They
-should accept `&AppState` or derived view-model values plus a `Theme`, render
-into a `Frame`, and avoid terminal I/O.
+TUI components split into two categories:
 
-The public API should remain small: `AppState`, feature view structs, and `draw`
-are exposed from `lib.rs`; lower-level widgets stay crate-private unless another
-crate has a real need.
+- App-specific render helpers live in `crates/hya-tui`. They accept app state or
+  derived view-model values plus a `Theme`, render into a ratatui `Frame`, and
+  avoid terminal I/O.
+- App-neutral layout primitives live in `crates/hya-tui-lib`. They expose
+  `Rect`, `Rgba`, flex layout contracts, layer validation, declarative
+  `Component` trees, overlay helpers, and ratatui adapter functions without
+  depending on Hya app state, prompt/keymap contracts, themes, screens, SDK,
+  async runtime, or crossterm event loops.
+
+Expose reusable primitives from `hya-tui-lib` only when another crate has a real
+need. Keep lower-level Hya widgets crate-private unless they are app-neutral and
+belong in the library.
 
 ---
 
 ## Component Structure
 
-Widget helpers follow this shape:
+App widget helpers follow this shape:
 
 ```rust
 pub fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
@@ -26,16 +33,33 @@ pub fn render_status(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
 }
 ```
 
-Keep layout math out of widget helpers. Compute `Rect`s in `layout.rs` and pass
-the final area into the renderer.
+Keep layout math out of widget helpers. Compute `Rect`s in layout code and pass
+the final area into the renderer. When layout math is reusable and app-neutral,
+move it to `hya-tui-lib` and keep `hya-tui` compatibility paths as re-exports.
+
+Reusable component trees use typed layout and layer contracts:
+
+```rust
+let layout = Component::container(FlexSpec { direction: FlexDirection::Row, ..Default::default() })
+    .children([
+        Component::leaf(NodeId(1), FlexSpec { grow: 1.0, ..Default::default() }),
+        Component::leaf(NodeId(2), FlexSpec { grow: 1.0, ..Default::default() }).layer(LayerId(1)),
+    ])
+    .layout(area)?;
+```
+
+Same-layer overlaps must return a typed layer/component error. Intentional
+overlap belongs on a distinct `LayerId` or through explicit overlay helpers.
 
 ---
 
 ## Props Conventions
 
 Prefer explicit inputs over hidden globals. Pass `Theme` by reference, pass
-`Rect` by value, and pass derived view-model structs when the widget does not
-need all of `AppState`.
+`Rect` by value, and pass derived view-model structs when an app widget does not
+need all of `AppState`. For library components, use `NodeId`, `FlexSpec`,
+`LayerId`, and typed `ComponentError`/`LayerError` instead of stringly IDs or
+silent rectangle lookup failures.
 
 ---
 
@@ -57,8 +81,12 @@ color alone for important state; include text labels such as `streaming`,
 
 ## Common Mistakes
 
-- Do not put crossterm input handling in `yaca-tui`.
-- Do not parse provider/tool business logic in widgets; use the projection and
+- Do not put crossterm input handling in `hya-tui` or `hya-tui-lib`.
+- Do not parse provider/tool business logic in widgets; use projection and
   view-model layers.
 - Do not compare whole-screen snapshots for routine layout tests when semantic
   text assertions are enough.
+- Do not add Hya app-state, prompt, keymap, theme, SDK, or runtime dependencies
+  to `hya-tui-lib`; keep that crate app-neutral.
+- Do not allow same-layer component overlap silently; return typed validation
+  errors and require explicit layers/overlays for intentional overlap.
