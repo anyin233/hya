@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_core::{
     AgentSpec, CompactionConfig, CreateSession, EventBus, MemberSpec, MemberStatus,
-    ModelSummarizer, PromptEnv, SessionEngine, Summarizer, TeamEvidenceEnvelope,
+    ModelSummarizer, PromptEnv, SessionEngine, SubagentGovernor, Summarizer, TeamEvidenceEnvelope,
     build_system_prompt, project_envelope, run_team,
 };
 use hya_mcp::McpServerConfig;
@@ -387,11 +387,13 @@ pub async fn build_session_engine(
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
+    let governor = SubagentGovernor::new(crate::config::load_subagent_limits());
     let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
         .with_interaction(interaction)
-        .with_spawner(spawner);
+        .with_spawner(spawner)
+        .with_governor(governor);
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
