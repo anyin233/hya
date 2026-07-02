@@ -51,6 +51,46 @@ pub(super) async fn get_session(
     }
 }
 
+/// Recursive subagent run tree rooted at the requested session's top ancestor.
+/// Joins each session's `members[].child` links via the shared `build_run_tree`
+/// assembler, so nested subagents are visible as one tree (parent → children).
+pub(super) async fn tree(
+    State(st): State<ServerState>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let session = parse_session(&id)?;
+    if let Err(response) = super::session_legacy::legacy_load_session(&st, session, None).await? {
+        return Ok(response);
+    }
+    let (root, _) = st
+        .engine
+        .session_lineage(session)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut lookup: std::collections::HashMap<_, _> = std::collections::HashMap::new();
+    let mut queue = vec![root];
+    while let Some(sid) = queue.pop() {
+        if lookup.contains_key(&sid) {
+            continue;
+        }
+        let projection = st
+            .engine
+            .read_projection(sid)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for member in &projection.session.members {
+            if let Some(child) = member.child
+                && !lookup.contains_key(&child)
+            {
+                queue.push(child);
+            }
+        }
+        lookup.insert(sid, projection.session);
+    }
+    let tree = hya_proto::build_run_tree(root, &lookup);
+    Ok(Json(tree).into_response())
+}
+
 pub(super) async fn update_session(
     State(st): State<ServerState>,
     Path(id): Path<String>,
