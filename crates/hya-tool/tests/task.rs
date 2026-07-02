@@ -47,6 +47,57 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
     }
 }
 
+fn ctx_with_parent(
+    rules: Vec<Rule>,
+    spawner: SpawnerPlane,
+    session: SessionId,
+    parent: SessionId,
+) -> ToolCtx {
+    let mut ctx = ctx_with_session(rules, spawner, session);
+    ctx.parent_session = Some(parent);
+    ctx
+}
+
+#[tokio::test]
+async fn subagent_can_spawn_nested_task() {
+    // A session WITH a parent (i.e. itself a subagent) must be allowed to call the
+    // task tool: nesting is bounded by the governor, not blocked outright.
+    let parent = SessionId::new();
+    let child = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_parent(vec![allow(Action::Task, "explore")], spawner, child, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Nested probe",
+                "prompt": "dig deeper",
+                "subagent_type": "explore"
+            }),
+        )
+        .await
+    });
+
+    // The request reaches the spawner instead of erroring with a lead-only guard.
+    let req = rx.recv().await.unwrap();
+    assert_eq!(
+        req.parent, child,
+        "nested spawn is parented at the subagent"
+    );
+    req.reply
+        .send(vec![MemberOutcome {
+            member: "mbr_n".to_string(),
+            session: "ses_grandchild".to_string(),
+            status: "done".to_string(),
+            summary: "nested done".to_string(),
+        }])
+        .unwrap();
+    let out = handle.await.unwrap().unwrap();
+    assert_eq!(out["metadata"]["sessionId"], "ses_grandchild");
+}
+
 #[test]
 fn task_schema_exposes_open_code_fields() {
     let tool = ToolRegistry::builtins().get("task").unwrap();

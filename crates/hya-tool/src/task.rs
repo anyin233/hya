@@ -100,12 +100,10 @@ impl Tool for TaskTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        if ctx.parent_session.is_some() {
-            return Err(ToolError::Other(
-                "the task tool is lead-only; a subagent cannot spawn more subagents".to_string(),
-            ));
-        }
-
+        // Nested subagents are allowed: a subagent may call `task` to spawn its own
+        // subagents. Recursion depth and total fan-out are bounded by the engine's
+        // SubagentGovernor (max_depth + per-run budget), enforced in `run_team`, so
+        // there is no hard one-level cap here.
         let input: TaskInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         let background = input.background;
