@@ -38,7 +38,7 @@ pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
     cost_preflight, drive_loop, run_loop,
 };
-pub use orchestrator::SubagentLimits;
+pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use prompt::{PromptEnv, build_system_prompt};
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
