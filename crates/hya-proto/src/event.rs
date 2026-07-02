@@ -213,6 +213,16 @@ pub enum Event {
         code: String,
         message: String,
     },
+
+    /// Forward-compatibility catch-all: any event whose `type` tag is not one of
+    /// the variants above deserializes here instead of failing. This lets an older
+    /// binary replay a log (or a client decode a stream) that contains newer event
+    /// variants without erroring. NOTE: this is a unit variant, so the original
+    /// payload is dropped — code that must forward unknown events losslessly should
+    /// decode the raw JSON (`serde_json::Value`) at the boundary rather than relying
+    /// on this round-tripping.
+    #[serde(other)]
+    Unknown,
 }
 
 fn default_step_finish_reason() -> FinishReason {
@@ -258,6 +268,7 @@ impl Event {
             | Event::ToolError { session, .. } => Some(*session),
             Event::ToolPartUpdated { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
+            Event::Unknown => None,
         }
     }
 }
@@ -268,4 +279,32 @@ pub struct Envelope {
     pub seq: EventSeq,
     pub ts_millis: i64,
     pub event: Event,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn unknown_event_type_deserializes_to_unknown() {
+        // A future/unknown `type` must not fail deserialization: it maps to
+        // Event::Unknown so old binaries can replay logs with newer variants.
+        let json = r#"{"type":"member_spawned","session":"ses_x","member":"m1"}"#;
+        let event: Event = serde_json::from_str(json).expect("unknown type must decode");
+        assert_eq!(event, Event::Unknown);
+        assert_eq!(event.session(), None);
+
+        // A known variant still decodes to its proper variant.
+        let known =
+            r#"{"type":"session_share_cleared","session":"ses_00000000000000000000000000000001"}"#;
+        let event: Event = serde_json::from_str(known).expect("known type decodes");
+        assert!(matches!(event, Event::SessionShareCleared { .. }));
+
+        // Envelope carrying an unknown event also decodes.
+        let env_json = format!(r#"{{"seq":7,"ts_millis":1,"event":{json}}}"#);
+        let env: Envelope = serde_json::from_str(&env_json).expect("envelope decodes");
+        assert_eq!(env.event, Event::Unknown);
+    }
 }

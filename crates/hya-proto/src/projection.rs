@@ -333,7 +333,8 @@ impl Projection {
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
-            | Event::Error { .. } => {}
+            | Event::Error { .. }
+            | Event::Unknown => {}
         }
     }
 }
