@@ -250,7 +250,8 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
             | Event::ToolPartUpdated { .. }
-            | Event::Error { .. } => None,
+            | Event::Error { .. }
+            | Event::Unknown => None,
         })
         .ok_or_else(|| ApiError::internal("admitted prompt event missing"))
 }
