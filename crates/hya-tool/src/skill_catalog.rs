@@ -1,11 +1,17 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParsedSkill {
     pub name: String,
     pub description: String,
     pub content: String,
+    /// Per-skill tool allowlist from `allowed-tools`. Empty = no restriction.
+    pub allowed_tools: Vec<String>,
+    /// Optional per-skill model override.
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,8 +19,27 @@ pub struct SkillCatalogEntry {
     pub name: String,
     pub description: String,
     pub content: String,
+    pub allowed_tools: Vec<String>,
+    pub model: Option<String>,
     pub path: PathBuf,
     pub dir: PathBuf,
+}
+
+/// YAML frontmatter shape for a `SKILL.md`. Every field beyond name/description is
+/// optional so existing minimal skills keep parsing.
+#[derive(Debug, Default, Deserialize)]
+struct SkillFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+    #[serde(default, rename = "allowed-tools")]
+    allowed_tools: Vec<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    disable: bool,
+    #[serde(default)]
+    #[allow(dead_code)]
+    license: Option<String>,
 }
 
 #[must_use]
@@ -77,6 +102,8 @@ pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
                 name: parsed.name,
                 description: parsed.description,
                 content: parsed.content,
+                allowed_tools: parsed.allowed_tools,
+                model: parsed.model,
                 path,
                 dir,
             });
@@ -102,22 +129,54 @@ pub fn skills_section(skills: &[SkillCatalogEntry]) -> Option<String> {
     Some(section)
 }
 
+/// Parse a `SKILL.md`: YAML frontmatter between `---` fences, then the markdown
+/// body. Requires `name` and `description`; returns `None` for malformed or
+/// `disable: true` skills so they are skipped during discovery.
 #[must_use]
 pub fn parse_skill(content: &str) -> Option<ParsedSkill> {
     let after = content.strip_prefix("---")?;
     let (front, body) = after.split_once("\n---")?;
-    let mut name = None;
-    let mut description = None;
-    for line in front.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            name = Some(value.trim().to_string());
-        } else if let Some(value) = line.strip_prefix("description:") {
-            description = Some(value.trim().to_string());
-        }
+    let front: SkillFrontmatter = serde_norway::from_str(front).ok()?;
+    if front.disable {
+        return None;
     }
     Some(ParsedSkill {
-        name: name?,
-        description: description?,
+        name: front.name?,
+        description: front.description?,
         content: body.strip_prefix('\n').unwrap_or(body).to_string(),
+        allowed_tools: front.allowed_tools,
+        model: front.model,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn parses_frontmatter_policy_fields() {
+        let md = "---\nname: reviewer\ndescription: reviews code\nallowed-tools: [read, grep]\nmodel: anthropic/claude-sonnet-4-6\nlicense: MIT\n---\nBODY TEXT\n";
+        let parsed = parse_skill(md).expect("parses");
+        assert_eq!(parsed.name, "reviewer");
+        assert_eq!(parsed.description, "reviews code");
+        assert_eq!(parsed.allowed_tools, vec!["read", "grep"]);
+        assert_eq!(parsed.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
+        assert_eq!(parsed.content, "BODY TEXT\n");
+    }
+
+    #[test]
+    fn minimal_frontmatter_still_parses_with_defaults() {
+        let md = "---\nname: mini\ndescription: tiny\n---\nbody";
+        let parsed = parse_skill(md).expect("parses");
+        assert!(parsed.allowed_tools.is_empty());
+        assert!(parsed.model.is_none());
+    }
+
+    #[test]
+    fn disabled_skill_is_skipped() {
+        let md = "---\nname: off\ndescription: nope\ndisable: true\n---\nbody";
+        assert!(parse_skill(md).is_none(), "disabled skills are skipped");
+    }
 }
