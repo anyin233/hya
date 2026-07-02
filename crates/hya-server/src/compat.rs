@@ -22,6 +22,7 @@ mod experimental_sync;
 mod experimental_tool;
 mod experimental_workspace;
 mod experimental_worktree;
+mod external_protocol;
 mod file;
 mod formatter;
 mod global;

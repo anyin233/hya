@@ -72,9 +72,12 @@ fn global_config_paths() -> Vec<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| {
+            let dir = home
+                .join(".config")
+                .join(super::external_protocol::GLOBAL_CONFIG_DIR);
             vec![
-                home.join(".config/opencode/opencode.json"),
-                home.join(".config/opencode/opencode.jsonc"),
+                dir.join(super::external_protocol::CONFIG_FILE_JSON),
+                dir.join(super::external_protocol::CONFIG_FILE_JSONC),
             ]
         })
         .unwrap_or_default()

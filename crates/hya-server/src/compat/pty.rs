@@ -11,7 +11,7 @@ use crate::{ApiError, ServerState};
 use super::location;
 use super::pty_state::PtyInfo;
 
-const CONNECT_TOKEN_HEADER: &str = "x-opencode-ticket";
+use super::external_protocol::CONNECT_TOKEN_HEADER;
 const CONNECT_TOKEN_HEADER_VALUE: &str = "1";
 
 pub(super) fn router() -> Router<ServerState> {

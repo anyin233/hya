@@ -10,7 +10,7 @@ pub(super) fn workdir(st: &ServerState, directory: Option<&str>, headers: &Heade
         .map(PathBuf::from)
         .or_else(|| {
             headers
-                .get("x-opencode-directory")
+                .get(crate::compat::external_protocol::DIRECTORY_HEADER)
                 .and_then(|value| value.to_str().ok())
                 .map(PathBuf::from)
         })
