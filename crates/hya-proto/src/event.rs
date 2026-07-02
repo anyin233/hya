@@ -6,8 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{EventSeq, MessageId, PartId, SessionId, ToolCallId};
-use crate::message::{FinishReason, Role, TokenUsage, ToolPartState};
+use crate::ids::{EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -207,6 +207,33 @@ pub enum Event {
         state: ToolPartState,
     },
 
+    // -------- subagent (member) lifecycle --------
+    // These attach to the PARENT (`session`) so they live in the parent's log and
+    // stream with it. They carry only bounded metadata + a short summary — never a
+    // child transcript — so observers can render a live agent tree cheaply.
+    MemberSpawned {
+        session: SessionId,
+        member: MemberId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child: Option<SessionId>,
+        subagent_type: AgentName,
+        description: String,
+        depth: u32,
+    },
+    MemberStatusChanged {
+        session: SessionId,
+        member: MemberId,
+        status: MemberRunStatus,
+    },
+    MemberFinished {
+        session: SessionId,
+        member: MemberId,
+        status: MemberRunStatus,
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child: Option<SessionId>,
+    },
+
     // -------- errors --------
     Error {
         session: Option<SessionId>,
@@ -267,6 +294,9 @@ impl Event {
             | Event::ToolResult { session, .. }
             | Event::ToolError { session, .. } => Some(*session),
             Event::ToolPartUpdated { session, .. } => Some(*session),
+            Event::MemberSpawned { session, .. }
+            | Event::MemberStatusChanged { session, .. }
+            | Event::MemberFinished { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
@@ -291,7 +321,7 @@ mod tests {
     fn unknown_event_type_deserializes_to_unknown() {
         // A future/unknown `type` must not fail deserialization: it maps to
         // Event::Unknown so old binaries can replay logs with newer variants.
-        let json = r#"{"type":"member_spawned","session":"ses_x","member":"m1"}"#;
+        let json = r#"{"type":"totally_made_up_future_event","session":"ses_x","x":1}"#;
         let event: Event = serde_json::from_str(json).expect("unknown type must decode");
         assert_eq!(event, Event::Unknown);
         assert_eq!(event.session(), None);

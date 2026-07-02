@@ -18,6 +18,7 @@ use crate::hooks::HookDispatcher;
 
 mod admission;
 mod fork;
+mod members;
 mod session_cleanup;
 mod session_state;
 mod session_title;

@@ -433,6 +433,9 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::PartDeleted { .. }
         | Event::MessageDeleted { .. }
         | Event::UserPromptContextRecorded { .. }
+        | Event::MemberSpawned { .. }
+        | Event::MemberStatusChanged { .. }
+        | Event::MemberFinished { .. }
         | Event::Unknown => envelope_payload(st, envelope).await,
     }
 }

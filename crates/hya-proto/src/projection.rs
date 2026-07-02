@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
-use crate::ids::{MessageId, PartId, SessionId, ToolCallId};
-use crate::message::{FinishReason, Role, TokenUsage, ToolPartState};
+use crate::ids::{MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -25,6 +25,26 @@ pub struct SessionProjection {
     pub archived: Option<serde_json::Number>,
     pub share: Option<String>,
     pub messages: Vec<MessageProjection>,
+    /// Subagents spawned by this session, folded from member lifecycle events.
+    /// Empty for sessions that never spawned subagents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<MemberProjection>,
+}
+
+/// A single spawned subagent as seen from its parent session. Carries only bounded
+/// metadata + a short summary (never the child transcript), so a recursive run tree
+/// can be assembled cheaply by joining `child` links across sessions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MemberProjection {
+    pub member: MemberId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<SessionId>,
+    pub subagent_type: AgentName,
+    pub description: String,
+    pub depth: u32,
+    pub status: MemberRunStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -326,6 +346,38 @@ impl Projection {
                     *state = next.clone();
                 }
             }
+            Event::MemberSpawned {
+                member,
+                child,
+                subagent_type,
+                description,
+                depth,
+                ..
+            } => {
+                let entry = self.member_mut(*member);
+                entry.child = *child;
+                entry.subagent_type = subagent_type.clone();
+                entry.description = description.clone();
+                entry.depth = *depth;
+                entry.status = MemberRunStatus::Spawning;
+            }
+            Event::MemberStatusChanged { member, status, .. } => {
+                self.member_mut(*member).status = *status;
+            }
+            Event::MemberFinished {
+                member,
+                status,
+                summary,
+                child,
+                ..
+            } => {
+                let entry = self.member_mut(*member);
+                entry.status = *status;
+                entry.summary = summary.clone();
+                if child.is_some() {
+                    entry.child = *child;
+                }
+            }
             Event::TextEnd { .. }
             | Event::ReasoningEnd { .. }
             | Event::SessionStatus { .. }
@@ -336,5 +388,98 @@ impl Projection {
             | Event::Error { .. }
             | Event::Unknown => {}
         }
+    }
+
+    /// Get or insert the member projection for `member`.
+    fn member_mut(&mut self, member: MemberId) -> &mut MemberProjection {
+        if let Some(idx) = self.session.members.iter().position(|m| m.member == member) {
+            return &mut self.session.members[idx];
+        }
+        self.session.members.push(MemberProjection {
+            member,
+            child: None,
+            subagent_type: AgentName::new(""),
+            description: String::new(),
+            depth: 0,
+            status: MemberRunStatus::Spawning,
+            summary: String::new(),
+        });
+        let last = self.session.members.len() - 1;
+        &mut self.session.members[last]
+    }
+}
+
+#[cfg(test)]
+mod member_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::ids::EventSeq;
+
+    fn env(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        }
+    }
+
+    #[test]
+    fn folds_member_lifecycle_into_projection() {
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        let member = MemberId::new();
+        let mut p = Projection::default();
+        p.apply(&env(
+            1,
+            Event::MemberSpawned {
+                session: parent,
+                member,
+                child: Some(child),
+                subagent_type: AgentName::new("explore"),
+                description: "scan routing".to_string(),
+                depth: 1,
+            },
+        ));
+        p.apply(&env(
+            2,
+            Event::MemberStatusChanged {
+                session: parent,
+                member,
+                status: MemberRunStatus::Running,
+            },
+        ));
+        assert_eq!(p.session.members.len(), 1);
+        assert_eq!(p.session.members[0].status, MemberRunStatus::Running);
+        assert_eq!(p.session.members[0].child, Some(child));
+        assert_eq!(
+            p.session.members[0].subagent_type,
+            AgentName::new("explore")
+        );
+
+        p.apply(&env(
+            3,
+            Event::MemberFinished {
+                session: parent,
+                member,
+                status: MemberRunStatus::Done,
+                summary: "found it".to_string(),
+                child: Some(child),
+            },
+        ));
+        assert_eq!(p.session.members.len(), 1, "same member upserts, not dupes");
+        assert_eq!(p.session.members[0].status, MemberRunStatus::Done);
+        assert_eq!(p.session.members[0].summary, "found it");
+
+        // Idempotent by seq: replaying an older seq is a no-op.
+        p.apply(&env(
+            2,
+            Event::MemberStatusChanged {
+                session: parent,
+                member,
+                status: MemberRunStatus::Running,
+            },
+        ));
+        assert_eq!(p.session.members[0].status, MemberRunStatus::Done);
     }
 }

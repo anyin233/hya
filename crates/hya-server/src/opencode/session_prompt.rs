@@ -250,6 +250,9 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
             | Event::ToolPartUpdated { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         })

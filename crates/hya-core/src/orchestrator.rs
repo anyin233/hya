@@ -129,7 +129,11 @@ mod tests {
         });
         let root = SessionId::new();
         assert_eq!(gov.reserve(root, 2), 2, "first reserve grants requested");
-        assert_eq!(gov.reserve(root, 5), 1, "second reserve clamps to remaining");
+        assert_eq!(
+            gov.reserve(root, 5),
+            1,
+            "second reserve clamps to remaining"
+        );
         assert_eq!(gov.reserve(root, 1), 0, "budget exhausted");
         // A distinct root has its own fresh budget.
         assert_eq!(gov.reserve(SessionId::new(), 3), 3);

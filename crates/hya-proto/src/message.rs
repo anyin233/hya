@@ -24,6 +24,17 @@ pub enum FinishReason {
     Error,
 }
 
+/// Lifecycle status of a spawned subagent member, as observed by the lead/tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberRunStatus {
+    Spawning,
+    Running,
+    Done,
+    Failed,
+    Cancelled,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     #[serde(default, alias = "prompt")]

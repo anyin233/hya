@@ -17,9 +17,13 @@ pub use ids::{
     EventSeq, GoalId, LoopRunId, MemberId, MessageId, PartId, PermissionRequestId,
     QuestionRequestId, SessionId, TeamRunId, ToolCallId,
 };
-pub use message::{CostBreakdown, FinishReason, Message, Part, Role, TokenUsage, ToolPartState};
+pub use message::{
+    CostBreakdown, FinishReason, MemberRunStatus, Message, Part, Role, TokenUsage, ToolPartState,
+};
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
-pub use projection::{MessageProjection, PartProjection, Projection, SessionProjection};
+pub use projection::{
+    MemberProjection, MessageProjection, PartProjection, Projection, SessionProjection,
+};
 pub use workspace::WorkspaceAdapterInfo;
 
 /// Unix-epoch milliseconds. Used for `Envelope.ts_millis` and DB timestamps.

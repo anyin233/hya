@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use hya_proto::{MemberId, PartProjection, Projection, Role, SessionId};
+use hya_proto::{MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -57,6 +57,7 @@ async fn run_member(
     spec: MemberSpec,
     cancel: CancellationToken,
 ) -> Result<(SessionId, String), CoreError> {
+    let member = spec.id;
     let child = if let Some(session) = spec.session {
         session
     } else {
@@ -69,6 +70,26 @@ async fn run_member(
             })
             .await?
     };
+    // Announce the member so observers can render it live in the agent tree.
+    let depth = engine
+        .session_lineage(child)
+        .await
+        .map(|(_, d)| d)
+        .unwrap_or(0);
+    let description: String = spec.directive.chars().take(80).collect();
+    let _ = engine
+        .record_member_spawned(
+            lead,
+            member,
+            Some(child),
+            spec.agent.name.clone(),
+            description,
+            depth,
+        )
+        .await;
+    let _ = engine
+        .record_member_status(lead, member, MemberRunStatus::Running)
+        .await;
     engine.admit_user_prompt(child, spec.directive).await?;
     engine.run_turn(child, &spec.agent, cancel).await?;
     let projection = engine.read_projection(child).await?;
@@ -104,16 +125,37 @@ pub async fn run_team(
     let specs: Vec<MemberSpec> = if let Some(gov) = engine.governor() {
         let (root, lead_depth) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
         if lead_depth.saturating_add(1) > gov.max_depth() {
-            return specs
-                .into_iter()
-                .map(|s| rejected_evidence(s.id, "max recursion depth reached"))
-                .collect();
+            let mut out = Vec::new();
+            for s in specs {
+                let _ = engine
+                    .record_member_finished(
+                        lead,
+                        s.id,
+                        MemberRunStatus::Failed,
+                        "max recursion depth reached".to_string(),
+                        None,
+                    )
+                    .await;
+                out.push(rejected_evidence(s.id, "max recursion depth reached"));
+            }
+            return out;
         }
         let want = u64::try_from(specs.len()).unwrap_or(u64::MAX);
         let granted = usize::try_from(gov.reserve(root, want)).unwrap_or(usize::MAX);
         let mut iter = specs.into_iter();
         let granted_specs: Vec<MemberSpec> = iter.by_ref().take(granted).collect();
-        rejected.extend(iter.map(|s| rejected_evidence(s.id, "run agent budget exhausted")));
+        for s in iter {
+            let _ = engine
+                .record_member_finished(
+                    lead,
+                    s.id,
+                    MemberRunStatus::Failed,
+                    "run agent budget exhausted".to_string(),
+                    None,
+                )
+                .await;
+            rejected.push(rejected_evidence(s.id, "run agent budget exhausted"));
+        }
         granted_specs
     } else {
         specs
@@ -131,30 +173,48 @@ pub async fn run_team(
 
     let mut evidence = Vec::new();
     for (id, handle) in handles {
-        let entry = match handle.await {
-            Ok(Ok((session, summary))) => MemberEvidence {
-                member: id.to_string(),
-                session: session.to_string(),
-                status: MemberStatus::Done,
-                summary,
-            },
-            Ok(Err(e)) => MemberEvidence {
-                member: id.to_string(),
-                session: "-".to_string(),
-                status: MemberStatus::Failed,
-                summary: e.to_string(),
-            },
-            Err(join_err) => MemberEvidence {
-                member: id.to_string(),
-                session: "-".to_string(),
-                status: MemberStatus::Failed,
-                summary: if join_err.is_panic() {
-                    "member panicked".to_string()
-                } else {
-                    "member cancelled".to_string()
+        let (entry, member_status, child) = match handle.await {
+            Ok(Ok((session, summary))) => (
+                MemberEvidence {
+                    member: id.to_string(),
+                    session: session.to_string(),
+                    status: MemberStatus::Done,
+                    summary: summary.clone(),
                 },
-            },
+                MemberRunStatus::Done,
+                Some(session),
+            ),
+            Ok(Err(e)) => (
+                MemberEvidence {
+                    member: id.to_string(),
+                    session: "-".to_string(),
+                    status: MemberStatus::Failed,
+                    summary: e.to_string(),
+                },
+                MemberRunStatus::Failed,
+                None,
+            ),
+            Err(join_err) => {
+                let (summary, status) = if join_err.is_panic() {
+                    ("member panicked".to_string(), MemberRunStatus::Failed)
+                } else {
+                    ("member cancelled".to_string(), MemberRunStatus::Cancelled)
+                };
+                (
+                    MemberEvidence {
+                        member: id.to_string(),
+                        session: "-".to_string(),
+                        status: MemberStatus::Failed,
+                        summary: summary.clone(),
+                    },
+                    status,
+                    None,
+                )
+            }
         };
+        let _ = engine
+            .record_member_finished(lead, id, member_status, entry.summary.clone(), child)
+            .await;
         evidence.push(entry);
     }
     evidence.extend(rejected);
