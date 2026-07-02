@@ -102,7 +102,7 @@ fn configured_default(workdir: &Path, config_default: Option<&str>) -> Option<St
     super::agent_sources::default_agent(workdir).or_else(|| config_default.map(str::to_owned))
 }
 
-fn merged_entries(workdir: &Path, include_global: bool) -> Vec<AgentEntry> {
+pub(super) fn merged_entries(workdir: &Path, include_global: bool) -> Vec<AgentEntry> {
     let mut agents = native_entries();
     let global_permissions = super::agent_sources::global_permissions(workdir);
     for agent in &mut agents {

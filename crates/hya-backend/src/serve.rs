@@ -22,6 +22,7 @@ pub(crate) async fn cmd_serve(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let mut state = AppState::new(engine, Arc::new(agent_with_model(&runtime.model)))
@@ -83,6 +84,7 @@ pub(crate) async fn cmd_tui_hya(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        true,
     )
     .await;
     let mut state = AppState::new(engine, Arc::new(agent_with_model(&runtime.model)))
