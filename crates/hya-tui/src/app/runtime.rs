@@ -69,6 +69,10 @@ const TOAST_DURATION: Duration = Duration::from_millis(3000);
 const CONNECTING_TIP: &str =
     "\u{27f3} Starting backend\u{2026} you can type now; prompts send once it is ready";
 const CONNECTING_PLACEHOLDER: &str = "Starting backend\u{2026} type to queue a prompt";
+const BUILTIN_SLASH_COMMANDS: &[&str] = &[
+    "help", "model", "models", "new", "clear", "agent", "agents", "sessions", "resume", "compact",
+    "tools", "mcp", "think", "export", "quit", "exit", "q", "?",
+];
 
 const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
     (
@@ -348,6 +352,94 @@ fn slash_command(text: &str, names: &[String]) -> Option<(String, String)> {
     Some((name.to_owned(), arguments.to_owned()))
 }
 
+fn slash_autocomplete_names(discovered: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = BUILTIN_SLASH_COMMANDS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    for name in discovered {
+        if !name.is_empty() && !names.iter().any(|existing| existing == name) {
+            names.push(name.clone());
+        }
+    }
+    names
+}
+
+fn slash_autocomplete_filter(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix('/')?;
+    if rest.contains('/') || rest.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(rest)
+}
+
+fn slash_autocomplete_items(names: &[String]) -> Vec<DialogSelectItem<String>> {
+    names
+        .iter()
+        .map(|name| {
+            DialogSelectItem::new(format!("/{name}"), name.clone()).with_category("Command")
+        })
+        .collect()
+}
+
+fn sync_slash_autocomplete_dialog(
+    text: &str,
+    names: &[String],
+    dialog: &mut Option<ActiveDialog>,
+    dismissed: &mut bool,
+) {
+    let Some(filter) = slash_autocomplete_filter(text) else {
+        if matches!(
+            dialog.as_ref().map(|active| active.kind),
+            Some(DialogKind::SlashAutocomplete)
+        ) {
+            *dialog = None;
+        }
+        *dismissed = false;
+        return;
+    };
+    if *dismissed
+        && !matches!(
+            dialog.as_ref().map(|active| active.kind),
+            Some(DialogKind::SlashAutocomplete)
+        )
+    {
+        return;
+    }
+    let mut select = DialogSelect::new(slash_autocomplete_items(names));
+    select.set_filter(filter.to_owned());
+    *dialog = Some(ActiveDialog {
+        select,
+        kind: DialogKind::SlashAutocomplete,
+    });
+}
+
+fn slash_completion_text(text: &str, selected: &str) -> Option<String> {
+    slash_autocomplete_filter(text)?;
+    Some(format!("/{selected} "))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlashAutocompleteEnterAction {
+    Quit,
+    Submit,
+}
+
+fn slash_autocomplete_enter_action(
+    text: &str,
+    command_names: &[String],
+) -> Option<SlashAutocompleteEnterAction> {
+    slash_autocomplete_filter(text)?;
+    if builtin_quit_command(text) {
+        Some(SlashAutocompleteEnterAction::Quit)
+    } else if builtin_client_command(text).is_some() || slash_command(text, command_names).is_some()
+    {
+        Some(SlashAutocompleteEnterAction::Submit)
+    } else {
+        None
+    }
+}
+
 /// The command name in `/name ...` input that has command syntax (one leading `/`-prefixed
 /// token with no further `/`), whether or not the command is registered. Distinguishes an
 /// unknown command (`/bogus`) from a path (`/usr/bin`) or a plain prompt, so the former can
@@ -465,6 +557,7 @@ fn hit(rect: Option<crate::contracts::Rect>, column: u16, row: u16) -> bool {
 #[derive(Clone, Copy)]
 enum DialogKind {
     CommandPalette,
+    SlashAutocomplete,
     AgentSwitch,
     ModelSwitch,
     VariantList,
@@ -478,6 +571,7 @@ impl DialogKind {
     fn title(self) -> &'static str {
         match self {
             DialogKind::CommandPalette => "Commands",
+            DialogKind::SlashAutocomplete => "Slash commands",
             DialogKind::AgentSwitch => "Agents",
             DialogKind::ModelSwitch => "Select model",
             DialogKind::VariantList => "Select variant",
@@ -544,6 +638,7 @@ struct Runtime {
     timeline_entries: Vec<(String, String, String)>,
     theme_names: Vec<String>,
     dialog: Option<ActiveDialog>,
+    slash_autocomplete_dismissed: bool,
     prompt_dialog: Option<PromptDialog>,
     confirm_dialog: Option<ConfirmDialog>,
     session_dialog_pending: bool,
@@ -616,6 +711,7 @@ impl Runtime {
             timeline_entries: Vec::new(),
             theme_names,
             dialog: None,
+            slash_autocomplete_dismissed: false,
             prompt_dialog: None,
             confirm_dialog: None,
             session_dialog_pending: false,
@@ -1041,6 +1137,7 @@ impl Runtime {
                 let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                 self.prompt.insert_str(&normalized);
                 self.history_index = None;
+                self.sync_slash_autocomplete_from_prompt();
                 Ok(false)
             }
             AppEvent::Navigate(session_id) => {
@@ -1060,6 +1157,9 @@ impl Runtime {
             }
             AppEvent::CommandList(names) => {
                 self.command_names = names;
+                if self.slash_autocomplete_open() {
+                    self.sync_slash_autocomplete_from_prompt();
+                }
                 Ok(false)
             }
             AppEvent::ModelList(models) => {
@@ -1219,6 +1319,9 @@ impl Runtime {
             self.handle_confirm_dialog_key(key);
             return false;
         }
+        if self.slash_autocomplete_open() {
+            return self.handle_slash_autocomplete_key(key);
+        }
         if self.dialog.is_some() {
             self.handle_dialog_key(key);
             return false;
@@ -1237,6 +1340,7 @@ impl Runtime {
         // (Enter is also diff.toggle, ctrl+c is also input.clear), so the prompt must win.
         // While a leader chord is mid-sequence (above), the dispatcher wins instead.
         if let Some(quit) = self.handle_prompt_key(key) {
+            self.sync_slash_autocomplete_from_prompt();
             return quit;
         }
         self.dispatch_key(key)
@@ -1249,6 +1353,89 @@ impl Runtime {
             return self.handle_command(command.0.as_str());
         }
         false
+    }
+
+    fn slash_autocomplete_open(&self) -> bool {
+        matches!(
+            self.dialog.as_ref().map(|active| active.kind),
+            Some(DialogKind::SlashAutocomplete)
+        )
+    }
+
+    fn handle_slash_autocomplete_key(&mut self, key: KeyEvent) -> bool {
+        let no_mods = !key.ctrl && !key.alt && !key.meta;
+        match key.key {
+            Key::Esc if no_mods => {
+                self.dialog = None;
+                self.slash_autocomplete_dismissed = true;
+                false
+            }
+            Key::Up | Key::BackTab if no_mods => {
+                if let Some(active) = self.dialog.as_mut() {
+                    active.select.move_up();
+                }
+                false
+            }
+            Key::Down if no_mods => {
+                if let Some(active) = self.dialog.as_mut() {
+                    active.select.move_down();
+                }
+                false
+            }
+            Key::Enter if no_mods => {
+                match slash_autocomplete_enter_action(&self.prompt.text, &self.command_names) {
+                    Some(SlashAutocompleteEnterAction::Quit) => {
+                        self.dialog = None;
+                        true
+                    }
+                    Some(SlashAutocompleteEnterAction::Submit) => {
+                        self.dialog = None;
+                        self.submit_prompt();
+                        false
+                    }
+                    None => {
+                        self.complete_slash_selection();
+                        false
+                    }
+                }
+            }
+            Key::Tab if no_mods => {
+                self.complete_slash_selection();
+                false
+            }
+            _ => {
+                if let Some(quit) = self.handle_prompt_key(key) {
+                    self.sync_slash_autocomplete_from_prompt();
+                    return quit;
+                }
+                false
+            }
+        }
+    }
+
+    fn sync_slash_autocomplete_from_prompt(&mut self) {
+        let names = slash_autocomplete_names(&self.command_names);
+        sync_slash_autocomplete_dialog(
+            &self.prompt.text,
+            &names,
+            &mut self.dialog,
+            &mut self.slash_autocomplete_dismissed,
+        );
+    }
+
+    fn complete_slash_selection(&mut self) {
+        let Some(selected) = self
+            .dialog
+            .as_ref()
+            .and_then(|active| active.select.select().cloned())
+        else {
+            return;
+        };
+        if let Some(text) = slash_completion_text(&self.prompt.text, &selected) {
+            self.prompt.set_text(text);
+            self.history_index = None;
+            self.dialog = None;
+        }
     }
 
     fn clear_leader(&mut self) {
@@ -1495,6 +1682,7 @@ impl Runtime {
             Ok(content) => {
                 self.prompt.set_text(normalize_editor_content(&content));
                 self.history_index = None;
+                self.sync_slash_autocomplete_from_prompt();
             }
             Err(error) => {
                 self.toast = Some((
@@ -1730,6 +1918,10 @@ impl Runtime {
                 self.show_timestamps,
                 &self.command_names,
             ),
+            DialogKind::SlashAutocomplete => {
+                let names = slash_autocomplete_names(&self.command_names);
+                slash_autocomplete_items(&names)
+            }
             DialogKind::AgentSwitch => self
                 .input
                 .agent_names
@@ -1982,6 +2174,12 @@ impl Runtime {
                     self.handle_command(&value);
                 } else {
                     self.run_command(value);
+                }
+            }
+            DialogKind::SlashAutocomplete => {
+                if let Some(text) = slash_completion_text(&self.prompt.text, &value) {
+                    self.prompt.set_text(text);
+                    self.history_index = None;
                 }
             }
             DialogKind::AgentSwitch => self.set_active_agent(value),
@@ -2795,9 +2993,11 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         base64_encode, builtin_client_command, builtin_quit_command, command_like_name,
-        command_palette_items, normalize_editor_content, parse_editor_command, slash_command,
-        toggle_yolo, trailing_mention, COMMAND_THEME_MODE, COMMAND_TOGGLE_TIMESTAMPS,
-        COMMAND_YOLO_SWITCH,
+        command_palette_items, normalize_editor_content, parse_editor_command,
+        slash_autocomplete_enter_action, slash_autocomplete_filter, slash_autocomplete_names,
+        slash_command, slash_completion_text, sync_slash_autocomplete_dialog, toggle_yolo,
+        trailing_mention, DialogKind, SlashAutocompleteEnterAction, COMMAND_THEME_MODE,
+        COMMAND_TOGGLE_TIMESTAMPS, COMMAND_YOLO_SWITCH,
     };
     use crate::theme::Mode;
 
@@ -2964,6 +3164,164 @@ mod tests {
         let names = vec!["review".to_owned()];
         assert_eq!(slash_command("/bogus", &names), None);
         assert_eq!(command_like_name("/bogus"), Some("bogus"));
+    }
+
+    #[test]
+    fn slash_autocomplete_names_seed_builtins_before_discovery() {
+        let names = slash_autocomplete_names(&[]);
+
+        assert!(names.iter().any(|name| name == "help"));
+        assert!(names.iter().any(|name| name == "model"));
+        assert!(names.iter().any(|name| name == "new"));
+        assert!(names.iter().any(|name| name == "?"));
+        assert!(names.iter().any(|name| name == "quit"));
+        assert!(names.iter().any(|name| name == "exit"));
+        assert!(names.iter().any(|name| name == "q"));
+    }
+
+    #[test]
+    fn slash_autocomplete_names_merge_discovered_commands_stably() {
+        let discovered = vec![
+            "review".to_owned(),
+            "help".to_owned(),
+            "init".to_owned(),
+            "review".to_owned(),
+        ];
+        let names = slash_autocomplete_names(&discovered);
+        let Some(help) = names.iter().position(|name| name == "help") else {
+            panic!("built-in help command missing");
+        };
+        let Some(review) = names.iter().position(|name| name == "review") else {
+            panic!("discovered review command missing");
+        };
+        let Some(init) = names.iter().position(|name| name == "init") else {
+            panic!("discovered init command missing");
+        };
+
+        assert!(help < review);
+        assert!(review < init);
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "review")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn slash_autocomplete_filter_tracks_prompt_prefix() {
+        assert_eq!(slash_autocomplete_filter("/"), Some(""));
+        assert_eq!(slash_autocomplete_filter("/mo"), Some("mo"));
+        assert_eq!(slash_autocomplete_filter("/model "), None);
+        assert_eq!(slash_autocomplete_filter("/usr/bin"), None);
+        assert_eq!(slash_autocomplete_filter("plain /mo"), None);
+    }
+
+    #[test]
+    fn slash_completion_text_inserts_selected_command_for_arguments() {
+        assert_eq!(
+            slash_completion_text("/mo", "model"),
+            Some("/model ".to_owned())
+        );
+        assert_eq!(
+            slash_completion_text("/", "help"),
+            Some("/help ".to_owned())
+        );
+        assert_eq!(slash_completion_text("/model ", "model"), None);
+    }
+
+    #[test]
+    fn slash_autocomplete_dialog_opens_from_leading_slash_prompt() {
+        let names = slash_autocomplete_names(&[]);
+        let mut dialog = None;
+
+        let mut dismissed = false;
+        sync_slash_autocomplete_dialog("/", &names, &mut dialog, &mut dismissed);
+
+        let Some(active) = dialog else {
+            panic!("slash autocomplete dialog missing");
+        };
+        assert!(matches!(active.kind, DialogKind::SlashAutocomplete));
+        assert_eq!(active.select.filter(), "");
+        assert!(active
+            .select
+            .filtered_items()
+            .iter()
+            .any(|item| item.title == "/help" && item.value == "help"));
+    }
+
+    #[test]
+    fn slash_autocomplete_dialog_refreshes_when_commands_arrive() {
+        let startup_names = slash_autocomplete_names(&[]);
+        let mut dialog = None;
+        let mut dismissed = false;
+        sync_slash_autocomplete_dialog("/rev", &startup_names, &mut dialog, &mut dismissed);
+        let Some(active) = dialog.as_ref() else {
+            panic!("startup slash dialog missing");
+        };
+        assert!(active.select.filtered_items().is_empty());
+
+        let discovered = vec!["review".to_owned()];
+        let updated_names = slash_autocomplete_names(&discovered);
+        sync_slash_autocomplete_dialog("/rev", &updated_names, &mut dialog, &mut dismissed);
+
+        let Some(active) = dialog else {
+            panic!("refreshed slash dialog missing");
+        };
+        assert!(matches!(active.kind, DialogKind::SlashAutocomplete));
+        assert_eq!(active.select.filter(), "rev");
+        assert_eq!(active.select.select().map(String::as_str), Some("review"));
+    }
+
+    #[test]
+    fn slash_autocomplete_dialog_stays_dismissed_until_prompt_leaves_slash_prefix() {
+        let names = slash_autocomplete_names(&[]);
+        let mut dialog = None;
+        let mut dismissed = false;
+
+        sync_slash_autocomplete_dialog("/mo", &names, &mut dialog, &mut dismissed);
+        assert!(dialog.is_some());
+
+        dismissed = true;
+        dialog = None;
+        sync_slash_autocomplete_dialog("/mod", &names, &mut dialog, &mut dismissed);
+        assert!(dialog.is_none());
+        assert!(dismissed);
+
+        sync_slash_autocomplete_dialog("/model ", &names, &mut dialog, &mut dismissed);
+        assert!(dialog.is_none());
+        assert!(!dismissed);
+
+        sync_slash_autocomplete_dialog("/", &names, &mut dialog, &mut dismissed);
+        assert!(dialog.is_some());
+    }
+
+    #[test]
+    fn slash_autocomplete_enter_submits_exact_builtin_or_discovered_command() {
+        let discovered = vec!["review".to_owned()];
+
+        assert!(slash_autocomplete_enter_action("/model", &discovered).is_some());
+        assert!(slash_autocomplete_enter_action("/review", &discovered).is_some());
+        assert!(slash_autocomplete_enter_action("/quit", &discovered).is_some());
+        assert!(slash_autocomplete_enter_action("/exit", &discovered).is_some());
+        assert!(slash_autocomplete_enter_action("/q", &discovered).is_some());
+        assert!(slash_autocomplete_enter_action("/mo", &discovered).is_none());
+        assert!(slash_autocomplete_enter_action("/unknown", &discovered).is_none());
+        assert!(slash_autocomplete_enter_action("/usr/bin", &discovered).is_none());
+
+        assert_eq!(
+            slash_autocomplete_enter_action("/quit", &discovered),
+            Some(SlashAutocompleteEnterAction::Quit)
+        );
+        assert_eq!(
+            slash_autocomplete_enter_action("/model", &discovered),
+            Some(SlashAutocompleteEnterAction::Submit)
+        );
+        assert_eq!(
+            slash_autocomplete_enter_action("/review", &discovered),
+            Some(SlashAutocompleteEnterAction::Submit)
+        );
     }
 
     #[test]
