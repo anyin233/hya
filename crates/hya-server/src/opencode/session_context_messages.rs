@@ -362,6 +362,9 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::ToolInputDelta { .. }
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => {}
         }
@@ -413,6 +416,9 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
             | Event::ToolPartUpdated { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => {}
         }

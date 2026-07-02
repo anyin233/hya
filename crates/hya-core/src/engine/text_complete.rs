@@ -54,6 +54,9 @@ impl TextPartAccumulator {
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
             | Event::ToolPartUpdated { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

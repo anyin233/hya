@@ -283,6 +283,43 @@ async fn governor_rejects_spawn_beyond_max_depth() {
 }
 
 #[tokio::test]
+async fn run_team_records_member_lifecycle_on_lead() {
+    let (engine, agent) = engine().await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let evidence = run_team(
+        engine.clone(),
+        lead,
+        vec![member(&agent, "member one"), member(&agent, "member two")],
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(evidence.len(), 2);
+
+    // The lead projection now carries observable member lifecycle entries.
+    let proj = engine.read_projection(lead).await.unwrap();
+    assert_eq!(proj.session.members.len(), 2, "both members are tracked");
+    assert!(
+        proj.session
+            .members
+            .iter()
+            .all(|m| matches!(m.status, hya_proto::MemberRunStatus::Done)),
+        "members finished Done"
+    );
+    assert!(
+        proj.session.members.iter().all(|m| m.child.is_some()),
+        "each member links to its child session"
+    );
+}
+
+#[tokio::test]
 async fn team_evidence_envelope_has_no_transcript_leak() {
     let (engine, agent) = engine().await;
     let lead = engine

@@ -200,6 +200,9 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<OpenCodePartCurso
             | Event::ToolInputDelta { .. }
             | Event::ToolResult { .. }
             | Event::ToolError { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => {}
         }
@@ -347,6 +350,9 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, OpenCodePartTime> {
             | Event::ReasoningDelta { .. }
             | Event::ReasoningReplace { .. }
             | Event::ToolInputDelta { .. }
+            | Event::MemberSpawned { .. }
+            | Event::MemberStatusChanged { .. }
+            | Event::MemberFinished { .. }
             | Event::Error { .. }
             | Event::Unknown => {}
         }
