@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use hya_core::SubagentLimits;
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{HttpProvider, ProviderKind, ProviderRouter};
@@ -25,6 +26,7 @@ pub struct ResolvedConfig {
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub plugins: BTreeMap<String, PluginEntry>,
     pub default_agent: Option<String>,
+    pub subagents: SubagentLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,22 @@ struct FileConfig {
     mcp: BTreeMap<String, McpServerConfig>,
     #[serde(default)]
     plugins: BTreeMap<String, PluginEntry>,
+    /// Bounded nested/parallel subagent caps. Absent → defaults; per-field env
+    /// overrides (`HYA_SUBAGENT_*`) win over file values.
+    #[serde(default)]
+    subagents: Option<SubagentLimitsFile>,
+}
+
+/// File shape of the `subagents:` block. Every field is optional so a partial
+/// block keeps the [`SubagentLimits`] default for the fields it omits.
+#[derive(Debug, Default, Deserialize)]
+struct SubagentLimitsFile {
+    #[serde(default)]
+    max_depth: Option<u32>,
+    #[serde(default)]
+    max_concurrency: Option<usize>,
+    #[serde(default)]
+    per_run_budget: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -707,6 +725,50 @@ fn model_entries(providers: &[ParsedProvider]) -> Vec<ModelEntry> {
         .collect()
 }
 
+/// Resolve subagent caps from an optional file block, then apply per-field
+/// `HYA_SUBAGENT_*` env overrides (env wins). Unset file fields and unparseable
+/// env values fall back to the [`SubagentLimits`] default.
+fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits {
+    let defaults = SubagentLimits::default();
+    let mut limits = SubagentLimits {
+        max_depth: file.and_then(|f| f.max_depth).unwrap_or(defaults.max_depth),
+        max_concurrency: file
+            .and_then(|f| f.max_concurrency)
+            .unwrap_or(defaults.max_concurrency),
+        per_run_budget: file
+            .and_then(|f| f.per_run_budget)
+            .unwrap_or(defaults.per_run_budget),
+    };
+    if let Ok(v) = std::env::var("HYA_SUBAGENT_MAX_DEPTH")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        limits.max_depth = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_SUBAGENT_MAX_CONCURRENCY")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        limits.max_concurrency = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_SUBAGENT_BUDGET")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        limits.per_run_budget = parsed;
+    }
+    limits
+}
+
+/// Resolve subagent caps independent of provider config, so the offline path
+/// (where [`load`] returns `None`) still honors configured/env limits.
+#[must_use]
+pub fn load_subagent_limits() -> SubagentLimits {
+    let file_block = config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.subagents);
+    resolve_subagent_limits(file_block.as_ref())
+}
+
 fn choose_default(file_default: Option<String>, models: &[ModelEntry]) -> String {
     if let Some(model) = file_default {
         return model;
@@ -758,6 +820,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let default_model = choose_default(file.default_model, &models);
+    let subagents = resolve_subagent_limits(file.subagents.as_ref());
     Ok(Some(ResolvedConfig {
         router,
         default_model,
@@ -766,6 +829,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         mcp,
         default_agent: file.default_agent,
         plugins: file.plugins,
+        subagents,
     }))
 }
 
@@ -774,6 +838,33 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn subagent_limits_parse_from_file_and_env_wins() {
+        // File block sets all three; a partial block keeps defaults elsewhere.
+        let file = parse_config(
+            "default_model: x\nsubagents:\n  max_depth: 9\n  max_concurrency: 200\n  per_run_budget: 1000\n",
+        )
+        .unwrap();
+        let from_file = resolve_subagent_limits(file.subagents.as_ref());
+        assert_eq!(from_file.max_depth, 9);
+        assert_eq!(from_file.max_concurrency, 200);
+        assert_eq!(from_file.per_run_budget, 1000);
+
+        // Absent block → all defaults.
+        let defaults = resolve_subagent_limits(None);
+        assert_eq!(defaults, SubagentLimits::default());
+
+        // Env override wins over the file value.
+        unsafe { std::env::set_var("HYA_SUBAGENT_MAX_DEPTH", "3") };
+        let overridden = resolve_subagent_limits(file.subagents.as_ref());
+        unsafe { std::env::remove_var("HYA_SUBAGENT_MAX_DEPTH") };
+        assert_eq!(overridden.max_depth, 3, "env must win over file");
+        assert_eq!(
+            overridden.max_concurrency, 200,
+            "untouched field stays file"
+        );
+    }
 
     const FIXTURE: &str = "
 default_model: gpt-5.5

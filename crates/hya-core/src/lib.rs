@@ -9,6 +9,7 @@ pub mod engine;
 pub mod error;
 pub mod hooks;
 pub mod loop_mode;
+pub mod orchestrator;
 pub mod prompt;
 pub mod subagent;
 pub mod team;
@@ -37,6 +38,7 @@ pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
     cost_preflight, drive_loop, run_loop,
 };
+pub use orchestrator::SubagentLimits;
 pub use prompt::{PromptEnv, build_system_prompt};
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
