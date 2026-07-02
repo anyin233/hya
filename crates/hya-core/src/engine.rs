@@ -61,6 +61,7 @@ pub struct SessionEngine {
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
     hooks: Option<Arc<dyn HookDispatcher>>,
+    governor: Option<crate::orchestrator::SubagentGovernor>,
 }
 
 impl SessionEngine {
@@ -95,6 +96,7 @@ impl SessionEngine {
             summarizer: None,
             compaction: CompactionConfig::default(),
             hooks: None,
+            governor: None,
         }
     }
 
@@ -114,6 +116,19 @@ impl SessionEngine {
     pub fn with_spawner(mut self, spawner: SpawnerPlane) -> Self {
         self.spawner = spawner;
         self
+    }
+
+    /// Install the [`SubagentGovernor`] that bounds nested/parallel subagent
+    /// streaming concurrency and per-run budget.
+    #[must_use]
+    pub fn with_governor(mut self, governor: crate::orchestrator::SubagentGovernor) -> Self {
+        self.governor = Some(governor);
+        self
+    }
+
+    #[must_use]
+    pub fn governor(&self) -> Option<&crate::orchestrator::SubagentGovernor> {
+        self.governor.as_ref()
     }
 
     #[must_use]
@@ -180,6 +195,27 @@ impl SessionEngine {
 
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, CoreError> {
         Ok(self.store.read_projection(session).await?)
+    }
+
+    /// Walk the `SessionCreated{parent}` chain to the top ancestor, returning the
+    /// root session and this session's depth (0 = no parent / interactive lead,
+    /// 1 = a direct subagent, and so on). Depth is derived from the replayed
+    /// projection so there is no separate stored value that can drift. Bounded by a
+    /// generous iteration cap as a cycle/runaway guard.
+    pub async fn session_lineage(&self, session: SessionId) -> Result<(SessionId, u32), CoreError> {
+        let mut current = session;
+        let mut depth = 0u32;
+        for _ in 0..1024 {
+            let projection = self.read_projection(current).await?;
+            match projection.session.parent {
+                Some(parent) => {
+                    current = parent;
+                    depth = depth.saturating_add(1);
+                }
+                None => break,
+            }
+        }
+        Ok((current, depth))
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
