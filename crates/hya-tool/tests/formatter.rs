@@ -139,6 +139,34 @@ async fn custom_formatter_command_formats_matching_extension() {
     );
 }
 
+#[tokio::test]
+async fn custom_formatter_command_failure_returns_error() {
+    // Given: a custom formatter whose command cannot be spawned.
+    let dir = tempdir();
+    let target = dir.join("note.txt");
+    tokio::fs::write(&target, "raw\n").await.unwrap();
+
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "textfmt".to_string(),
+        FormatterEntry {
+            command: Some(vec![
+                dir.join("missing-formatter").to_string_lossy().into_owned(),
+                "$FILE".to_string(),
+            ]),
+            extensions: Some(vec![".txt".to_string()]),
+            ..FormatterEntry::default()
+        },
+    );
+    let provider = BuiltinFormatterProvider::new(FormatterConfig::Custom(entries));
+
+    // When: formatting a file with the matching extension.
+    let result = provider.format_file(&dir, &target).await;
+
+    // Then: spawn failures surface as formatter errors.
+    assert!(result.is_err(), "expected formatter error, got {result:?}");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn builtin_formatter_command_formats_matching_extension() {

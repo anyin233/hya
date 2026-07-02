@@ -83,8 +83,8 @@ impl FormatterProvider for BuiltinFormatterProvider {
                 continue;
             }
             if let Some(command) = command_for_definition(&item, workdir) {
+                run_formatter(command, workdir, file).await?;
                 ran = true;
-                run_formatter(command, workdir, file).await;
             }
         }
         Ok(ran)
@@ -125,7 +125,11 @@ fn dotted_extension(file: &Path) -> Option<String> {
         .map(|extension| format!(".{extension}"))
 }
 
-async fn run_formatter(command: FormatterCommand, workdir: &Path, file: &Path) {
+async fn run_formatter(
+    command: FormatterCommand,
+    workdir: &Path,
+    file: &Path,
+) -> Result<(), FormatterError> {
     let file = file.to_string_lossy();
     let argv: Vec<String> = command
         .argv
@@ -133,9 +137,17 @@ async fn run_formatter(command: FormatterCommand, workdir: &Path, file: &Path) {
         .map(|part| part.replace("$FILE", &file))
         .collect();
     let Some((program, args)) = argv.split_first() else {
-        return;
+        return Ok(());
     };
-    let _status = Command::new(program)
+    let program_path = Path::new(program);
+    let resolved_program;
+    let program = if program_path.is_relative() && program.contains('/') {
+        resolved_program = workdir.join(program_path);
+        resolved_program.as_path()
+    } else {
+        program_path
+    };
+    let status = Command::new(program)
         .args(args)
         .current_dir(workdir)
         .envs(command.environment)
@@ -143,5 +155,18 @@ async fn run_formatter(command: FormatterCommand, workdir: &Path, file: &Path) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .await;
+        .await
+        .map_err(|error| {
+            FormatterError(format!(
+                "formatter spawn failed: {}: {error}",
+                program.display()
+            ))
+        })?;
+    if !status.success() {
+        return Err(FormatterError(format!(
+            "formatter exited with {status}: {}",
+            program.display()
+        )));
+    }
+    Ok(())
 }
