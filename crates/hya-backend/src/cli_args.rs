@@ -55,7 +55,7 @@ impl Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    /// OpenCode-compatible alias for headless prompt execution.
+    /// Compat-compatible alias for headless prompt execution.
     Run {
         /// Message words to send to the agent.
         message: Vec<String>,
@@ -79,19 +79,19 @@ pub(crate) enum Command {
         /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: String,
-        /// Hostname to listen on. OpenCode-compatible alias for the host part of `--bind`.
+        /// Hostname to listen on. Compat-compatible alias for the host part of `--bind`.
         #[arg(long)]
         hostname: Option<String>,
-        /// Port to listen on. OpenCode-compatible alias for the port part of `--bind`.
+        /// Port to listen on. Compat-compatible alias for the port part of `--bind`.
         #[arg(long)]
         port: Option<u16>,
-        /// Enable OpenCode mDNS-compatible wildcard binding when hostname is not set.
+        /// Enable Compat mDNS-compatible wildcard binding when hostname is not set.
         #[arg(long)]
         mdns: bool,
-        /// Accepted for OpenCode CLI compatibility; hya does not advertise mDNS yet.
-        #[arg(long = "mdns-domain", default_value = "opencode.local")]
+        /// Accepted for Compat CLI compatibility; hya does not advertise mDNS yet.
+        #[arg(long = "mdns-domain", default_value = "compat.local")]
         mdns_domain: String,
-        /// Accepted for OpenCode CLI compatibility; hya mirrors CORS origins globally.
+        /// Accepted for Compat CLI compatibility; hya mirrors CORS origins globally.
         #[arg(long)]
         cors: Vec<String>,
         /// Override global SQLite database path for this server.
@@ -128,10 +128,10 @@ pub(crate) enum Command {
     Models {
         /// Provider id to filter models by.
         provider: Option<String>,
-        /// Accepted for OpenCode CLI compatibility.
+        /// Accepted for Compat CLI compatibility.
         #[arg(long)]
         verbose: bool,
-        /// Accepted for OpenCode CLI compatibility.
+        /// Accepted for Compat CLI compatibility.
         #[arg(long)]
         refresh: bool,
     },
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_mini_alias() {
+    fn parses_compat_mini_alias() {
         let cli = parse([
             "hya-backend",
             "--mini",
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_run_alias() {
+    fn parses_compat_run_alias() {
         let cli = parse(["hya-backend", "run", "--format", "json", "hello", "world"]);
         match cli.command {
             Some(super::Command::Run {
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_serve_network_aliases() {
+    fn parses_compat_serve_network_aliases() {
         let cli = parse([
             "hya-backend",
             "serve",
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_serve_cors_and_mdns_flags() {
+    fn parses_compat_serve_cors_and_mdns_flags() {
         let cli = parse([
             "hya-backend",
             "serve",
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_models_command() {
+    fn parses_compat_models_command() {
         let cli = parse(["hya-backend", "models", "openai", "--verbose", "--refresh"]);
         match cli.command {
             Some(super::Command::Models {
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_opencode_providers_alias_for_auth_list() {
+    fn parses_compat_providers_alias_for_auth_list() {
         let cli = parse(["hya-backend", "providers", "list"]);
         match cli.command {
             Some(super::Command::Auth {

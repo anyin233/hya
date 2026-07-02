@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a polished opencode-inspired, Rust-only ratatui TUI for hya's existing chat/session state.
+**Goal:** Build a polished compat-inspired, Rust-only ratatui TUI for hya's existing chat/session state.
 
 **Architecture:** Keep `hya-backend` as the terminal/event-loop owner and keep `hya-legacy-tui` as a pure view crate. Split rendering into semantic theme, responsive layout, projection view-model, and focused widgets while preserving `AppState` and `draw`.
 

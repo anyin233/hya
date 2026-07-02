@@ -2,7 +2,7 @@
 
 ## Scope
 
-This design upgrades yaca's TUI presentation while preserving existing behavior and architecture. opencode is used only as a visual reference. The implementation remains Rust-only and ratatui-based.
+This design upgrades yaca's TUI presentation while preserving existing behavior and architecture. compat is used only as a visual reference. The implementation remains Rust-only and ratatui-based.
 
 ## Current boundary
 

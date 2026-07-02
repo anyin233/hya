@@ -1,7 +1,7 @@
 //! In-process `/global/event` bridge.
 //!
 //! Oneshots the SSE route on the in-process hya `Router` and drains its streaming body in-process,
-//! reusing the backend's `Envelope -> GlobalEvent` projection (`hya-server/src/opencode/event.rs`)
+//! reusing the backend's `Envelope -> GlobalEvent` projection (`hya-server/src/compat/event.rs`)
 //! and hya-sdk's `GlobalEvent` decoder. No TCP, no reqwest. The bridge resolves the `oneshot`
 //! immediately (the `Sse` handler returns a streaming body) and then forwards frames lazily as the
 //! backend publishes them — exactly mirroring the HTTP SSE path in `crates/hya/src/main.rs`.

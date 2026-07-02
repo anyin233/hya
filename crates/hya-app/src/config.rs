@@ -138,8 +138,8 @@ pub struct CreatedConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpencodeImportSummary {
-    pub opencode_path: PathBuf,
+pub struct CompatImportSummary {
+    pub compat_path: PathBuf,
     pub config_path: PathBuf,
     pub providers: usize,
     pub models: usize,
@@ -211,27 +211,27 @@ pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     }
 
     eprintln!("hya: created default config at {}", created.path.display());
-    let Some(opencode_path) = default_opencode_config_path() else {
-        eprintln!("hya: no OpenCode config found to import; keeping the starter config");
+    let Some(compat_path) = default_compat_config_path() else {
+        eprintln!("hya: no Compat config found to import; keeping the starter config");
         return Ok(());
     };
-    eprintln!("hya: found OpenCode config at {}", opencode_path.display());
+    eprintln!("hya: found Compat config at {}", compat_path.display());
     eprintln!(
         "hya: import copies provider base URLs, model IDs, and API key values/templates into hya config"
     );
-    if !prompt_yes_no("hya: import OpenCode model config now?")? {
+    if !prompt_yes_no("hya: import Compat model config now?")? {
         eprintln!("hya: keeping the starter config; edit it later to add live providers");
         return Ok(());
     }
 
-    match import_opencode_models_into_config(&opencode_path, &created.path) {
+    match import_compat_models_into_config(&compat_path, &created.path) {
         Ok(summary) => eprintln!(
             "hya: imported {} providers and {} models into {}",
             summary.providers,
             summary.models,
             summary.config_path.display()
         ),
-        Err(error) => eprintln!("hya: OpenCode import skipped ({error:#})"),
+        Err(error) => eprintln!("hya: Compat import skipped ({error:#})"),
     }
     Ok(())
 }
@@ -252,29 +252,29 @@ fn prompt_yes_no(prompt: &str) -> anyhow::Result<bool> {
 }
 
 #[must_use]
-pub fn default_opencode_config_path() -> Option<PathBuf> {
-    opencode_config_candidates()
+pub fn default_compat_config_path() -> Option<PathBuf> {
+    compat_config_candidates()
         .into_iter()
         .find(|path| path.is_file())
 }
 
-fn opencode_config_candidates() -> Vec<PathBuf> {
+fn compat_config_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Ok(path) = std::env::var("OPENCODE_CONFIG") {
+    if let Ok(path) = std::env::var("COMPAT_CONFIG") {
         candidates.push(PathBuf::from(path));
     }
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        push_opencode_dir_candidates(&mut candidates, PathBuf::from(dir).join("opencode"));
+        push_compat_dir_candidates(&mut candidates, PathBuf::from(dir).join("compat"));
     }
     if let Ok(home) = std::env::var("HOME") {
         let home = PathBuf::from(home);
-        push_opencode_dir_candidates(&mut candidates, home.join(".config/opencode"));
-        push_opencode_dir_candidates(&mut candidates, home.join(".opencode"));
+        push_compat_dir_candidates(&mut candidates, home.join(".config/opencode"));
+        push_compat_dir_candidates(&mut candidates, home.join(".opencode"));
     }
     candidates
 }
 
-fn push_opencode_dir_candidates(candidates: &mut Vec<PathBuf>, dir: PathBuf) {
+fn push_compat_dir_candidates(candidates: &mut Vec<PathBuf>, dir: PathBuf) {
     candidates.push(dir.join("opencode.json"));
     candidates.push(dir.join("config.json"));
     candidates.push(dir.join("opencode.jsonc"));
@@ -298,31 +298,31 @@ fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpencodeModelConfig {
+struct CompatModelConfig {
     #[serde(default)]
     model: Option<String>,
     #[serde(default, alias = "defaultModel", alias = "default_model")]
     default_model: Option<String>,
     #[serde(default)]
-    provider: BTreeMap<String, OpencodeProviderConfig>,
+    provider: BTreeMap<String, CompatProviderConfig>,
     #[serde(default)]
     disabled_providers: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct OpencodeProviderConfig {
+struct CompatProviderConfig {
     #[serde(default)]
     npm: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
-    options: OpencodeProviderOptions,
+    options: CompatProviderOptions,
     #[serde(default)]
     models: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct OpencodeProviderOptions {
+struct CompatProviderOptions {
     #[serde(default, rename = "baseURL", alias = "base_url")]
     base_url: Option<String>,
     #[serde(default, rename = "apiKey", alias = "api_key")]
@@ -338,17 +338,17 @@ struct ImportedProvider {
     models: Vec<String>,
 }
 
-pub fn import_opencode_models_into_config(
-    opencode_config_path: &Path,
+pub fn import_compat_models_into_config(
+    compat_config_path: &Path,
     hya_config_path: &Path,
-) -> anyhow::Result<OpencodeImportSummary> {
-    let raw = std::fs::read_to_string(opencode_config_path)
-        .with_context(|| format!("read OpenCode config {}", opencode_config_path.display()))?;
-    let config = parse_opencode_model_config(&raw)
-        .with_context(|| format!("parse OpenCode config {}", opencode_config_path.display()))?;
-    let providers = imported_opencode_providers(&config);
+) -> anyhow::Result<CompatImportSummary> {
+    let raw = std::fs::read_to_string(compat_config_path)
+        .with_context(|| format!("read Compat config {}", compat_config_path.display()))?;
+    let config = parse_compat_model_config(&raw)
+        .with_context(|| format!("parse Compat config {}", compat_config_path.display()))?;
+    let providers = imported_compat_providers(&config);
     if providers.is_empty() {
-        anyhow::bail!("OpenCode config has no importable provider models");
+        anyhow::bail!("Compat config has no importable provider models");
     }
     let default_model = imported_default_model(&config, &providers);
     let rendered =
@@ -361,8 +361,8 @@ pub fn import_opencode_models_into_config(
         .with_context(|| format!("create hya config directory {}", parent.display()))?;
     std::fs::write(hya_config_path, rendered)
         .with_context(|| format!("write hya config {}", hya_config_path.display()))?;
-    Ok(OpencodeImportSummary {
-        opencode_path: opencode_config_path.to_path_buf(),
+    Ok(CompatImportSummary {
+        compat_path: compat_config_path.to_path_buf(),
         config_path: hya_config_path.to_path_buf(),
         providers: providers.len(),
         models: providers.iter().map(|provider| provider.models.len()).sum(),
@@ -412,7 +412,7 @@ fn merge_model_import_into_existing_config(
     serde_norway::to_string(&Value::Mapping(existing_map)).context("render merged hya config")
 }
 
-fn parse_opencode_model_config(raw: &str) -> anyhow::Result<OpencodeModelConfig> {
+fn parse_compat_model_config(raw: &str) -> anyhow::Result<CompatModelConfig> {
     match serde_json::from_str(raw) {
         Ok(config) => Ok(config),
         Err(json_error) => {
@@ -424,7 +424,7 @@ fn parse_opencode_model_config(raw: &str) -> anyhow::Result<OpencodeModelConfig>
     }
 }
 
-fn imported_opencode_providers(config: &OpencodeModelConfig) -> Vec<ImportedProvider> {
+fn imported_compat_providers(config: &CompatModelConfig) -> Vec<ImportedProvider> {
     let disabled = config
         .disabled_providers
         .iter()
@@ -462,7 +462,7 @@ fn imported_opencode_providers(config: &OpencodeModelConfig) -> Vec<ImportedProv
         }
         providers.push(ImportedProvider {
             id: id.clone(),
-            kind: opencode_provider_kind(id, provider),
+            kind: compat_provider_kind(id, provider),
             base_url: base_url.to_string(),
             api_key: provider.options.api_key.clone(),
             models: models.into_iter().collect(),
@@ -471,7 +471,7 @@ fn imported_opencode_providers(config: &OpencodeModelConfig) -> Vec<ImportedProv
     providers
 }
 
-fn opencode_provider_kind(id: &str, provider: &OpencodeProviderConfig) -> &'static str {
+fn compat_provider_kind(id: &str, provider: &CompatProviderConfig) -> &'static str {
     let text = format!(
         "{} {} {}",
         id,
@@ -488,7 +488,7 @@ fn opencode_provider_kind(id: &str, provider: &OpencodeProviderConfig) -> &'stat
     }
 }
 
-fn imported_default_model(config: &OpencodeModelConfig, providers: &[ImportedProvider]) -> String {
+fn imported_default_model(config: &CompatModelConfig, providers: &[ImportedProvider]) -> String {
     let candidate = config
         .model
         .as_deref()
@@ -518,7 +518,7 @@ fn served_imported_model(model: &str, providers: &[ImportedProvider]) -> Option<
 
 fn render_imported_hya_config(default_model: &str, providers: &[ImportedProvider]) -> String {
     let mut lines = vec![
-        "# Generated by hya first-run OpenCode import.".to_string(),
+        "# Generated by hya first-run Compat import.".to_string(),
         format!("default_model: {}", quote_yaml_scalar(default_model)),
         "providers:".to_string(),
     ];
@@ -1046,8 +1046,8 @@ plugins:
   disabled-one:
     enabled: false
     command: [nope]
-  opencode:
-    kind: opencode
+  compat:
+    kind: compat
 ";
         let file = parse_config(yaml).unwrap();
         assert_eq!(file.plugins.len(), 3);
@@ -1061,8 +1061,8 @@ plugins:
         assert_eq!(memory.env.get("TOKEN").map(String::as_str), Some("literal"));
         assert!(!file.plugins.get("disabled-one").unwrap().enabled);
         assert_eq!(
-            file.plugins.get("opencode").unwrap().kind,
-            hya_plugin::messages::PluginKindWire::Opencode
+            file.plugins.get("compat").unwrap().kind,
+            hya_plugin::messages::PluginKindWire::Compat
         );
     }
 
@@ -1087,16 +1087,16 @@ plugins:
     }
 
     #[test]
-    fn import_opencode_models_writes_hya_provider_config() {
+    fn import_compat_models_writes_hya_provider_config() {
         let dir =
-            std::env::temp_dir().join(format!("hya-opencode-model-import-{}", std::process::id()));
+            std::env::temp_dir().join(format!("hya-compat-model-import-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let opencode = dir.join("opencode.json");
+        let compat = dir.join("opencode.json");
         let hya_config = dir.join("hya/config.yaml");
 
         std::fs::write(
-            &opencode,
+            &compat,
             r#"{
   "model": "gateway/gpt-5.5",
   "disabled_providers": ["disabled"],
@@ -1135,7 +1135,7 @@ plugins:
         )
         .unwrap();
 
-        let summary = import_opencode_models_into_config(&opencode, &hya_config).unwrap();
+        let summary = import_compat_models_into_config(&compat, &hya_config).unwrap();
 
         assert_eq!(summary.providers, 2);
         assert_eq!(summary.models, 3);
@@ -1156,14 +1156,14 @@ plugins:
     }
 
     #[test]
-    fn import_opencode_models_preserves_existing_non_model_config() {
+    fn import_compat_models_preserves_existing_non_model_config() {
         let dir = std::env::temp_dir().join(format!(
-            "hya-opencode-model-import-merge-{}",
+            "hya-compat-model-import-merge-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let opencode = dir.join("opencode.json");
+        let compat = dir.join("opencode.json");
         let hya_config = dir.join("hya/config.yaml");
         std::fs::create_dir_all(hya_config.parent().unwrap()).unwrap();
         std::fs::write(
@@ -1187,7 +1187,7 @@ plugins:
         )
         .unwrap();
         std::fs::write(
-            &opencode,
+            &compat,
             r#"{
   "model": "gateway/gpt-5.5",
   "provider": {
@@ -1201,7 +1201,7 @@ plugins:
         )
         .unwrap();
 
-        let summary = import_opencode_models_into_config(&opencode, &hya_config).unwrap();
+        let summary = import_compat_models_into_config(&compat, &hya_config).unwrap();
 
         assert_eq!(summary.providers, 1);
         assert_eq!(summary.models, 1);

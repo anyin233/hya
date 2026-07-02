@@ -1097,11 +1097,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-plugin-example"
+name = "hya-plugin-compat"
 version = "0.28.10"
 
 [[package]]
-name = "hya-plugin-opencode"
+name = "hya-plugin-example"
 version = "0.28.10"
 
 [[package]]

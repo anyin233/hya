@@ -3,8 +3,8 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 const FALLBACK_PREFIX: &str = "Untitled Session_";
-const OPENCODE_ROOT_PREFIX: &str = "New session - ";
-const OPENCODE_CHILD_PREFIX: &str = "Child session - ";
+const COMPAT_ROOT_PREFIX: &str = "New session - ";
+const COMPAT_CHILD_PREFIX: &str = "Child session - ";
 const TITLE_LIMIT: usize = 100;
 const TITLE_FORMAT: &[time::format_description::FormatItem<'_>] =
     format_description!("[year]-[month]-[day]-[hour]-[minute]");
@@ -24,8 +24,8 @@ pub fn fallback_title(activity_millis: i64) -> String {
 #[must_use]
 pub fn is_default_or_fallback_title(title: &str) -> bool {
     is_hya_fallback_title(title)
-        || has_opencode_timestamp_prefix(title, OPENCODE_ROOT_PREFIX)
-        || has_opencode_timestamp_prefix(title, OPENCODE_CHILD_PREFIX)
+        || has_compat_timestamp_prefix(title, COMPAT_ROOT_PREFIX)
+        || has_compat_timestamp_prefix(title, COMPAT_CHILD_PREFIX)
 }
 
 #[must_use]
@@ -55,7 +55,7 @@ fn is_hya_fallback_title(title: &str) -> bool {
         })
 }
 
-fn has_opencode_timestamp_prefix(title: &str, prefix: &str) -> bool {
+fn has_compat_timestamp_prefix(title: &str, prefix: &str) -> bool {
     let Some(timestamp) = title.strip_prefix(prefix) else {
         return false;
     };
@@ -103,7 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn default_title_detector_accepts_hya_and_opencode_defaults() {
+    fn default_title_detector_accepts_hya_and_compat_defaults() {
         assert!(is_default_or_fallback_title(
             "Untitled Session_2023-11-14-22-13"
         ));

@@ -15,7 +15,7 @@ This should make reasoning-capable models feel ready by default while preserving
 - `AgentSpec.reasoning` is the value sent into provider completion requests through `crates/yaca-core/src/engine/turn/messages.rs`.
 - The TUI `/think` flow currently updates only the active in-memory `AgentSpec.reasoning` and `AppState.reasoning_effort` in `crates/yaca-cli/src/tui.rs::apply_reasoning`.
 - `Controller::open_think_dialog` currently offers only `off`, `low`, `medium`, and `high`, independent of the selected model's supported reasoning variants.
-- OpenCode-compatible reasoning option resolution already exists in `crates/yaca-server/src/opencode/reasoning_options.rs::resolve_reasoning`, but it returns `None` when no variant or agent option signals reasoning.
+- Compat-compatible reasoning option resolution already exists in `crates/yaca-server/src/compat/reasoning_options.rs::resolve_reasoning`, but it returns `None` when no variant or agent option signals reasoning.
 - Provider model catalog data can expose supported reasoning variants through `yaca_provider::ProviderModel.reasoning_variants`; provider families currently advertise:
   - Anthropic: `low`, `medium`, `high`, `max`
   - OpenAI-compatible: `minimal`, `low`, `medium`, `high`, `xhigh`
@@ -24,7 +24,7 @@ This should make reasoning-capable models feel ready by default while preserving
 - No existing code path was found that persists “last selected reasoning effort per model.”
 - `ProviderKind::reasoning_variants` is the current source of provider-family supported effort names, and `ProviderRouter::catalog` exposes those names through `SessionEngine::provider_catalog`.
 - `HistoryStore` is the existing native TUI local persistence mechanism. It writes JSON session history under `YACA_HISTORY_DIR` or `~/.yaca/history`; the SQLite `SessionStore` persists event logs and projections, not user preferences.
-- The OpenCode-compatible surface already supports agent-file and inline-agent reasoning through `AgentEntry.variant`, `AgentEntry.options`, and `apply_agent_entry`; native TUI profiles are built-in only and do not currently read agent files.
+- The Compat-compatible surface already supports agent-file and inline-agent reasoning through `AgentEntry.variant`, `AgentEntry.options`, and `apply_agent_entry`; native TUI profiles are built-in only and do not currently read agent files.
 - Session model changes are event-sourced with `ModelSwitched`; reasoning effort changes are not currently event-sourced and are only in the live `AgentSpec` / `AppState`.
 - Provider request encoders already treat `ReasoningEffort::Off` as “emit no provider reasoning field,” so explicit-off state must be distinguishable before request encoding if it participates in default resolution.
 
@@ -36,7 +36,7 @@ This should make reasoning-capable models feel ready by default while preserving
 - Show the currently resolved reasoning effort in the TUI status/sidebar consistently with existing `think:<effort>` rendering.
 - Ensure `/think` choices are compatible with the active model's supported efforts, including `max`, `xhigh`, and `minimal` where supported.
 - Keep provider-specific request encoding unchanged: the resolved `ReasoningEffort` should continue flowing through existing provider protocol encoders.
-- Avoid introducing a second, divergent reasoning resolver for OpenCode API and native TUI paths unless the design explicitly defines their boundary.
+- Avoid introducing a second, divergent reasoning resolver for Compat API and native TUI paths unless the design explicitly defines their boundary.
 
 ## Acceptance Criteria
 
@@ -51,7 +51,7 @@ This should make reasoning-capable models feel ready by default while preserving
 
 ## Open Question
 
-- Pending design confirmation: store “last used effort per model” as native TUI user preference state rather than session event data, unless the final plan finds a reason OpenCode API clients must share the same preference store.
+- Pending design confirmation: store “last used effort per model” as native TUI user preference state rather than session event data, unless the final plan finds a reason Compat API clients must share the same preference store.
 
 ## Out of Scope
 

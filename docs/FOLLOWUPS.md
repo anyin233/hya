@@ -33,7 +33,7 @@ Reference for work intentionally left for a future pass. The pi-parity waves
 ## Notes
 
 - This work was developed on `feat/hya-w1-agent-can-code` (branched from the
-  pre-permission baseline) and merged with the concurrent `tui-opencode-parity`
+  pre-permission baseline) and merged with the concurrent `tui-compat-parity`
   permission commit; on overlap the broader implementation won, while that
   commit's `Decision::Reject { feedback }` plane and tool-output truncation were
   preserved.

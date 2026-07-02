@@ -28,7 +28,7 @@ multiple providers, and scripting/integration modes.
 - Agent loop `yaca-core/src/engine.rs::run_turn` is real & correct: multi-round tool calls
   (MAX_TOOL_ROUNDS=25), event-sourced, streams provider events.
 - Providers: OpenAI Chat Completions + Anthropic Messages + Dev/echo + Fake. API key only.
-- Config: reuses opencode's `opencode.json` (no separate config).
+- Config: reuses compat's `opencode.json` (no separate config).
 - System prompt: hardcoded `"You are yaca, a coding agent."` — no AGENTS.md/context loading.
 - Store: SQLite event log + projection + token ledger (no JSONL, no branching/tree).
 - CLI: bare→TUI, `exec`, `serve` (HTTP+SSE), `tail-session`, `-p` goal mode.

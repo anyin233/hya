@@ -22,21 +22,21 @@ Persist last-used reasoning as user preference state, not event-sourced session 
 - Replaying an old session must not change because a later session changed the preference.
 - `SessionStore` should remain the event log/projection store, not a mutable preference database.
 
-### OpenCode compatibility stays explicit/config-driven in v1
+### Compat compatibility stays explicit/config-driven in v1
 
-OpenCode agent files and inline agent config already resolve explicit reasoning through `crates/yaca-server/src/opencode/reasoning_options.rs::resolve_reasoning`. Do not introduce a dependency from `yaca-server` to `yaca-cli::HistoryStore` and do not duplicate preference-file I/O in `yaca-server`.
+Compat agent files and inline agent config already resolve explicit reasoning through `crates/yaca-server/src/compat/reasoning_options.rs::resolve_reasoning`. Do not introduce a dependency from `yaca-server` to `yaca-cli::HistoryStore` and do not duplicate preference-file I/O in `yaca-server`.
 
-OpenCode can reuse the pure resolver for explicit/config parsing where it helps, but last-used defaults are native TUI-only unless a later task extracts shared preference storage into a non-CLI crate.
+Compat can reuse the pure resolver for explicit/config parsing where it helps, but last-used defaults are native TUI-only unless a later task extracts shared preference storage into a non-CLI crate.
 
 This resolves the planner conflict as follows:
 
-- Conservative planner: put the resolver in a shared crate and keep OpenCode no-signal behavior stable.
+- Conservative planner: put the resolver in a shared crate and keep Compat no-signal behavior stable.
 - Edge-case planner: key last-used by provider/model and preserve explicit `Off`.
-- Chosen v1: shared pure resolver, native TUI last-used keyed by provider/model, OpenCode behavior unchanged unless explicit config supplies reasoning.
+- Chosen v1: shared pure resolver, native TUI last-used keyed by provider/model, Compat behavior unchanged unless explicit config supplies reasoning.
 
 ## Resolver contract
 
-Add a pure helper next to `ReasoningEffort` in `crates/yaca-provider/src/lib.rs` because both native CLI/TUI and OpenCode server already depend on `yaca-provider`.
+Add a pure helper next to `ReasoningEffort` in `crates/yaca-provider/src/lib.rs` because both native CLI/TUI and Compat server already depend on `yaca-provider`.
 
 Proposed signature:
 
@@ -198,7 +198,7 @@ This keeps old metadata valid and gives new metadata a stable session-level snap
 
 `TuiEffect::SubmitConfigured { model: Some(..), .. }` changes `agent.model` for a prompt. The implementation should resolve reasoning for that temporary model before spawning the turn, otherwise a command can send the previous model's reasoning effort to the overridden model.
 
-## OpenCode resolver boundary
+## Compat resolver boundary
 
 Do not add last-used preference persistence to `crates/yaca-server` in this task.
 
@@ -211,7 +211,7 @@ Allowed server-side work:
 Not in v1:
 
 - No server read/write of `~/.yaca/history/model_reasoning.json`.
-- No new OpenCode config key unless a future product decision asks for OpenCode defaults to mirror TUI defaults.
+- No new Compat config key unless a future product decision asks for Compat defaults to mirror TUI defaults.
 
 ## Compatibility and migration
 
@@ -219,7 +219,7 @@ Not in v1:
 - Missing `model_reasoning.json` means there are no last-used defaults yet.
 - Corrupt `model_reasoning.json` should not prevent the TUI from starting; ignore it and overwrite on next valid selection.
 - Existing provider encoders remain unchanged.
-- Existing tests that assert OpenCode no-signal behavior remains `None` should keep passing.
+- Existing tests that assert Compat no-signal behavior remains `None` should keep passing.
 
 ## Manual QA surface
 
@@ -237,6 +237,6 @@ The real surface is the native TUI. After implementation and automated tests:
 - Adding new reasoning effort variants.
 - Changing Anthropic/OpenAI/Google request encoding or budget mappings.
 - Syncing reasoning preferences across machines.
-- Adding OpenCode last-used preference persistence.
+- Adding Compat last-used preference persistence.
 - Event-sourcing reasoning changes.
 - Redesigning transcript rendering for reasoning content.

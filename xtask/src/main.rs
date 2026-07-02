@@ -1,6 +1,6 @@
 //! Dev tooling entrypoint.
 
-mod sync_opencode;
+mod sync_compat;
 
 fn main() {
     let mut args = std::env::args();
@@ -8,10 +8,10 @@ fn main() {
     let task = args.next();
 
     let result = match task.as_deref() {
-        Some("sync-opencode") => sync_opencode::run(args.collect()),
-        Some("migrate") => sync_opencode::run(args.collect()),
+        Some("sync-compat") => sync_compat::run(args.collect()),
+        Some("migrate") => sync_compat::run(args.collect()),
         _ => {
-            eprintln!("usage: cargo xtask <sync-opencode|migrate>");
+            eprintln!("usage: cargo xtask <sync-compat|migrate>");
             Ok(())
         }
     };

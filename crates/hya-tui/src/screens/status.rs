@@ -154,7 +154,7 @@ fn mcp_detail(name: &str, status: &str) -> String {
     match status {
         "connected" => "Connected".to_owned(),
         "disabled" => "Disabled in configuration".to_owned(),
-        "needs_auth" => format!("Needs authentication (run: opencode mcp auth {name})"),
+        "needs_auth" => format!("Needs authentication (run: compat mcp auth {name})"),
         other => other.to_owned(),
     }
 }
@@ -260,7 +260,7 @@ mod tests {
         assert!(text.iter().any(|line| line.contains("1 Plugins")));
         assert!(text
             .iter()
-            .any(|line| line.contains("opencode mcp auth beta")));
+            .any(|line| line.contains("compat mcp auth beta")));
         assert!(text.iter().any(|line| line.contains("@latest")));
     }
 }

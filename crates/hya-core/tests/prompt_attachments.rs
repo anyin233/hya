@@ -64,7 +64,7 @@ impl Provider for RecordingProvider {
 }
 
 #[tokio::test]
-async fn opencode_prompt_files_are_replayed_as_media_parts() {
+async fn compat_prompt_files_are_replayed_as_media_parts() {
     let dir = tempdir();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider {

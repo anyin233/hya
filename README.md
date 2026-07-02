@@ -5,7 +5,7 @@ Rust. It runs an event-sourced session engine, normalizes model providers
 (OpenAI-compatible, Anthropic, and Google) into one canonical event stream,
 executes tools behind a permission plane, and exposes the same core through an
 interactive TUI, headless CLI commands, and an HTTP/SSE server with an
-OpenCode-compatible surface.
+Compat-compatible surface.
 
 If no provider is configured, hya still runs: it falls back to an offline
 "dev" provider that echoes prompts, so the whole stack is usable without API
@@ -79,8 +79,8 @@ the full environment-variable reference, and a fully-commented sample config.
 - Headless single-turn execution (`hya-backend exec` / `hya-backend run`) and iterative goal
   mode (`hya-backend -p "<goal>"`).
 - HTTP/SSE server (`hya-backend serve`) exposing native `/sessions/*` routes plus
-  OpenCode-compatible route groups.
-- MCP servers, plugins (including an OpenCode plugin adapter), and a formatter
+  Compat-compatible route groups.
+- MCP servers, plugins (including an Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 
 ## Documentation
@@ -94,8 +94,8 @@ the full environment-variable reference, and a fully-commented sample config.
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, terminal, permission, and server issues. |
 | [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
 | [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, server/client, and TUI internals. |
-| [docs/opencode-parity.md](docs/opencode-parity.md) | OpenCode compatibility status. |
-| [docs/hya-pi-opencode-comparison.md](docs/hya-pi-opencode-comparison.md) | Feature comparison across hya, upstream stock Pi, and current OpenCode. |
+| [docs/compat-parity.md](docs/compat-parity.md) | Compat compatibility status. |
+| [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
 
 ## License
 

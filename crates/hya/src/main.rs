@@ -79,36 +79,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 fn cmd_import(source: &str) -> Result<(), Box<dyn Error>> {
     match source.to_ascii_lowercase().as_str() {
-        "opencode" => import_opencode_model_config(),
+        "compat" => import_compat_model_config(),
         "codex" | "claude" => Err(invalid_input(format!(
-            "hya import from {source} is not supported yet; currently only opencode model import is implemented"
+            "hya import from {source} is not supported yet; currently only compat model import is implemented"
         ))
         .into()),
         _ => Err(invalid_input(format!(
-            "unknown import source {source}; currently supported: opencode"
+            "unknown import source {source}; currently supported: compat"
         ))
         .into()),
     }
 }
 
-fn import_opencode_model_config() -> Result<(), Box<dyn Error>> {
-    let opencode_path = hya_app::config::default_opencode_config_path().ok_or_else(|| {
+fn import_compat_model_config() -> Result<(), Box<dyn Error>> {
+    let compat_path = hya_app::config::default_compat_config_path().ok_or_else(|| {
         invalid_input(
-            "no OpenCode config found; set OPENCODE_CONFIG or create ~/.config/opencode/opencode.json",
+            "no Compat config found; set COMPAT_CONFIG or create ~/.config/opencode/opencode.json",
         )
     })?;
     let config_path = hya_app::config::expected_config_path();
-    let summary =
-        hya_app::config::import_opencode_models_into_config(&opencode_path, &config_path)?;
+    let summary = hya_app::config::import_compat_models_into_config(&compat_path, &config_path)?;
     println!(
-        "hya: imported {} providers and {} models from OpenCode into {}",
+        "hya: imported {} providers and {} models from Compat into {}",
         summary.providers,
         summary.models,
         summary.config_path.display()
     );
-    // TODO(import): import OpenCode skills after ownership and merge semantics are defined.
+    // TODO(import): import Compat skills after ownership and merge semantics are defined.
     println!("hya: skills import: TODO");
-    // TODO(import): import OpenCode MCP entries after model-only import settles.
+    // TODO(import): import Compat MCP entries after model-only import settles.
     println!("hya: mcp import: TODO");
     Ok(())
 }
@@ -118,7 +117,7 @@ fn invalid_input(message: impl Into<String>) -> IoError {
 }
 
 fn bootstrap_config_for_frontend(args: &Args) -> Result<(), Box<dyn Error>> {
-    if args.server.is_none() && !args.opencode {
+    if args.server.is_none() && !args.compat {
         hya_app::config::first_run_config_bootstrap(true)?;
     }
     Ok(())
@@ -196,7 +195,7 @@ mod tests {
         root: PathBuf,
         home: Option<OsString>,
         xdg_config_home: Option<OsString>,
-        opencode_config: Option<OsString>,
+        compat_config: Option<OsString>,
     }
 
     impl EnvGuard {
@@ -217,11 +216,11 @@ mod tests {
                 root,
                 home: std::env::var_os("HOME"),
                 xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
-                opencode_config: std::env::var_os("OPENCODE_CONFIG"),
+                compat_config: std::env::var_os("COMPAT_CONFIG"),
             };
             std::env::set_var("HOME", &home);
             std::env::set_var("XDG_CONFIG_HOME", &xdg);
-            std::env::set_var("OPENCODE_CONFIG", xdg.join("missing-opencode.json"));
+            std::env::set_var("COMPAT_CONFIG", xdg.join("missing-opencode.json"));
             guard
         }
 
@@ -234,7 +233,7 @@ mod tests {
         fn drop(&mut self) {
             restore_env("HOME", self.home.take());
             restore_env("XDG_CONFIG_HOME", self.xdg_config_home.take());
-            restore_env("OPENCODE_CONFIG", self.opencode_config.take());
+            restore_env("COMPAT_CONFIG", self.compat_config.take());
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }

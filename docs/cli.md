@@ -18,8 +18,8 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--yolo` | Auto-approve every tool action. This applies to TUI, headless, and server composition. |
 | `--db <PATH>` | SQLite database path. Empty string uses an in-memory store. Used by the TUI, `serve`, headless `exec`/`run`, `sessions`, and `tail-session`; goal mode and `rpc` stay in-memory. |
 | `--resume <SESSION>` | Resume a session in the interactive TUI. Accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID. |
-| `--mini` | OpenCode-compatible alias for the default TUI. Must be used without a subcommand. |
-| `--print-logs`, `--log-level`, `--pure` | Accepted OpenCode-compatible global flags. |
+| `--mini` | Compat-compatible alias for the default TUI. Must be used without a subcommand. |
+| `--print-logs`, `--log-level`, `--pure` | Accepted Compat-compatible global flags. |
 
 When `--prompt` is present, it takes precedence over subcommand dispatch.
 
@@ -61,7 +61,7 @@ TUI slash commands include:
 | `/quit`, `/exit`, `/q` | Exit the TUI. |
 | `/help`, `/?` | Show command help. |
 
-Custom markdown commands are loaded from opencode-style command directories and
+Custom markdown commands are loaded from compat-style command directories and
 hya prompt directories in the project and user config:
 
 ```text
@@ -103,7 +103,7 @@ hya-backend run "summarize this repo"
 hya-backend run --format json "summarize this repo"
 ```
 
-OpenCode-compatible alias for `exec`. Message words are joined with spaces.
+Compat-compatible alias for `exec`. Message words are joined with spaces.
 Like `exec`, `run` persists only when the global `--db <PATH>` is supplied.
 `--format json` and `--json` both emit event JSONL.
 
@@ -129,16 +129,16 @@ Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
 | Flag | Meaning |
 | --- | --- |
 | `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. |
-| `--hostname <HOST>` | OpenCode-compatible alias for the host part of `--bind`. |
-| `--port <PORT>` | OpenCode-compatible alias for the port part of `--bind`. |
+| `--hostname <HOST>` | Compat-compatible alias for the host part of `--bind`. |
+| `--port <PORT>` | Compat-compatible alias for the port part of `--bind`. |
 | `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
-| `--mdns-domain <NAME>` | Accepted for OpenCode CLI compatibility. |
-| `--cors <ORIGIN>` | Accepted for OpenCode CLI compatibility; hya mirrors CORS origins globally. |
+| `--mdns-domain <NAME>` | Accepted for Compat CLI compatibility. |
+| `--cors <ORIGIN>` | Accepted for Compat CLI compatibility; hya mirrors CORS origins globally. |
 | `--db <PATH>` | SQLite path. Empty string uses an in-memory store. |
 
-The server mounts native `/sessions/*` routes plus OpenCode-compatible legacy
+The server mounts native `/sessions/*` routes plus Compat-compatible legacy
 and v2 route groups. See
-[`opencode-parity.md`](opencode-parity.md) for exact compatibility status.
+[`compat-parity.md`](compat-parity.md) for exact compatibility status.
 
 ## Auth and Catalog Commands
 
@@ -154,7 +154,7 @@ hya-backend agent list
 
 `login` writes a provider token under `~/.config/hya/auth`; saved tokens take
 precedence over inline `api_key` values. `providers` is an alias for `auth`.
-`models --refresh` is accepted for OpenCode compatibility but does not fetch a
+`models --refresh` is accepted for Compat compatibility but does not fetch a
 remote catalog.
 
 ## Session and RPC Commands

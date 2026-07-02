@@ -2,7 +2,7 @@
 
 ## Goal
 
-Upgrade yaca's default terminal UI into a polished Rust/ratatui developer workspace inspired by opencode's TUI visual language, without copying opencode functionality or implementation technology.
+Upgrade yaca's default terminal UI into a polished Rust/ratatui developer workspace inspired by compat's TUI visual language, without copying compat functionality or implementation technology.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ Upgrade yaca's default terminal UI into a polished Rust/ratatui developer worksp
 - Replace the current large bordered conversation box with a time-line style layout: subtle background, user panels with left rails, assistant text blocks, compact tool rows, and minimal metadata.
 - Add responsive context treatment: wide terminals show a right sidebar for session/model/goal/loop/team/permission summaries; narrow terminals keep content readable and avoid overlap.
 - Add a theme layer with named semantic colors for background, panels, borders, text, accents, success, warning, error, and info.
-- Keep the implementation focused on UI presentation. Do not add opencode commands, sharing, fork, plugin, LSP, MCP, external editor, provider setup, or theme marketplace features.
+- Keep the implementation focused on UI presentation. Do not add compat commands, sharing, fork, plugin, LSP, MCP, external editor, provider setup, or theme marketplace features.
 
 ## Acceptance Criteria
 
@@ -25,5 +25,5 @@ Upgrade yaca's default terminal UI into a polished Rust/ratatui developer worksp
 
 ## Notes
 
-- Visual reference is limited to opencode's TUI style: dark surface hierarchy, sparse borders, compact footer/status, message rails, bottom prompt, and responsive side context.
+- Visual reference is limited to compat's TUI style: dark surface hierarchy, sparse borders, compact footer/status, message rails, bottom prompt, and responsive side context.
 - Existing yaca event projection remains the source of truth; this task is a rendering and view-model upgrade, not an agent-engine change.

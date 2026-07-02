@@ -1,7 +1,7 @@
 {
   "id": "tui-command-session-harness",
   "name": "tui-command-session-harness",
-  "title": "Opencode-style TUI commands sessions and test harness",
+  "title": "Compat-style TUI commands sessions and test harness",
   "description": "",
   "status": "completed",
   "dev_type": null,

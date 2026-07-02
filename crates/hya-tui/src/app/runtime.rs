@@ -1660,7 +1660,7 @@ impl Runtime {
     }
 
     /// Select `name` as the active agent and adopt that agent's configured model (resetting the
-    /// variant), mirroring OpenCode where each agent carries its own model.
+    /// variant), mirroring Compat where each agent carries its own model.
     fn set_active_agent(&mut self, name: String) {
         if let Some(model) = self.agent_models.get(&name).cloned() {
             self.active_model = Some(model);

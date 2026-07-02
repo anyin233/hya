@@ -23,7 +23,7 @@ Expected behavior:
 - Interactive `/yolo` is not a built-in/public slash command.
 - `/yolo` is not resolved by backend/TUI slash registries.
 - `/yolo` is not advertised in help/completion.
-- OpenCode-compatible command metadata does not expose `yolo`.
+- Compat-compatible command metadata does not expose `yolo`.
 - CLI `--yolo` remains valid and documented.
 - swebench automation enables YOLO through the command palette, not by typing `/yolo on`.
 - Docs do not tell users to use `/yolo on`.
@@ -67,9 +67,9 @@ Expected behavior:
 - `crates/hya-tui/src/keymap/tests.rs`
 - `crates/hya-backend/src/tui/commands.rs`
 - `crates/hya-backend/src/tui/controller.rs`
-- `crates/hya-server/src/opencode/command_catalog.rs`
-- `crates/hya-server/tests/opencode_command_metadata_api.rs`
-- `crates/hya-server/tests/opencode_provider_model_api.rs`
+- `crates/hya-server/src/compat/command_catalog.rs`
+- `crates/hya-server/tests/compat_command_metadata_api.rs`
+- `crates/hya-server/tests/compat_provider_model_api.rs`
 - `docs/cli.md`
 - `swebench/scripts/hya_drive.sh`
 - `swebench/scripts/HYA_DRIVE.md`
@@ -86,7 +86,7 @@ Expected behavior:
 - [ ] Enabling YOLO visibly enables auto-approve mode in the TUI.
 - [ ] `builtin_client_command("/yolo") == None` or the equivalent direct routing assertion holds.
 - [ ] Backend slash resolution, help, and completion omit `/yolo`.
-- [ ] OpenCode command metadata omits `yolo`.
+- [ ] Compat command metadata omits `yolo`.
 - [ ] CLI `--yolo` remains valid and documented.
 - [ ] swebench automation uses command palette YOLO enablement and not `/yolo on`.
 - [ ] Docs do not instruct users to use `/yolo on`.

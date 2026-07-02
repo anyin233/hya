@@ -17,7 +17,7 @@ The work remains one Trellis task, but each deliverable below must be independen
 | Shared title policy and fallback title | `hya-core` pure tests | projection can identify session activity |
 | Empty-session list filtering | server/backend list tests | shared empty-session predicate |
 | Empty-session exit cleanup | core/backend/server cleanup tests | shared empty-session predicate and list filtering |
-| OpenCode-compatible auto-title replacement | server prompt/summarize tests | shared title policy |
+| Compat-compatible auto-title replacement | server prompt/summarize tests | shared title policy |
 | SQLite-backed switch summaries | backend/sdk/tui tests | route/client ID compatibility and title/list behavior |
 | Live-vs-durable assistant streaming | core/store tests | stable ID/store replay behavior |
 
@@ -111,9 +111,9 @@ Expected GREEN: new and legacy session storage tests pass.
 
 Files:
 
-- Modify: `crates/hya-server/tests/opencode_session_v2_create_api.rs`
-- Modify: `crates/hya-server/tests/opencode_session_v2_api.rs`
-- Modify: `crates/hya-server/tests/opencode_session_switch_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_v2_create_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_v2_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_switch_api.rs`
 - Modify: `crates/hya-client/src/lib.rs` tests if present; otherwise add the minimal test in the crate that owns URL formatting.
 
 Steps:
@@ -125,9 +125,9 @@ Steps:
 5. Run:
 
 ```sh
-cargo test -p hya-server --test opencode_session_v2_create_api
-cargo test -p hya-server --test opencode_session_v2_api
-cargo test -p hya-server --test opencode_session_switch_api
+cargo test -p hya-server --test compat_session_v2_create_api
+cargo test -p hya-server --test compat_session_v2_api
+cargo test -p hya-server --test compat_session_switch_api
 cargo test -p hya-client
 ```
 
@@ -138,9 +138,9 @@ Expected RED: tests or compilation fail on hard-coded `as_uuid()`/`ses_` assumpt
 Files:
 
 - Modify: `crates/hya-server/src/lib.rs`
-- Modify: `crates/hya-server/src/opencode/session_v2.rs`
-- Modify: `crates/hya-server/src/opencode/tui.rs`
-- Modify: `crates/hya-server/src/opencode/experimental_sync.rs`
+- Modify: `crates/hya-server/src/compat/session_v2.rs`
+- Modify: `crates/hya-server/src/compat/tui.rs`
+- Modify: `crates/hya-server/src/compat/experimental_sync.rs`
 - Modify: `crates/hya-client/src/lib.rs`
 - Modify other compile-error locations only where they directly assume `as_uuid()` for session URLs/validation.
 
@@ -166,7 +166,7 @@ Files:
 Steps:
 
 1. Add pure tests for `Untitled Session_%Y-%m-%d-%H-%M` with a fixed UTC timestamp.
-2. Add tests for detecting hya fallback titles and upstream OpenCode default titles.
+2. Add tests for detecting hya fallback titles and upstream Compat default titles.
 3. Add tests for title cleanup: strip `<think>...</think>`, first non-empty line, max 100 chars with `...`.
 4. Run:
 
@@ -201,8 +201,8 @@ Expected GREEN: title helper tests pass.
 
 Files:
 
-- Modify: `crates/hya-server/tests/opencode_session_v2_list_api.rs`
-- Modify: `crates/hya-server/tests/opencode_session_list_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_v2_list_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_list_api.rs`
 - Modify: `crates/hya-backend/src/tui/history.rs` tests if preserving a bridge there.
 
 Steps:
@@ -213,8 +213,8 @@ Steps:
 4. Run:
 
 ```sh
-cargo test -p hya-server --test opencode_session_v2_list_api empty
-cargo test -p hya-server --test opencode_session_list_api empty
+cargo test -p hya-server --test compat_session_v2_list_api empty
+cargo test -p hya-server --test compat_session_list_api empty
 cargo test -p hya-backend history
 ```
 
@@ -225,9 +225,9 @@ Expected RED: empty sessions currently list, or titles use old `Untitled`/JSON b
 Files:
 
 - Modify: `crates/hya-proto/src/projection.rs` only if projection needs a helper for emptiness.
-- Modify: `crates/hya-server/src/opencode/session_list.rs`
-- Modify: `crates/hya-server/src/opencode/session_v2.rs`
-- Modify: `crates/hya-server/src/opencode/projection.rs`
+- Modify: `crates/hya-server/src/compat/session_list.rs`
+- Modify: `crates/hya-server/src/compat/session_v2.rs`
+- Modify: `crates/hya-server/src/compat/projection.rs`
 - Modify: `crates/hya-backend/src/tui.rs`
 - Modify: `crates/hya-backend/src/tui/history.rs` only for bridge/fallback compatibility.
 
@@ -248,8 +248,8 @@ Files:
 - Create/modify: `crates/hya-core/src/engine/session_cleanup.rs` or add the same logic near `SessionEngine` if no submodule split is used.
 - Modify: `crates/hya-core/src/engine.rs`
 - Modify: `crates/hya-backend/src/tui.rs`
-- Modify: `crates/hya-server/tests/opencode_session_v2_api.rs`
-- Modify: `crates/hya-server/tests/opencode_session_v2_list_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_v2_api.rs`
+- Modify: `crates/hya-server/tests/compat_session_v2_list_api.rs`
 
 Steps:
 
@@ -262,8 +262,8 @@ Steps:
 ```sh
 cargo test -p hya-core cleanup_empty_unnamed_session
 cargo test -p hya-backend cleanup_empty_unnamed_session_on_exit
-cargo test -p hya-server --test opencode_session_v2_api empty_cleanup
-cargo test -p hya-server --test opencode_session_v2_list_api empty
+cargo test -p hya-server --test compat_session_v2_api empty_cleanup
+cargo test -p hya-server --test compat_session_v2_list_api empty
 ```
 
 Expected RED: empty sessions are only filtered from lists; no shared core helper durably deletes SQLite events, so direct lookup still succeeds after “finalization.”
@@ -290,14 +290,14 @@ Steps:
 
 Expected GREEN: the shared core helper durably deletes empty unnamed sessions; backend TUI exit/new/resume call the helper; post-cleanup direct GET/store lookup returns not found; non-empty and manually titled sessions survive; repeated cleanup does not fail.
 
-## Wave 4: OpenCode-compatible auto-title replacement
+## Wave 4: Compat-compatible auto-title replacement
 
 ### Task 4.1: Add RED auto-title trigger tests
 
 Files:
 
-- Modify: `crates/hya-server/tests/opencode_session_summarize_api.rs`
-- Modify: `crates/hya-server/tests/opencode_prompt_async_api.rs` or the prompt test file that already covers `session_prompt.rs`.
+- Modify: `crates/hya-server/tests/compat_session_summarize_api.rs`
+- Modify: `crates/hya-server/tests/compat_prompt_async_api.rs` or the prompt test file that already covers `session_prompt.rs`.
 - Modify: `crates/hya-core` title tests if trigger eligibility is pure.
 
 Steps:
@@ -309,19 +309,19 @@ Steps:
 5. Run:
 
 ```sh
-cargo test -p hya-server --test opencode_session_summarize_api title
-cargo test -p hya-server --test opencode_prompt_async_api title
+cargo test -p hya-server --test compat_session_summarize_api title
+cargo test -p hya-server --test compat_prompt_async_api title
 cargo test -p hya-core title
 ```
 
-Expected RED: current prompt path truncates the first prompt to 50 chars and does not use OpenCode gates.
+Expected RED: current prompt path truncates the first prompt to 50 chars and does not use Compat gates.
 
 ### Task 4.2: Replace first-prompt truncation with shared title trigger
 
 Files:
 
-- Modify: `crates/hya-server/src/opencode/session_prompt.rs`
-- Modify: `crates/hya-server/src/opencode/session_summarize.rs` if summarizer reuse is viable.
+- Modify: `crates/hya-server/src/compat/session_prompt.rs`
+- Modify: `crates/hya-server/src/compat/session_summarize.rs` if summarizer reuse is viable.
 - Modify: `crates/hya-core/src/engine/summary.rs` only if existing summarizer abstraction belongs there.
 
 Steps:
@@ -505,14 +505,14 @@ If a touched source file exceeds 250 pure LOC or the review finds structural sme
 cargo test -p hya-proto session_id
 cargo test -p hya-store --test store session
 cargo test -p hya-store --test persistence session
-cargo test -p hya-server --test opencode_session_v2_create_api
-cargo test -p hya-server --test opencode_session_v2_api
-cargo test -p hya-server --test opencode_session_switch_api
-cargo test -p hya-server --test opencode_session_v2_list_api empty
-cargo test -p hya-server --test opencode_session_v2_api empty_cleanup
-cargo test -p hya-server --test opencode_session_list_api empty
-cargo test -p hya-server --test opencode_session_summarize_api title
-cargo test -p hya-server --test opencode_prompt_async_api title
+cargo test -p hya-server --test compat_session_v2_create_api
+cargo test -p hya-server --test compat_session_v2_api
+cargo test -p hya-server --test compat_session_switch_api
+cargo test -p hya-server --test compat_session_v2_list_api empty
+cargo test -p hya-server --test compat_session_v2_api empty_cleanup
+cargo test -p hya-server --test compat_session_list_api empty
+cargo test -p hya-server --test compat_session_summarize_api title
+cargo test -p hya-server --test compat_prompt_async_api title
 cargo test -p hya-core title
 cargo test -p hya-core cleanup_empty_unnamed_session
 cargo test -p hya-core stream_round

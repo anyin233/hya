@@ -14,20 +14,20 @@
 - The current HTTP transport is where native must not go: `HttpTransport` owns `reqwest::Client`, formats URLs, injects `x-opencode-directory`, sends, `error_for_status`, and decodes JSON (`client.rs:177-220`).
 - Existing events are still HTTP/SSE-only: `stream_global_events` does a `reqwest.get({base_url}/global/event)`, reads `bytes_stream().eventsource()`, tolerates unknown frames, and deserializes `GlobalEvent` (`crates/hya-sdk/src/events.rs:19-49`).
 - `hya` currently gives the TUI a `PendingClient`, spawns backend connection in the background, then aborts the connector and drops the transport guard on exit (`crates/hya/src/main.rs:35-58`). The default yaca path currently goes through `ServerMode::new` -> `ServerHandle::spawn_yaca` -> HTTP/SSE (`main.rs:150-172`, `337-354`, `412-420`).
-- `NativeBridge` today is a Bun stdio bridge for opencode only. Its `Drop` kills the child process group (`crates/hya-sdk/src/native.rs:66-72`, `159-182`) and must remain an explicit `--opencode` path, not the yaca-native design.
-- `yaca-server::router(AppState)` is already the in-process HTTP-compatible entry point and merges `opencode::router()` (`crates/yaca-server/src/lib.rs:31-43`). `opencode::router()` includes the hya-facing routes: `/global/event`, `/session`, `/session/:id/message`, `/agent`, `/mcp`, `/permission`, `/question`, etc. (`crates/yaca-server/src/opencode.rs:95-126`).
+- `NativeBridge` today is a Bun stdio bridge for compat only. Its `Drop` kills the child process group (`crates/hya-sdk/src/native.rs:66-72`, `159-182`) and must remain an explicit `--compat` path, not the yaca-native design.
+- `yaca-server::router(AppState)` is already the in-process HTTP-compatible entry point and merges `compat::router()` (`crates/yaca-server/src/lib.rs:31-43`). `compat::router()` includes the hya-facing routes: `/global/event`, `/session`, `/session/:id/message`, `/agent`, `/mcp`, `/permission`, `/question`, etc. (`crates/yaca-server/src/compat.rs:95-126`).
 - `AppState` contains the long-lived engine, agent, pending permission/question managers, `McpManager`, workspace adapters, formatter status, default agent, and global-agent flag (`crates/yaca-server/src/state.rs:11-22`). `ServerState::new` derives per-router state, including `RunRegistry`, `GlobalState`, `McpHttpState`, `PtyState`, and `TuiState` (`state.rs:88-126`).
-- The event bus is `tokio::sync::broadcast` with default capacity 1024 (`crates/yaca-core/src/bus.rs:4-30`). `/global/event` already maps raw envelopes into opencode-shaped `GlobalEvent` SSE frames and converts broadcast lag into an SSE `resync` event (`crates/yaca-server/src/opencode/event.rs:102-128`).
+- The event bus is `tokio::sync::broadcast` with default capacity 1024 (`crates/yaca-core/src/bus.rs:4-30`). `/global/event` already maps raw envelopes into compat-shaped `GlobalEvent` SSE frames and converts broadcast lag into an SSE `resync` event (`crates/yaca-server/src/compat/event.rs:102-128`).
 - yaca bootstrap is currently trapped in `yaca-cli`: `agent_with_model` builds the prompt and skill context (`crates/yaca-cli/src/main.rs:95-117`), `build_session_engine` connects MCP, connects plugins, registers tools, creates permission/interaction/spawner planes, builds `SessionEngine`, and spawns the team supervisor (`main.rs:240-295`), while `resolve_runtime` loads config or falls back to offline (`main.rs:322-382`). `serve::cmd_serve` and `cmd_tui_hya` assemble `AppState` and then bind TCP listeners (`crates/yaca-cli/src/serve.rs:10-47`, `50-109`).
 - MCP and plugin child lifecycle is Drop-driven today: `McpManager` owns `McpServer { _client, _guard, ... }` (`crates/yaca-mcp/src/manager.rs:35-47`) where `ChildGuard::drop` terminates the child (`crates/yaca-mcp/src/client.rs:52-89`); `PluginHost` owns plugin connections (`crates/yaca-plugin/src/host.rs:40-63`) whose child guard first sends plugin shutdown then terminates (`crates/yaca-plugin/src/client.rs:38-77`).
-- Run cancellation already exists at server level: `RunRegistry::start` stores a `CancellationToken`, `cancel` cancels it, and `RunGuard::drop` clears busy state (`crates/yaca-server/src/runs.rs:38-113`); `/session/:id/abort` calls `st.runs.cancel(session)` (`crates/yaca-server/src/opencode/session_legacy.rs:361-368`).
+- Run cancellation already exists at server level: `RunRegistry::start` stores a `CancellationToken`, `cancel` cancels it, and `RunGuard::drop` clears busy state (`crates/yaca-server/src/runs.rs:38-113`); `/session/:id/abort` calls `st.runs.cancel(session)` (`crates/yaca-server/src/compat/session_legacy.rs:361-368`).
 
 ## Key decisions
 
 1. **Create `yaca-app`, do not put bootstrap in `yaca-server`.** `yaca-server` should remain router/projection state over `AppState`; moving config/provider/MCP/plugin/prompt bootstrap into it would make the server crate depend on provider/plugin/auth/config policy and risk a fat bidirectional application layer. `yaca-app` depends downward on `yaca-core`, `yaca-server`, `yaca-provider`, `yaca-store`, `yaca-tool`, `yaca-mcp`, `yaca-plugin`, and config helpers. `yaca-cli` and `hya-yaca` both depend on `yaca-app`; `yaca-app` depends on neither CLI nor hya.
 2. **Create `hya-yaca`, do not feature-gate yaca into `hya-sdk`.** `hya-sdk` should stay the lean client/types/reducer crate. Pulling yaca's backend graph into a `native-yaca` feature would make the normal SDK build transitively include MCP/plugin/provider/sqlx and increase cycle risk. `hya-yaca` is the glue crate: `hya-sdk` + `yaca-app` + `yaca-server` + `tower`/`http-body-util`.
-3. **Native is the new `hya` default; HTTP is opt-in.** Preserve `--server <url>` for attaching to external opencode-compatible servers and preserve `--opencode` / `--opencode --http`. Add `--http` as “use yaca over spawned `yaca serve`” for compatibility/debugging. Remove `--yaca-bin` from the default path semantics; keep it meaningful only for `--http` yaca.
-4. **Events use in-process oneshot `/global/event`, not direct `engine.bus().subscribe()` projection.** Direct bus subscription is tempting but would require re-exporting or duplicating the private 787-line `opencode/event.rs` projection (`event.rs:171-787`) and would immediately fork behavior from HTTP clients. The production path should reuse the exact projected wire shape hya already accepts (`hya-sdk/src/types.rs:22-58`) by calling the SSE route in-process, then harden stream consumption around backpressure/lag/resync.
+3. **Native is the new `hya` default; HTTP is opt-in.** Preserve `--server <url>` for attaching to external compat-compatible servers and preserve `--compat` / `--compat --http`. Add `--http` as “use yaca over spawned `yaca serve`” for compatibility/debugging. Remove `--yaca-bin` from the default path semantics; keep it meaningful only for `--http` yaca.
+4. **Events use in-process oneshot `/global/event`, not direct `engine.bus().subscribe()` projection.** Direct bus subscription is tempting but would require re-exporting or duplicating the private 787-line `compat/event.rs` projection (`event.rs:171-787`) and would immediately fork behavior from HTTP clients. The production path should reuse the exact projected wire shape hya already accepts (`hya-sdk/src/types.rs:22-58`) by calling the SSE route in-process, then harden stream consumption around backpressure/lag/resync.
 
 ## Crate and module layout
 
@@ -144,7 +144,7 @@ pub async fn connect(
 Move because both CLI and native hya need it:
 
 - `config.rs` provider/MCP/plugin config loading (`crates/yaca-cli/src/config.rs:18-236`).
-- `plugins.rs` plugin resolution and bundled opencode adapter lookup (`crates/yaca-cli/src/plugins.rs:8-114`).
+- `plugins.rs` plugin resolution and bundled compat adapter lookup (`crates/yaca-cli/src/plugins.rs:8-114`).
 - `formatter_config.rs` formatter plane loading (`crates/yaca-cli/src/formatter_config.rs:66-104`).
 - `skills.rs` skill discovery/prompt section (`crates/yaca-cli/src/skills.rs:29-61`).
 - `permission.rs` policy and `spawn_auto_responder` (`crates/yaca-cli/src/permission.rs:7-96`).
@@ -202,14 +202,14 @@ Panic isolation:
 
 Use `router.clone().oneshot(GET /global/event)` and parse the response body stream in-process. Reasoning:
 
-- Reuses yaca's existing global event projection, including `server.connected`, `server.heartbeat`, `session.error`, `message.updated`, `message.part.delta`, `message.part.updated`, `session.status`, and fallback behavior (`crates/yaca-server/src/opencode/event.rs:102-128`, `171-787`).
+- Reuses yaca's existing global event projection, including `server.connected`, `server.heartbeat`, `session.error`, `message.updated`, `message.part.delta`, `message.part.updated`, `session.status`, and fallback behavior (`crates/yaca-server/src/compat/event.rs:102-128`, `171-787`).
 - Reuses the exact `GlobalEvent` shape hya's decoder expects (`hya-sdk/src/types.rs:22-58`).
 - Avoids exporting private `ServerState` projection internals or duplicating `envelope_payload`, which would drift under backend changes.
 - Still has no network: `oneshot` over `Router` constructs HTTP request/response values in memory, not sockets.
 
 ### Backpressure and ordering
 
-Current yaca bus is a broadcast channel with capacity 1024 (`yaca-core/src/bus.rs:26-29`). A slow consumer will eventually receive `Lagged`; yaca's SSE handler converts that into an SSE event named `resync` (`yaca-server/src/opencode/event.rs:112-121`). The native bridge must make this explicit instead of dropping silently.
+Current yaca bus is a broadcast channel with capacity 1024 (`yaca-core/src/bus.rs:26-29`). A slow consumer will eventually receive `Lagged`; yaca's SSE handler converts that into an SSE event named `resync` (`yaca-server/src/compat/event.rs:112-121`). The native bridge must make this explicit instead of dropping silently.
 
 Implement `hya-yaca/src/events.rs` as a two-stage bridge:
 
@@ -248,7 +248,7 @@ Failure handling:
 ```rust
 enum Transport {
     YacaNative(hya_yaca::YacaNative),
-    OpencodeNative(hya_sdk::NativeBridge),
+    CompatNative(hya_sdk::NativeBridge),
     Http { server: ServerMode, sse: JoinHandle<()>, keep_streaming: Arc<AtomicBool> },
 }
 ```
@@ -286,19 +286,19 @@ Problem: legacy `/session/:id/message` awaits `run_turn_with_external_dirs` and 
 
 Plan:
 
-- Add a core hardening task in `yaca-core`: after `MessageStarted`, wrap the inner turn loop so any `CoreError` emits both `Event::Error { session: Some(session), code, message }` and `Event::MessageFinished { finish: FinishReason::Error }` before returning `Err`. `event.rs` already projects `Event::Error` to `session.error` (`yaca-server/src/opencode/event.rs:171-178`, `735-763`). This fixes HTTP and native paths together.
-- In `yaca-server/src/opencode/session_prompt.rs`, replace `let _ = engine.run_turn...await` with logging and error-event reliance; keep the `RunGuard` in the task so busy state clears on exit (`session_prompt.rs:115-120`, `runs.rs:106-113`).
+- Add a core hardening task in `yaca-core`: after `MessageStarted`, wrap the inner turn loop so any `CoreError` emits both `Event::Error { session: Some(session), code, message }` and `Event::MessageFinished { finish: FinishReason::Error }` before returning `Err`. `event.rs` already projects `Event::Error` to `session.error` (`yaca-server/src/compat/event.rs:171-178`, `735-763`). This fixes HTTP and native paths together.
+- In `yaca-server/src/compat/session_prompt.rs`, replace `let _ = engine.run_turn...await` with logging and error-event reliance; keep the `RunGuard` in the task so busy state clears on exit (`session_prompt.rs:115-120`, `runs.rs:106-113`).
 - `/session/:id/abort` should continue to call `RunRegistry::cancel` (`session_legacy.rs:361-368`). Native request transport must support that route exactly as HTTP.
 - `YacaNative::shutdown()` should cancel the global runtime token and, if possible, call all active run tokens via a new `RunRegistry::cancel_all()` only if exposed by server state. If not exposed, rely on dropping request/router state and active `RunGuard`s. Do not leave running turns alive after hya exits.
 
 ## `hya/src/main.rs` wiring and flags
 
-Current flags: `--server`, `--http`, `--opencode`, `--yaca-bin`, `--version`, `--help` (`hya/src/main.rs:364-421`). Change semantics:
+Current flags: `--server`, `--http`, `--compat`, `--yaca-bin`, `--version`, `--help` (`hya/src/main.rs:364-421`). Change semantics:
 
 - Default: native yaca in-process via `hya-yaca`.
 - `--http`: spawn `yaca serve` and use existing `HttpClient` + `stream_global_events`. This keeps a fallback and preserves `--yaca-bin`.
 - `--server <url>`: attach to external server over HTTP and SSE, no process ownership.
-- `--opencode`: use existing Bun `NativeBridge` by default, unless combined with `--http` to spawn `opencode serve`.
+- `--compat`: use existing Bun `NativeBridge` by default, unless combined with `--http` to spawn `compat serve`.
 - Add `--db <path>` and `--model <provider/model>` if hya should expose yaca-native runtime knobs directly; otherwise default to yaca config and store path already used by CLI.
 - Add `--yolo` only if yaca CLI default behavior needs parity. Otherwise use `PermissionMode::FrontendRequests` so permission/question requests flow to hya via existing `/permission` and `/question` endpoints.
 
@@ -306,7 +306,7 @@ Current flags: `--server`, `--http`, `--opencode`, `--yaca-bin`, `--version`, `-
 
 1. `args.server.is_some()` -> HTTP attach.
 2. `args.opencode && !args.http` -> existing `NativeBridge`.
-3. `args.opencode && args.http` -> existing `ServerHandle::spawn` opencode HTTP.
+3. `args.opencode && args.http` -> existing `ServerHandle::spawn` compat HTTP.
 4. `args.http` -> existing `ServerHandle::spawn_yaca` yaca HTTP.
 5. else -> `hya_yaca::connect(directory, options)` native yaca.
 
@@ -392,7 +392,7 @@ grep -E 'bind\(|listen\(|connect\([^)]*(127\.0\.0\.1|localhost)' /tmp/hya-native
 
 ## Production risks and mitigations
 
-1. **Silent event loss under load.** The source bus is broadcast(1024), and `/global/event` already reports lag as `resync` (`yaca-core/src/bus.rs:26-29`, `yaca-server/src/opencode/event.rs:112-121`). Native must never drop with `try_send`; use bounded `send().await`, surface resync to hya, and hydrate current session from durable `Client::session_messages`.
+1. **Silent event loss under load.** The source bus is broadcast(1024), and `/global/event` already reports lag as `resync` (`yaca-core/src/bus.rs:26-29`, `yaca-server/src/compat/event.rs:112-121`). Native must never drop with `try_send`; use bounded `send().await`, surface resync to hya, and hydrate current session from durable `Client::session_messages`.
 2. **Shutdown leaks background work or children.** Current MCP/plugin children rely on Drop guards (`yaca-mcp/src/client.rs:56-89`, `yaca-plugin/src/client.rs:43-77`). Native guard must stop accepting requests, cancel event bridge, cancel/abort background tasks, then drop plugin/MCP owners in order. Drop is best-effort; explicit `shutdown().await` is mandatory in `hya/main.rs`.
 3. **Bootstrap extraction creates dependency cycles.** Keep `yaca-app` above server/core and below CLI/hya. Do not move CLI command parsing into app. Do not make `hya-sdk` depend on yaca. Do not make `yaca-server` know about runtime config.
 4. **Engine error leaves UI permanently “working”.** Harden `SessionEngine::run_turn_with_external_dirs` to emit `session.error` + `MessageFinished(Error)` on provider/store errors after assistant message start. This protects both HTTP and native.
@@ -425,7 +425,7 @@ grep -E 'bind\(|listen\(|connect\([^)]*(127\.0\.0\.1|localhost)' /tmp/hya-native
 **Files:**
 - Modify: `crates/yaca-core/src/engine/turn.rs`
 - Modify/Add tests near `crates/yaca-core/src/engine/turn.rs` or existing test module
-- Modify: `crates/yaca-server/src/opencode/session_prompt.rs` only for spawned-run error logging if needed
+- Modify: `crates/yaca-server/src/compat/session_prompt.rs` only for spawned-run error logging if needed
 
 **Produces:** provider/store errors after `MessageStarted` become durable `Event::Error` and `MessageFinished(Error)`.
 
@@ -484,12 +484,12 @@ grep -E 'bind\(|listen\(|connect\([^)]*(127\.0\.0\.1|localhost)' /tmp/hya-native
 - Modify: `crates/hya/src/main.rs`
 - Possibly modify: `crates/hya-sdk/src/server.rs` docs/help only if HTTP fallback wording changes
 
-**Produces:** `hya` defaults to native yaca; HTTP/opencode paths remain explicit.
+**Produces:** `hya` defaults to native yaca; HTTP/compat paths remain explicit.
 
 - [ ] Add `hya-yaca` dependency.
-- [ ] Change `Transport` enum to include `YacaNative` and rename current `Native` to `OpencodeNative` for clarity.
+- [ ] Change `Transport` enum to include `YacaNative` and rename current `Native` to `CompatNative` for clarity.
 - [ ] Move `reqwest::Client::new()` into HTTP-only branch.
-- [ ] Update help text: default native yaca, `--http` yaca HTTP fallback, `--server` external, `--opencode` existing Bun bridge.
+- [ ] Update help text: default native yaca, `--http` yaca HTTP fallback, `--server` external, `--compat` existing Bun bridge.
 - [ ] Await native shutdown explicitly after TUI exits.
 - [ ] Run `cargo test -p hya && cargo build -p hya`.
 

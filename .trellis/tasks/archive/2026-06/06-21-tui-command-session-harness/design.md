@@ -1,4 +1,4 @@
-# Design: Opencode-style TUI commands, sessions, and test harness
+# Design: Compat-style TUI commands, sessions, and test harness
 
 ## Current State
 
@@ -16,7 +16,7 @@ Introduce a small TUI controller layer inside `yaca-cli` while keeping rendering
 
 The controller will translate terminal events into semantic commands, update dialog/input/session state, and request runtime side effects through a narrow runtime trait. This gives tests a cheap fake runtime and lets the live TUI keep using `SessionEngine`, `EventBus`, and crossterm.
 
-The first implementation should stay incremental. It should not rebuild all of opencode. It should establish the architecture and ship the missing user-facing behavior for model switching, safe `Ctrl-C`, dummy-model testing, and JSON/JSONL session resume.
+The first implementation should stay incremental. It should not rebuild all of compat. It should establish the architecture and ship the missing user-facing behavior for model switching, safe `Ctrl-C`, dummy-model testing, and JSON/JSONL session resume.
 
 ## Modules
 
@@ -30,7 +30,7 @@ The first implementation should stay incremental. It should not rebuild all of o
 
 - `crates/yaca-cli/src/tui/keymap.rs`
   - Maps key strokes into semantic `TuiCommand`s.
-  - Provides opencode-inspired defaults: model list, resume list, new session, help, scrolling, input editing, dialog movement, interrupt, exit.
+  - Provides compat-inspired defaults: model list, resume list, new session, help, scrolling, input editing, dialog movement, interrupt, exit.
 
 - `crates/yaca-cli/src/tui/commands.rs`
   - Registry for slash commands and palette commands.
@@ -169,7 +169,7 @@ The fake runtime must be the default for TUI tests. No test should require netwo
 
 ## Non-goals
 
-- Full opencode parity in one pass.
-- Replacing ratatui with opencode's OpenTUI stack.
+- Full compat parity in one pass.
+- Replacing ratatui with compat's OpenTUI stack.
 - Migrating server APIs from SQLite to JSON history in this task.
 - Long-term compaction/summarization beyond metadata summaries.

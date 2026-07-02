@@ -13,7 +13,7 @@
 - Native TUI `apply_reasoning` currently treats `off|none` as `agent.reasoning = None`, which loses the distinction between “explicit off” and “no preference/default available.”
 - `AgentSpec.reasoning` is copied into `CompletionRequest.reasoning` in `crates/yaca-core/src/engine/turn/messages.rs`; provider encoders already omit reasoning request fields for `None` and for provider-specific off/no-budget cases.
 - `HistoryStore` under `crates/yaca-cli/src/tui/history.rs` is the existing local TUI persistence mechanism. It writes JSON session history under `YACA_HISTORY_DIR` or `~/.yaca/history`. SQLite `SessionStore` is for event logs/projections and saved permissions, not user preferences.
-- The OpenCode-compatible path already parses agent-file/inline-agent reasoning through `AgentEntry.variant` and `AgentEntry.options`, using `resolve_reasoning` and `apply_agent_entry` before request construction.
+- The Compat-compatible path already parses agent-file/inline-agent reasoning through `AgentEntry.variant` and `AgentEntry.options`, using `resolve_reasoning` and `apply_agent_entry` before request construction.
 
 ## Planning implications
 

@@ -2,7 +2,7 @@
 
 Source: librarian deep-dive of `code-yeongyu/oh-my-openagent`
 (SHA `1e48f191a2be2ec176a7fe610deebe2c89b25cdf`) + `lazycodex`. The `team_*`
-system lives in the OpenCode/"Ultimate" side; the Codex/"Light" side has no
+system lives in the Compat/"Ultimate" side; the Codex/"Light" side has no
 `team_*` and uses Codex-native `spawn_agent` roles instead.
 
 ## TL;DR for our Rust design

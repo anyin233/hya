@@ -20,7 +20,7 @@ fn resolve_with_bun(
     find_bun: impl Fn() -> Option<PathBuf>,
 ) -> Vec<PluginSpec> {
     let specs = raw_specs(config, dir);
-    resolve_opencode_specs(specs, find_bun)
+    resolve_compat_specs(specs, find_bun)
 }
 
 fn raw_specs(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
@@ -31,50 +31,50 @@ fn raw_specs(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<P
     hya_plugin::config::merge(config, manifests)
 }
 
-fn resolve_opencode_specs(
+fn resolve_compat_specs(
     specs: Vec<PluginSpec>,
     find_bun: impl Fn() -> Option<PathBuf>,
 ) -> Vec<PluginSpec> {
     specs
         .into_iter()
         .filter_map(|mut spec| {
-            if spec.kind != PluginKindWire::Opencode || !spec.command.is_empty() {
+            if spec.kind != PluginKindWire::Compat || !spec.command.is_empty() {
                 return Some(spec);
             }
             let Some(bun) = find_bun() else {
-                // Bun is an OPTIONAL dependency, needed only to run OpenCode JS
+                // Bun is an OPTIONAL dependency, needed only to run Compat JS
                 // plugins. The core and native Rust plugins never require it, so a
                 // missing Bun is a skip (with notice), not an error.
                 eprintln!(
-                    "hya: skipping optional opencode plugin '{}' — Bun not found in PATH \
-                     (Bun is only needed for OpenCode JS plugins; native Rust plugins work without it)",
+                    "hya: skipping optional compat plugin '{}' — Bun not found in PATH \
+                     (Bun is only needed for Compat JS plugins; native Rust plugins work without it)",
                     spec.id
                 );
                 return None;
             };
-            spec.command = bundled_opencode_adapter_command(&bun);
+            spec.command = bundled_compat_adapter_command(&bun);
             Some(spec)
         })
         .collect()
 }
 
-fn bundled_opencode_adapter_command(bun: &Path) -> Vec<String> {
+fn bundled_compat_adapter_command(bun: &Path) -> Vec<String> {
     vec![
         path_to_arg(bun),
         "run".to_string(),
-        path_to_arg(&bundled_opencode_adapter_dir().join("src/main.ts")),
+        path_to_arg(&bundled_compat_adapter_dir().join("src/main.ts")),
     ]
 }
 
-fn bundled_opencode_adapter_dir() -> PathBuf {
-    if let Some(dir) = non_empty_env_path("HYA_OPENCODE_ADAPTER_DIR") {
+fn bundled_compat_adapter_dir() -> PathBuf {
+    if let Some(dir) = non_empty_env_path("HYA_COMPAT_ADAPTER_DIR") {
         return dir;
     }
     let cli_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     cli_dir
         .parent()
-        .map(|crates_dir| crates_dir.join("hya-plugin-opencode/adapter"))
-        .unwrap_or_else(|| cli_dir.join("../hya-plugin-opencode/adapter"))
+        .map(|crates_dir| crates_dir.join("hya-plugin-compat/adapter"))
+        .unwrap_or_else(|| cli_dir.join("../hya-plugin-compat/adapter"))
 }
 
 fn find_bun() -> Option<PathBuf> {
@@ -173,12 +173,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_entry_without_command_resolves_to_bundled_adapter() {
+    fn compat_entry_without_command_resolves_to_bundled_adapter() {
         let mut config = BTreeMap::new();
         config.insert(
-            "opencode".to_string(),
+            "compat".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Opencode,
+                kind: PluginKindWire::Compat,
                 command: Vec::new(),
                 enabled: true,
                 timeout_ms: Some(1000),
@@ -191,8 +191,8 @@ mod tests {
 
         assert_eq!(specs.len(), 1);
         let spec = &specs[0];
-        assert_eq!(spec.id, "opencode");
-        assert_eq!(spec.kind, PluginKindWire::Opencode);
+        assert_eq!(spec.id, "compat");
+        assert_eq!(spec.kind, PluginKindWire::Compat);
         assert_eq!(
             spec.command.first().map(String::as_str),
             Some("/usr/local/bin/bun")
@@ -207,12 +207,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_entry_without_bun_is_skipped() {
+    fn compat_entry_without_bun_is_skipped() {
         let mut config = BTreeMap::new();
         config.insert(
-            "opencode".to_string(),
+            "compat".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Opencode,
+                kind: PluginKindWire::Compat,
                 command: Vec::new(),
                 enabled: true,
                 timeout_ms: None,
@@ -246,12 +246,12 @@ mod tests {
     }
 
     #[test]
-    fn opencode_entry_with_explicit_command_is_preserved() {
+    fn compat_entry_with_explicit_command_is_preserved() {
         let mut config = BTreeMap::new();
         config.insert(
-            "opencode".to_string(),
+            "compat".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Opencode,
+                kind: PluginKindWire::Compat,
                 command: vec!["custom-adapter".to_string(), "--stdio".to_string()],
                 enabled: true,
                 timeout_ms: None,

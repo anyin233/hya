@@ -52,7 +52,7 @@ fn ctx_with(workdir: PathBuf) -> ToolCtx {
 }
 
 #[tokio::test]
-async fn edit_matches_line_trimmed_block_like_opencode() {
+async fn edit_matches_line_trimmed_block_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("main.rs");
@@ -84,7 +84,7 @@ async fn edit_matches_line_trimmed_block_like_opencode() {
 }
 
 #[tokio::test]
-async fn edit_matches_whitespace_normalized_substring_like_opencode() {
+async fn edit_matches_whitespace_normalized_substring_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("math.rs");
@@ -116,7 +116,7 @@ async fn edit_matches_whitespace_normalized_substring_like_opencode() {
 }
 
 #[tokio::test]
-async fn edit_matches_similar_block_anchor_like_opencode() {
+async fn edit_matches_similar_block_anchor_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("config.ts");
@@ -172,7 +172,7 @@ async fn edit_matches_similar_block_anchor_like_opencode() {
 }
 
 #[tokio::test]
-async fn edit_matches_escape_normalized_string_like_opencode() {
+async fn edit_matches_escape_normalized_string_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("text.txt");
@@ -204,7 +204,7 @@ async fn edit_matches_escape_normalized_string_like_opencode() {
 }
 
 #[tokio::test]
-async fn edit_matches_trimmed_boundary_block_like_opencode() {
+async fn edit_matches_trimmed_boundary_block_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("trimmed.txt");
@@ -236,7 +236,7 @@ async fn edit_matches_trimmed_boundary_block_like_opencode() {
 }
 
 #[tokio::test]
-async fn edit_matches_context_aware_block_like_opencode() {
+async fn edit_matches_context_aware_block_like_compat() {
     // Given
     let workdir = tempdir();
     let target = workdir.join("context.ts");

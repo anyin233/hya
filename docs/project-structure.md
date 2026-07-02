@@ -37,11 +37,11 @@ hya-core::SessionEngine
 | `hya-tool` | [`../crates/hya-tool/src/lib.rs`](../crates/hya-tool/src/lib.rs) | Tool trait, builtin tools, permission rules, ask/decision channel. |
 | `hya-mcp` | [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs) | MCP stdio client/manager, resource discovery, and tool bridge. |
 | `hya-plugin` | [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs) | Stdio JSON-RPC plugin host, manifest/config merge, hook dispatch, tool and permission bridge. |
-| `hya-plugin-opencode` | [`../crates/hya-plugin-opencode`](../crates/hya-plugin-opencode) | Bundled Bun adapter for OpenCode plugin SDK compatibility. |
+| `hya-plugin-compat` | [`../crates/hya-plugin-compat`](../crates/hya-plugin-compat) | Bundled Bun adapter for Compat plugin SDK compatibility. |
 | `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Minimal fixture/example plugin binary. |
 | `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger. |
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, hooks, goal/loop drivers, teams, worktrees. |
-| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API and OpenCode-compatible routes over `SessionEngine`. |
+| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API and Compat-compatible routes over `SessionEngine`. |
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
 | `hya-legacy-tui` | [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs) | Pure ratatui view state, layout, theme, view-model conversion, and widgets. |
 | `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Umbrella binary: TUI, `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup. |
@@ -188,12 +188,12 @@ store and immediately publishes the same envelope on the `EventBus`.
 | `GET /sessions/:id/events` | Replay envelopes, optionally after `since_seq`. |
 | `GET /sessions/:id/stream` | Stream live envelopes as SSE. |
 
-It also mounts OpenCode-compatible route groups for legacy/v2 sessions, event
+It also mounts Compat-compatible route groups for legacy/v2 sessions, event
 SSE, files/search/symbols, providers/models, permission/question queues, MCP,
 PTY, VCS, project/worktree, TUI control, sync, global/config, and metadata
 catalogs. Those routes translate between hya's event log/projection and
-OpenCode-shaped HTTP bodies; exact parity is tracked in
-[`opencode-parity.md`](opencode-parity.md).
+Compat-shaped HTTP bodies; exact parity is tracked in
+[`compat-parity.md`](compat-parity.md).
 
 `hya-client` is a small typed wrapper around create session, prompt, and events.
 The current interactive TUI runs in-process through `hya-backend`; it does not need
@@ -244,9 +244,9 @@ Tests are crate-local and map closely to runtime boundaries:
 | [`../crates/hya-provider/tests`](../crates/hya-provider/tests) | OpenAI/Anthropic conformance, provider preflight, canonical event shape. |
 | [`../crates/hya-store/tests`](../crates/hya-store/tests) | Migration, projection, session scoping, persistence, token ledger. |
 | [`../crates/hya-tool/tests`](../crates/hya-tool/tests) | Permission evaluation and builtin tools. |
-| [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and OpenCode-compatible route behavior. |
+| [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and Compat-compatible route behavior. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
-| [`../crates/hya-plugin-opencode/adapter/test`](../crates/hya-plugin-opencode/adapter/test) | OpenCode adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
+| [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
 | [`../crates/hya-legacy-tui/tests`](../crates/hya-legacy-tui/tests) | Rendering snapshots, permission panel, scroll behavior, tool lines. |
 
 ## Dependency Direction
@@ -260,7 +260,7 @@ hya-proto
 provider tool store server/client/tui plugin
         ^      ^       ^
         |      |       |
-       mcp  hya-core  plugin-opencode adapter
+       mcp  hya-core  plugin-compat adapter
                 ^
                 |
              hya-backend

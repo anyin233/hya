@@ -2,7 +2,7 @@
   "id": "06-29-complete-ses-0f226f01-yolo-system-slash",
   "name": "06-29-complete-ses-0f226f01-yolo-system-slash",
   "title": "Complete ses_0f226f01 yolo and system slash cleanup",
-  "description": "Continuation of OpenCode session ses_0f226f01affemrXG9TnsGx2NBb. Complete YOLO slash-command removal/internal command-palette switch migration and ensure built-in local/system slash commands route in the TUI instead of falling through as skill/model prompts. Use isolated worktree complete-ses-0f226f01-yolo-system-slash, merge back to main, push origin/main, archive only after final clean-tree verification.",
+  "description": "Continuation of Compat session ses_0f226f01affemrXG9TnsGx2NBb. Complete YOLO slash-command removal/internal command-palette switch migration and ensure built-in local/system slash commands route in the TUI instead of falling through as skill/model prompts. Use isolated worktree complete-ses-0f226f01-yolo-system-slash, merge back to main, push origin/main, archive only after final clean-tree verification.",
   "status": "completed",
   "dev_type": null,
   "scope": "YOLO slash-command removal, local system slash routing, swebench/docs cleanup, verification/merge/push",

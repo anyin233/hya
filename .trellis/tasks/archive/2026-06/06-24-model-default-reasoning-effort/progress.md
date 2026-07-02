@@ -5,14 +5,14 @@
 - Created Trellis task `.trellis/tasks/06-24-model-default-reasoning-effort`.
 - Loaded Trellis planning/pre-dev, Rust programming, TDD, and parallel-planning workflows.
 - Updated `prd.md` with code-backed requirements and acceptance criteria.
-- Inspected provider, app config, TUI controller/run loop, history persistence, OpenCode agent reasoning, and request-construction paths.
+- Inspected provider, app config, TUI controller/run loop, history persistence, Compat agent reasoning, and request-construction paths.
 - Started two required parallel planner jobs:
   - `bg_9f4c7de2`: conservative Oracle plan.
   - `bg_a9e8b7ab`: edge-case-driven deep plan.
 - Current gate: wait for both planner outputs, merge their recommendations into `design.md` and `implement.md`, then run `plan-review` before `task.py start`.
 - Curated `implement.jsonl` and `check.jsonl` with real spec/research entries and removed seed example rows.
 - Collected both planner outputs and merged them into `design.md` and `implement.md`.
-- Resolved planner disagreement by scoping v1 last-used persistence to the native TUI while keeping OpenCode no-signal behavior stable.
+- Resolved planner disagreement by scoping v1 last-used persistence to the native TUI while keeping Compat no-signal behavior stable.
 
 ## Errors / corrections
 
@@ -49,9 +49,9 @@ VERDICT: PASS
 - `cargo build -p yaca-cli --bin yaca`: passed fresh.
 - `cargo test -p yaca-provider default_reasoning --lib`: 5 passed.
 - `cargo test -p yaca-app model_entries_include_provider_reasoning_variants --lib`: 1 passed.
-- `cargo test -p yaca-cli`: 80 unit tests passed plus `opencode_agent_cli` integration 1 passed.
+- `cargo test -p yaca-cli`: 80 unit tests passed plus `compat_agent_cli` integration 1 passed.
 - `cargo test -p yaca-cli think_dialog_marks_off_current_when_state_stores_none`: red before the fix (`off` row detail was `reasoning effort`), green after normalizing display `none` to menu label `off`.
-- `cargo test --workspace`: fresh run reached the known unrelated `crates/yaca-server/tests/opencode_instance_api.rs` failures only: expected `demo`/`scoped`, got `brainstorming`; full output saved at `/home/yanweiye/.local/share/opencode/tool-output/tool_efce66f69001NrkPFIlNPWw04f`.
+- `cargo test --workspace`: fresh run reached the known unrelated `crates/yaca-server/tests/compat_instance_api.rs` failures only: expected `demo`/`scoped`, got `brainstorming`; full output saved at `/home/yanweiye/.local/share/compat/tool-output/tool_efce66f69001NrkPFIlNPWw04f`.
 
 ## Manual QA evidence
 

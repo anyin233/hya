@@ -8,5 +8,5 @@
 {"file":"crates/hya-backend/src/tui.rs","reason":"Review that exit/new/resume cleanup uses one shared empty-session predicate and idempotent deletion."}
 {"file":"crates/hya-core/src/engine.rs","reason":"Review deletion and projection access remain event-store authoritative."}
 {"file":"crates/hya-core/src/engine/session_cleanup.rs","reason":"Review shared cleanup helper ownership if created during implementation."}
-{"file":"crates/hya-server/tests/opencode_session_v2_api.rs","reason":"Verify cleanup proves direct lookup/not-found, not list-only masking."}
-{"file":"crates/hya-server/tests/opencode_session_v2_list_api.rs","reason":"Verify empty unnamed sessions remain hidden in list/search surfaces."}
+{"file":"crates/hya-server/tests/compat_session_v2_api.rs","reason":"Verify cleanup proves direct lookup/not-found, not list-only masking."}
+{"file":"crates/hya-server/tests/compat_session_v2_list_api.rs","reason":"Verify empty unnamed sessions remain hidden in list/search surfaces."}

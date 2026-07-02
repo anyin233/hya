@@ -2,7 +2,7 @@
   "id": "plugin-system",
   "name": "plugin-system",
   "title": "Plugin system for yaca",
-  "description": "Dynamic plugin/hook system for the yaca Rust harness: (1) direct compatibility for OpenCode plugins, (2) Rust-based out-of-process plugin interface over IPC/RPC. Brainstorm injection points and architecture.",
+  "description": "Dynamic plugin/hook system for the yaca Rust harness: (1) direct compatibility for Compat plugins, (2) Rust-based out-of-process plugin interface over IPC/RPC. Brainstorm injection points and architecture.",
   "status": "planning",
   "dev_type": null,
   "scope": null,
@@ -21,7 +21,7 @@
   "children": [
     "06-21-plugin-host-core",
     "06-21-plugin-tools",
-    "06-21-opencode-adapter"
+    "06-21-compat-adapter"
   ],
   "parent": null,
   "relatedFiles": [],

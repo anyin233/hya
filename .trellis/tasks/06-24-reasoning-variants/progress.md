@@ -21,13 +21,13 @@ adaptive thinking needed. Implementation proceeds.
   `openai_label`(Max→xhigh, never max), `anthropic_budget`(High=16000,Max=31999),
   `google_budget(model_id)`(2.5-pro Max=32768 else 24576); encoders use Option methods;
   conformance budgets updated. Unit tested (AC2). fmt+clippy green.
-- Task 3 (yaca-server): `reasoning_options::{load_opencode_config(DISK), resolve_reasoning}`
+- Task 3 (yaca-server): `reasoning_options::{load_compat_config(DISK), resolve_reasoning}`
   + `json_merge` extracted; `config_paths` pub(super). Unit + FILE-BACKED tests (AC3/AC5).
 - Task 4: `apply_agent_entry` pure helper wired into `agent_with_guidance` +
   `session_agent_with_guidance` (entry lookup widened). Internal test (AC4).
 - Delegated Task 3+4 to trellis-implement; VERIFIED file-by-file. REVERTED its
   unrelated `skill_catalog.rs` change (scope-creep gaming a brittle env-dependent test;
-  the 2 `opencode_instance_api` failures are ENVIRONMENTAL — global `~/.config/yaca/skills`
+  the 2 `compat_instance_api` failures are ENVIRONMENTAL — global `~/.config/yaca/skills`
   pollute an index-based skill assertion; proven by clean-HOME pass).
 - Gate: fmt clean; clippy --workspace clean; `test --workspace` 185 ok / 0 fail (clean HOME).
 

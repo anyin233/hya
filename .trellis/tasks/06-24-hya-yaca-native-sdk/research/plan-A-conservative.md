@@ -5,8 +5,8 @@
 Framing: smallest correct change. Re-use the `Transport` seam, the existing
 `yaca_server::router(state)`, the existing `/global/event` projection, and the
 `tower::oneshot` + `http_body_util::BodyExt` patterns already used in 30+ tests
-(`crates/yaca-server/tests/api.rs:53`, `opencode_event_api.rs:105`,
-`opencode_prompt_async_api.rs:211`). The only genuinely new code is a small
+(`crates/yaca-server/tests/api.rs:53`, `compat_event_api.rs:105`,
+`compat_prompt_async_api.rs:211`). The only genuinely new code is a small
 in-process `Transport` impl and a small SSE-body-in-process event bridge,
 landing behind a Cargo feature so the HTTP path is untouched.
 
@@ -27,7 +27,7 @@ public surface, no new wire protocol.
   is exactly the right seam — adding a parallel trait doubles the surface for zero
   benefit. The dynamic `Arc<dyn Client>` storage in `hya/main.rs:122` works as-is.
 - **No re-projection of the bus.** The 796-line `/global/event` projection in
-  `crates/yaca-server/src/opencode/event.rs` already produces exactly the
+  `crates/yaca-server/src/compat/event.rs` already produces exactly the
   `GlobalEvent` shape hya's `events.rs` consumes. Re-projecting from
   `engine.bus().subscribe()` duplicates that logic and binds hya to internal
   envelope shapes — exactly the coupling the projection was designed to hide.
@@ -467,7 +467,7 @@ existing hya-tui error-handling paths stay valid.
 |---|---|---|
 | Code added in hya-sdk | ~40 LOC | ~400 LOC (re-project envelope → GlobalEvent) |
 | Couples hya to | the SSE wire shape (already a frozen contract) | yaca's internal `Envelope`/`Event` enum |
-| Reuses the 796-LOC `opencode/event.rs` projection | **yes** | no (must reimplement) |
+| Reuses the 796-LOC `compat/event.rs` projection | **yes** | no (must reimplement) |
 | Behavior drift risk vs. HTTP path | none — same producer | high — two projections must stay in sync |
 | Matches existing hya `events.rs` consumer | drop-in | drop-in but the producer is duplicated |
 
@@ -654,7 +654,7 @@ graceful shutdown.
 |---|---|
 | `--native` (no `--server`) | new Yaca branch |
 | `--native --server <url>` | reject in `Args::parse` (`InvalidInput`) |
-| `--http` / `--opencode` / `--server` / default (no `--native`) | UNCHANGED from today |
+| `--http` / `--compat` / `--server` / default (no `--native`) | UNCHANGED from today |
 | `--yolo` (future) | inside Yaca branch, swap `with_permission_requests` for `spawn_auto_responder(asks, PermissionPolicy::Yolo)` — copy the 4-line pattern from `serve.rs:88-93`. Out of scope for this PR. |
 
 ---
@@ -790,7 +790,7 @@ two transports are interchangeable from any consumer's point of view.
 
 ### 7.3 Existing tests
 
-The `crates/yaca-server/tests/api.rs` and 70+ opencode_*_api.rs tests already
+The `crates/yaca-server/tests/api.rs` and 70+ compat_*_api.rs tests already
 exercise the router via `tower::oneshot`. They give us extremely high
 confidence that the in-process router behaves identically to a TCP-served one.
 No new server-side tests needed.
@@ -821,10 +821,10 @@ Documented script (kept in
 | 3 | **`Router::clone` is not free.** | Low | Low | Already validated: 70+ existing tests do this per request without measurable cost. The Router wraps an Arc internally. |
 | 4 | **SSE bridge stops reading mid-frame on cancel**, leaving the broadcast `Sender` with one extra subscriber. | Low | Low | Sub drops when the Body stream drops. Tokio's broadcast already collects orphans. Verified by reading `tokio::sync::broadcast` semantics; no leak. |
 | 5 | **`/global/event` projection diverges from hya's expected shape over time.** | Low | High | This is the SAME risk the HTTP path runs today — the producer is the same code. Native path takes no new risk; in fact native path closes the risk that hya's HTTP consumer ever sees a different projection than the bus produces. |
-| 6 | **`with_permission_requests` consumed by AppState** but hya wants the channel for its own visibility. | Low | Low | hya uses the existing TUI permission prompt machinery via SSE events (`permission.created`, `permission.replied`). The channel inside AppState is only used by the legacy /sessions REST API; hya's opencode-routes path is the same as today. No change. |
+| 6 | **`with_permission_requests` consumed by AppState** but hya wants the channel for its own visibility. | Low | Low | hya uses the existing TUI permission prompt machinery via SSE events (`permission.created`, `permission.replied`). The channel inside AppState is only used by the legacy /sessions REST API; hya's compat-routes path is the same as today. No change. |
 | 7 | **`drop(plugin_host)` runs while still pluggable.** | Low | Medium | Ordered teardown: abort `event_task` FIRST (kills the SSE stream → router stops touching state), THEN drop the Arc<dyn Client> (this happens when `spawn_connect`'s task returns and the JoinHandle is dropped), THEN `drop(plugin_host)`. The existing `serve.rs:107-109` (`server.abort(); drop(plugin_host); result`) is our model. |
 | 8 | **Cargo feature interaction with `cargo build --workspace`** — `hya` enables `hya-sdk/native-yaca`, dragging `yaca-server` into the build for everyone. | Medium | Low | Acceptable — `yaca-server` is already a workspace member and builds anyway. The feature exists for downstream crates, not the workspace build. |
-| 9 | **Periodic merge with origin/main brings new routes/events that need projection updates.** | Medium | Medium | Zero new exposure on the native path — the projection is server-side, so any rebase automatically picks up new routes/events. The contract is wholly inside `yaca-server::opencode`. |
+| 9 | **Periodic merge with origin/main brings new routes/events that need projection updates.** | Medium | Medium | Zero new exposure on the native path — the projection is server-side, so any rebase automatically picks up new routes/events. The contract is wholly inside `yaca-server::compat`. |
 | 10 | **`anyhow::Result` from `build_engine` doesn't match `hya-sdk`'s `SdkError`.** | Low | Low | The native branch in `hya/src/main.rs` returns `Box<dyn Error + Send + Sync>` (existing signature, see `main.rs:141`). `anyhow::Error` boxes cleanly. No new error mapping needed. |
 
 ---
@@ -956,7 +956,7 @@ Total wall-time estimate with the parallel fan: **Medium (1–2d)**.
    behind `feature = "http"`. This makes `cargo build -p hya
    --no-default-features --features hya-sdk/native-yaca` produce a binary with
    zero reqwest. Cleanest possible proof, but touches `events.rs`, `server.rs`,
-   `client.rs` with `#[cfg]` and breaks `--server`/`--http`/`--opencode` until
+   `client.rs` with `#[cfg]` and breaks `--server`/`--http`/`--compat` until
    you flip the feature. Land in a follow-up PR after the native path is
    default. **Short (1–4h).**
 2. **Flip `--native` from opt-in to default.** Replace the current default

@@ -128,5 +128,5 @@
 - Child B reuses `protocol.rs` `tool/call` + the stored `declared_tools`; it only
   adds the `PluginTool` proxy and registers it via the **existing**
   `ToolRegistry::register` (no new registry primitive).
-- Child C reuses the whole stack; adds only a `kind:opencode` Bun child speaking
+- Child C reuses the whole stack; adds only a `kind:compat` Bun child speaking
   this protocol. **Protocol must not change for B/C** without a coordinated bump.

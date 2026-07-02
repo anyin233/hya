@@ -77,7 +77,7 @@ fn include_tool(id: &str, provider_id: Option<&str>, model: &str) -> bool {
     match id {
         "apply_patch" => use_patch,
         "edit" | "write" => !use_patch,
-        "websearch" => provider_id == Some("opencode"),
+        "websearch" => provider_id == Some("compat"),
         _ => true,
     }
 }

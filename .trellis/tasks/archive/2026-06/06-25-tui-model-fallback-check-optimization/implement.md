@@ -380,7 +380,7 @@ Under the code review checklist, add:
 Run:
 
 ```sh
-export TRELLIS_CONTEXT_ID='opencode_ses_1049b54e4ffekMcVcoTL7zT6lA'; python3 ./.trellis/scripts/task.py validate 06-25-tui-model-fallback-check-optimization
+export TRELLIS_CONTEXT_ID='compat_ses_1049b54e4ffekMcVcoTL7zT6lA'; python3 ./.trellis/scripts/task.py validate 06-25-tui-model-fallback-check-optimization
 ```
 
 Expected: all context manifests validate.
@@ -460,7 +460,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Expected: fmt and clippy pass. If `cargo test --workspace` still fails in known unrelated `crates/yaca-server/tests/opencode_instance_api.rs` cases expecting `demo`/`scoped` but observing `brainstorming`, record that as pre-existing and keep focused TUI tests green.
+Expected: fmt and clippy pass. If `cargo test --workspace` still fails in known unrelated `crates/yaca-server/tests/compat_instance_api.rs` cases expecting `demo`/`scoped` but observing `brainstorming`, record that as pre-existing and keep focused TUI tests green.
 
 - [ ] **Step 2: Manual native TUI QA**
 

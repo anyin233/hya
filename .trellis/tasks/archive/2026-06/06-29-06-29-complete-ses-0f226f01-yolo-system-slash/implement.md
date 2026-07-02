@@ -65,14 +65,14 @@ Complete YOLO slash-command removal/internal palette migration and local/system 
 - [ ] Add or edit only `crates/hya-backend/src/tui/controller.rs` tests for `/think`, `/mcp`, `/?`, `/exit`, and `/q` so each routes to its intended local effect/dialog.
 - [ ] Add or edit only `crates/hya-backend/src/tui/controller.rs` custom command test so a user-defined prompt macro remains submitted and is not claimed by local built-in routing.
 - [ ] Treat `tab_toggles_yolo_when_no_popup_is_active` as audit-only: do not remove Tab behavior unless it directly exposes public `/yolo` slash-command behavior or breaks a failing test tied to the PRD.
-- [ ] In `crates/hya-server/tests/opencode_command_metadata_api.rs`, edit `opencode_command_route_includes_native_init_and_review_commands` or add one adjacent test so `/command` and `/api/command` metadata omit built-in `yolo` while preserving expected `init`/`review` metadata.
-- [ ] In `crates/hya-server/tests/opencode_provider_model_api.rs`, edit tests only if provider/model metadata exposes command lists; otherwise make no change and record that this file has no command metadata assertion point.
+- [ ] In `crates/hya-server/tests/compat_command_metadata_api.rs`, edit `compat_command_route_includes_native_init_and_review_commands` or add one adjacent test so `/command` and `/api/command` metadata omit built-in `yolo` while preserving expected `init`/`review` metadata.
+- [ ] In `crates/hya-server/tests/compat_provider_model_api.rs`, edit tests only if provider/model metadata exposes command lists; otherwise make no change and record that this file has no command metadata assertion point.
 - [ ] Use `grep` for literal `/yolo`, `yolo on`, and `Switch YOLO` in `docs/cli.md`, `swebench/scripts/hya_drive.sh`, `swebench/scripts/HYA_DRIVE.md`, `swebench/RESULTS.md`, and `FINDINGS.md` before editing docs/automation.
 - [ ] Run the focused test commands expected to fail before implementation:
   - `cargo test -p hya-tui builtin_client_command_routes_builtin_slashes_to_client_actions palette_tui_commands_include_yolo_switch_action builtin_quit_command_detects_documented_slash_exit_aliases`
   - `cargo test -p hya-backend resolves_slash_commands_and_aliases unknown_slash_command_is_not_resolved help_items_come_from_registered_commands completion_items_filter_by_prefix`
   - `cargo test -p hya-backend slash_tools_opens_tool_status_dialog slash_quit_requests_exit slash_init_is_not_local_builtin`
-  - `cargo test -p hya-server opencode_command_route_includes_native_init_and_review_commands`
+  - `cargo test -p hya-server compat_command_route_includes_native_init_and_review_commands`
 
 ## Phase 3: Minimal implementation
 
@@ -82,7 +82,7 @@ Complete YOLO slash-command removal/internal palette migration and local/system 
 - [ ] In `crates/hya-backend/src/tui/controller.rs`, remove any `CommandKind::Init`/`TuiEffect::InitProject` dispatch if `/init` is still local; preserve custom prompt macro dispatch for user-defined `init` commands.
 - [ ] Leave Tab YOLO toggling unchanged unless an explicit PRD-tied failing test proves it exposes public `/yolo` slash behavior; the task removes public slash exposure, not unrelated keybindings.
 - [ ] In `crates/hya-backend/src/tui.rs` and `crates/hya-backend/src/tui/harness.rs`, remove `TuiEffect::InitProject` match arms only if the enum variant is deleted.
-- [ ] In `crates/hya-server/src/opencode/command_catalog.rs`, keep native `init` metadata if it is OpenCode-compatible prompt/native metadata; ensure no built-in `yolo` command is synthesized.
+- [ ] In `crates/hya-server/src/compat/command_catalog.rs`, keep native `init` metadata if it is Compat-compatible prompt/native metadata; ensure no built-in `yolo` command is synthesized.
 - [ ] Preserve CLI `--yolo` in backend CLI code and keep docs that describe startup `--yolo` usage.
 - [ ] In swebench script/docs/results/findings, replace any automation/guidance that types `/yolo on` with command-palette `Switch YOLO` guidance.
 - [ ] Do not add compatibility aliases or shims for `/yolo`.
@@ -93,7 +93,7 @@ Complete YOLO slash-command removal/internal palette migration and local/system 
   - `cargo test -p hya-tui builtin_client_command_routes_builtin_slashes_to_client_actions palette_tui_commands_include_yolo_switch_action builtin_quit_command_detects_documented_slash_exit_aliases`
   - `cargo test -p hya-backend resolves_slash_commands_and_aliases unknown_slash_command_is_not_resolved help_items_come_from_registered_commands completion_items_filter_by_prefix`
   - `cargo test -p hya-backend slash_tools_opens_tool_status_dialog slash_quit_requests_exit slash_init_is_not_local_builtin`
-  - `cargo test -p hya-server opencode_command_route_includes_native_init_and_review_commands`
+  - `cargo test -p hya-server compat_command_route_includes_native_init_and_review_commands`
 - [ ] Run `test ! -f swebench/scripts/hya_drive.sh || bash -n swebench/scripts/hya_drive.sh`.
 - [ ] Run `cargo fmt --all --check`.
 - [ ] Run `cargo clippy --workspace --all-targets -- -D warnings`.
@@ -123,7 +123,7 @@ Complete YOLO slash-command removal/internal palette migration and local/system 
   - `cargo test -p hya-tui builtin_client_command_routes_builtin_slashes_to_client_actions palette_tui_commands_include_yolo_switch_action builtin_quit_command_detects_documented_slash_exit_aliases`
   - `cargo test -p hya-backend resolves_slash_commands_and_aliases unknown_slash_command_is_not_resolved help_items_come_from_registered_commands completion_items_filter_by_prefix`
   - `cargo test -p hya-backend slash_tools_opens_tool_status_dialog slash_quit_requests_exit slash_init_is_not_local_builtin`
-  - `cargo test -p hya-server opencode_command_route_includes_native_init_and_review_commands`
+  - `cargo test -p hya-server compat_command_route_includes_native_init_and_review_commands`
   - `test ! -f swebench/scripts/hya_drive.sh || bash -n swebench/scripts/hya_drive.sh`
   - `cargo fmt --all --check`
   - `cargo clippy --workspace --all-targets -- -D warnings`

@@ -1,14 +1,14 @@
-# Design: Per-model reasoning variants with OpenCode parity
+# Design: Per-model reasoning variants with Compat parity
 
 Merged from two parallel planners (oracle = conservative/architecture-first;
 deep = thorough/failure-modes). Divergences and their resolutions are logged in
-§9. Requirements/ACs live in `prd.md`; OpenCode schema + citations in
-`research/opencode-reasoning-schema.md`.
+§9. Requirements/ACs live in `prd.md`; Compat schema + citations in
+`research/compat-reasoning-schema.md`.
 
 ## 1. Architecture (one seam)
 
 Resolve an agent/model `variant` (+ opencode.json model `options`/`variants`)
-into a typed `ReasoningEffort` at the OpenCode server agent-prep boundary, store
+into a typed `ReasoningEffort` at the Compat server agent-prep boundary, store
 it on `AgentSpec.reasoning`, and let the EXISTING pipeline carry it to the wire.
 Provider encoders own per-provider validity (so an invalid level can never reach
 the wire). No event/projection/TUI changes — providers already emit reasoning
@@ -18,7 +18,7 @@ events and the TUI already renders `Part::Reasoning`.
 opencode.json{,c} on DISK (config_paths(workdir) [+ ~/.config/opencode], jsonc::from_str::<Value>)
         │  NOTE: st.global.config() is runtime-PATCH-only and starts EMPTY (global.rs:23) — it is
         │  NOT a disk load. The provider variant bundles are read from disk per turn.
-        ▼  read per prompt turn: cfg = load_opencode_config(location::workdir(st))  // {} if none
+        ▼  read per prompt turn: cfg = load_compat_config(location::workdir(st))  // {} if none
 session_agent_with_guidance(st, session)           ◄═══ THE SEAM (reference.rs:19)
    • existing: overlay session agent name + custom prompt
    • NEW: entry = agent_catalog::list(..).find(active agent)
@@ -42,18 +42,18 @@ VERIFIED: all prompt turns converge on `session_agent_with_guidance`
 (`session_prompt.rs:113,155`, `session_prompt_legacy.rs:60`,
 `session_legacy.rs:217,329`); `agent_with_guidance` covers the no-session case
 (`session_legacy.rs:401`). The native `hya` bridge talks to these in-process
-opencode endpoints, so this one seam covers the native path.
+compat endpoints, so this one seam covers the native path.
 
 ## 2. Type design (`crates/yaca-provider/src/lib.rs`)
 
 Keep `ReasoningEffort` a typed enum (NOT a stringly/option-bag), extended to the
-full OpenCode vocabulary. Per-provider validity + clamping live in methods on the
+full Compat vocabulary. Per-provider validity + clamping live in methods on the
 enum, so encoders cannot bypass them.
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReasoningEffort {
-    Off,      // OpenCode "none" — explicit disable. Named `Off` (not `None`) to
+    Off,      // Compat "none" — explicit disable. Named `Off` (not `None`) to
               // avoid Option<ReasoningEffort>::None shadowing/confusion.
     Minimal,
     Low,
@@ -65,7 +65,7 @@ pub enum ReasoningEffort {
 
 impl ReasoningEffort {
     pub fn parse(s: &str) -> Option<Self>;        // accepts none|off, minimal, low, medium|med, high, xhigh, max
-    pub fn as_str(self) -> &'static str;          // canonical OpenCode strings; Off → "none"
+    pub fn as_str(self) -> &'static str;          // canonical Compat strings; Off → "none"
 
     /// OpenAI `reasoning_effort` label, or None to omit. `model_id` enables
     /// per-model narrowing (consistent with google_budget). Max CLAMPS to
@@ -112,16 +112,16 @@ The "OpenAI never emits max" rule is enforced INSIDE `openai_label()` (returns
 "xhigh" for Max) and asserted by a unit test, so a future encoder edit cannot
 silently regress it.
 
-## 4. Reasoning resolver (new: `crates/yaca-server/src/opencode/reasoning_options.rs`)
+## 4. Reasoning resolver (new: `crates/yaca-server/src/compat/reasoning_options.rs`)
 
 ```rust
 /// Read + deep-merge opencode.json{,c} from DISK into one Value (workdir paths
 /// per config_paths() then ~/.config/opencode, via jsonc::from_str::<Value>;
 /// workdir wins). Returns {} when no file exists. This — NOT st.global.config()
 /// (runtime-PATCH-only, empty) — is the source for provider model bundles.
-pub(in crate::opencode) fn load_opencode_config(workdir: &Path) -> serde_json::Value;
+pub(in crate::compat) fn load_compat_config(workdir: &Path) -> serde_json::Value;
 
-pub(in crate::opencode) fn resolve_reasoning(
+pub(in crate::compat) fn resolve_reasoning(
     agent_variant: Option<&str>,
     agent_options: &BTreeMap<String, serde_json::Value>,
     model: &ModelRef,                 // active model (may carry #variant)
@@ -129,7 +129,7 @@ pub(in crate::opencode) fn resolve_reasoning(
 ) -> Option<yaca_provider::ReasoningEffort>;
 ```
 
-Algorithm (mirrors OpenCode precedence):
+Algorithm (mirrors Compat precedence):
 1. Fast exit (backward compat / AC5): `agent_variant.is_none() && agent_options
    has no reasoning key && model has no #variant` → return `None`.
 2. Split model via `model_ref::model_ref_parts` → `(provider_id?, model_id,
@@ -140,7 +140,7 @@ Algorithm (mirrors OpenCode precedence):
    no `config`; disk `config` is consulted only here onward for the bundle path —
    so AC1/AC4 work even with NO opencode.json on disk.)
 4. Build a merged option map (deep-merge, reuse `agent_catalog::merge_json_value`,
-   extracted to `opencode/json_merge.rs`): base `models.<id>.options` ← agent
+   extracted to `compat/json_merge.rs`): base `models.<id>.options` ← agent
    `options` ← selected `variants.<name>` (skip if `disabled:true`).
 5. Project merged map → effort, first match wins:
    a. selected variant name parsed as a level (`max`,`high`,…);
@@ -154,13 +154,13 @@ This module is the ONLY place that knows opencode.json shape. `yaca-provider`
 knows nothing about variants; `yaca-core`/`yaca-proto` know nothing about
 opencode.json.
 
-## 5. Wiring (`crates/yaca-server/src/opencode/reference.rs`)
+## 5. Wiring (`crates/yaca-server/src/compat/reference.rs`)
 
 Extend `session_agent_with_guidance` (and `agent_with_guidance` for the
 no-session default agent) with a shared PURE helper
 `apply_agent_entry(agent: &mut AgentSpec, entry: &AgentEntry, active_model: &ModelRef, config: &Value)`
 (no `ServerState` → unit-testable in-module): after the existing name/prompt
-overlay, compute the active model, load `config = load_opencode_config(location::workdir(st))`
+overlay, compute the active model, load `config = load_compat_config(location::workdir(st))`
 (DISK read — NOT `global.config()`), look up the agent entry (already fetched in
 the existing block — widen its scope), call `resolve_reasoning`, and set
 `agent.reasoning = effort` when `Some`. Precedence
@@ -175,7 +175,7 @@ through the seam above, so no AC needs it.
 ## 6. Max-budget bounding (resolves PRD DQ3)
 
 `Capabilities` has no per-model output limit. Use a CONSTANT max budget (31999
-Anthropic; 24576/32768 Google) matching OpenCode, NOT a new `Capabilities`
+Anthropic; 24576/32768 Google) matching Compat, NOT a new `Capabilities`
 field. Rationale: adding `max_output_tokens` to the `Provider` trait + all impls
 is scope the ACs don't need; `anthropic.rs` already bumps `max_tokens` to
 `budget + 4096` when the requested cap is below the budget, which is the only
@@ -194,7 +194,7 @@ Google's existing `thinkingConfig`:
 
 ADAPTIVE THINKING — FAIL CLOSED (critical, from deep's plan-review + oracle Risk#5):
 do NOT emit `thinking:{type:"adaptive",effort}` — it is not a documented Anthropic
-Messages wire field and would 400. `claude-opus-4-8` is in OpenCode's "adaptive"
+Messages wire field and would 400. `claude-opus-4-8` is in Compat's "adaptive"
 family, but the documented Anthropic extended-thinking wire is
 `type:"enabled",budget_tokens`, which an Anthropic-compatible gateway (12th.day)
 accepts. We emit ONLY `enabled+budget_tokens` and confirm reasoning renders via
@@ -251,7 +251,7 @@ that caused this task).
 4. **Model→provider lookup** for bare native ids: scan `provider.*.models`;
    confirm deterministic and correct for `claude-opus-4-8`.
 5. **`merge_json_value` extraction** from `agent_catalog.rs` to a shared
-   `json_merge.rs` (pub(in crate::opencode)) without changing its semantics.
+   `json_merge.rs` (pub(in crate::compat)) without changing its semantics.
 6. **CONFIG SOURCE (verified):** `st.global.config()` is runtime-PATCH-only and
    starts EMPTY (`global.rs:23,31`) — provider variant bundles MUST be read from
    DISK (`config_paths(workdir)` [+ `~/.config/opencode`], `jsonc::from_str::<Value>`),
@@ -270,7 +270,7 @@ D1 PASS · D2 **FAIL** · D3 PASS · D4 PASS · D5 PASS · D6 PASS.
   but omitted the sibling assertions that move with the parity budgets:
   `conformance.rs:365` (`budget_tokens == 16384`) and `:372` (`thinkingBudget == 24576`).
 - D3 independently confirmed all cited symbols live, incl. native `hya` flowing
-  through the opencode endpoints via in-proc axum (`serve.rs:81-103`) → the seam.
+  through the compat endpoints via in-proc axum (`serve.rs:81-103`) → the seam.
 - FIX APPLIED: `implement.md` Task 2 now explicitly updates `conformance.rs:365`
   16384→16000 and `:372` 24576→16000 (verified these are the only budget literals).
 
@@ -282,19 +282,19 @@ D1 FAIL · D2 FAIL · D3 FAIL · D4 PASS · D5 FAIL · D6 PASS.
 - D5: added an early AC1 gateway smoke (`implement.md` Task 2.5) before building the resolver.
 
 ### Round 3 — codex gpt-5 (cross-family ✓) — VERDICT: FAIL
-D1 FAIL (prd.md:46 Scope still said "bounded by output limit") · D2 FAIL (`session_agent_with_guidance` is `pub(in crate::opencode)`, unreachable from external `tests/`) · D3 FAIL (diagram + encoder §7 still called `openai_label()` without model_id) · D4 PASS · D5 PASS · D6 PASS.
+D1 FAIL (prd.md:46 Scope still said "bounded by output limit") · D2 FAIL (`session_agent_with_guidance` is `pub(in crate::compat)`, unreachable from external `tests/`) · D3 FAIL (diagram + encoder §7 still called `openai_label()` without model_id) · D4 PASS · D5 PASS · D6 PASS.
 - D1: prd.md:46 reworded to the constant.
 - D2: design §5 gives `apply_agent_entry` a pure ServerState-free signature; implement Task 4 is now an INTERNAL unit test on it.
 - D3: design diagram (§1) + encoder §7 now pass `model_id`.
 
 ### Round 4 — codex gpt-5 (cross-family ✓) — VERDICT: FAIL
 D1 PASS · D2 PASS · D3 **FAIL** · D4 PASS · D5 **FAIL** · D6 PASS.
-- D3 (MAJOR, both same-family planners missed it): design sourced provider bundles from `st.global.config()`, which is runtime-PATCH-only and starts EMPTY (`global.rs:23`) — NOT a disk load. FIX: resolver now reads opencode.json from DISK via `load_opencode_config(workdir)` (`config_paths` + `jsonc`); §1/§4/§5 + §11#6 updated. AC1/AC4 (variant-name path) need no disk config.
+- D3 (MAJOR, both same-family planners missed it): design sourced provider bundles from `st.global.config()`, which is runtime-PATCH-only and starts EMPTY (`global.rs:23`) — NOT a disk load. FIX: resolver now reads opencode.json from DISK via `load_compat_config(workdir)` (`config_paths` + `jsonc`); §1/§4/§5 + §11#6 updated. AC1/AC4 (variant-name path) need no disk config.
 - D5: tests used in-memory Values and AC1 could pass via the variant-name parse → didn't prove the disk bundle is actually read. FIX: added a file-backed integration test (`implement.md` Task 3) writing a real opencode.json whose variant name is NOT a level keyword so the BUNDLE must supply the effort, asserting it reaches the request body.
 
 ### Round 5 — codex gpt-5 (cross-family ✓) — VERDICT: FAIL
 D1 PASS · D2 PASS · D3 FAIL · D4 PASS · D5 PASS · D6 PASS.
-- D3: `config_paths` is private to `agent_sources.rs`; module root is `opencode.rs` (no `opencode/mod.rs`). FIX: implement Task 3 now makes `config_paths` `pub(super)` and declares modules in `opencode.rs`.
+- D3: `config_paths` is private to `agent_sources.rs`; module root is `compat.rs` (no `compat/mod.rs`). FIX: implement Task 3 now makes `config_paths` `pub(super)` and declares modules in `compat.rs`.
 
 ### Round 6 — codex gpt-5.5 (cross-family ✓) — VERDICT: PASS
 D1–D6 all PASS. Plan cleared the cross-family gate; execution may begin after user go-ahead + `task.py start`.

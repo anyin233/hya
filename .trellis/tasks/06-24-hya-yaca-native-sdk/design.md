@@ -19,7 +19,7 @@
 
 The existing `Transport` trait (`crates/hya-sdk/src/client.rs:14`) is the seam. `Client` is implemented once over any
 `Transport`. We add a new in-process `Transport` that calls `yaca_server::router(AppState)` — an `axum::Router` — via
-`tower::ServiceExt::oneshot`, the Rust analogue of opencode's in-process `app.fetch`. No TCP, no reqwest. Events stream
+`tower::ServiceExt::oneshot`, the Rust analogue of compat's in-process `app.fetch`. No TCP, no reqwest. Events stream
 in-process by `oneshot`-ing `GET /global/event` and reading the SSE body, reusing the entire 796-LOC projection.
 
 ```
@@ -38,14 +38,14 @@ yaca-cli  → yaca-app       (re-uses the extracted bootstrap; behavior unchange
 |---|---|---|---|---|
 | Native transport crate | feature-gated module in `hya-sdk` | new `hya-yaca` | new `hya-yaca` | **NEW `hya-yaca` crate** (B+C). hya-sdk's design is "Client over any Transport" — backends belong OUTSIDE it. Feature-gating forces optional `reqwest`/`yaca-server` deps + gated `events.rs`/`server.rs` (A itself flagged this as awkward). Cost of a crate = 1 Cargo.toml. |
 | Bootstrap lib name | `yaca-bootstrap` | `yaca-app` | `yaca-app` | **`yaca-app`** (B+C majority). |
-| Native default vs opt-in | `--native` opt-in | default | default | **DEFAULT** (B+C; matches "instead of HTTP streaming"). Keep `--http`/`--server`/`--opencode` as explicit fallbacks. |
+| Native default vs opt-in | `--native` opt-in | default | default | **DEFAULT** (B+C; matches "instead of HTTP streaming"). Keep `--http`/`--server`/`--compat` as explicit fallbacks. |
 | Event delivery | oneshot SSE | oneshot SSE | oneshot SSE (+bus fallback) | **oneshot `/global/event`** primary; **`engine.bus()` fallback** if flaky. Reuses projection + decoder. |
 | Channel backpressure | unbounded (match HTTP) | bounded | unbounded | **UNBOUNDED** — match existing HTTP path exactly; bounded redesign is a separate concern. |
 | Engine error hardening | — | harden `run_turn` | — | **OUT OF SCOPE** — changing core `SessionEngine` semantics affects both paths; not part of "wire natively". |
 
 ## 4. Explicit non-goals (do NOT build)
 - No new `Transport` trait; no new `SdkError` variants (reuse `SdkError::Http(String)` for non-2xx + parse errors, exactly like `HttpTransport`).
-- No re-projection of the bus on the primary path (reuse the `/global/event` 796-LOC projection in `opencode/event.rs`).
+- No re-projection of the bus on the primary path (reuse the `/global/event` 796-LOC projection in `compat/event.rs`).
 - No changes to `hya-sdk/src/{client,server,events,native}.rs` except promoting `DIRECTORY_HEADER` to `pub`.
 - No moving `auth_cmd.rs` (the `yaca auth` CLI subcommand), `agent_cmd`, `models_cmd`, `tui*`, `rpc`, `cli_args` out of `yaca-cli`. Only the bootstrap glue moves — which DOES include `auth.rs` token helpers (because `config.rs:208` calls `crate::auth::load_token`). The staying files that reference moved items (`models_cmd.rs`, `tui.rs`, `tui/controller.rs`, `auth_cmd.rs`, `tui/harness.rs`, and every `cmd_*`) keep their `crate::…`/`super::…`/unqualified references UNCHANGED — `main.rs` re-exports the moved modules and fns via `pub use yaca_app::{…}` (1i2/1i3), so NO call-site edits are needed anywhere in yaca-cli.
 - No `SessionEngine` behavior change; no bounded-channel redesign; no feature-gating `reqwest` out (HTTP path stays intact).
@@ -130,7 +130,7 @@ that takes the PUBLIC `AppState` and ENCAPSULATES the private `ServerState` inte
 are `pub(crate)` — state.rs:88,108 — so they must NOT appear in the public signature): define
 `pub async fn project_envelope_to_global_event(state: &AppState, env: Envelope) -> Option<Value>` IN yaca-server, body
 `let ss = ServerState::new(state.clone()); /* call existing private subscribe_global/envelope_payload projection */`
-(`opencode/event.rs`). The fallback bridge needs `YacaRuntime` to expose the AppState (`pub fn app_state(&self) -> AppState`,
+(`compat/event.rs`). The fallback bridge needs `YacaRuntime` to expose the AppState (`pub fn app_state(&self) -> AppState`,
 `AppState: Clone`), then drives `engine.bus().subscribe()` → `project_envelope_to_global_event(&rt.app_state(), env)` →
 `{"payload": ...}` → tx. **No `ServerState` in the public API.** Same wire shape; hya cannot tell. Primary (oneshot-SSE) and
 fallback (bus) are mutually exclusive at build time; ship whichever passes the Phase-2 gates.
@@ -143,7 +143,7 @@ fallback (bus) are mutually exclusive at build time; ship whichever passes the P
   (`yolo:false` → permission requests surface to the TUI via the existing `permission_reply` path, exactly like the HTTP path.)
 - `shutdown`: `bridge.abort(); drop(runtime)` (drops engine → mcp → plugin_host in order).
 - Flags after change: *(none)* → native default; `--http` → spawn `yaca serve` + reqwest/SSE (today's default, preserved);
-  `--server <url>` → attach; `--opencode` → Bun bridge; `--yaca-bin` retained (used by `--http`). Update `print_usage`.
+  `--server <url>` → attach; `--compat` → Bun bridge; `--yaca-bin` retained (used by `--http`). Update `print_usage`.
   NOTE: hya's current `Args` (main.rs:364) has NO `yolo` field; native mode uses `yolo:false` (scoped, TUI-mediated permissions).
   A hya `--yolo` flag is **OUT OF SCOPE** for this task (the proof tests set `yolo:true` directly in `RuntimeOptions`, not via a CLI flag).
 

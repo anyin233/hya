@@ -101,7 +101,7 @@ Return a minimal unified-diff-ish summary `{replaced: n}`.
 
 ## Wave 5 — Providers + auth
 - Add Google provider decoder in `yaca-provider` (Gemini generateContent/SSE),
-  wired into router + opencode-config mapping.
+  wired into router + compat-config mapping.
 - OAuth `/login`: device/PKCE flow for Anthropic + one OpenAI-class; store token
   (SecretString) in config dir; router prefers OAuth token when present.
 - AC6: a Google model and an OAuth provider each complete a turn.

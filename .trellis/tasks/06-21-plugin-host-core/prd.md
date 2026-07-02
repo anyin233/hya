@@ -2,17 +2,17 @@
 
 > Parent: [06-21-plugin-system](../06-21-plugin-system/prd.md). All cross-cutting
 > decisions (D1–D7), the verified yaca architecture, the v1 hook inventory, and the
-> OpenCode contract live in the parent PRD. This child owns the MVP foundation.
+> Compat contract live in the parent PRD. This child owns the MVP foundation.
 
 ## Goal
 
-Build the foundational layer that every plugin (native or the OpenCode adapter)
+Build the foundational layer that every plugin (native or the Compat adapter)
 relies on: a new `yaca-plugin` crate carrying the **JSONL / JSON-RPC-style IPC
 protocol** + the **host/manager** that spawns plugins as child processes, plus the
 **hook-dispatch seams** inside `yaca-core` for the v1 hook set, the config/loading
 surface, and the `yaca-cli` bootstrap. Ships with a native example plugin and the
 per-hook failure posture. This is the contract Child B (tools) and Child C
-(OpenCode adapter) consume.
+(Compat adapter) consume.
 
 ## Scope (owns)
 
@@ -81,7 +81,7 @@ R5 tool registration is Child B; R8 is Child C).
 
 ## Out of scope
 
-- Plugin-registered tools (Child B), OpenCode adapter (Child C), out-of-process
+- Plugin-registered tools (Child B), Compat adapter (Child C), out-of-process
   providers, OS sandbox, and the deferred hook inventory (parent "Out of scope").
 
 ## Notes

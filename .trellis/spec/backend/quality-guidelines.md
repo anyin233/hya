@@ -57,7 +57,7 @@ Questions to answer:
 ### 1. Scope / Trigger
 
 - Trigger: any HTTP/API route that admits a prompt or shell turn and starts optional model-side work such as auto-title, summarization, compaction, or background metadata generation.
-- Applies to OpenCode-compatible prompt routes, native prompt routes, and future admission-style routes that must acknowledge work before the provider stream completes.
+- Applies to Compat-compatible prompt routes, native prompt routes, and future admission-style routes that must acknowledge work before the provider stream completes.
 
 ### 2. Signatures
 
@@ -118,7 +118,7 @@ Ok(Json(response))
 ### 1. Scope / Trigger
 
 - Trigger: any API route, client URL builder, sync/projector path, TUI/control route, or test fixture that accepts or emits a session ID.
-- Applies to OpenCode-compatible `sessionID` payload fields, native path parameters, experimental routes, sync replay/history routes, and test helpers that create sessions.
+- Applies to Compat-compatible `sessionID` payload fields, native path parameters, experimental routes, sync replay/history routes, and test helpers that create sessions.
 
 ### 2. Contracts
 

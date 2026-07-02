@@ -33,13 +33,13 @@ that is a near-exact precedent for the plugin host:
 **[MERGE] The plugin host is a generalization of `yaca-mcp`'s client+manager**, and
 the protocol adopts **JSON-RPC 2.0** (the house style) rather than either planner's
 bespoke envelope. This de-risks transport, reuses proven patterns, keeps the
-codebase consistent, and makes the OpenCode Bun adapter (Child C) trivial (JSON-RPC
+codebase consistent, and makes the Compat Bun adapter (Child C) trivial (JSON-RPC
 2.0 is ubiquitous in JS). Follow-up (not now): extract a shared `jsonrpc-stdio`
 helper crate that both `yaca-mcp` and `yaca-plugin` use; for v1 we keep a parallel
 minimal impl in `yaca-plugin` to avoid refactoring a working crate.
 
 > Note: MCP is yaca's **parallel** extension mechanism (external tool servers). The
-> plugin system is broader (lifecycle interception + tools + OpenCode compat) but
+> plugin system is broader (lifecycle interception + tools + Compat compat) but
 > deliberately shares MCP's transport DNA.
 
 ## 1. Crate & dependency layout (the DAG)
@@ -121,7 +121,7 @@ codes: `-32601` method-not-found, `-32602` invalid-params, `-32603` internal,
 // plugin→host (must arrive within INITIALIZE_TIMEOUT=5s)
 { "jsonrpc":"2.0","id":1,"result": {
     "protocol_version":1,
-    "plugin":{ "id":"example","version":"0.1.0","kind":"rust" },   // kind: rust|opencode|other
+    "plugin":{ "id":"example","version":"0.1.0","kind":"rust" },   // kind: rust|compat|other
     "hooks":[ {"name":"tool.execute.before","posture":"safe"},
               {"name":"chat.params","posture":"open"},
               {"name":"event","posture":"open"} ],
@@ -138,7 +138,7 @@ on mismatch.
 **[D6] Tool-schema wire key is `inputSchema` (camelCase) EVERYWHERE** — in
 `initialize.tools[]` above and in any Child C adapter output. This mirrors the
 existing `yaca-mcp` `ToolInfo` (`#[serde(rename_all = "camelCase")]`, whose test
-asserts the wire contains `inputSchema`) and OpenCode's own `inputSchema`. Rust
+asserts the wire contains `inputSchema`) and Compat's own `inputSchema`. Rust
 structs may name the field `input_schema` internally but MUST serde-rename to
 `inputSchema` on the wire. Children B and C MUST NOT emit snake_case `input_schema`
 on the wire; a protocol-codec round-trip test pins this.
@@ -146,7 +146,7 @@ on the wire; a protocol-codec round-trip test pins this.
 ### 2.3 Hook request/reply (interception)
 
 `input` = read-only context; `output`/outcome = the mutable thing the engine
-applies (mirrors OpenCode's `(input, output)` in-place mutation). Outcome is a
+applies (mirrors Compat's `(input, output)` in-place mutation). Outcome is a
 tagged enum so mutation, pass-through, veto, and defer are explicit:
 
 ```jsonc
@@ -310,7 +310,7 @@ Generalize `McpManager`:
 - Per plugin: `PluginClient` (send/notify channels, `Pending` map, reader+writer+
   notifier+watcher tasks), status `Alive|Dead|Disabled`, declared hooks/tools.
 - **Chains**: per-hook, plugins run **sequentially in declared LOAD order**; each
-  plugin's output feeds the next (mirrors OpenCode). `permission.ask`/goal/loop =
+  plugin's output feeds the next (mirrors Compat). `permission.ask`/goal/loop =
   first-non-`defer` wins. `event` = broadcast to all (bounded, drop-oldest).
   **Mandatory test:** two plugins where the first-loaded plugin is slow to hand
   shake and the second is fast — assert the chain still applies them in load order
@@ -326,7 +326,7 @@ Generalize `McpManager`:
 ```yaml
 plugins:
   remember:
-    kind: rust                    # rust | opencode
+    kind: rust                    # rust | compat
     command: ["./bin/remember"]   # argv
     enabled: true
     timeout_ms: 1000
@@ -386,10 +386,10 @@ use it; `cmd_tail_session` uses an empty plugin set.
   before the registry freezes into `Arc`. No new registry primitive is required
   (the registry is already dynamic); an `extend(...)` convenience wrapper is
   optional.
-- **Child C** adds a `kind:opencode` Bun plugin (one child process) that speaks this
-  exact protocol on stdio and re-emits OpenCode `Hooks`. **The protocol does not
-  change for C.** C maps OpenCode `(input,output)`+throw ⇄ our outcome enums, and
-  points the OpenCode SDK `client` at a `yaca serve` instance.
+- **Child C** adds a `kind:compat` Bun plugin (one child process) that speaks this
+  exact protocol on stdio and re-emits Compat `Hooks`. **The protocol does not
+  change for C.** C maps Compat `(input,output)`+throw ⇄ our outcome enums, and
+  points the Compat SDK `client` at a `yaca serve` instance.
 
 ## 8. Risks / explicit tradeoffs
 

@@ -1,4 +1,4 @@
-//! Spawn and supervise a real backend `serve` subprocess (`opencode` or `hya-backend`).
+//! Spawn and supervise a real backend `serve` subprocess (`compat` or `hya-backend`).
 //!
 //! Both backends print `<name> server listening on http://127.0.0.1:<port>` to their output,
 //! which we parse for the base URL (see [`parse_listen_url`]). `Drop` guarantees no orphaned
@@ -13,14 +13,14 @@ use tokio::sync::mpsc;
 
 use crate::error::{Result, SdkError};
 
-const DEFAULT_BIN: &str = "opencode";
+const DEFAULT_BIN: &str = "compat";
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// hya binds its listener only after connecting MCP servers, which can be slow; give the
 /// background connect a generous window before declaring the spawn dead.
 const HYA_READY_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// `opencode serve` flags: ephemeral port on loopback, logs to stdout so the URL is parseable.
-const OPENCODE_SERVE_ARGS: &[&str] = &[
+/// `compat serve` flags: ephemeral port on loopback, logs to stdout so the URL is parseable.
+const COMPAT_SERVE_ARGS: &[&str] = &[
     "serve",
     "--port",
     "0",
@@ -31,7 +31,7 @@ const OPENCODE_SERVE_ARGS: &[&str] = &[
 /// `hya-backend serve` flags: ephemeral loopback port (`:0`). hya prints the same `listening on` line.
 const HYA_SERVE_ARGS: &[&str] = &["serve", "--bind", "127.0.0.1:0"];
 
-/// A running `opencode serve` process plus its discovered base URL.
+/// A running `compat serve` process plus its discovered base URL.
 #[derive(Debug)]
 pub struct ServerHandle {
     child: Child,
@@ -40,7 +40,7 @@ pub struct ServerHandle {
 }
 
 impl ServerHandle {
-    /// Spawn `opencode serve` for `directory` on a random port and wait until it is ready.
+    /// Spawn `compat serve` for `directory` on a random port and wait until it is ready.
     ///
     /// # Errors
     /// [`SdkError::Spawn`] if the process cannot start, [`SdkError::Readiness`] on timeout,
@@ -49,13 +49,13 @@ impl ServerHandle {
         Self::spawn_with(DEFAULT_BIN, directory, DEFAULT_READY_TIMEOUT).await
     }
 
-    /// Spawn `opencode serve` with an explicit binary name and readiness timeout (used by tests
+    /// Spawn `compat serve` with an explicit binary name and readiness timeout (used by tests
     /// to inject failures).
     ///
     /// # Errors
     /// See [`ServerHandle::spawn`].
     pub async fn spawn_with(bin: &str, directory: &str, timeout: Duration) -> Result<Self> {
-        Self::spawn_args(bin, OPENCODE_SERVE_ARGS, directory, timeout).await
+        Self::spawn_args(bin, COMPAT_SERVE_ARGS, directory, timeout).await
     }
 
     /// Spawn `hya-backend serve` on an ephemeral loopback port and wait until it announces its URL.
@@ -135,7 +135,7 @@ impl ServerHandle {
 impl Drop for ServerHandle {
     fn drop(&mut self) {
         // The child is its own process-group leader (`process_group(0)`), so signalling the
-        // NEGATIVE pid reaches the whole tree — `opencode serve` spawns subprocesses that a
+        // NEGATIVE pid reaches the whole tree — `compat serve` spawns subprocesses that a
         // single-pid kill would orphan. Graceful SIGTERM, ~1s wait, then SIGKILL the group.
         if let Some(pid) = self.child.id() {
             let pid = pid as libc::pid_t;
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn parses_verified_listen_line() {
-        let line = "opencode server listening on http://127.0.0.1:4096";
+        let line = "compat server listening on http://127.0.0.1:4096";
         assert_eq!(
             parse_listen_url(line).as_deref(),
             Some("http://127.0.0.1:4096")
@@ -275,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn missing_binary_is_typed_spawn_error_not_a_hang() {
         let err = ServerHandle::spawn_with(
-            "opencode-definitely-not-a-real-binary-xyz",
+            "compat-definitely-not-a-real-binary-xyz",
             ".",
             Duration::from_secs(2),
         )

@@ -1,7 +1,7 @@
 {
   "id": "reasoning-variants",
   "name": "reasoning-variants",
-  "title": "Per-model reasoning variants with OpenCode parity",
+  "title": "Per-model reasoning variants with Compat parity",
   "description": "",
   "status": "in_progress",
   "dev_type": null,

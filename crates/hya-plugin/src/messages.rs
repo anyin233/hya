@@ -138,7 +138,10 @@ pub struct PluginInfo {
 pub enum PluginKindWire {
     #[default]
     Rust,
-    Opencode,
+    // Back-compat: existing configs may still declare `kind: opencode` for the
+    // external JS-plugin adapter; keep accepting that literal (external contract).
+    #[serde(alias = "opencode")]
+    Compat,
     Other,
 }
 

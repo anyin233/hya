@@ -178,7 +178,7 @@ impl HttpProvider {
         Ok(headers)
     }
 
-    // OpenCode addresses models as `providerID/modelID` (+ optional `#variant`);
+    // Compat addresses models as `providerID/modelID` (+ optional `#variant`);
     // the upstream route wants the bare `modelID`. Maps a served ref to that id.
     fn served_model_id(&self, model: &ModelRef) -> Option<String> {
         let base = match model.as_str().rsplit_once('#') {

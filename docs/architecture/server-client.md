@@ -2,7 +2,7 @@
 
 The server lives in [`../../crates/hya-server`](../../crates/hya-server). It
 wraps `SessionEngine` with Axum routes, native SSE streams, and
-OpenCode-compatible HTTP/SSE route groups.
+Compat-compatible HTTP/SSE route groups.
 
 ## App State
 
@@ -18,8 +18,8 @@ OpenCode-compatible HTTP/SSE route groups.
 The router wraps it into internal `ServerState`, which adds run tokens for
 busy/abort behavior plus process-local global, MCP HTTP, project, PTY, and TUI
 state used by compatibility routes. The native routes run prompts through
-the server's configured `AgentSpec`. OpenCode-compatible routes translate
-OpenCode-shaped request/response bodies to the same engine, event log,
+the server's configured `AgentSpec`. Compat-compatible routes translate
+Compat-shaped request/response bodies to the same engine, event log,
 projection, run registry, and pending queues.
 
 ## Native Routes
@@ -37,7 +37,7 @@ Session ids in native URL paths accept any valid shared `SessionId` form:
 `hysec_...`, `ses_...`, or legacy raw UUID. Invalid ids return `400 Bad
 Request`. Busy sessions return `409 Conflict`. Runtime errors are returned as
 `500 Internal Server Error` unless a compatibility route maps the error into a
-typed OpenCode body.
+typed Compat body.
 
 ## Native Session Calls
 
@@ -75,15 +75,15 @@ events for the requested session. If the broadcast receiver lags, the server
 emits an SSE event named `resync`; clients should use the events endpoint with
 their last seen sequence to catch up.
 
-## OpenCode-Compatible Route Groups
+## Compat-Compatible Route Groups
 
-`opencode::router()` is merged into the same Axum app. Current route groups
+`compat::router()` is merged into the same Axum app. Current route groups
 include:
 
 | Group | Examples | Backing implementation |
 | --- | --- | --- |
 | Sessions | `/session`, `/session/:id`, `/api/session`, `/api/session/:id/context`, `/api/session/:id/message`, prompt/command/shell/abort/fork/share/update/delete/revert/summarize routes | hya event log, projection, run registry, switch/session-state events, pending queues |
-| Events | `/event`, `/api/event`, `/global/event` | translated live hya envelopes plus OpenCode heartbeat/connected/status/error frames |
+| Events | `/event`, `/api/event`, `/global/event` | translated live hya envelopes plus Compat heartbeat/connected/status/error frames |
 | Files/search | `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, `/api/fs/read/*path`, `/api/fs/list`, `/api/fs/find` | filesystem reads, ignore matching, MIME sniffing, fuzzy path search, optional `LspPlane` |
 | Catalogs/metadata | `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill` | built-in catalog sources, prompt directories, local skills, formatter/LSP planes |
 | Provider/auth | `/config`, `/config/providers`, `/provider`, `/provider/auth`, `/auth/:providerID`, `/api/provider`, `/api/model`, credential/integration routes | resolved hya provider catalog and local auth token store |
@@ -93,14 +93,14 @@ include:
 | VCS/project/worktree | `/vcs/*`, `/project/*`, `/experimental/project/*/copy`, `/experimental/worktree/*` | git commands, project state, git worktree helpers |
 | TUI/global/sync/experimental | `/tui/*`, `/global/*`, `/sync/*`, `/experimental/*` | process-local compatibility queues/state and event-log-backed sync history |
 
-The OpenCode surface intentionally favors shaped compatibility over pretending
-to be a full OpenCode superset. Known limits are tracked in
-[`../opencode-parity.md`](../opencode-parity.md).
+The Compat surface intentionally favors shaped compatibility over pretending
+to be a full Compat superset. Known limits are tracked in
+[`../compat-parity.md`](../compat-parity.md).
 
 ## CORS and OpenAPI
 
 The server mirrors request origins and headers globally through
-`tower_http::cors`. OpenCode-compatible OpenAPI discovery is exposed at `/doc`
+`tower_http::cors`. Compat-compatible OpenAPI discovery is exposed at `/doc`
 and `/openapi.json`; it provides implemented path/method skeletons rather than
 full request/response schemas.
 

@@ -26,11 +26,11 @@ fn frontend_without_tty_creates_config_and_exits_cleanly() -> Result<(), Box<dyn
 }
 
 #[test]
-fn import_opencode_imports_model_config_without_tty() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-frontend-import-opencode")?;
-    let opencode_config = env.root.join("opencode.json");
+fn import_compat_imports_model_config_without_tty() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-import-compat")?;
+    let compat_config = env.root.join("opencode.json");
     std::fs::write(
-        &opencode_config,
+        &compat_config,
         r#"{
   "model": "gateway/gpt-5.5",
   "provider": {
@@ -50,15 +50,15 @@ fn import_opencode_imports_model_config_without_tty() -> Result<(), Box<dyn std:
     )?;
 
     let output = hya_command(&env)
-        .env("OPENCODE_CONFIG", &opencode_config)
-        .args(["--import", "opencode"])
+        .env("COMPAT_CONFIG", &compat_config)
+        .args(["--import", "compat"])
         .output()?;
 
-    assert_success("hya --import opencode", &output);
+    assert_success("hya --import compat", &output);
     let stdout = String::from_utf8(output.stdout)?;
     assert!(
         stdout.contains("imported 1 providers and 2 models"),
-        "import summary should report model-only OpenCode import:\n{stdout}"
+        "import summary should report model-only Compat import:\n{stdout}"
     );
     assert!(
         stdout.contains("skills import: TODO"),
@@ -115,7 +115,7 @@ fn hya_command(env: &IsolatedEnv) -> Command {
     command
         .env("HOME", &env.home)
         .env("XDG_CONFIG_HOME", &env.xdg_config)
-        .env("OPENCODE_CONFIG", env.root.join("missing-opencode.json"))
+        .env("COMPAT_CONFIG", env.root.join("missing-opencode.json"))
         .env("NO_COLOR", "1");
     command
 }

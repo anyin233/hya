@@ -1,4 +1,4 @@
-# Implement: Per-model reasoning variants with OpenCode parity
+# Implement: Per-model reasoning variants with Compat parity
 
 Execution plan for `design.md`. TDD (red→green) where feasible. Verification gate
 after each task: `cargo test -p <crate>`; full gate before finish. Library crates
@@ -50,7 +50,7 @@ Files: `anthropic.rs` (42-47), `openai.rs` (59-60), `google.rs` (180-183);
 3. GREEN — update the EXISTING assertions that move with the parity budgets (they
    WILL fail otherwise): `conformance.rs:365` `budget_tokens == 16384` → `16000`
    (Anthropic High); `conformance.rs:372` `thinkingBudget == 24576` → `16000`
-   (Google High — 24576 is OpenCode's *max*, not *high*). VERIFIED budget literals:
+   (Google High — 24576 is Compat's *max*, not *high*). VERIFIED budget literals:
    the enum source `lib.rs:105` (16384) / `:114` (24576) — rewritten in Task 1 —
    plus these two test assertions; dispatcher/harness use `parse`/`as_str`, not budgets.
 4. `cargo test -p yaca-provider` (incl. existing `conformance.rs`, `multiprovider.rs`).
@@ -59,7 +59,7 @@ Files: `anthropic.rs` (42-47), `openai.rs` (59-60), `google.rs` (180-183);
 
 Verify the load-bearing AC1 assumption NOW, before Tasks 3–5: that the 12th.day
 gateway honors Anthropic `thinking:{type:"enabled",budget_tokens}` for
-`claude-opus-4-8` (design §7 / §11#1 — opus-4-8 is in OpenCode's adaptive family,
+`claude-opus-4-8` (design §7 / §11#1 — opus-4-8 is in Compat's adaptive family,
 so the enabled+budget shape is the risk point).
 
 1. Write a throwaway, `#[ignore]`d integration test (or small script) that builds
@@ -73,14 +73,14 @@ so the enabled+budget shape is the risk point).
 
 ## Task 3 — Reasoning resolver + DISK opencode.json loader  [AC3, AC4, AC5, AC6]
 
-Files: new `crates/yaca-server/src/opencode/reasoning_options.rs` (BOTH
-`load_opencode_config(workdir)` and `resolve_reasoning`); new
-`crates/yaca-server/src/opencode/json_merge.rs` (extract `merge_json_value` from
+Files: new `crates/yaca-server/src/compat/reasoning_options.rs` (BOTH
+`load_compat_config(workdir)` and `resolve_reasoning`); new
+`crates/yaca-server/src/compat/json_merge.rs` (extract `merge_json_value` from
 `agent_catalog.rs`, update its callsite); declare both modules in
-`crates/yaca-server/src/opencode.rs` (the module root — there is NO `opencode/mod.rs`).
+`crates/yaca-server/src/compat.rs` (the module root — there is NO `compat/mod.rs`).
 Make `config_paths` `pub(super)` in `agent_sources.rs` (currently private) so
 `reasoning_options.rs` can reuse it — do NOT duplicate the 4-path list.
-`load_opencode_config` reads `config_paths(workdir)` [+ `~/.config/opencode/opencode.json{,c}`]
+`load_compat_config` reads `config_paths(workdir)` [+ `~/.config/opencode/opencode.json{,c}`]
 via `super::jsonc::from_str::<Value>` and deep-merges (workdir wins); returns `{}` if none.
 
 1. RED (in-memory unit tests — `resolve_reasoning` with a constructed `config: Value`):
@@ -98,30 +98,30 @@ via `super::jsonc::from_str::<Value>` and deep-merges (workdir wins); returns `{
    `provider.p.models.m.variants.deep = { "thinking": { "budgetTokens": 31999 } }`
    — variant name "deep" is NOT a level keyword, so step 5a CANNOT supply the
    effort; only the disk bundle can. Then
-   `resolve_reasoning(Some("deep"), &{}, &ModelRef("p/m#deep"), &load_opencode_config(dir))`
+   `resolve_reasoning(Some("deep"), &{}, &ModelRef("p/m#deep"), &load_compat_config(dir))`
    → `Some(Max)`; encode an Anthropic request with that effort and assert
    `thinking.budget_tokens == 31999`. Proves disk file → request body. [AC3]
-3. GREEN: implement `load_opencode_config` + `resolve_reasoning` per design §4 +
+3. GREEN: implement `load_compat_config` + `resolve_reasoning` per design §4 +
    the extracted deep-merge.
 4. `cargo test -p yaca-server reasoning_options`.
 
 ## Task 4 — Wire variant → `AgentSpec.reasoning` at the seam  [AC1, AC4, AC5, AC6]
 
-Files: `crates/yaca-server/src/opencode/reference.rs` (shared `apply_agent_entry`
+Files: `crates/yaca-server/src/compat/reference.rs` (shared `apply_agent_entry`
 in `agent_with_guidance` + `session_agent_with_guidance`). No `runtime.rs` change —
 the `model#variant` direct-selection fallback is out of scope (design §8).
 
 1. RED (INTERNAL unit test in `reference.rs` `#[cfg(test)] mod` — the seam helpers
-   are `pub(in crate::opencode)`, unreachable from `crates/yaca-server/tests`):
+   are `pub(in crate::compat)`, unreachable from `crates/yaca-server/tests`):
    - build `AgentEntry { variant: Some("max"), model: Some("<prefixed>/claude-opus-4-8"), .. }`
-     + an opencode-config `Value` with the matching `provider.<id>.models.<id>`; call
+     + an compat-config `Value` with the matching `provider.<id>.models.<id>`; call
      the pure `apply_agent_entry(&mut agent, &entry, &model, &config)` and assert
      `agent.reasoning == Some(Max)` (ONE concrete path; no ServerState/fake provider).
    - entry with no variant and no reasoning option → `agent.reasoning == None` (AC5).
    (End-to-end glue through `session_agent_with_guidance` is validated by the AC1
    smoke in Task 2.5 + the Task 6 manual run.)
 2. GREEN: implement `apply_agent_entry`; in `session_agent_with_guidance` load
-   `config = load_opencode_config(location::workdir(st))` (DISK) and pass it; widen
+   `config = load_compat_config(location::workdir(st))` (DISK) and pass it; widen
    the existing entry lookup; set `agent.reasoning` from `resolve_reasoning` with
    session/model-variant precedence.
 3. `cargo test -p yaca-server apply_agent_entry` (internal `reference.rs` test).

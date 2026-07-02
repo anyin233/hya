@@ -1,4 +1,4 @@
-# Implementation plan: TUI borderless opencode-parity redesign
+# Implementation plan: TUI borderless compat-parity redesign
 
 ## Prerequisites
 
@@ -30,10 +30,10 @@ until step 3; that's OK).
 
 - Create `crates/yaca-tui/src/theme.rs`:
   - `Theme` struct with fields from design.md.
-  - `Theme::opencode_dark()` constructor returning the palette from
-    opencode's `opencode.json`.
+  - `Theme::compat_dark()` constructor returning the palette from
+    compat's `opencode.json`.
 - Add `pub mod theme;` and `pub use theme::Theme;` in `crates/yaca-tui/src/lib.rs`.
-- Add `pub theme: Theme` to `AppState` (default to `Theme::opencode_dark()`).
+- Add `pub theme: Theme` to `AppState` (default to `Theme::compat_dark()`).
 
 **Validation:** `cargo check -p yaca-tui` passes.
 
