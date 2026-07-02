@@ -26,6 +26,8 @@ fn resource_server_command() -> Vec<String> {
 import json, sys
 for line in sys.stdin:
     req = json.loads(line)
+    if "id" not in req:
+        continue
     if req["method"] == "initialize":
         result = {"capabilities": {"resources": {}}}
     elif req["method"] == "tools/list":
