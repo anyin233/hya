@@ -42,8 +42,12 @@ fn resolve_opencode_specs(
                 return Some(spec);
             }
             let Some(bun) = find_bun() else {
+                // Bun is an OPTIONAL dependency, needed only to run OpenCode JS
+                // plugins. The core and native Rust plugins never require it, so a
+                // missing Bun is a skip (with notice), not an error.
                 eprintln!(
-                    "hya: skipping opencode plugin '{}' because bun was not found in PATH",
+                    "hya: skipping optional opencode plugin '{}' — Bun not found in PATH \
+                     (Bun is only needed for OpenCode JS plugins; native Rust plugins work without it)",
                     spec.id
                 );
                 return None;
@@ -219,6 +223,26 @@ mod tests {
         let specs = super::resolve_with_bun(config, None, || None);
 
         assert!(specs.is_empty());
+    }
+
+    #[test]
+    fn rust_plugins_never_invoke_bun() {
+        // The pure-Rust plugin path must not depend on Bun: resolving a `rust`
+        // plugin must never call the bun locator.
+        let mut config = BTreeMap::new();
+        config.insert(
+            "native".to_string(),
+            PluginEntry {
+                kind: PluginKindWire::Rust,
+                command: vec!["my-plugin".to_string()],
+                enabled: true,
+                timeout_ms: None,
+                env: BTreeMap::new(),
+            },
+        );
+        let specs = super::resolve_with_bun(config, None, || panic!("bun must not be probed"));
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].command, vec!["my-plugin"]);
     }
 
     #[test]
