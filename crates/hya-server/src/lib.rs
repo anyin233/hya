@@ -18,21 +18,21 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
-mod opencode;
+mod compat;
 mod pending;
 mod runs;
 mod state;
 
+pub use compat::subagent_resolve::resolve_subagent_agent;
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
-pub use opencode::subagent_resolve::resolve_subagent_agent;
 pub use state::AppState;
 pub(crate) use state::ServerState;
 
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     Router::new()
-        .merge(opencode::router())
+        .merge(compat::router())
         .route("/sessions", post(create_session))
         .route("/sessions/:id/prompt", post(prompt))
         .route("/sessions/:id/command", post(command))

@@ -155,16 +155,16 @@ of that replay model.
 # BAD: "gemini" falls through to else, returns "claude"
 @property
 def cli_name(self) -> str:
-    if self.platform == "opencode":
-        return "opencode"
+    if self.platform == "compat":
+        return "compat"
     else:
         return "claude"  # gemini silently gets "claude"!
 
 # GOOD: explicit branch for every platform
 @property
 def cli_name(self) -> str:
-    if self.platform == "opencode":
-        return "opencode"
+    if self.platform == "compat":
+        return "compat"
     elif self.platform == "gemini":
         return "gemini"
     else:

@@ -18,7 +18,7 @@ impl ServerMode {
         if let Some(base_url) = args.server.clone() {
             return Ok(Self::Attached(base_url));
         }
-        if args.opencode {
+        if args.compat {
             return Ok(Self::Spawned(ServerHandle::spawn(directory).await?));
         }
         let backend_bin = resolve_backend_bin(args);
@@ -42,7 +42,7 @@ pub(crate) fn resolve_backend_dir() -> Result<PathBuf, Box<dyn Error + Send + Sy
         return Ok(PathBuf::from(dir));
     }
     let candidate =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../opencode-origin/packages/opencode");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../compat-origin/packages/compat");
     candidate.canonicalize().map_err(|e| {
         format!(
             "cannot locate backend package at {} ({e}); set HYA_BACKEND_DIR",

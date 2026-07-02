@@ -67,7 +67,7 @@ which can include prompts, tool arguments, tool results, reasoning deltas,
 command metadata, and absolute workdir paths. Add `--json` to emit canonical
 event JSONL.
 
-OpenCode-compatible prompt execution is also accepted:
+Compat-compatible prompt execution is also accepted:
 
 ```sh
 cargo run -p hya-backend -- run --format json "summarize this repository"
@@ -108,7 +108,7 @@ The server prints the address it bound to:
 hya server listening on http://127.0.0.1:8080
 ```
 
-The same server exposes native `/sessions/*` routes and OpenCode-compatible
+The same server exposes native `/sessions/*` routes and Compat-compatible
 legacy/v2 route groups for sessions, events, files, providers/models,
 permissions/questions, MCP, PTY, VCS, projects/worktrees, TUI control, and sync.
 
@@ -134,10 +134,10 @@ intentional, not an error — see
 hya creates a starter `~/.config/hya/config.yaml` (or
 `$XDG_CONFIG_HOME/hya/config.yaml`) the first time a command needs runtime
 config. Interactive startup also offers to import provider/model entries from
-your OpenCode config. You can run the same model-only import explicitly:
+your Compat config. You can run the same model-only import explicitly:
 
 ```sh
-hya --import opencode
+hya --import compat
 ```
 
 To switch to a live model manually, edit the starter file:

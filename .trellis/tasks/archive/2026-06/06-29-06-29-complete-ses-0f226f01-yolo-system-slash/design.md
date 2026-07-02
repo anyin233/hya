@@ -5,7 +5,7 @@
 The change is a cleanup of command ownership, not a new command system.
 
 - TUI-only actions stay owned by the TUI command palette and TUI controller.
-- Public slash commands stay owned by backend slash-command registries and OpenCode metadata.
+- Public slash commands stay owned by backend slash-command registries and Compat metadata.
 - System slash commands that are local TUI actions are intercepted before any `/session/.../command` request.
 - Prompt macros and unknown slash commands are not claimed by the local system-command router.
 - CLI `--yolo` remains a startup switch; only interactive `/yolo` exposure is removed.
@@ -17,7 +17,7 @@ The change is a cleanup of command ownership, not a new command system.
 - Internal palette label: `Switch YOLO`.
 - Selection opens an Enable/Disable dialog.
 - Enable path updates the TUI auto-approve/YOLO state visibly.
-- `/yolo` is absent from public slash registries, help/completion, backend lookup, and OpenCode-compatible command metadata.
+- `/yolo` is absent from public slash registries, help/completion, backend lookup, and Compat-compatible command metadata.
 - `/yolo` is not a local system command; it should follow the same fallback path as unknown/custom commands where applicable.
 
 ### Local system slash routing
@@ -44,7 +44,7 @@ Non-local commands:
 - `crates/hya-tui/src/keymap/tests.rs`: internal palette/action regressions.
 - `crates/hya-backend/src/tui/commands.rs`: builtin slash registry/help/completion behavior.
 - `crates/hya-backend/src/tui/controller.rs`: TUI slash routing split.
-- `crates/hya-server/src/opencode/command_catalog.rs`: OpenCode-compatible command metadata.
+- `crates/hya-server/src/compat/command_catalog.rs`: Compat-compatible command metadata.
 - Server tests: command metadata and provider/model command regressions.
 - `docs/cli.md`: CLI `--yolo` remains documented; interactive `/yolo on` is not recommended.
 - `swebench/scripts/hya_drive.sh` and adjacent docs/results/findings: automation uses palette YOLO enablement.

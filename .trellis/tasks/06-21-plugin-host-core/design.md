@@ -16,7 +16,7 @@
   modes; config `plugins:` + dir-scan + `plugin.toml`; failure posture; a native
   example plugin + e2e/QA.
 - **Defers**: registry injection of plugin **tools** (Child B — A ships the
-  `tool/call` types but does not register tools); the OpenCode Bun adapter (Child
+  `tool/call` types but does not register tools); the Compat Bun adapter (Child
   C). Plugin `tools` from `initialize` are parsed + stored, not wired.
 
 ## 1. `yaca-plugin` crate (modeled on `yaca-mcp`)

@@ -6,7 +6,7 @@
 
 ## Goal
 
-Build a Rust-based coding agent (CLI + rich TUI) in the style of opencode /
+Build a Rust-based coding agent (CLI + rich TUI) in the style of compat /
 Claude Code, whose **two core differentiators** are:
 
 1. **Multi-agent orchestration ("team mode")** — a main/lead model orchestrates
@@ -34,10 +34,10 @@ tokens than a single-context agent.
 ## Confirmed Facts (from request)
 
 - **Language**: Rust is the primary implementation language. (hard requirement)
-- **TUI**: must be rich AND high-performance, in the style of opencode's TUI.
+- **TUI**: must be rich AND high-performance, in the style of compat's TUI.
 - **Reference systems**:
-  - opencode — overall coding-agent architecture & TUI feel
-    (github.com/anomalyco/opencode; upstream github.com/sst/opencode)
+  - compat — overall coding-agent architecture & TUI feel
+    (github.com/anomalyco/compat; upstream github.com/sst/compat)
   - oh-my-openagent (omo) — team-mode multi-agent orchestration model
     (github.com/code-yeongyu/oh-my-openagent)
   - Claude Code `/goal` — goal-driven dev / independent verification gate
@@ -136,7 +136,7 @@ This task's deliverable is the **spec**, not running code. Done when:
 ## Resolved Decisions
 
 - **D1 (Q1) — Scope philosophy: minimal feature BREADTH, full feature DEPTH.**
-  (Reconciled after D3/D4.) We do NOT reinvent opencode's full breadth — v0 has
+  (Reconciled after D3/D4.) We do NOT reinvent compat's full breadth — v0 has
   NO LSP, NO MCP, NO desktop app, NO web docs, and only an essential tool set.
   BUT the architecture (client/server, multi-provider) and the two
   differentiators ship at full depth. "Lean" = narrow surface, not shallow
@@ -159,10 +159,10 @@ This task's deliverable is the **spec**, not running code. Done when:
   OpenAI-compatible/local). Model-tier routing (cheap goal-gate / per-category
   team-mode models) layers on top of this. Note: this enlarges the v0 base
   surface (per-provider auth, streaming, tool-call format normalization) — the
-  design must include a provider-normalization layer (opencode's
+  design must include a provider-normalization layer (compat's
   Provider/Protocol/Route split) so the agent loop sees one uniform
   message/tool-call shape. (user-confirmed)
-- **D3 (Q3+Q6) — Runtime: Client/server split from day 1 (opencode-style).**
+- **D3 (Q3+Q6) — Runtime: Client/server split from day 1 (compat-style).**
   A `core` server process owns sessions, the agent loop, tools, providers, the
   orchestration engine, and the goal engine; the ratatui TUI is a client over a
   local HTTP/SSE API. Enables remote control / SDK / multiple clients and
@@ -186,7 +186,7 @@ This task's deliverable is the **spec**, not running code. Done when:
 - Goal UX surface (`/goal`-style command) + exactly how a goal turn that
   delegates to a team gets its team results summarized into the lead transcript
   for the evaluator to judge.
-- Wire-protocol shape (reuse opencode-style normalized event stream).
+- Wire-protocol shape (reuse compat-style normalized event stream).
 - Naming: working name "yaca" (repo dir) unless the user renames.
 
 ### Assumptions to confirm (loop feature — D5 sub-decisions)

@@ -1,5 +1,5 @@
 {"step":1,"title":"Add unicode-width and unicode-segmentation workspace deps","file":"Cargo.toml","action":"add workspace dependencies"}
-{"step":2,"title":"Add theme struct with opencode dark palette","file":"crates/yaca-tui/src/theme.rs","action":"create Theme::opencode_dark"}
+{"step":2,"title":"Add theme struct with compat dark palette","file":"crates/yaca-tui/src/theme.rs","action":"create Theme::compat_dark"}
 {"step":3,"title":"Implement grapheme-aware InputState","file":"crates/yaca-tui/src/input.rs","action":"create InputState with motion/deletion methods and unit tests"}
 {"step":4,"title":"Redesign draw() to borderless color-block layout","file":"crates/yaca-tui/src/lib.rs","action":"remove borders, add theme backgrounds, status/transcript/input/footer regions"}
 {"step":5,"title":"Move model name into input area","file":"crates/yaca-tui/src/lib.rs","action":"render model label inside input, remove from status bar"}

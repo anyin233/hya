@@ -31,7 +31,7 @@ impl Tool for ApplyPatchTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("apply_patch"),
-            description: "Apply an OpenCode-style patch envelope to files.".to_string(),
+            description: "Apply an Compat-style patch envelope to files.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -126,7 +126,7 @@ impl Tool for ApplyPatchTool {
             let mut metadata_file = json!({
                 "filePath": display_path(&source),
                 "relativePath": display_path(relative),
-                "type": summary.action.opencode_type(),
+                "type": summary.action.compat_type(),
                 "patch": summary.patch.clone(),
                 "additions": summary.additions,
                 "deletions": summary.deletions,

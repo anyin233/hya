@@ -1,4 +1,4 @@
-# Implementation Plan: Opencode-style TUI commands, sessions, and test harness
+# Implementation Plan: Compat-style TUI commands, sessions, and test harness
 
 ## Validation Commands
 

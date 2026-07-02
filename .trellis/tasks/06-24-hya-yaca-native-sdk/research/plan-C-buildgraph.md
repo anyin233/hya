@@ -60,7 +60,7 @@ inside hya-sdk** rejected because:
 1. Adds optional deps on every `cargo metadata` resolve even when off → slower lockfile churn.
 2. Couples the "pure client" SDK to yaca backend crates conceptually, harming the
    `HttpClient` and existing `NativeClient` (Bun bridge) story (`crates/hya-sdk/src/native.rs:1`).
-3. Forward-compat: a future `hya-opencode-native` mirrors the same shape symmetrically.
+3. Forward-compat: a future `hya-compat-native` mirrors the same shape symmetrically.
 
 ### Bootstrap-extraction decision
 
@@ -289,7 +289,7 @@ impl Transport for YacaNativeTransport {
 (`crates/hya-sdk/src/native.rs:280-333`) injects the same name into the bridge headers.
 We do the exact same thing — the backend (`yaca-server`) reads it via the
 `location::LocationRef::from_request(&query, &headers)` helper
-(`crates/yaca-server/src/opencode/event.rs:64`).
+(`crates/yaca-server/src/compat/event.rs:64`).
 
 ### Status / error mapping
 
@@ -304,7 +304,7 @@ Mirror `HttpTransport` semantics (`crates/hya-sdk/src/client.rs:207-219`):
 
 ### Primary plan — SSE over `oneshot`
 
-Reuses the entire 796-LOC projection in `crates/yaca-server/src/opencode/event.rs`,
+Reuses the entire 796-LOC projection in `crates/yaca-server/src/compat/event.rs`,
 including `subscribe_global` (line 102) and its connected/heartbeat framing, the same
 "resync" semantics on broadcast lag (line 120), and the **same `GlobalEvent` decoder**
 hya-sdk already ships (`crates/hya-sdk/src/events.rs:42`). Zero new code in any
@@ -360,7 +360,7 @@ pub fn spawn_event_bridge(
 ### Why `oneshot` works on an infinite SSE response
 
 `Router::oneshot(req)` resolves once the handler returns the `Response<Body>` object.
-`subscribe_global` (`crates/yaca-server/src/opencode/event.rs:102-128`) builds the Sse
+`subscribe_global` (`crates/yaca-server/src/compat/event.rs:102-128`) builds the Sse
 synchronously and returns immediately — the body is the streaming part. We get the
 `Response` back, then drain the body lazily; the heartbeat task (line 126
 `event_heartbeat::stream(global_heartbeat_event)`) ticks for as long as the body is
@@ -424,7 +424,7 @@ flags continue to work via them.
 enum Transport {
     Yaca { runtime: std::sync::Arc<yaca_app::YacaRuntime>,
            bridge: tokio::task::JoinHandle<()> },
-    Native(NativeBridge),                      // existing opencode Bun bridge
+    Native(NativeBridge),                      // existing compat Bun bridge
     Http { server: ServerMode, sse: tokio::task::JoinHandle<()>,
            keep_streaming: std::sync::Arc<AtomicBool> },
 }
@@ -456,7 +456,7 @@ async fn connect(args: &Args, directory: &str, tx: &mpsc::UnboundedSender<AppEve
             runtime.router().clone(), directory.to_owned(), event_tx);
         return Ok((client, Transport::Yaca { runtime, bridge }));
     }
-    // existing opencode-native, http, and --server branches unchanged
+    // existing compat-native, http, and --server branches unchanged
     // …
 }
 ```
@@ -466,8 +466,8 @@ async fn connect(args: &Args, directory: &str, tx: &mpsc::UnboundedSender<AppEve
 - *no flags*  → **native yaca in-process** (NEW DEFAULT)
 - `--http`    → spawn `yaca serve` as subprocess and connect over HTTP/SSE (the
                 current default behaviour, preserved)
-- `--opencode`→ opencode native Bun bridge (unchanged)
-- `--server`  → attach to a running opencode-compatible server (unchanged)
+- `--compat`→ compat native Bun bridge (unchanged)
+- `--server`  → attach to a running compat-compatible server (unchanged)
 - `--yaca-bin`→ only consumed by the `--http` path (unchanged)
 
 ### Teardown
@@ -540,7 +540,7 @@ strace test (#1) is belt-and-suspenders.
 - `transport_empty_body_returns_null` — `request("DELETE","/session/{fresh_id}",None)`.
 - `transport_non_2xx_is_typed_error` — request a route that returns 4xx, assert
   `SdkError::Http`.
-- `transport_directory_header_propagated` — pick an opencode endpoint that uses
+- `transport_directory_header_propagated` — pick an compat endpoint that uses
   `LocationRef::from_request` and verify the response reflects the directory we set.
 - `event_bridge_emits_connected_then_event` — bridge subscribe, immediately publish a
   `MessageStarted` envelope via `engine.bus().publish(...)`, assert the

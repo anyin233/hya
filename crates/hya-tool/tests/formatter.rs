@@ -32,7 +32,7 @@ async fn disabled_formatter_config_returns_empty_status() {
 }
 
 #[tokio::test]
-async fn builtin_formatter_config_returns_opencode_catalog_status() {
+async fn builtin_formatter_config_returns_compat_catalog_status() {
     let status = status_json(FormatterConfig::Builtins).await;
 
     assert!(status.as_array().unwrap().iter().any(|item| {
@@ -142,7 +142,7 @@ async fn custom_formatter_command_formats_matching_extension() {
 #[cfg(unix)]
 #[tokio::test]
 async fn builtin_formatter_command_formats_matching_extension() {
-    // Given: a built-in formatter enabled by its OpenCode project probe.
+    // Given: a built-in formatter enabled by its Compat project probe.
     let dir = tempdir();
     tokio::fs::write(
         dir.join("composer.json"),
@@ -164,7 +164,7 @@ async fn builtin_formatter_command_formats_matching_extension() {
     // When: formatting a matching PHP file.
     let formatted = provider.format_file(&dir, &target).await.unwrap();
 
-    // Then: hya executes the OpenCode built-in command.
+    // Then: hya executes the Compat built-in command.
     assert!(formatted);
     assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "pint\n");
 }

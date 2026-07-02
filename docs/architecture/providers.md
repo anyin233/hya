@@ -113,6 +113,6 @@ usable without API keys.
 ## CLI Configuration
 
 `hya-backend` builds routes from `~/.config/hya/config.yaml`. Provider ids and
-models are surfaced through `hya-backend models`, OpenCode-compatible provider/model
+models are surfaced through `hya-backend models`, Compat-compatible provider/model
 HTTP routes, and saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.

@@ -6,8 +6,8 @@ Give yaca a dynamic plugin/hook system so users can extend and intercept the
 Rust harness at well-defined lifecycle stages without forking the core. Two
 delivery vectors are explicitly requested:
 
-1. **OpenCode plugin compatibility** — run existing OpenCode (JS/TS) plugins
-   against yaca's engine, reusing OpenCode's hook surface as much as is feasible.
+1. **Compat plugin compatibility** — run existing Compat (JS/TS) plugins
+   against yaca's engine, reusing Compat's hook surface as much as is feasible.
 2. **Rust-native out-of-process plugin interface** — let a plugin ship as its own
    binary that talks to yaca over IPC/RPC, so plugin authors get a flexible,
    language-agnostic, crash-isolated extension path.
@@ -21,7 +21,7 @@ delivery vectors are explicitly requested:
 
 - Extend yaca (new tools, observers, policy, custom providers) without patching
   core crates or waiting on upstream.
-- Reuse the existing OpenCode plugin ecosystem instead of rewriting plugins.
+- Reuse the existing Compat plugin ecosystem instead of rewriting plugins.
 - Author plugins in any language via a stable IPC contract, isolated from the
   harness process.
 
@@ -109,15 +109,15 @@ config extension points), README, pi-parity design/FOLLOWUPS.
   server, the typed client, the SQLite event log, and `yaca rpc`. These are the
   candidate wire types for an out-of-process plugin protocol.
 
-## OpenCode plugin contract (verified — librarian bg_8431cee9)
+## Compat plugin contract (verified — librarian bg_8431cee9)
 
-Source: `sst/opencode` @ `5606d2b…`, pkg `@opencode-ai/plugin` v1.17.9.
+Source: `sst/compat` @ `5606d2b…`, pkg `@opencode-ai/plugin` v1.17.9.
 
 - **Authoring**: a plugin is a JS/TS **ESM module**. Server contract is
   `Plugin(input, options?) => Promise<Hooks>`; init `input` carries a live SDK
   `client`, a Bun shell `$`, project/directory/worktree context.
-- **Runtime = Bun, in-process**: plugins execute in OpenCode's JS runtime and call
-  back into OpenCode via the **SDK client over HTTP**. npm plugins are
+- **Runtime = Bun, in-process**: plugins execute in Compat's JS runtime and call
+  back into Compat via the **SDK client over HTTP**. npm plugins are
   `bun install`-ed at startup; local plugins may carry their own `package.json`.
 - **Loading (two paths)**: (a) auto-scan dirs `.opencode/plugins/` and
   `~/.config/opencode/plugins/`; (b) npm/specifier entries in config
@@ -146,7 +146,7 @@ Direct compat requires a **JS runtime**. Two host strategies: (a) **spawn Bun**
 and load plugin modules there (faithful, heavy dep), or (b) **embed a JS engine**
 (e.g. deno_core/boa) and shim Bun's `$`/install/resolution (lighter dep, partial
 fidelity). Either way, the JS host needs an SDK-shaped client back into yaca —
-which yaca's **`yaca serve` HTTP+SSE + typed client already provides**. OpenCode's
+which yaca's **`yaca serve` HTTP+SSE + typed client already provides**. Compat's
 own host↔plugin model therefore maps onto an **out-of-process** design that the
 Rust-native plugin path can share.
 
@@ -156,8 +156,8 @@ Both requested vectors reduce to **one out-of-process hook-dispatch protocol**:
   execute, permission ask, provider stream, chat params).
 - A host process subscribes/responds over IPC (extend the `yaca rpc` JSONL +
   proto substrate).
-- Rust plugins speak the protocol directly; OpenCode-compat is a **bundled Bun
-  adapter** that loads JS plugins and maps OpenCode `Hooks` ⇄ the protocol, with
+- Rust plugins speak the protocol directly; Compat-compat is a **bundled Bun
+  adapter** that loads JS plugins and maps Compat `Hooks` ⇄ the protocol, with
   the SDK client pointed at yaca's server.
 
 ## Resolved decisions
@@ -166,14 +166,14 @@ Both requested vectors reduce to **one out-of-process hook-dispatch protocol**:
   verifiable children. Sequence: (1) shared **hook-dispatch core** in `yaca-core`
   (named lifecycle hooks at existing boundaries) → (2) **Rust-native
   out-of-process plugin** path over an extended `yaca rpc`/proto JSONL+RPC
-  protocol (MVP) → (3) **OpenCode-compat Bun adapter** on top of the same
+  protocol (MVP) → (3) **Compat-compat Bun adapter** on top of the same
   protocol (later child). Protocol is designed Rust-first; both vectors ship.
 
 - **D2 — Hook power & execution model (CONFIRMED)**: Full interception. Hooks are
   **blocking request/response**: engine sends `(input, output)` to the plugin
   host, awaits a reply within a per-hook timeout, then applies the plugin's
   payload **mutations** and/or a **veto** (block tool / deny permission). Mirrors
-  OpenCode's in-place output mutation + throw-to-block. Observation is the subset
+  Compat's in-place output mutation + throw-to-block. Observation is the subset
   that ignores the response. Protocol is therefore **two-way request/response**,
   and requires timeout + failure-isolation machinery (resolved in D7).
   Performance note to carry into design: high-frequency observation (e.g. token
@@ -184,7 +184,7 @@ Both requested vectors reduce to **one out-of-process hook-dispatch protocol**:
   **JSON-RPC-style correlated envelope** — requests (`id`+`method`+`params`),
   replies (`id`+`result`/`error`), and one-way notification frames for async
   observation events. Each plugin is a **child process** yaca spawns; the Bun
-  OpenCode-adapter is just one such child. Extends the existing `yaca rpc` JSONL +
+  Compat-adapter is just one such child. Extends the existing `yaca rpc` JSONL +
   serde proto substrate; no heavy deps; language-agnostic. Token-level
   observation stays async/coalesced; blocking interception stays low-frequency.
 
@@ -203,7 +203,7 @@ Both requested vectors reduce to **one out-of-process hook-dispatch protocol**:
   - `event` — async observe of the `Envelope` stream (the `emit` funnel).
   - `message.user.before` — mutate user prompt at `admit_user_prompt`.
   - `chat.params` — mutate model/temperature/system before `request_from_messages`
-    (covers OpenCode `chat.params` + `system.transform`).
+    (covers Compat `chat.params` + `system.transform`).
   - `tool.execute.before` — mutate args / **veto**, in the engine tool loop.
   - `tool.execute.after` — rewrite result, in the engine tool loop.
   - `permission.ask` — answer allow/ask/deny via the permission plane.
@@ -218,10 +218,10 @@ Both requested vectors reduce to **one out-of-process hook-dispatch protocol**:
 
 - **D6 — Loading & declaration (CONFIRMED)**: **config.yaml `plugins:` (primary)
   + native yaca dir-scan + adapter.** Explicit `plugins:` entries (spawn
-  command/path + `kind: rust|opencode` + options + `enabled`) are primary. yaca
+  command/path + `kind: rust|compat` + options + `enabled`) are primary. yaca
   **also auto-scans** `~/.config/yaca/plugins/` and `.yaca/plugins/` for native
-  plugins (mirrors the `skills` precedent). OpenCode's own `.opencode/plugins/`
-  dir-scan + npm install happen **inside** the enabled Bun `opencode` adapter, not
+  plugins (mirrors the `skills` precedent). Compat's own `.opencode/plugins/`
+  dir-scan + npm install happen **inside** the enabled Bun `compat` adapter, not
   in yaca core. Trust mitigation (dir-scan widens the surface): a scanned plugin
   must carry a **manifest** (`plugin.toml`: id, kind, declared hooks, posture) and
   gets the same isolation + per-hook posture as config plugins; "you own these
@@ -275,10 +275,10 @@ Parent-level requirements (cross-child). Each child owns the subset it delivers.
   (`~/.config/yaca/plugins/`, `.yaca/plugins/`) with a `plugin.toml` manifest;
   per-plugin `enabled`. Central bootstrap in `yaca-cli` wires the host before the
   registry/router freeze into `Arc`, across all modes (exec/rpc/goal/tui/serve).
-- **R8 — OpenCode compatibility (later child).** A bundled **Bun adapter** plugin
-  loads OpenCode JS/TS plugins (legacy bare-function exports + new target-module
-  shapes), maps OpenCode `Hooks` ⇄ the yaca protocol, points the SDK `client` at
-  `yaca serve`, provides Bun `$`, and runs OpenCode's `.opencode/plugins/` scan +
+- **R8 — Compat compatibility (later child).** A bundled **Bun adapter** plugin
+  loads Compat JS/TS plugins (legacy bare-function exports + new target-module
+  shapes), maps Compat `Hooks` ⇄ the yaca protocol, points the SDK `client` at
+  `yaca serve`, provides Bun `$`, and runs Compat's `.opencode/plugins/` scan +
   npm install. Target: common server hooks (`tool.execute.*`, `chat.params`,
   `permission.ask`, `event`, plugin `tool:`). TUI plugin surface excluded.
 - **R9 — Quality gate.** Every child keeps the workspace gate green:
@@ -309,7 +309,7 @@ Parent-level (cross-child); each child restates its own testable subset.
       use). Asserted via test/QA.
 - [ ] **AC6 (R7).** A plugin declared in `config.yaml` and one dropped into the
       scanned dir (with manifest) both load and run; `enabled: false` disables one.
-- [ ] **AC7 (R8, OpenCode child).** A real off-the-shelf OpenCode plugin using
+- [ ] **AC7 (R8, Compat child).** A real off-the-shelf Compat plugin using
       `tool.execute.before`/`after` (or `event`) runs against yaca via the Bun
       adapter and its hook provably fires — live QA evidence.
 - [ ] **AC8 (R9,R10).** Full quality gate green; with no plugins configured every
@@ -329,10 +329,10 @@ Parent-level (cross-child); each child restates its own testable subset.
   provider wrappers for now.
 - **OS-level sandboxing** (seccomp/landlock/container) — deferred child; v1 trust =
   explicit declaration + process isolation.
-- OpenCode **TUI** plugin surface (`@opencode-ai/plugin/tui`).
+- Compat **TUI** plugin surface (`@opencode-ai/plugin/tui`).
 - The full `experimental.*` / provider-SSE-frame / compaction / explicit `Step*`
   hook inventory beyond R4 — phased into later children.
-- Embedding a JS engine in-process (v1 OpenCode-compat spawns Bun as a child).
+- Embedding a JS engine in-process (v1 Compat-compat spawns Bun as a child).
 - A plugin marketplace / registry / auto-update.
 
 ## Proposed task tree (parent + children) — for confirmation
@@ -348,7 +348,7 @@ map, cross-child AC, final integration review; no direct implementation).
   existing `ToolRegistry::register` (optional `extend` wrapper) + schema
   advertisement + tool-call dispatch. Depends on A's protocol/host. Verifiable via
   AC2.
-- **Child C — OpenCode-compat Bun adapter.** R8. Bun host child that loads OpenCode
+- **Child C — Compat-compat Bun adapter.** R8. Bun host child that loads Compat
   plugins and bridges `Hooks` ⇄ protocol + SDK client → `yaca serve`. Depends on
   A (+B for plugin `tool:`). Verifiable via AC7.
 - **Child D — Deferred extensions (later, may not be planned now).** Out-of-process

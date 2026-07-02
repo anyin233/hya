@@ -1,20 +1,20 @@
-# Opencode-style TUI commands sessions and test harness
+# Compat-style TUI commands sessions and test harness
 
 ## Goal
 
-Make the yaca TUI behave more like opencode for everyday interactive work: slash commands and keyboard shortcuts should drive the same command system, model switching must work, `Ctrl-C` must not accidentally kill the process, TUI behavior must be testable without real model calls, and previous conversations must be resumable.
+Make the yaca TUI behave more like compat for everyday interactive work: slash commands and keyboard shortcuts should drive the same command system, model switching must work, `Ctrl-C` must not accidentally kill the process, TUI behavior must be testable without real model calls, and previous conversations must be resumable.
 
 ## Requirements
 
 - `/model` must switch the active model for future assistant turns.
-- The model switcher must be available through both slash command input and an opencode-style shortcut.
+- The model switcher must be available through both slash command input and an compat-style shortcut.
 - `Ctrl-C` must be contextual:
   - when text is present, clear the input instead of quitting;
   - when an assistant turn is running, interrupt/cancel that turn instead of quitting the process;
   - when a dialog is open, close the dialog first;
   - only quit when the TUI is idle and there is no input/dialog to handle.
 - The TUI must move away from one monolithic key handler toward modular input, command, dialog, and session-management units.
-- First-pass opencode-style functionality must include:
+- First-pass compat-style functionality must include:
   - slash commands: `/model`, `/resume`, `/new`, `/help`;
   - command palette foundation for the same command registry;
   - dialog navigation with Up/Down, Tab/Shift-Tab, Enter, Esc, Home/End, PageUp/PageDown;
@@ -49,5 +49,5 @@ Make the yaca TUI behave more like opencode for everyday interactive work: slash
 
 ## Notes
 
-- This task intentionally mimics opencode interaction patterns while keeping yaca's Rust/ratatui architecture.
+- This task intentionally mimics compat interaction patterns while keeping yaca's Rust/ratatui architecture.
 - The history storage correction from the user is a hard constraint: avoid a single central history DB as the canonical store.

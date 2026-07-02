@@ -37,7 +37,7 @@ develop the Rust workspace.
 
 ## Notes
 
-- Reference projects checked: OpenCode public docs use a broad topic-page model;
+- Reference projects checked: Compat public docs use a broad topic-page model;
   Oh My Pi docs use deeper engineering-topic manuals. yaca should use a smaller
   hybrid structure because the workspace is currently compact but has strong
   crate boundaries.

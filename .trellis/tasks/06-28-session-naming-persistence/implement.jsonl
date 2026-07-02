@@ -2,11 +2,11 @@
 {"file":".trellis/spec/guides/index.md","reason":"Shared thinking-guide index for cross-layer and reuse checks."}
 {"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Session IDs, events, SQLite persistence, server APIs, and TUI switch lists cross multiple layers."}
 {"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Avoid duplicate session metadata/projection logic across store, server, and TUI."}
-{"file":".trellis/tasks/06-28-session-naming-persistence/findings.md","reason":"Task-specific repository findings and pending OpenCode evidence."}
+{"file":".trellis/tasks/06-28-session-naming-persistence/findings.md","reason":"Task-specific repository findings and pending Compat evidence."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/design.md","reason":"Accepted architecture and contracts for IDs, titles, empty-session cleanup, streaming durability, and migration."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/implement.md","reason":"Ordered RED/GREEN execution waves, explicit dependencies, cleanup hooks, and verification commands."}
 {"file":"crates/hya-backend/src/tui.rs","reason":"Backend TUI owns concrete async exit/new/resume finalization hooks for empty-session cleanup."}
 {"file":"crates/hya-core/src/engine.rs","reason":"Owns SessionEngine create/replay/read_projection/delete_session and durable emit path."}
 {"file":"crates/hya-core/src/engine/session_cleanup.rs","reason":"Potential shared core cleanup helper location for SessionEngine::cleanup_empty_unnamed_session."}
-{"file":"crates/hya-server/tests/opencode_session_v2_api.rs","reason":"API-facing direct GET/delete/not-found cleanup proof target."}
-{"file":"crates/hya-server/tests/opencode_session_v2_list_api.rs","reason":"OpenCode v2 list/search hidden-empty coverage target."}
+{"file":"crates/hya-server/tests/compat_session_v2_api.rs","reason":"API-facing direct GET/delete/not-found cleanup proof target."}
+{"file":"crates/hya-server/tests/compat_session_v2_list_api.rs","reason":"Compat v2 list/search hidden-empty coverage target."}

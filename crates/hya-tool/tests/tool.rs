@@ -85,7 +85,7 @@ fn registry_rejects_duplicate_tool_name() {
 }
 
 #[test]
-fn builtins_expose_opencode_names_and_keep_short_aliases_hidden() {
+fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
     let registry = ToolRegistry::builtins();
     let visible: Vec<_> = registry
         .schemas()

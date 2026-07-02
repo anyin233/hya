@@ -34,7 +34,7 @@ TUI / API clients / transcript renderers
 | Tools | [`hya-tool`](../../crates/hya-tool), [`hya-mcp`](../../crates/hya-mcp), [`hya-plugin`](../../crates/hya-plugin) | Define tool schemas, execute builtin/MCP/plugin tools, and enforce permissions. |
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, event publication, hooks, compaction, goal/loop/team primitives. |
-| Surfaces | [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-legacy-tui`](../../crates/hya-legacy-tui), [`hya-plugin-opencode`](../../crates/hya-plugin-opencode) | Expose the runtime through CLI, TUI, native/OpenCode HTTP/SSE, typed client APIs, and the OpenCode plugin adapter. |
+| Surfaces | [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-legacy-tui`](../../crates/hya-legacy-tui), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the runtime through CLI, TUI, native/Compat HTTP/SSE, typed client APIs, and the Compat plugin adapter. |
 
 ## Turn Flow
 
@@ -67,7 +67,7 @@ The event log is the source of truth. This gives hya a few useful properties:
 
 - The default `hya` command runs the interactive TUI in-process.
 - `hya-backend exec` runs one turn and prints a transcript.
-- `hya-backend run` is an OpenCode-compatible alias for headless prompt execution.
+- `hya-backend run` is an Compat-compatible alias for headless prompt execution.
 - `hya-backend -p` runs goal mode with an independent model-backed evaluator.
 - `hya-backend serve` exposes HTTP and SSE over the same engine.
 - `hya-backend tail-session` replays JSON envelopes from a persisted SQLite event log.

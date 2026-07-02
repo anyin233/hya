@@ -2,7 +2,7 @@
 pub(crate) struct Args {
     pub(crate) server: Option<String>,
     pub(crate) http: bool,
-    pub(crate) opencode: bool,
+    pub(crate) compat: bool,
     pub(crate) backend_bin: Option<String>,
     pub(crate) import_source: Option<String>,
     pub(crate) version: bool,
@@ -24,7 +24,7 @@ impl Args {
                     })?);
                 }
                 "--http" => parsed.http = true,
-                "--opencode" => parsed.opencode = true,
+                "--compat" => parsed.compat = true,
                 "--backend-bin" => {
                     parsed.backend_bin = Some(args.next().ok_or_else(|| {
                         std::io::Error::new(
@@ -62,16 +62,14 @@ pub(crate) fn print_usage() {
         "  (default)          run the `hya` backend in-process and talk to it natively (no HTTP)"
     );
     println!(
-        "  --http             spawn `hya-backend serve` and connect over HTTP/SSE (with --opencode: `opencode serve`)"
+        "  --http             spawn `hya-backend serve` and connect over HTTP/SSE (with --compat: `compat serve`)"
     );
-    println!(
-        "  --server <url>     attach to a running opencode-compatible server (hya or opencode)"
-    );
+    println!("  --server <url>     attach to a running compat-compatible server (hya or compat)");
     println!(
         "  --backend-bin <path>  hya-backend binary to spawn for --http (else $HYA_BACKEND_BIN, sibling build, or PATH)"
     );
-    println!("  --import <source>  import model config from a source (currently: opencode)");
-    println!("  --opencode         use the opencode backend (native bun bridge) instead of hya");
+    println!("  --import <source>  import model config from a source (currently: compat)");
+    println!("  --compat         use the compat backend (native bun bridge) instead of hya");
     println!("  --version, -v      print version");
     println!("  --help, -h         print this help");
 }

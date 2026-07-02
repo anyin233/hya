@@ -29,7 +29,7 @@ docs/
   troubleshooting.md
 ```
 
-This borrows OpenCode's discoverable topic-page style for user docs and Oh My
+This borrows Compat's discoverable topic-page style for user docs and Oh My
 Pi's engineering-topic depth for architecture docs, while keeping the tree small
 enough for yaca's current workspace.
 
@@ -37,7 +37,7 @@ enough for yaca's current workspace.
 
 - `docs/README.md`: landing page, reading paths, docs map.
 - `getting-started.md`: prerequisites, build, first TUI run, first headless run.
-- `configuration.md`: opencode config reuse, `YACA_MODEL`, fallback provider,
+- `configuration.md`: compat config reuse, `YACA_MODEL`, fallback provider,
   security notes for API keys.
 - `cli.md`: command reference for the shipped CLI surface.
 - `project-structure.md`: repository map, crate table, source-file guide, data

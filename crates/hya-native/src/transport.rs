@@ -1,5 +1,5 @@
 //! In-process native transport: drives the in-process hya `axum::Router` via
-//! `tower::ServiceExt::oneshot` — no TCP, no reqwest. This is the Rust analogue of opencode's
+//! `tower::ServiceExt::oneshot` — no TCP, no reqwest. This is the Rust analogue of compat's
 //! in-process `app.fetch`. Status/empty-body/JSON handling mirrors `hya_sdk::HttpTransport`
 //! (`crates/hya-sdk/src/client.rs`) so the shared `Client` logic behaves identically.
 

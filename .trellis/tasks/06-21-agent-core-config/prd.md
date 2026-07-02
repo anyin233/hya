@@ -48,7 +48,7 @@ systems a single substrate to resolve against.
   ls, glob, find, grep, shell, ask_user, task` (**10**; `task` = lead-only subagent-spawn tool — Round-1 review corrected 8→10). `request_from_messages` (`engine.rs:463`) sends
   `tools.schemas()` — **all tools to every agent**. **No per-agent allowlist exists.**
   `Tool` trait = `name()`, `schema()`, `execute(ctx, input)`.
-- **Config today** (`crates/yaca-cli/src/config.rs`): parses only opencode's `opencode.json`
+- **Config today** (`crates/yaca-cli/src/config.rs`): parses only compat's `opencode.json`
   → providers/models (`ResolvedConfig { router, default_model }`). **No agent config.**
   `serde`/`serde_json` already deps.
 - **Blast radius** (AgentSpec construct/consume): `engine.rs` (`projection_to_messages`,

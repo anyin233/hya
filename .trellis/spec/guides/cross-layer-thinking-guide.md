@@ -134,7 +134,7 @@ In Trellis, command templates (e.g., `record-session.md`) exist in **multiple pl
 - [ ] For Gemini TOML: adapt line continuations (`\\` vs `\`) and triple-quoted strings
 - [ ] Run `/trellis:check-cross-layer` to verify nothing was missed
 
-**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, OpenCode, and Gemini — caught by cross-layer check.
+**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, Compat, and Gemini — caught by cross-layer check.
 
 ---
 
@@ -231,7 +231,7 @@ In Trellis, command templates (e.g., `record-session.md`) exist in **multiple pl
 - [ ] For Gemini TOML: adapt line continuations (`\\` vs `\`) and triple-quoted strings
 - [ ] Run `/trellis:check-cross-layer` to verify nothing was missed
 
-**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, OpenCode, and Gemini — caught by cross-layer check.
+**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, Compat, and Gemini — caught by cross-layer check.
 
 ---
 

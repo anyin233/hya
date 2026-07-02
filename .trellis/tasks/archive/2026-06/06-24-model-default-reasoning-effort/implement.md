@@ -4,7 +4,7 @@
 
 **Goal:** Make native TUI reasoning effort default per model with precedence explicit agent/profile config → last-used for exact provider/model → highest supported effort.
 
-**Architecture:** Add a pure resolver in `yaca-provider`, carry provider reasoning variants through `yaca-app::ModelEntry`, persist native TUI last-used preferences in `HistoryStore`, and update controller/runtime paths to resolve and validate reasoning by the active model. OpenCode explicit/config reasoning remains stable.
+**Architecture:** Add a pure resolver in `yaca-provider`, carry provider reasoning variants through `yaca-app::ModelEntry`, persist native TUI last-used preferences in `HistoryStore`, and update controller/runtime paths to resolve and validate reasoning by the active model. Compat explicit/config reasoning remains stable.
 
 **Tech Stack:** Rust 2024 workspace, `cargo`, `serde_json`, existing `anyhow`, ratatui/crossterm TUI controller tests, provider unit tests.
 
@@ -27,8 +27,8 @@
 - Modify `crates/yaca-cli/src/tui/controller.rs`: carry provider/model in selection effects and build `/think` choices dynamically.
 - Modify `crates/yaca-cli/src/tui.rs`: resolve startup/model-switch/resume/custom-command reasoning and persist `/think` selections.
 - Modify `crates/yaca-cli/src/tui/harness.rs`: teach harness model entries about reasoning variants and update reasoning-effect handling.
-- Modify `crates/yaca-server/src/opencode/reasoning_options_tests.rs` only if needed to lock no-signal compatibility.
-- Optionally modify `crates/yaca-server/src/opencode/reasoning_options.rs` only for behavior-preserving reuse of the provider helper.
+- Modify `crates/yaca-server/src/compat/reasoning_options_tests.rs` only if needed to lock no-signal compatibility.
+- Optionally modify `crates/yaca-server/src/compat/reasoning_options.rs` only for behavior-preserving reuse of the provider helper.
 
 ---
 
@@ -568,11 +568,11 @@ Expected: pass.
 
 ---
 
-### Task 6: Compatibility tests for OpenCode no-signal behavior
+### Task 6: Compatibility tests for Compat no-signal behavior
 
 **Files:**
-- Modify only if needed: `crates/yaca-server/src/opencode/reasoning_options_tests.rs`
-- Modify only if needed: `crates/yaca-server/src/opencode/reasoning_options.rs`
+- Modify only if needed: `crates/yaca-server/src/compat/reasoning_options_tests.rs`
+- Modify only if needed: `crates/yaca-server/src/compat/reasoning_options.rs`
 
 **Interfaces:**
 - Preserves: `resolve_reasoning(None, empty_options, model, {}) == None`.
@@ -668,7 +668,7 @@ If local provider config is unavailable, use the harness or fake/dev provider pa
 - If resolver tests fail unexpectedly, revert only `crates/yaca-provider/src/lib.rs` changes and re-check `ReasoningEffort` ordering assumptions.
 - If TUI controller changes spread too broadly, keep `TuiEffect::SelectModel(String)` and add a provider lookup helper in `tui.rs`; do not refactor unrelated controller behavior.
 - If session meta restoration gets noisy, defer optional `SessionMeta.reasoning_effort` and keep resume behavior to model-default resolution only.
-- If OpenCode tests start failing, back out server refactors; this task does not require OpenCode behavioral changes.
+- If Compat tests start failing, back out server refactors; this task does not require Compat behavioral changes.
 
 ## Pre-start checklist
 

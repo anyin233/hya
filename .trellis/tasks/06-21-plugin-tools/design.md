@@ -13,10 +13,10 @@
 
 - **[MERGE] Raw declared tool names, NOT `plugin__<id>__<tool>` namespacing.** The
   edge-case planner proposed namespacing to make collisions structurally
-  impossible. **Rejected** because Child C (OpenCode compat) routes OpenCode
-  `tool:` registrations through this same `PluginTool`, and OpenCode tools are
+  impossible. **Rejected** because Child C (Compat compat) routes Compat
+  `tool:` registrations through this same `PluginTool`, and Compat tools are
   **not** namespaced — a plugin's `weather` tool MUST be callable by the model as
-  `weather`, not `plugin__opencode__weather`. Namespacing would break OpenCode
+  `weather`, not `plugin__compat__weather`. Namespacing would break Compat
   fidelity. Collisions are instead handled by the registry's deterministic
   **first-wins + warn** (builtins register first, so they always win); see §7.
 - **[MERGE] `ToolCtx` needs `session` + `call` (the key correctness catch).** The
@@ -61,7 +61,7 @@ The precedent to mirror is `yaca-mcp`:
 
 The only intentional divergence from MCP is user-visible naming: MCP tools are
 namespaced because their servers are a parallel extension mechanism. Plugin tools
-preserve their declared names so OpenCode-style `tool:` registration maps cleanly
+preserve their declared names so Compat-style `tool:` registration maps cleanly
 and the parent example tool `remember` is advertised as `remember`. Collisions are
 handled explicitly in section 6.
 
@@ -500,7 +500,7 @@ Warnings use `tracing::warn!` and include at least `plugin`, `tool`, and the
 `DuplicateName` error. Do not fail bootstrap on duplicate plugin tools; other
 tools from that plugin still register and the plugin's hooks still run.
 
-This rule is simpler than OpenCode's override behavior and protects B-AC5: no
+This rule is simpler than Compat's override behavior and protects B-AC5: no
 plugin can silently shadow a builtin in v1. A future explicit override feature can
 be designed as a separate task if users need it.
 

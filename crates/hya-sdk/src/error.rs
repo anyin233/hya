@@ -3,12 +3,12 @@ use thiserror::Error;
 /// Errors surfaced by the SDK layer.
 ///
 /// Frozen contract (W0). `Spawn`/`Readiness` are populated in W1 once the real
-/// `opencode serve` lifecycle lands; they exist now so the spawn-failure path
+/// `compat serve` lifecycle lands; they exist now so the spawn-failure path
 /// (PLAN.md S-8) has a typed home and downstream `match` arms are stable.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum SdkError {
-    #[error("failed to spawn `opencode serve`: {0}")]
+    #[error("failed to spawn `compat serve`: {0}")]
     Spawn(String),
 
     #[error("server did not become ready within {0:?}")]

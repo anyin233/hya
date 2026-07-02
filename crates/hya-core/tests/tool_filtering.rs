@@ -129,8 +129,8 @@ async fn runtime_tool_request_filters_patch_tools_by_model() {
 
 #[tokio::test]
 async fn runtime_tool_request_filters_websearch_by_provider() {
-    let opencode_ids = tool_ids("opencode", "test").await;
-    assert!(opencode_ids.contains(&"websearch".to_string()));
+    let compat_ids = tool_ids("compat", "test").await;
+    assert!(compat_ids.contains(&"websearch".to_string()));
 
     let anthropic_ids = tool_ids("anthropic", "test").await;
     assert!(!anthropic_ids.contains(&"websearch".to_string()));

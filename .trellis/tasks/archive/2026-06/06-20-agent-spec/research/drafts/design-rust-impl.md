@@ -4,14 +4,14 @@
 > _buildable_. Every section answers "what crate, what type, what signature,
 > what does the compiler see". Confirmed decisions D1–D4 are taken as given.
 >
-> **Reference systems**: opencode (Bun/TS, event-sourced sessions, two-layer
-> tools, Provider/Protocol/Route) — see `research/opencode-architecture.md`;
+> **Reference systems**: compat (Bun/TS, event-sourced sessions, two-layer
+> tools, Provider/Protocol/Route) — see `research/compat-architecture.md`;
 > omo team mode (lead + members, file-backed mailbox/task board, 12 team_* tools,
 > category→model routing) — see `research/omo-team-mode.md`; Claude Code `/goal`
 > (independent cheap-model evaluator judging only the transcript) — see
 > `research/goal-driven-verification.md`.
 >
-> **Why this lens matters**: opencode and omo are TypeScript. Many of their
+> **Why this lens matters**: compat and omo are TypeScript. Many of their
 > patterns (`Effect`, Zod, freeform JSON shape-shifting) do not survive contact
 > with the borrow checker or `dyn Trait` dyn-safety rules. This doc commits to
 > Rust-idiomatic substitutes _before_ the first crate is generated, so we do not
@@ -323,7 +323,7 @@ event-sourcing replay path.
 
 ## 3. `yaca-provider` — Provider / Protocol / Route
 
-Lifted from opencode's split (see research). The point is that the agent loop
+Lifted from compat's split (see research). The point is that the agent loop
 sees ONE event stream regardless of which vendor.
 
 ### 3.1 The traits
@@ -472,7 +472,7 @@ and never logged — `SecretString` is `secrecy::SecretString` with a
 
 ## 4. `yaca-tool` — canonical schema + typed runtime wrapper
 
-Two layers exactly as opencode does it (see research §4), translated to Rust's
+Two layers exactly as compat does it (see research §4), translated to Rust's
 type system.
 
 ### 4.1 The canonical layer
@@ -903,9 +903,9 @@ CREATE TABLE goal (
 
 ## 6. Team-mode orchestration (the hard part)
 
-This is where opencode buys us nothing — opencode's `task` tool is a
+This is where compat buys us nothing — compat's `task` tool is a
 single-subagent dispatch. The **omo team-mode** model (lead + members + mailbox
-+ task board) has no equivalent in opencode. We rebuild it natively in Rust.
++ task board) has no equivalent in compat. We rebuild it natively in Rust.
 
 ### 6.1 Core types
 

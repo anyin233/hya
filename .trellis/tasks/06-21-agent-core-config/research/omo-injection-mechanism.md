@@ -1,8 +1,8 @@
-# Research: omo (OhMyOpenCode) prompt-injection mechanism
+# Research: omo (OhMyCompat) prompt-injection mechanism
 
 Per user instruction ("before start, check how omo inject the prompt, we use similar
 mechanism — per-agent & per-model rule"). Source: locally installed
-`oh-my-openagent` / `oh-my-opencode` (omo-codex variant).
+`oh-my-openagent` / `oh-my-compat` (omo-codex variant).
 Base: `~/.config/opencode/node_modules/oh-my-openagent/packages/omo-codex/plugin/`
 
 ## Summary

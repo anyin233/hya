@@ -1,4 +1,4 @@
-# Design: TUI borderless opencode-parity redesign
+# Design: TUI borderless compat-parity redesign
 
 ## 1. Architecture & boundaries
 
@@ -12,9 +12,9 @@ The change is confined to the view crate `yaca-tui` and the CLI event-loop
 - `yaca-provider` already exposes `DevProvider`; the mock "backend" is mostly
   wiring, not new provider code.
 
-## 2. Reference summary (opencode)
+## 2. Reference summary (compat)
 
-opencode's TUI (`sst/opencode`, `dev` branch, `packages/tui/src`) is built on a
+compat's TUI (`sst/compat`, `dev` branch, `packages/tui/src`) is built on a
 custom TypeScript/SolidJS renderer (`@opentui/core`). The design we port is:
 
 - **Layout**: a top-level `flexDirection="row"`. Main content is a column with
@@ -38,7 +38,7 @@ custom TypeScript/SolidJS renderer (`@opentui/core`). The design we port is:
 ## 3. Theme system
 
 Introduce a small `Theme` struct in `yaca-tui` (no file IO; the default dark
-palette is compiled in). Use ratatui `Color::Rgb` values from the opencode
+palette is compiled in). Use ratatui `Color::Rgb` values from the compat
 palette.
 
 ```rust
@@ -61,7 +61,7 @@ pub struct Theme {
 }
 ```
 
-Expose `Theme::opencode_dark()` and store it in `AppState` so tests can pass a
+Expose `Theme::compat_dark()` and store it in `AppState` so tests can pass a
 deterministic theme.
 
 ## 4. Layout redesign (borderless)
@@ -78,7 +78,7 @@ Replace the current 3-row vertical layout with a color-block layout:
 - All `Block::borders(Borders::ALL)` on the main regions are removed.
 - Overlays (permission/question/picker) keep a subtle 1-line border using
   `border`/`border_active` colors because they are floating modal surfaces;
-  this is intentional and matches opencode's dialog styling.
+  this is intentional and matches compat's dialog styling.
 - The transcript stays scrollable with the existing scroll-back math, but the
   wrapped-line calculation must account for the new padding.
 
@@ -228,7 +228,7 @@ Keep the existing overlay shapes but update their `Block` styling:
 - Background set to `theme.background_panel`.
 - Title color `theme.text` or `theme.primary` depending on overlay type.
 - Selected option background `theme.primary` with selected-foreground black
-  (opencode uses `selectedListItemText: background`).
+  (compat uses `selectedListItemText: background`).
 
 ## 8. Compatibility & migration
 

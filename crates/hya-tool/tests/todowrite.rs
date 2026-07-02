@@ -52,7 +52,7 @@ async fn todowrite_updates_session_todos_and_reports_open_count() {
             &ctx,
             json!({
                 "todos": [
-                    { "content": "Audit OpenCode tools", "status": "in_progress", "priority": "high" },
+                    { "content": "Audit Compat tools", "status": "in_progress", "priority": "high" },
                     { "content": "Document parity gaps", "status": "completed", "priority": "low" }
                 ]
             }),
@@ -65,7 +65,7 @@ async fn todowrite_updates_session_todos_and_reports_open_count() {
     assert_eq!(out["metadata"]["todos"].as_array().unwrap().len(), 2);
     let stored = todo.get(session).await;
     assert_eq!(stored.len(), 2);
-    assert_eq!(stored[0].content, "Audit OpenCode tools");
+    assert_eq!(stored[0].content, "Audit Compat tools");
     assert_eq!(stored[0].status.as_str(), "in_progress");
     assert_eq!(stored[0].priority.as_str(), "high");
     assert_eq!(stored[1].status.as_str(), "completed");
@@ -122,7 +122,7 @@ async fn todowrite_rejects_missing_status_without_updating_session_todos() {
 }
 
 #[tokio::test]
-async fn todowrite_accepts_opencode_string_status_and_priority() {
+async fn todowrite_accepts_compat_string_status_and_priority() {
     // Given
     let session = SessionId::new();
     let todo = TodoPlane::default();

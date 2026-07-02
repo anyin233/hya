@@ -31,15 +31,15 @@ pub(crate) enum Transport {
 impl Transport {
     /// Connect using the mode implied by `args`: by default run the `hya` backend IN-PROCESS and
     /// talk to it natively (no TCP, no reqwest). `--http` spawns `hya-backend serve` and talks HTTP/SSE;
-    /// `--server <url>` attaches to an already-running opencode-compatible server; `--opencode`
-    /// switches to the opencode backend (native bun bridge, or `opencode serve` over HTTP with
+    /// `--server <url>` attaches to an already-running compat-compatible server; `--compat`
+    /// switches to the compat backend (native bun bridge, or `compat serve` over HTTP with
     /// `--http`). Returns the shared client plus the guard that owns the connection.
     pub(crate) async fn connect(
         args: &Args,
         directory: &str,
         tx: &mpsc::UnboundedSender<AppEvent>,
     ) -> Result<(Arc<dyn Client>, Transport), Box<dyn Error + Send + Sync>> {
-        if args.server.is_none() && !args.http && !args.opencode {
+        if args.server.is_none() && !args.http && !args.compat {
             let runtime = Arc::new(
                 HyaRuntime::start(RuntimeOptions {
                     model: None,
@@ -60,7 +60,7 @@ impl Transport {
             return Ok((client, Transport::Hya { runtime, bridge }));
         }
 
-        if args.opencode && !args.http && args.server.is_none() {
+        if args.compat && !args.http && args.server.is_none() {
             let (event_tx, event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
             let bridge = NativeBridge::spawn(&resolve_backend_dir()?, event_tx).await?;
             let client: Arc<dyn Client> = Arc::new(bridge.client(directory));

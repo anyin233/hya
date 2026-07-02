@@ -22,7 +22,7 @@ impl FileAction {
         }
     }
 
-    pub(crate) fn opencode_type(self) -> &'static str {
+    pub(crate) fn compat_type(self) -> &'static str {
         match self {
             FileAction::Add => "add",
             FileAction::Update => "update",

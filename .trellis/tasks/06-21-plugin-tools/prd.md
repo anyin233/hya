@@ -11,7 +11,7 @@ Let a plugin contribute **new model-callable tools**: the plugin declares tools
 (name + JSON schema) at registration; yaca advertises them to the model alongside
 builtins; when the model calls one, a plugin-tool proxy dispatches the call over
 the IPC protocol to the owning plugin and returns its JSON result, all under the
-normal permission plane. Mirrors OpenCode's `tool:` registration.
+normal permission plane. Mirrors Compat's `tool:` registration.
 
 ## Scope (owns)
 
@@ -67,7 +67,7 @@ which Child A defines but B exercises end-to-end).
 
 ## Out of scope
 
-- Hook interception (Child A), OpenCode adapter (Child C), out-of-process
+- Hook interception (Child A), Compat adapter (Child C), out-of-process
   providers. Plugin tools that need new permission `Action` kinds beyond a generic
   plugin-tool action are deferred unless design.md shows a concrete need.
 

@@ -103,7 +103,7 @@ async fn glob_supports_path_and_open_code_output_shape() {
 }
 
 #[tokio::test]
-async fn glob_rejects_file_path_like_opencode() {
+async fn glob_rejects_file_path_like_compat() {
     let workdir = tempdir();
     let src = workdir.join("src");
     tokio::fs::create_dir_all(&src).await.unwrap();

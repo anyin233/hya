@@ -39,14 +39,14 @@ When an interactive TUI startup creates the starter file for the first time, it
 prompts before doing anything else:
 
 ```text
-hya: import OpenCode model config now? [y/N]
+hya: import Compat model config now? [y/N]
 ```
 
 Answering yes imports provider base URLs, model IDs, and API key values or
-templates from the first discovered OpenCode config (`$OPENCODE_CONFIG`,
-`$XDG_CONFIG_HOME/opencode/{opencode.json,config.json,opencode.jsonc}`,
+templates from the first discovered Compat config (`$COMPAT_CONFIG`,
+`$XDG_CONFIG_HOME/compat/{opencode.json,config.json,opencode.jsonc}`,
 `$HOME/.config/opencode/{...}`, then `$HOME/.opencode/{...}`). The import is
-local and does not print secret values. If no importable OpenCode provider has
+local and does not print secret values. If no importable Compat provider has
 both a base URL and at least one model, hya keeps the starter config and
 continues offline.
 
@@ -114,8 +114,8 @@ plugins:
     timeout_ms: 500
     env:
       TOKEN: literal-token
-  opencode:
-    kind: opencode                       # rust (default) | opencode | other
+  compat:
+    kind: compat                       # rust (default) | compat | other
 ```
 
 ## Providers
@@ -211,15 +211,15 @@ hya honors the standard `HOME` and `XDG_CONFIG_HOME` for config/auth paths.
 | `HYA_COMPACTION_KEEP_RECENT` | Number of most-recent messages kept verbatim when compacting. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().keep_recent` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
 | `HYA_HISTORY_DIR` | Directory for the TUI's JSONL session history. | `$HOME/.hya/history`, else a temp dir. | `crates/hya-backend/src/tui/history.rs` |
 | `HYA_EXPORT_DIR` | Directory where `/export` writes Markdown transcripts. | `$HOME/.hya/exports`, else a temp dir. | `crates/hya-backend/src/tui.rs` (`export_root`) |
-| `HYA_OPENCODE_ADAPTER_DIR` | Path to an alternate OpenCode plugin adapter checkout (used for `kind: opencode` plugins). | Bundled adapter in `crates/hya-plugin-opencode/adapter`. | `crates/hya-app/src/plugins.rs` |
+| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (used for `kind: compat` plugins). | Bundled adapter in `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH`. | `crates/hya-backend/src/serve.rs` (`resolve_hya_bin`) |
 
 Related, non-`HYA_` variables that also affect behavior:
 
 | Variable | Effect | Source |
 | --- | --- | --- |
-| `BUN` | Bun binary used to run the bundled OpenCode adapter. | `crates/hya-app/src/plugins.rs` |
-| `OPENCODE_WEBSEARCH_PROVIDER` | Selects the web-search backend used by the websearch tool. | `crates/hya-tool/src/websearch.rs` |
+| `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
+| `COMPAT_WEBSEARCH_PROVIDER` | Selects the web-search backend used by the websearch tool. | `crates/hya-tool/src/websearch.rs` |
 | `PARALLEL_API_KEY`, `EXA_API_KEY` | API keys for the corresponding websearch providers. | `crates/hya-tool/src/websearch.rs` |
 
 ## MCP Servers
@@ -241,74 +241,74 @@ mcp:
 Enabled servers are started during runtime composition. Their tools are
 registered as `mcp__<server>__<tool>` and use the normal permission plane.
 `GET /mcp` reports connected, disabled, and failed servers in an
-OpenCode-shaped status response. Dynamic HTTP MCP add/connect/disconnect routes
+Compat-shaped status response. Dynamic HTTP MCP add/connect/disconnect routes
 exist for compatibility, but they do not durably rewrite `config.yaml` or hot-plug
 new tools into an already running engine.
 
-### OpenCode migration into hya
+### Compat migration into hya
 
-Interactive first-run startup can import OpenCode provider/model config into
+Interactive first-run startup can import Compat provider/model config into
 `config.yaml`. You can also run the model import explicitly without starting a
 TUI:
 
 ```sh
-hya --import opencode
+hya --import compat
 ```
 
-The explicit import currently supports only OpenCode and only model/provider
+The explicit import currently supports only Compat and only model/provider
 config. It replaces `default_model` and `providers` in `config.yaml`, while
 preserving existing non-model sections such as `mcp`, `plugins`, and
 `default_agent`. The command prints TODO placeholders for skills and MCP import;
 future sources such as Codex and Claude are reserved but not implemented yet.
 
-To mirror OpenCode-owned MCP and skill surfaces into the default hya runtime,
+To mirror Compat-owned MCP and skill surfaces into the default hya runtime,
 use the workspace xtask migration entrypoint:
 
 ```sh
-cargo run -p xtask -- sync-opencode --help
+cargo run -p xtask -- sync-compat --help
 ```
 
 The first-pass migration contract is intentionally narrow:
 
-- OpenCode remains the canonical source of truth.
-- The migration supports OpenCode local stdio MCP entries that map to hya's
-  `McpServerConfig` shape. The OpenCode `command`, `enabled`, and `environment`
+- Compat remains the canonical source of truth.
+- The migration supports Compat local stdio MCP entries that map to hya's
+  `McpServerConfig` shape. The Compat `command`, `enabled`, and `environment`
   fields are migrated; `environment` becomes the hya `env` map and any
-  `{env:VAR}` / `{file:path}` templates are preserved verbatim. OpenCode
+  `{env:VAR}` / `{file:path}` templates are preserved verbatim. Compat
   remote MCP entries are skipped in this first pass.
 - The migration materializes skills into the hya skill root as managed symlinks.
 - The migration writes a managed-state lock file at
-  `~/.config/hya/opencode-sync-lock.json` so rerun and prune operations can be
+  `~/.config/hya/compat-sync-lock.json` so rerun and prune operations can be
   safe and idempotent.
-- OpenCode provider/model sections are handled by the first-run import prompt,
+- Compat provider/model sections are handled by the first-run import prompt,
   not this xtask. The xtask focuses on MCP and skills.
 
 Typical workflow:
 
 ```sh
-cargo run -p xtask -- sync-opencode \
+cargo run -p xtask -- sync-compat \
   --dry-run \
-  --opencode-config "$HOME/.config/opencode/opencode.json" \
-  --opencode-skill-root .opencode/skills \
+  --compat-config "$HOME/.config/opencode/opencode.json" \
+  --compat-skill-root .opencode/skills \
   --hya-config "$HOME/.config/hya/config.yaml" \
   --hya-skills-root "$HOME/.config/hya/skills"
 
-cargo run -p xtask -- sync-opencode \
-  --opencode-config "$HOME/.config/opencode/opencode.json" \
-  --opencode-skill-root .opencode/skills \
+cargo run -p xtask -- sync-compat \
+  --compat-config "$HOME/.config/opencode/opencode.json" \
+  --compat-skill-root .opencode/skills \
   --hya-config "$HOME/.config/hya/config.yaml" \
   --hya-skills-root "$HOME/.config/hya/skills"
 ```
 
-Repeat `--opencode-skill-root <PATH>` for each additional OpenCode-managed skill
-root you want to migrate. External skill paths configured through OpenCode, such
-as a superpowers install, are also discovered from the OpenCode config's
+Repeat `--compat-skill-root <PATH>` for each additional Compat-managed skill
+root you want to migrate. External skill paths configured through Compat, such
+as a superpowers install, are also discovered from the Compat config's
 `skills.paths` list.
 
 To remove only lockfile-managed migrated state:
 
 ```sh
-cargo run -p xtask -- sync-opencode \
+cargo run -p xtask -- sync-compat \
   --prune \
   --hya-config "$HOME/.config/hya/config.yaml" \
   --hya-skills-root "$HOME/.config/hya/skills"
@@ -330,23 +330,23 @@ plugins:
     timeout_ms: 500
     env:
       TOKEN: literal-token
-  opencode:
-    kind: opencode
+  compat:
+    kind: compat
 ```
 
 Config entries support:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `rust`, `opencode`, or `other`; default is `rust`. |
+| `kind` | `rust`, `compat`, or `other`; default is `rust`. |
 | `command` | Process command for stdio JSON-RPC. |
 | `enabled` | Defaults to `true`; disabled entries are skipped. |
 | `timeout_ms` | Optional request timeout. |
 | `env` | Environment variables passed to the plugin process as configured. |
 
-For `kind: opencode` entries without `command`, hya uses the bundled Bun
-adapter from `crates/hya-plugin-opencode/adapter`. Set `BUN` to choose a Bun
-binary or `HYA_OPENCODE_ADAPTER_DIR` to point at an alternate adapter checkout.
+For `kind: compat` entries without `command`, hya uses the bundled Bun
+adapter from `crates/hya-plugin-compat/adapter`. Set `BUN` to choose a Bun
+binary or `HYA_COMPAT_ADAPTER_DIR` to point at an alternate adapter checkout.
 If Bun is not available, that plugin is skipped.
 
 The plugin host supports registered tools, command/message/text/chat hooks,
@@ -356,7 +356,7 @@ metadata.
 ## Formatter
 
 The `formatter` key controls the formatter plane exposed through tools and the
-OpenCode-compatible `/formatter` route:
+Compat-compatible `/formatter` route:
 
 ```yaml
 formatter: true

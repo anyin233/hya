@@ -6,7 +6,7 @@ use hya_proto::WorkspaceAdapterInfo;
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use tokio::sync::mpsc;
 
-use crate::{opencode, pending, runs};
+use crate::{compat, pending, runs};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -92,12 +92,12 @@ pub(crate) struct ServerState {
     pub(crate) runs: runs::RunRegistry,
     pub(crate) permission_requests: pending::PermissionRequests,
     pub(crate) question_requests: pending::QuestionRequests,
-    pub(crate) global: opencode::GlobalState,
+    pub(crate) global: compat::GlobalState,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) mcp_http: opencode::McpHttpState,
-    pub(crate) project: opencode::ProjectState,
-    pub(crate) pty: opencode::PtyState,
-    pub(crate) tui: opencode::TuiState,
+    pub(crate) mcp_http: compat::McpHttpState,
+    pub(crate) project: compat::ProjectState,
+    pub(crate) pty: compat::PtyState,
+    pub(crate) tui: compat::TuiState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
@@ -112,12 +112,12 @@ impl ServerState {
             runs: runs::RunRegistry::default(),
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
-            global: opencode::GlobalState::new(),
+            global: compat::GlobalState::new(),
             mcp_manager: app.mcp_manager,
-            mcp_http: opencode::McpHttpState::new(),
-            project: opencode::ProjectState::new(),
-            pty: opencode::PtyState::new(),
-            tui: opencode::TuiState::new(),
+            mcp_http: compat::McpHttpState::new(),
+            project: compat::ProjectState::new(),
+            pty: compat::PtyState::new(),
+            tui: compat::TuiState::new(),
             workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,

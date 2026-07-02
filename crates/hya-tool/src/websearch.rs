@@ -29,7 +29,7 @@ struct WebSearchConfig {
 
 impl Default for WebSearchPlane {
     fn default() -> Self {
-        let provider = match std::env::var("OPENCODE_WEBSEARCH_PROVIDER").as_deref() {
+        let provider = match std::env::var("COMPAT_WEBSEARCH_PROVIDER").as_deref() {
             Ok("exa") => WebSearchProviderMode::Fixed(WebSearchProvider::Exa),
             Ok("parallel") => WebSearchProviderMode::Fixed(WebSearchProvider::Parallel),
             _ => WebSearchProviderMode::Auto,

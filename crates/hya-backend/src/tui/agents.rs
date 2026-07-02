@@ -105,7 +105,7 @@ pub fn apply_profile(agent: &mut AgentSpec, base_prompt: &str, profile: &AgentPr
 #[cfg(test)]
 mod tests {
     #[test]
-    fn builtins_include_opencode_style_agent_profiles() {
+    fn builtins_include_compat_style_agent_profiles() {
         let profiles = super::builtin_profiles();
 
         assert!(profiles.iter().any(|profile| profile.name == "build"));

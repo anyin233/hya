@@ -44,7 +44,7 @@ runs connected to a lead session.
 
 The same shape is used by `inject_system_message` for system messages.
 `admit_command_prompt` records command metadata while admitting a user message.
-OpenCode-compatible v2 prompt admission can attach file and agent metadata that
+Compat-compatible v2 prompt admission can attach file and agent metadata that
 is replayed through the projection and provider request builder.
 
 ## Assistant Turn Loop
@@ -81,7 +81,7 @@ and [`engine/summary.rs`](../../crates/hya-core/src/engine/summary.rs).
 `ModelSummarizer` asks the configured provider for a summary when token
 thresholds are exceeded. `compact_context` records a hya-native system summary
 and prunes older provider context for future requests. The CLI exposes this via
-`/compact`; legacy OpenCode summarize routes persist the same native summary
+`/compact`; legacy Compat summarize routes persist the same native summary
 shape.
 
 ## Hooks

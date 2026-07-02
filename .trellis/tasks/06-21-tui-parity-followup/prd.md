@@ -1,9 +1,9 @@
-# TUI opencode parity follow-up
+# TUI compat parity follow-up
 
 ## Goal
 
 Track and (when prioritized) close the **out-of-scope** surfaces identified during
-the TUI opencode-parity effort — every opencode TUI feature that yaca deliberately
+the TUI compat-parity effort — every compat TUI feature that yaca deliberately
 did NOT build because it has no equivalent backend concept yet. This task is the
 parent backlog; each deliverable below is independently verifiable and should
 become its own child task (with its own `design.md`) when picked up.
@@ -14,20 +14,20 @@ wizard (tracked separately, per direction).
 ## Context & confirmed facts
 
 - Source of truth for what shipped vs. deferred vs. out-of-scope:
-  `docs/parity.md` on branch `tui/opencode-parity`.
+  `docs/parity.md` on branch `tui/compat-parity`.
 - The TUI parity work (W0–W7: editor, dialogs, theme loader+persistence, token
   usage, rename/delete, skill picker, markdown/diff render, abort) lives on the
-  unmerged branch `tui/opencode-parity` (off substrate `f5ae121`).
+  unmerged branch `tui/compat-parity` (off substrate `f5ae121`).
 - **Architecture has since diverged on `main`:** yaca now uses its own
   `~/.config/yaca/config.yaml` (`providers: { kind: openai|anthropic|google }`)
-  instead of reading opencode's config. Any backend work here targets the current
-  `main` architecture, not the opencode-config substrate the branch was cut from.
+  instead of reading compat's config. Any backend work here targets the current
+  `main` architecture, not the compat-config substrate the branch was cut from.
 - yaca is currently **single-agent** (`agent_with_model` is fixed to `build`) and
   has no MCP, sharing, workspace-warp, tag, or model-variant concepts.
 
 ## Hard dependency
 
-- **Blocked by:** `tui/opencode-parity` merged into `main`. Every deliverable here
+- **Blocked by:** `tui/compat-parity` merged into `main`. Every deliverable here
   builds on that TUI's dialog system (`SelectDialog`/`DialogKind`, leader plane,
   `Effect`/`Msg` TEA loop) and theme registry.
 
@@ -38,9 +38,9 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 ### 1. Stash dialog (S) — TUI-local, no backend
 
-- **What:** opencode's prompt-stash (set aside drafts, pop them back).
+- **What:** compat's prompt-stash (set aside drafts, pop them back).
 - **Gap:** `PromptStash` exists in `yaca-tui` (push/pop/cap) but is wired to
-  nothing; opencode itself ships it **unbound** by default.
+  nothing; compat itself ships it **unbound** by default.
 - **Build:** a stash-add action + a stash list/pop dialog (`DialogKind::Stash`);
   persist to `$XDG_STATE_HOME/yaca/tui/stash.jsonl` like prompt history.
 - **Accept:** stashing a draft clears the editor and stores it; the stash dialog
@@ -64,7 +64,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 ### 4. Model variants (M) — needs backend
 
-- **What:** opencode model "variants" (e.g., reasoning-effort / config presets per
+- **What:** compat model "variants" (e.g., reasoning-effort / config presets per
   model) selectable from a variant picker.
 - **Gap:** yaca has `ModelRef` only; no variant concept.
 - **Build:** decide the variant model (reasoning effort? sampling preset?), add it
@@ -85,7 +85,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 ### 6. Workspace warp / move-workspace (M) — needs backend
 
-- **What:** opencode's "warp"/move-workspace (re-root the session to another dir).
+- **What:** compat's "warp"/move-workspace (re-root the session to another dir).
 - **Gap:** the agent workdir is fixed at startup; no re-root path.
 - **Build:** an engine API to change a session's workdir (+ permission re-scope) and
   a dialog/prompt to pick the new root.
@@ -93,7 +93,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 
 ### 7. Console / org / share (L) — needs hosted backend
 
-- **What:** opencode's session sharing / org console links.
+- **What:** compat's session sharing / org console links.
 - **Gap:** yaca has no hosted/console concept.
 - **Build:** would require a sharing backend (upload session, return a URL) — large
   and arguably outside yaca's local-first design.
@@ -110,7 +110,7 @@ Each item lists: what it is, the current gap, what a real implementation needs
 These are **deferred** (a backend/feature exists or is planned), not out-of-scope,
 and should be their own tasks:
 
-- 33 built-in opencode themes (the JSON loader already shipped; only the bundled
+- 33 built-in compat themes (the JSON loader already shipped; only the bundled
   theme data is missing).
 - Syntax highlighting (syntect) + full-screen DiffViewer (W4.5 polish).
 - Session compact / fork / timeline (need new public `yaca-core` APIs;
@@ -122,7 +122,7 @@ and should be their own tasks:
 
 - [ ] Each deliverable (1–7) is either promoted to a child task with its own
       `design.md`, or explicitly marked won't-do with a one-line justification.
-- [ ] Child-task dependencies on `tui/opencode-parity` (merged) are written in the
+- [ ] Child-task dependencies on `tui/compat-parity` (merged) are written in the
       child artifacts, not implied.
 - [ ] OAuth remains excluded; the deferred list above stays out of this task.
 

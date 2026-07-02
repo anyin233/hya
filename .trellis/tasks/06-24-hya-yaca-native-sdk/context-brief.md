@@ -26,14 +26,14 @@
   commands, models, mcp_status, lsp_status, formatter_status, plugins, session_create, session_prompt,
   session_shell, session_command, permission_reply, question_reply/reject, session_rename/delete/compact/
   revert/unrevert/abort) is implemented ONCE over any `Transport` via `ApiClient<T>`. `ApiClient::with_transport(T)` is public.
-- **Existing transports:** `HttpTransport` (reqwest, client.rs:178) and `NativeTransport` (native.rs — spawns a **Bun** process running opencode TS `native-bridge.ts`, framed JSON over stdio). Neither is native-Rust-to-yaca.
+- **Existing transports:** `HttpTransport` (reqwest, client.rs:178) and `NativeTransport` (native.rs — spawns a **Bun** process running compat TS `native-bridge.ts`, framed JSON over stdio). Neither is native-Rust-to-yaca.
 - **Events:** `crates/hya-sdk/src/events.rs` `stream_global_events()` consumes SSE `GET /global/event` via reqwest+eventsource-stream → `GlobalEvent`. `crates/hya/src/main.rs` forwards `GlobalEvent` → `AppEvent::Sse`.
-- **hya binary** (`crates/hya/src/main.rs`): default mode spawns `yaca serve` (`ServerHandle`, `server.rs`) then connects via `HttpClient` + SSE task. Flags: `--server <url>`, `--http`, `--opencode`, `--yaca-bin`.
+- **hya binary** (`crates/hya/src/main.rs`): default mode spawns `yaca serve` (`ServerHandle`, `server.rs`) then connects via `HttpClient` + SSE task. Flags: `--server <url>`, `--http`, `--compat`, `--yaca-bin`.
 - `hya` depends on `hya-sdk` + `hya-tui` only (Cargo.toml). hya-sdk deps: serde, reqwest, eventsource-stream, tokio, async-trait, libc.
 
 ### yaca backend (crates `yaca-server`, `yaca-core`, `yaca-cli`, …)
 - **Router entry** — `crates/yaca-server/src/lib.rs:31`: `pub fn router(state: AppState) -> axum::Router`.
-  It `.merge(opencode::router())` — `crates/yaca-server/src/opencode.rs` serves EXACTLY the opencode-compatible
+  It `.merge(compat::router())` — `crates/yaca-server/src/compat.rs` serves EXACTLY the compat-compatible
   routes hya's `Client` calls (`/config`, `/session`, `/session/{id}/message`, `/agent`, `/global/event` SSE,
   `/find/file`, `/command`, `/config/providers`, `/mcp`, `/lsp`, `/formatter`, `/permission/{id}/reply`,
   `/question/...`, `/session/{id}/{shell,command,summarize,revert,unrevert,abort}`, PATCH/DELETE `/session/{id}`).
@@ -43,8 +43,8 @@
   .with_mcp_manager(m).with_workspace_adapters(v).with_default_agent(a).with_global_agents(b)
   .with_permission_requests(rx)`. `ServerState::new(app)` adds runs/global/pty/tui/project/mcp_http state.
 - **Event bus** — `crates/yaca-core/src/bus.rs`: `EventBus(broadcast::Sender<Envelope>)`; `engine.bus().subscribe()
-  -> broadcast::Receiver<Envelope>`. The `/global/event` SSE handler (`opencode/event.rs`, 796 LOC) PROJECTS
-  raw `Envelope`s into opencode-shaped `GlobalEvent` frames (e.g. `server.connected`) — hya consumes the projected shape.
+  -> broadcast::Receiver<Envelope>`. The `/global/event` SSE handler (`compat/event.rs`, 796 LOC) PROJECTS
+  raw `Envelope`s into compat-shaped `GlobalEvent` frames (e.g. `server.connected`) — hya consumes the projected shape.
 - **Bootstrap lives in the `yaca-cli` BINARY** (`crates/yaca-cli/src/main.rs`) — NOT a library:
   - `resolve_runtime(model_override) -> RuntimeConfig{ router: ProviderRouter, model, models, mcp, plugins, default_agent }` via `config::load()` (falls back to offline DevProvider).
   - `build_session_engine(store, router, model, mcp, plugins) -> (Arc<SessionEngine>, asks rx, questions rx, McpManager, Arc<PluginHost>)`.
@@ -57,7 +57,7 @@
 1. **Request transport:** A new `Transport` impl that calls the in-process `axum::Router` via
    `tower::ServiceExt::oneshot` — build `http::Request` (method, path, `x-opencode-directory` header, JSON body),
    read `http::Response` body via `http_body_util::BodyExt`. NO TCP, NO reqwest. (This is the Rust analogue of
-   opencode's in-process `app.fetch`.)
+   compat's in-process `app.fetch`.)
 2. **Event bridge:** EITHER oneshot `GET /global/event` and read the SSE body stream in-process (reuses the 796-LOC
    projection), OR `engine.bus().subscribe()` directly and re-project. Trade-off: reuse vs. coupling.
 3. **Bootstrap extraction:** Move the engine/AppState bootstrap from the `yaca-cli` binary into a LIBRARY so

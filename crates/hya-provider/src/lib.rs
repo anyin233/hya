@@ -184,7 +184,7 @@ mod reasoning_effort_tests {
     use super::ReasoningEffort as R;
 
     #[test]
-    fn parses_opencode_vocab() {
+    fn parses_compat_vocab() {
         assert_eq!(R::parse("none"), Some(R::Off));
         assert_eq!(R::parse("off"), Some(R::Off));
         assert_eq!(R::parse("minimal"), Some(R::Minimal));
@@ -203,7 +203,7 @@ mod reasoning_effort_tests {
     }
 
     #[test]
-    fn anthropic_budgets_match_opencode() {
+    fn anthropic_budgets_match_compat() {
         assert_eq!(R::High.anthropic_budget(), Some(16000));
         assert_eq!(R::Max.anthropic_budget(), Some(31999));
         assert_eq!(R::Minimal.anthropic_budget(), None);
