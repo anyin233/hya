@@ -1,5 +1,4 @@
-# 0.29.1
+# 0.29.2
 
-- Added startup-safe slash command autocomplete in the default TUI, seeded from built-in local slash commands before backend command discovery finishes.
-- Refreshed an open slash autocomplete popup when discovered commands arrive without reopening a dismissed popup.
-- Kept slash autocomplete selection in the prompt (`/command `) while exact built-in, quit, and discovered commands still execute on Enter.
+- Fixed formatter execution to resolve slash-containing relative commands from the workspace before spawning.
+- Reported formatter spawn and non-zero exit failures instead of treating failed formatting as successful.
