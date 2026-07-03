@@ -85,6 +85,7 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),
     }

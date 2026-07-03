@@ -53,6 +53,10 @@ pub(super) fn disk_agents(workdir: &Path) -> Vec<AgentChange> {
     for root in [
         workdir.join(".opencode/agent"),
         workdir.join(".opencode/agents"),
+        // Shared with Claude Code (mirrors how skills read `.claude/skills`), plus
+        // the hya-native project dir. Same frontmatter schema as `.opencode/agent`.
+        workdir.join(".claude/agents"),
+        workdir.join(".hya/agents"),
     ] {
         collect_markdown_files(&root, &root, false, &mut files);
     }
@@ -91,7 +95,7 @@ fn global_agent_dirs() -> Vec<PathBuf> {
             bases.push(xdg_default);
         }
     }
-    bases
+    let mut dirs: Vec<PathBuf> = bases
         .iter()
         .flat_map(|base| {
             [
@@ -101,7 +105,15 @@ fn global_agent_dirs() -> Vec<PathBuf> {
                 base.join("compat/agents"),
             ]
         })
-        .collect()
+        .collect();
+    // Shared with Claude Code: `~/.claude/agents` (home-based, not XDG), mirroring
+    // how skills read `~/.claude/skills`.
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        dirs.push(PathBuf::from(home).join(".claude/agents"));
+    }
+    dirs
 }
 
 fn collect_markdown_files(base: &Path, dir: &Path, primary: bool, files: &mut Vec<AgentFile>) {

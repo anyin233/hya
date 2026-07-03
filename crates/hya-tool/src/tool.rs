@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::agents::{AgentCatalogPlane, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
@@ -60,6 +61,7 @@ pub struct ToolCtx {
     pub parent_session: Option<SessionId>,
     pub todo: TodoPlane,
     pub skills: SkillPlane,
+    pub agents: AgentCatalogPlane,
     pub websearch: WebSearchPlane,
     pub lsp: LspPlane,
     pub formatter: FormatterPlane,
@@ -122,6 +124,7 @@ impl ToolRegistry {
             Arc::new(QuestionTool),
             Arc::new(LspTool),
             Arc::new(SkillTool),
+            Arc::new(ListAgentsTool),
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
         ] {

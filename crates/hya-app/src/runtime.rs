@@ -279,6 +279,7 @@ pub fn spawn_team_supervisor(
                                 spawn_model: member.model.as_deref(),
                                 spawn_category: member.category.as_deref(),
                                 is_servable: &is_servable,
+                                inline_agent: member.inline_agent.as_ref(),
                             });
                         let session = match member
                             .task_id
@@ -340,6 +341,7 @@ pub fn spawn_team_supervisor(
                                     spawn_model: m.model.as_deref(),
                                     spawn_category: m.category.as_deref(),
                                     is_servable: &is_servable,
+                                    inline_agent: m.inline_agent.as_ref(),
                                 });
                             MemberSpec {
                                 id: MemberId::new(),
@@ -430,11 +432,27 @@ pub async fn build_session_engine(
     // can test category-candidate servability against the same live providers.
     let spawn_router = router.clone();
     let categories = Arc::new(crate::config::load_categories());
+    // Inject the agent catalog into the `list_agents` tool via a closure, mirroring
+    // the SkillPlane/SpawnerPlane injection pattern. The catalog lives in
+    // `hya-server`; wiring it from here (which depends on both) keeps `hya-tool`
+    // free of a `hya-server` dependency.
+    let agents = hya_tool::AgentCatalogPlane::new(move |workdir| {
+        hya_server::agent_definitions(workdir, include_global_agents)
+            .into_iter()
+            .map(|def| hya_tool::AgentDef {
+                name: def.name,
+                description: def.description,
+                category: def.category,
+                mode: def.mode,
+            })
+            .collect()
+    });
     let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
         .with_interaction(interaction)
         .with_spawner(spawner)
+        .with_agents(agents)
         .with_governor(governor);
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());

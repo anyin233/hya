@@ -2,7 +2,7 @@ use axum::Router;
 
 use crate::ServerState;
 
-mod agent_catalog;
+pub(crate) mod agent_catalog;
 mod agent_defaults;
 mod agent_disk_sources;
 mod agent_native_prompts;

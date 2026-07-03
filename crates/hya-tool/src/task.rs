@@ -4,10 +4,45 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::permission::{Action, Resource};
-use crate::spawn::SpawnMember;
+use crate::spawn::{InlineAgent, SpawnMember};
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 
 pub struct TaskTool;
+
+/// An inline, ephemeral agent definition supplied on a `task` call. It lives only
+/// for that spawn (no disk write); persistence is opt-in via the `write` tool.
+#[derive(Deserialize)]
+struct InlineAgentInput {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+impl InlineAgentInput {
+    /// Convert to the runtime [`InlineAgent`], defaulting the name to the caller's
+    /// `subagent_type` when the inline block omits one.
+    fn into_inline(self, subagent_type: &str) -> InlineAgent {
+        let name = if self.name.trim().is_empty() {
+            subagent_type.to_string()
+        } else {
+            self.name
+        };
+        InlineAgent {
+            name,
+            prompt: self.prompt,
+            description: self.description,
+            category: self.category,
+            model: self.model,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct TaskMemberInput {
@@ -19,6 +54,8 @@ struct TaskMemberInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    inline_agent: Option<InlineAgentInput>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +76,8 @@ struct TaskInput {
     command: Option<String>,
     #[serde(default)]
     background: bool,
+    #[serde(default)]
+    inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
     members: Vec<TaskMemberInput>,
 }
@@ -97,6 +136,17 @@ impl Tool for TaskTool {
                     "type": "boolean",
                     "description": "Run the agent in the background"
                 },
+                "inline_agent": {
+                    "type": "object",
+                    "description": "Define an ephemeral agent for this spawn only (no disk file). Supplies its own system prompt + name and folds into the same model/category precedence chain. To reuse it later, have the agent save an .md via the write tool.",
+                    "properties": {
+                        "name": { "type": "string", "description": "Agent name (defaults to subagent_type when omitted)" },
+                        "prompt": { "type": "string", "description": "The system prompt / persona for the ephemeral agent" },
+                        "description": { "type": "string" },
+                        "category": { "type": "string", "description": "Logical model category (~ frontmatter category)" },
+                        "model": { "type": "string", "description": "Concrete provider/model (~ frontmatter model)" }
+                    }
+                },
                 "members": {
                     "type": "array",
                     "description": "hya extension: dispatch several members in one tool call",
@@ -107,7 +157,17 @@ impl Tool for TaskTool {
                             "prompt": { "type": "string" },
                             "subagent_type": { "type": "string" },
                             "category": { "type": "string" },
-                            "model": { "type": "string" }
+                            "model": { "type": "string" },
+                            "inline_agent": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "prompt": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "category": { "type": "string" },
+                                    "model": { "type": "string" }
+                                }
+                            }
                         },
                         "required": ["prompt", "subagent_type"]
                     }
@@ -139,13 +199,19 @@ impl Tool for TaskTool {
         let mut members: Vec<SpawnMember> = input
             .members
             .into_iter()
-            .map(|m| SpawnMember {
-                description: m.description,
-                prompt: m.prompt,
-                subagent_type: m.subagent_type,
-                task_id: None,
-                model: m.model,
-                category: m.category,
+            .map(|m| {
+                let inline_agent = m
+                    .inline_agent
+                    .map(|inline| inline.into_inline(&m.subagent_type));
+                SpawnMember {
+                    description: m.description,
+                    prompt: m.prompt,
+                    subagent_type: m.subagent_type,
+                    task_id: None,
+                    model: m.model,
+                    category: m.category,
+                    inline_agent,
+                }
             })
             .collect();
         if members.is_empty() {
@@ -157,6 +223,9 @@ impl Tool for TaskTool {
                     "provide description, prompt, and subagent_type".to_string(),
                 ));
             }
+            let inline_agent = input
+                .inline_agent
+                .map(|inline| inline.into_inline(&input.subagent_type));
             members.push(SpawnMember {
                 description: input.description,
                 prompt: input.prompt,
@@ -164,6 +233,7 @@ impl Tool for TaskTool {
                 task_id,
                 model: input.model,
                 category: input.category,
+                inline_agent,
             });
         }
         if background && members.len() != 1 {

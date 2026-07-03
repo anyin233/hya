@@ -42,6 +42,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: tempdir(),
         cancel: CancellationToken::new(),
     }

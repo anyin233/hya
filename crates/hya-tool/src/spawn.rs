@@ -15,6 +15,29 @@ pub struct SpawnMember {
     /// Spawn-time logical category override (precedence 2). `None`/empty defers
     /// to the agent's frontmatter category, then the global default.
     pub category: Option<String>,
+    /// A full inline agent definition that lives only for this spawn (no disk
+    /// write). When present it supplies the system prompt + name and folds into
+    /// the same model/category precedence chain (decision 11).
+    pub inline_agent: Option<InlineAgent>,
+}
+
+/// A runtime-authored, ephemeral agent definition attached to a single spawn.
+///
+/// It carries the same core fields a disk agent's frontmatter would (name,
+/// system prompt, optional `category`/`model`) but is never persisted; an agent
+/// that wants reuse saves an `.md` itself via the existing `write` tool.
+#[derive(Clone, Debug, Default)]
+pub struct InlineAgent {
+    /// Human-friendly agent name (used as the spawned session's agent name).
+    pub name: String,
+    /// The system prompt / persona for the ephemeral agent.
+    pub prompt: String,
+    /// Optional short description (parity with frontmatter `description:`).
+    pub description: Option<String>,
+    /// Logical model category (`~` frontmatter `category:` in precedence).
+    pub category: Option<String>,
+    /// Concrete `provider/model` (`~` frontmatter `model:` in precedence).
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +137,7 @@ mod tests {
                         task_id: None,
                         model: None,
                         category: None,
+                        inline_agent: None,
                     }],
                     CancellationToken::new(),
                 )

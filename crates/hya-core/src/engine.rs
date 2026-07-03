@@ -7,8 +7,9 @@ use hya_proto::{
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
-    FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane, discover_skills, skills_section,
+    AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, PermissionPlane,
+    PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane,
+    discover_skills, skills_section,
 };
 
 use crate::bus::EventBus;
@@ -55,6 +56,7 @@ pub struct SessionEngine {
     spawner: SpawnerPlane,
     todo: TodoPlane,
     skills: SkillPlane,
+    agents: AgentCatalogPlane,
     websearch: WebSearchPlane,
     formatter: FormatterPlane,
     lsp: LspPlane,
@@ -78,6 +80,7 @@ impl SessionEngine {
         let (spawner, _srx) = SpawnerPlane::new();
         let todo = TodoPlane::default();
         let skills = SkillPlane::default();
+        let agents = AgentCatalogPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
@@ -90,6 +93,7 @@ impl SessionEngine {
             spawner,
             todo,
             skills,
+            agents,
             websearch,
             formatter,
             lsp,
@@ -116,6 +120,15 @@ impl SessionEngine {
     #[must_use]
     pub fn with_spawner(mut self, spawner: SpawnerPlane) -> Self {
         self.spawner = spawner;
+        self
+    }
+
+    /// Inject the agent catalog resolver used by the model-facing `list_agents`
+    /// tool. Wired from the app layer (which owns the `hya-server` catalog) to
+    /// avoid a `hya-tool → hya-server` circular dependency.
+    #[must_use]
+    pub fn with_agents(mut self, agents: AgentCatalogPlane) -> Self {
+        self.agents = agents;
         self
     }
 

@@ -104,6 +104,7 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
         websearch: WebSearchPlane::default(),
         lsp,
         formatter,
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir,
         cancel: CancellationToken::new(),
     }
