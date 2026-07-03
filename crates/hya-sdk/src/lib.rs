@@ -12,6 +12,7 @@ pub mod pending;
 pub mod reducer;
 pub mod server;
 pub mod store;
+pub mod team;
 pub mod types;
 
 mod client;
@@ -23,6 +24,7 @@ pub use pending::{PendingClient, PendingSlot};
 pub use reducer::{Data, V2Event};
 pub use server::ServerHandle;
 pub use store::{MessageStore, StoredPart};
+pub use team::{ChannelProjection, MailEndpoint, MailMessage, RosterEntry, TeamProjection};
 pub use types::{
     Agent, Config, EventPayload, GlobalEvent, Message, MessageTime, Part, Session, SessionMessage,
     ToolPart,

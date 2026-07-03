@@ -23,6 +23,7 @@ use crate::theme::{builtin_theme, builtin_themes, resolve, Mode, ThemeError, DEF
 use crate::tui::{spawn_input_task, Tui};
 use crate::widgets::dialog_select::{DialogSelect, DialogSelectItem};
 
+use super::panes::PaneState;
 use super::{AppEvent, MouseKind};
 
 const COMMAND_PAGE_UP: &str = "session.page.up";
@@ -65,6 +66,11 @@ const COMMAND_SESSION_CHILD_PREVIOUS: &str = "session.child.previous";
 const COMMAND_SESSION_QUEUED_PROMPTS: &str = "session.queued_prompts";
 const COMMAND_TIPS_TOGGLE: &str = "tips.toggle";
 const COMMAND_TOGGLE_CONCEAL: &str = "session.toggle.conceal";
+const COMMAND_PANE_ROSTER: &str = "pane.roster";
+const COMMAND_PANE_CHANNELS: &str = "pane.channels";
+const COMMAND_PANE_CLOSE: &str = "pane.close";
+const COMMAND_PANE_CYCLE: &str = "pane.cycle";
+const COMMAND_PANE_FOCUS_MAIN: &str = "pane.focus.main";
 const TOAST_DURATION: Duration = Duration::from_millis(3000);
 const CONNECTING_TIP: &str =
     "\u{27f3} Starting backend\u{2026} you can type now; prompts send once it is ready";
@@ -373,6 +379,14 @@ fn slash_autocomplete_filter(text: &str) -> Option<&str> {
     Some(rest)
 }
 
+fn roster_placeholder() -> DialogSelectItem<String> {
+    DialogSelectItem::new("No team members yet".to_owned(), String::new())
+}
+
+fn channels_placeholder() -> DialogSelectItem<String> {
+    DialogSelectItem::new("No channel activity yet".to_owned(), String::new())
+}
+
 fn slash_autocomplete_items(names: &[String]) -> Vec<DialogSelectItem<String>> {
     names
         .iter()
@@ -565,6 +579,8 @@ enum DialogKind {
     Timeline,
     ThemeList,
     Help,
+    Roster,
+    Channels,
 }
 
 impl DialogKind {
@@ -579,6 +595,8 @@ impl DialogKind {
             DialogKind::Timeline => "Timeline",
             DialogKind::ThemeList => "Themes",
             DialogKind::Help => "Keybinds",
+            DialogKind::Roster => "Team roster",
+            DialogKind::Channels => "Channels & inboxes",
         }
     }
 }
@@ -616,8 +634,8 @@ struct ActiveQuestion {
     request: serde_json::Value,
 }
 
-struct Runtime {
-    input: RunTuiInput,
+pub(crate) struct Runtime {
+    pub(crate) input: RunTuiInput,
     prompt: PromptDoc,
     submitted_prompts: Vec<String>,
     /// Prompts typed before the backend finished connecting, replayed on `BackendReady`.
@@ -647,6 +665,9 @@ struct Runtime {
     active_model: Option<(String, String)>,
     agent_models: std::collections::HashMap<String, (String, String)>,
     leader_pending: bool,
+    /// tmux-style multi-pane layout: the main pane is implicit (driven by
+    /// `AppState.route`); `panes` holds the read-only aux panes + focus (ADR-0003).
+    panes: PaneState,
     toast: Option<(String, Instant)>,
     tip: &'static str,
     placeholder: &'static str,
@@ -678,7 +699,7 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn new(input: RunTuiInput) -> Result<Self, AppRunError> {
+    pub(crate) fn new(input: RunTuiInput) -> Result<Self, AppRunError> {
         let theme = resolve(
             &builtin_theme(DEFAULT_THEME)?.ok_or(ThemeError::MissingReference {
                 name: DEFAULT_THEME.to_owned(),
@@ -720,6 +741,7 @@ impl Runtime {
             active_model,
             agent_models: std::collections::HashMap::new(),
             leader_pending: false,
+            panes: PaneState::default(),
             toast: None,
             tip: screens::home::random_tip(),
             placeholder: screens::home::random_placeholder(),
@@ -843,7 +865,42 @@ impl Runtime {
         Some((connected, total, has_error))
     }
 
-    async fn draw(&mut self) -> Result<(), AppRunError> {
+    /// Drain one already-queued `AppEvent` without awaiting. Used by the headless test harness
+    /// to flush events pushed by tasks that `draw` spawns (e.g. yolo auto-approve).
+    #[cfg(test)]
+    pub(crate) fn try_next_event(&mut self) -> Option<AppEvent> {
+        self.input.events.try_recv().ok()
+    }
+
+    /// Test seam: whether the main (input-bearing) pane is focused.
+    #[cfg(test)]
+    pub(crate) fn pane_focus_is_main(&self) -> bool {
+        self.panes.is_main_focused()
+    }
+
+    /// Test seam: the observed session ids of the open aux panes, in order.
+    #[cfg(test)]
+    pub(crate) fn aux_pane_sessions(&self) -> Vec<String> {
+        self.panes
+            .aux
+            .iter()
+            .map(|pane| pane.session_id.clone())
+            .collect()
+    }
+
+    /// Test seam: the main pane's route session id (what the input bar targets).
+    #[cfg(test)]
+    pub(crate) fn main_route_session(&self) -> Option<String> {
+        self.current_session_id()
+    }
+
+    /// Test seam: prompts submitted through the (main-only) input bar.
+    #[cfg(test)]
+    pub(crate) fn submitted_prompts(&self) -> &[String] {
+        &self.submitted_prompts
+    }
+
+    pub(crate) async fn draw(&mut self) -> Result<(), AppRunError> {
         let route = self.input.state.route.clone();
         let data = self.input.state.data.read().await;
         let dialog = self.dialog.as_ref();
@@ -1000,81 +1057,139 @@ impl Runtime {
             && self.confirm_dialog.is_none()
             && !status_dialog_open
             && !self.leader_pending;
+        // tmux-style panes (ADR-0003): when an aux pane is focused, render it
+        // (read-only) in place of the main screen; a one-row tab bar advertises
+        // every open pane. The main route/prompt are untouched, so user input can
+        // never reach an aux session. The aux pane and its scroll are staged into
+        // locals so the draw closure borrows neither `self.panes` mutably nor an
+        // indexed field path.
+        let has_aux = !self.panes.aux.is_empty();
+        let tab_labels = self.panes.tab_labels();
+        let aux_render = self.panes.focused_aux().map(|pane| {
+            let entry = data
+                .team
+                .roster
+                .values()
+                .find(|entry| entry.session == pane.session_id);
+            AuxRender {
+                session_id: pane.session_id.clone(),
+                handle: pane.handle.clone(),
+                agent_type: entry.map(|entry| entry.agent_type.clone()),
+                status: entry.map(|entry| entry.status.clone()),
+            }
+        });
+        let mut aux_scroll = self
+            .panes
+            .focused_aux()
+            .map(|pane| pane.scroll)
+            .unwrap_or_default();
         let mut prompt_hits = screens::prompt_box::PromptHits::default();
         self.input.tui.terminal_mut().draw(|frame| {
-            prompt_hits = match route {
-                Route::Home { .. } => screens::home::draw(
+            if let Some(aux) = &aux_render {
+                let area = frame.area();
+                let reserve = u16::from(has_aux);
+                let aux_area = ratatui::layout::Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(reserve),
+                    width: area.width,
+                    height: area.height.saturating_sub(reserve),
+                };
+                screens::pane::draw(
                     frame,
-                    &screens::home::HomeView {
-                        doc: &self.prompt,
-                        agents,
-                        active_agent,
-                        model_label: model_label.as_deref(),
-                        provider_label: provider_label.as_deref(),
-                        tip: if self.backend_ready {
-                            self.show_tips.then_some(self.tip)
-                        } else {
-                            Some(CONNECTING_TIP)
-                        },
-                        placeholder: if self.backend_ready {
-                            self.placeholder
-                        } else {
-                            CONNECTING_PLACEHOLDER
-                        },
-                        mcp,
-                        logo_elapsed,
-                        show_cursor,
-                        yolo,
-                    },
-                    &self.theme,
-                ),
-                Route::Session { session_id, .. } => {
-                    let view = screens::session::SessionView {
+                    aux_area,
+                    &screens::pane::AuxPaneView {
                         store: &data,
-                        session_id: &session_id,
-                        pending: &self.submitted_prompts,
-                        prompt: &self.prompt,
+                        session_id: &aux.session_id,
+                        handle: &aux.handle,
+                        agent_type: aux.agent_type.as_deref(),
+                        status: aux.status.as_deref(),
                         agents,
                         model_names,
-                        active_agent,
-                        model_label: model_label.as_deref(),
-                        provider_label: provider_label.as_deref(),
-                        context_limit,
                         spinner,
-                        show_timestamps,
-                        sidebar_visible,
-                        subagent,
-                        show_cursor,
-                        yolo,
-                    };
-                    screens::session::draw(frame, &view, &mut self.scroll, &self.theme)
-                }
-                Route::Plugin { .. } => screens::home::draw(
-                    frame,
-                    &screens::home::HomeView {
-                        doc: &self.prompt,
-                        agents,
-                        active_agent,
-                        model_label: model_label.as_deref(),
-                        provider_label: provider_label.as_deref(),
-                        tip: if self.backend_ready {
-                            self.show_tips.then_some(self.tip)
-                        } else {
-                            Some(CONNECTING_TIP)
-                        },
-                        placeholder: if self.backend_ready {
-                            self.placeholder
-                        } else {
-                            CONNECTING_PLACEHOLDER
-                        },
-                        mcp,
-                        logo_elapsed,
-                        show_cursor,
-                        yolo,
+                        focused: true,
                     },
+                    &mut aux_scroll,
                     &self.theme,
-                ),
-            };
+                );
+                prompt_hits = screens::prompt_box::PromptHits::default();
+            } else {
+                prompt_hits = match route {
+                    Route::Home { .. } => screens::home::draw(
+                        frame,
+                        &screens::home::HomeView {
+                            doc: &self.prompt,
+                            agents,
+                            active_agent,
+                            model_label: model_label.as_deref(),
+                            provider_label: provider_label.as_deref(),
+                            tip: if self.backend_ready {
+                                self.show_tips.then_some(self.tip)
+                            } else {
+                                Some(CONNECTING_TIP)
+                            },
+                            placeholder: if self.backend_ready {
+                                self.placeholder
+                            } else {
+                                CONNECTING_PLACEHOLDER
+                            },
+                            mcp,
+                            logo_elapsed,
+                            show_cursor,
+                            yolo,
+                        },
+                        &self.theme,
+                    ),
+                    Route::Session { session_id, .. } => {
+                        let view = screens::session::SessionView {
+                            store: &data,
+                            session_id: &session_id,
+                            pending: &self.submitted_prompts,
+                            prompt: &self.prompt,
+                            agents,
+                            model_names,
+                            active_agent,
+                            model_label: model_label.as_deref(),
+                            provider_label: provider_label.as_deref(),
+                            context_limit,
+                            spinner,
+                            show_timestamps,
+                            sidebar_visible,
+                            subagent,
+                            show_cursor,
+                            yolo,
+                        };
+                        screens::session::draw(frame, &view, &mut self.scroll, &self.theme)
+                    }
+                    Route::Plugin { .. } => screens::home::draw(
+                        frame,
+                        &screens::home::HomeView {
+                            doc: &self.prompt,
+                            agents,
+                            active_agent,
+                            model_label: model_label.as_deref(),
+                            provider_label: provider_label.as_deref(),
+                            tip: if self.backend_ready {
+                                self.show_tips.then_some(self.tip)
+                            } else {
+                                Some(CONNECTING_TIP)
+                            },
+                            placeholder: if self.backend_ready {
+                                self.placeholder
+                            } else {
+                                CONNECTING_PLACEHOLDER
+                            },
+                            mcp,
+                            logo_elapsed,
+                            show_cursor,
+                            yolo,
+                        },
+                        &self.theme,
+                    ),
+                };
+            }
+            if has_aux {
+                screens::pane::draw_tab_bar(frame, &tab_labels, &self.theme);
+            }
             if let Some(dialog) = dialog {
                 screens::palette::draw(frame, &dialog.select, dialog.kind.title(), &self.theme);
             }
@@ -1124,13 +1239,18 @@ impl Runtime {
             }
         })?;
         self.prompt_hits = prompt_hits;
+        // Persist the focused aux pane's scroll position (staged out to avoid an
+        // indexed borrow across the draw closure).
+        if let Some(pane) = self.panes.focused_aux_mut() {
+            pane.scroll = aux_scroll;
+        }
         drop(data);
         self.animating = working || on_home;
         self.subagent_nav = subagent_nav;
         Ok(())
     }
 
-    async fn handle_event(&mut self, event: AppEvent) -> Result<bool, AppRunError> {
+    pub(crate) async fn handle_event(&mut self, event: AppEvent) -> Result<bool, AppRunError> {
         match event {
             AppEvent::Key(key) => Ok(self.handle_key(key)),
             AppEvent::Paste(text) => {
@@ -1285,7 +1405,7 @@ impl Runtime {
                                 dialog.select.move_down();
                             }
                         } else {
-                            self.scroll.scroll_by(delta);
+                            self.with_active_scroll(|scroll| scroll.scroll_by(delta));
                         }
                     }
                     MouseKind::Press => self.handle_mouse_press(column, row),
@@ -1660,7 +1780,7 @@ impl Runtime {
         self.input.input_task = Some(spawn_input_task(self.input.tx.clone()));
     }
 
-    async fn open_pending_editor(&mut self) -> Result<(), AppRunError> {
+    pub(crate) async fn open_pending_editor(&mut self) -> Result<(), AppRunError> {
         if !self.pending_editor {
             return Ok(());
         }
@@ -1980,11 +2100,92 @@ impl Runtime {
                 items.sort_by(|left, right| left.category.cmp(&right.category));
                 items
             }
+            DialogKind::Roster => self.roster_dialog_items(),
+            DialogKind::Channels => self.channels_dialog_items(),
         };
         self.dialog = Some(ActiveDialog {
             select: DialogSelect::new(items),
             kind,
         });
+    }
+
+    /// Build the team-roster overlay items from the live team projection. Each item
+    /// is `handle · type · status · task`; its value is the agent's session id so
+    /// Enter opens a read-only pane on it. Reads the store non-blockingly; an empty
+    /// or contended read yields a single placeholder row.
+    fn roster_dialog_items(&self) -> Vec<DialogSelectItem<String>> {
+        let Ok(store) = self.input.state.data.try_read() else {
+            return vec![roster_placeholder()];
+        };
+        if store.team.roster.is_empty() {
+            return vec![roster_placeholder()];
+        }
+        store
+            .team
+            .roster
+            .values()
+            .map(|entry| {
+                let mut title = entry.handle.clone();
+                if !entry.agent_type.is_empty() {
+                    title.push_str(&format!("  {}", entry.agent_type));
+                }
+                title.push_str(&format!("  \u{b7} {}", entry.status));
+                if let Some(task) = entry.current_task.as_deref().filter(|t| !t.is_empty()) {
+                    title.push_str(&format!("  \u{b7} {task}"));
+                }
+                DialogSelectItem::new(title, entry.session.clone())
+                    .with_description(entry.mode.clone())
+                    .with_category(if entry.mode == "resident" {
+                        "Resident"
+                    } else {
+                        "Transient"
+                    })
+            })
+            .collect()
+    }
+
+    /// Build the channel/inbox overlay items from the live team projection — one row
+    /// per posted message, grouped by channel then by per-agent inbox. Read-only:
+    /// selecting a row does nothing. Comes "for free" from the projection (ADR-0001).
+    fn channels_dialog_items(&self) -> Vec<DialogSelectItem<String>> {
+        let Ok(store) = self.input.state.data.try_read() else {
+            return vec![channels_placeholder()];
+        };
+        let mut items: Vec<DialogSelectItem<String>> = Vec::new();
+        for (name, channel) in &store.team.channels {
+            let category = format!("#{name} ({} members)", channel.members.len());
+            if channel.log.is_empty() {
+                items.push(
+                    DialogSelectItem::new("(no messages)".to_owned(), String::new())
+                        .with_category(category.clone()),
+                );
+            }
+            for message in &channel.log {
+                items.push(
+                    DialogSelectItem::new(
+                        format!("{}: {}", message.from, message.body),
+                        String::new(),
+                    )
+                    .with_category(category.clone()),
+                );
+            }
+        }
+        for (handle, inbox) in &store.team.inboxes {
+            let category = format!("@{handle} inbox");
+            for message in inbox {
+                items.push(
+                    DialogSelectItem::new(
+                        format!("{}: {}", message.from, message.body),
+                        String::new(),
+                    )
+                    .with_category(category.clone()),
+                );
+            }
+        }
+        if items.is_empty() {
+            items.push(channels_placeholder());
+        }
+        items
     }
 
     fn handle_dialog_key(&mut self, key: KeyEvent) {
@@ -2199,6 +2400,13 @@ impl Runtime {
                 self.apply_theme();
             }
             DialogKind::Help => {}
+            DialogKind::Roster => {
+                if !value.is_empty() {
+                    self.open_aux_pane(value);
+                }
+            }
+            // The channel/inbox view is read-only: selecting a row does nothing.
+            DialogKind::Channels => {}
         }
     }
 
@@ -2257,6 +2465,14 @@ impl Runtime {
             prompt: None,
         });
         self.reset_prompt();
+        self.spawn_session_backfill(session_id, true);
+    }
+
+    /// Backfill a session's transcript/todos/diffs into the store off-loop. Used
+    /// both by main-pane navigation ([`Runtime::load_session`]) and by opening a
+    /// read-only aux pane, which must NOT change the main route. `announce`
+    /// controls whether a "Session loaded" toast is posted on completion.
+    fn spawn_session_backfill(&self, session_id: String, announce: bool) {
         let client = Arc::clone(&self.input.client);
         let data = Arc::clone(&self.input.state.data);
         let tx = self.input.tx.clone();
@@ -2283,8 +2499,37 @@ impl Runtime {
             if let Ok(diffs) = client.session_diff(&session_id).await {
                 data.write().await.diffs.insert(session_id.clone(), diffs);
             }
-            let _ = tx.send(AppEvent::Toast("Session loaded".to_owned()));
+            if announce {
+                let _ = tx.send(AppEvent::Toast("Session loaded".to_owned()));
+            }
         });
+    }
+
+    /// Open a READ-ONLY aux pane observing `session_id` (from the roster overlay).
+    /// The main route is deliberately unchanged — input stays bound to the main
+    /// agent. Reuses the session-backfill path so the observed transcript populates
+    /// even for a subagent the user has not visited. The handle label is resolved
+    /// from the live roster, falling back to a short session id.
+    fn open_aux_pane(&mut self, session_id: String) {
+        let handle = self
+            .input
+            .state
+            .data
+            .try_read()
+            .ok()
+            .and_then(|store| {
+                store
+                    .team
+                    .roster
+                    .values()
+                    .find(|entry| entry.session == session_id)
+                    .map(|entry| entry.handle.clone())
+            })
+            .unwrap_or_else(|| session_id.chars().take(8).collect());
+        let created = self.panes.open_aux(session_id.clone(), handle);
+        if created {
+            self.spawn_session_backfill(session_id, false);
+        }
     }
 
     fn enter_first_child(&mut self) {
@@ -2418,14 +2663,14 @@ impl Runtime {
 
     fn handle_command(&mut self, command: &str) -> bool {
         match command {
-            COMMAND_PAGE_UP => self.scroll.page_up(),
-            COMMAND_PAGE_DOWN => self.scroll.page_down(),
-            COMMAND_LINE_UP => self.scroll.scroll_by(-1),
-            COMMAND_LINE_DOWN => self.scroll.scroll_by(1),
-            COMMAND_HALF_UP => self.scroll.half_page_up(),
-            COMMAND_HALF_DOWN => self.scroll.half_page_down(),
-            COMMAND_FIRST => self.scroll.to_top(),
-            COMMAND_LAST => self.scroll.to_bottom(),
+            COMMAND_PAGE_UP => self.with_active_scroll(ScrollState::page_up),
+            COMMAND_PAGE_DOWN => self.with_active_scroll(ScrollState::page_down),
+            COMMAND_LINE_UP => self.with_active_scroll(|s| s.scroll_by(-1)),
+            COMMAND_LINE_DOWN => self.with_active_scroll(|s| s.scroll_by(1)),
+            COMMAND_HALF_UP => self.with_active_scroll(ScrollState::half_page_up),
+            COMMAND_HALF_DOWN => self.with_active_scroll(ScrollState::half_page_down),
+            COMMAND_FIRST => self.with_active_scroll(ScrollState::to_top),
+            COMMAND_LAST => self.with_active_scroll(ScrollState::to_bottom),
             COMMAND_SESSION_NEW => {
                 self.input.state.navigate(Route::default());
                 self.reset_prompt();
@@ -2469,6 +2714,11 @@ impl Runtime {
             COMMAND_SESSION_CHILD_PREVIOUS => self.cycle_child(-1),
             COMMAND_SESSION_QUEUED_PROMPTS => self.show_queued_prompts(),
             COMMAND_TIPS_TOGGLE | COMMAND_TOGGLE_CONCEAL => self.toggle_contextual(),
+            COMMAND_PANE_ROSTER => self.open_dialog(DialogKind::Roster),
+            COMMAND_PANE_CHANNELS => self.open_dialog(DialogKind::Channels),
+            COMMAND_PANE_CLOSE => self.close_focused_pane(),
+            COMMAND_PANE_CYCLE => self.panes.cycle(),
+            COMMAND_PANE_FOCUS_MAIN => self.panes.focus_main(),
             other => {
                 if let Some(slot) = other.strip_prefix("session.quick_switch.") {
                     if let Ok(slot) = slot.parse::<usize>() {
@@ -2628,6 +2878,27 @@ impl Runtime {
             return;
         }
         self.load_session(session_id);
+    }
+
+    /// Apply a scroll operation to the FOCUSED pane's scroll state: the focused aux
+    /// pane when one is focused, otherwise the main pane. Keeps each pane's scroll
+    /// position independent (ADR-0003).
+    fn with_active_scroll(&mut self, op: impl FnOnce(&mut ScrollState)) {
+        match self.panes.focused_aux_mut() {
+            Some(pane) => op(&mut pane.scroll),
+            None => op(&mut self.scroll),
+        }
+    }
+
+    /// Close the focused aux pane. The main pane can never be closed, so this is a
+    /// no-op (with a hint toast) when the main pane is focused (ADR-0003).
+    fn close_focused_pane(&mut self) {
+        if !self.panes.close_focused() {
+            self.toast = Some((
+                "Main pane can't be closed".to_owned(),
+                Instant::now() + TOAST_DURATION,
+            ));
+        }
     }
 
     fn spawn_session_abort(&mut self) {
@@ -2951,6 +3222,15 @@ enum Submit {
     Shell(String),
     Command { name: String, arguments: String },
     Prompt(serde_json::Value),
+}
+
+/// Owned snapshot of the focused aux pane, staged out of `PaneState` so the draw
+/// closure never borrows `self.panes` across the render.
+struct AuxRender {
+    session_id: String,
+    handle: String,
+    agent_type: Option<String>,
+    status: Option<String>,
 }
 
 fn write_osc52_clipboard(text: &str) -> io::Result<()> {

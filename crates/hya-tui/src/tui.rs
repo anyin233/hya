@@ -2,7 +2,8 @@ use std::io::{self, Stdout};
 use std::panic;
 
 use futures_util::StreamExt;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{ClearType, CrosstermBackend, TestBackend, WindowSize};
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
 };
@@ -14,13 +15,108 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::layout::{Position, Size};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::app::{AppEvent, MouseKind};
 use crate::contracts::{Key, KeyEvent};
 
-pub type Backend = CrosstermBackend<Stdout>;
+/// Terminal backend that is either the real crossterm terminal (production) or an in-memory
+/// [`TestBackend`] (headless tests).
+///
+/// Kept as a single concrete type on purpose: `Tui`, `Runtime`, and `run_tui` stay non-generic,
+/// so enabling headless tests costs no churn in the render loop. A `Box<dyn Backend>` is not an
+/// option because `ratatui::backend::Backend` has generic methods (`draw`, `set_cursor_position`)
+/// and so is not object-safe.
+pub enum AnyBackend {
+    Crossterm(CrosstermBackend<Stdout>),
+    Test(TestBackend),
+}
+
+impl ratatui::backend::Backend for AnyBackend {
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        match self {
+            Self::Crossterm(backend) => backend.draw(content),
+            Self::Test(backend) => backend.draw(content),
+        }
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.hide_cursor(),
+            Self::Test(backend) => backend.hide_cursor(),
+        }
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.show_cursor(),
+            Self::Test(backend) => backend.show_cursor(),
+        }
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        match self {
+            Self::Crossterm(backend) => backend.get_cursor_position(),
+            Self::Test(backend) => backend.get_cursor_position(),
+        }
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.set_cursor_position(position),
+            Self::Test(backend) => backend.set_cursor_position(position),
+        }
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.clear(),
+            Self::Test(backend) => backend.clear(),
+        }
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.clear_region(clear_type),
+            Self::Test(backend) => backend.clear_region(clear_type),
+        }
+    }
+
+    fn append_lines(&mut self, n: u16) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.append_lines(n),
+            Self::Test(backend) => backend.append_lines(n),
+        }
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        match self {
+            Self::Crossterm(backend) => backend.size(),
+            Self::Test(backend) => backend.size(),
+        }
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        match self {
+            Self::Crossterm(backend) => backend.window_size(),
+            Self::Test(backend) => backend.window_size(),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Crossterm(backend) => backend.flush(),
+            Self::Test(backend) => backend.flush(),
+        }
+    }
+}
+
+pub type Backend = AnyBackend;
 
 pub struct Tui {
     terminal: Terminal<Backend>,
@@ -37,12 +133,32 @@ impl Tui {
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
-        let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let mut terminal = Terminal::new(AnyBackend::Crossterm(CrosstermBackend::new(stdout)))?;
         terminal.clear()?;
         Ok(Self {
             terminal,
             restored: false,
         })
+    }
+
+    /// Build a headless `Tui` backed by an in-memory [`TestBackend`] for tests. No raw mode,
+    /// no alternate screen, no stdout writes — the rendered frame is inspectable via
+    /// [`Tui::test_buffer`].
+    pub fn from_test_backend(width: u16, height: u16) -> io::Result<Self> {
+        let terminal = Terminal::new(AnyBackend::Test(TestBackend::new(width, height)))?;
+        Ok(Self {
+            terminal,
+            restored: false,
+        })
+    }
+
+    /// The rendered cell buffer when this `Tui` is backed by a [`TestBackend`]; `None` for the
+    /// real crossterm terminal.
+    pub fn test_buffer(&self) -> Option<&Buffer> {
+        match self.terminal.backend() {
+            AnyBackend::Test(backend) => Some(backend.buffer()),
+            AnyBackend::Crossterm(_) => None,
+        }
     }
 
     pub fn terminal_mut(&mut self) -> &mut Terminal<Backend> {
@@ -53,31 +169,37 @@ impl Tui {
         if self.restored {
             return Ok(());
         }
-        restore_terminal(self.terminal.backend_mut())?;
+        if let AnyBackend::Crossterm(backend) = self.terminal.backend_mut() {
+            restore_terminal(backend)?;
+        }
         self.terminal.show_cursor()?;
         self.restored = true;
         Ok(())
     }
 
     pub fn suspend(&mut self) -> io::Result<()> {
-        execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            DisableBracketedPaste
-        )?;
-        disable_raw_mode()?;
+        if let AnyBackend::Crossterm(backend) = self.terminal.backend_mut() {
+            execute!(
+                backend,
+                LeaveAlternateScreen,
+                DisableMouseCapture,
+                DisableBracketedPaste
+            )?;
+            disable_raw_mode()?;
+        }
         self.terminal.show_cursor()
     }
 
     pub fn resume(&mut self) -> io::Result<()> {
-        enable_raw_mode()?;
-        execute!(
-            self.terminal.backend_mut(),
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            EnableBracketedPaste
-        )?;
+        if let AnyBackend::Crossterm(backend) = self.terminal.backend_mut() {
+            enable_raw_mode()?;
+            execute!(
+                backend,
+                EnterAlternateScreen,
+                EnableMouseCapture,
+                EnableBracketedPaste
+            )?;
+        }
         self.terminal.clear()?;
         self.restored = false;
         Ok(())
