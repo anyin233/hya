@@ -3,12 +3,18 @@ use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SpawnMember {
     pub description: String,
     pub prompt: String,
     pub subagent_type: String,
     pub task_id: Option<String>,
+    /// Spawn-time explicit model override (precedence 1, highest). `None`/empty
+    /// defers to the agent's own model/category.
+    pub model: Option<String>,
+    /// Spawn-time logical category override (precedence 2). `None`/empty defers
+    /// to the agent's frontmatter category, then the global default.
+    pub category: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +112,8 @@ mod tests {
                         prompt: "p".to_string(),
                         subagent_type: "quick".to_string(),
                         task_id: None,
+                        model: None,
+                        category: None,
                     }],
                     CancellationToken::new(),
                 )

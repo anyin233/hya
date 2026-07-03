@@ -23,7 +23,7 @@ mod pending;
 mod runs;
 mod state;
 
-pub use compat::subagent_resolve::resolve_subagent_agent;
+pub use compat::subagent_resolve::{SubagentResolve, resolve_subagent_agent};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use state::AppState;

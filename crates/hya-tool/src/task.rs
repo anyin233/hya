@@ -15,6 +15,10 @@ struct TaskMemberInput {
     description: String,
     prompt: String,
     subagent_type: String,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +29,10 @@ struct TaskInput {
     prompt: String,
     #[serde(default)]
     subagent_type: String,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     task_id: Option<String>,
     #[serde(default)]
@@ -69,6 +77,14 @@ impl Tool for TaskTool {
                     "type": "string",
                     "description": "The type of specialized agent to use for this task"
                 },
+                "category": {
+                    "type": "string",
+                    "description": "Override the agent's logical model category (e.g. quick, deep) for this spawn; resolves to a concrete provider/model with failover"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Override the concrete provider/model for this spawn; wins over category and the agent's own model"
+                },
                 "task_id": {
                     "type": "string",
                     "description": "Resume a previous task session instead of creating a fresh one"
@@ -89,7 +105,9 @@ impl Tool for TaskTool {
                         "properties": {
                             "description": { "type": "string" },
                             "prompt": { "type": "string" },
-                            "subagent_type": { "type": "string" }
+                            "subagent_type": { "type": "string" },
+                            "category": { "type": "string" },
+                            "model": { "type": "string" }
                         },
                         "required": ["prompt", "subagent_type"]
                     }
@@ -126,6 +144,8 @@ impl Tool for TaskTool {
                 prompt: m.prompt,
                 subagent_type: m.subagent_type,
                 task_id: None,
+                model: m.model,
+                category: m.category,
             })
             .collect();
         if members.is_empty() {
@@ -142,6 +162,8 @@ impl Tool for TaskTool {
                 prompt: input.prompt,
                 subagent_type: input.subagent_type,
                 task_id,
+                model: input.model,
+                category: input.category,
             });
         }
         if background && members.len() != 1 {

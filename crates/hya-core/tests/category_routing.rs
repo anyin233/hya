@@ -1,13 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_core::{
-    AgentSpec, CategoryRegistry, CreateSession, EventBus, MemberSpec, MemberStatus, SessionEngine,
-    build_member_agent, inject_skills, run_team,
+    AgentSpec, CategoryEntry, CategoryRegistry, CreateSession, EventBus, MemberSpec, MemberStatus,
+    SessionEngine, build_member_agent, inject_skills, run_team,
 };
 use hya_proto::{AgentName, Event, FinishReason, MemberId, ModelRef, Role};
 use hya_provider::{
@@ -17,9 +17,32 @@ use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
+/// Build a registry mapping the four logical category names to concrete refs,
+/// mirroring what a `categories:` config block produces.
+fn config_registry() -> CategoryRegistry {
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        "quick".to_string(),
+        CategoryEntry::from_candidates(&["gw/quick-model".to_string()]).unwrap(),
+    );
+    overrides.insert(
+        "deep".to_string(),
+        CategoryEntry::from_candidates(&["gw/deep-model".to_string()]).unwrap(),
+    );
+    overrides.insert(
+        "ultrabrain".to_string(),
+        CategoryEntry::from_candidates(&["gw/ultra-model".to_string()]).unwrap(),
+    );
+    overrides.insert(
+        "writing".to_string(),
+        CategoryEntry::from_candidates(&["gw/writer-model".to_string()]).unwrap(),
+    );
+    CategoryRegistry::new().with_overrides(overrides)
+}
+
 #[test]
-fn categories_resolve_to_distinct_models_with_prompt_appends() {
-    let reg = CategoryRegistry::builtins();
+fn categories_resolve_to_distinct_configured_models() {
+    let reg = config_registry();
     let cats = ["quick", "deep", "ultrabrain", "writing"];
     let models: HashSet<String> = cats
         .iter()
@@ -28,17 +51,48 @@ fn categories_resolve_to_distinct_models_with_prompt_appends() {
     assert_eq!(
         models.len(),
         4,
-        "each category must map to a distinct model"
+        "each configured category must map to a distinct concrete model"
     );
 
     let deep = reg.resolve("deep").unwrap();
-    assert!(!deep.prompt_append.is_empty());
     assert_eq!(deep.fallback_chain.first().unwrap(), &deep.model);
+    // An unconfigured category does not resolve; the caller falls back to the
+    // global default rather than a dangling placeholder ref.
     assert!(reg.resolve("nonexistent").is_none());
+    assert!(CategoryRegistry::new().is_empty());
 }
 
 #[test]
-fn skills_are_injected_into_member_prompt() {
+fn category_failover_picks_first_servable_candidate() {
+    // A category with two ordered candidates: prefer #1, fail over to #2 when
+    // #1's provider is not configured/servable.
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        "deep".to_string(),
+        CategoryEntry::from_candidates(&["primary/opus".to_string(), "backup/sonnet".to_string()])
+            .unwrap(),
+    );
+    let reg = CategoryRegistry::new().with_overrides(overrides);
+
+    // Both providers configured → first candidate wins.
+    let both = reg.resolve_servable("deep", |_| true).unwrap();
+    assert_eq!(both.model, ModelRef::new("primary/opus"));
+
+    // Primary provider absent → fail over to the second candidate.
+    let failover = reg
+        .resolve_servable("deep", |m| m.as_str() != "primary/opus")
+        .unwrap();
+    assert_eq!(failover.model, ModelRef::new("backup/sonnet"));
+
+    // No candidate servable → best-effort first candidate (stream errors for
+    // real instead of silently misrouting).
+    let none = reg.resolve_servable("deep", |_| false).unwrap();
+    assert_eq!(none.model, ModelRef::new("primary/opus"));
+    assert_eq!(none.fallback_chain.len(), 2);
+}
+
+#[test]
+fn skills_and_prompt_append_are_injected_into_member_prompt() {
     let base = AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("base"),
@@ -46,9 +100,15 @@ fn skills_are_injected_into_member_prompt() {
         workdir: PathBuf::from("/tmp"),
         reasoning: None,
     };
-    let resolved = CategoryRegistry::builtins().resolve("deep").unwrap();
+    let mut overrides = HashMap::new();
+    overrides.insert(
+        "deep".to_string(),
+        CategoryEntry::new("gw/deep-model", "Think deeply and thoroughly."),
+    );
+    let reg = CategoryRegistry::new().with_overrides(overrides);
+    let resolved = reg.resolve("deep").unwrap();
     let agent = build_member_agent(&base, &resolved, &["use-the-foo-skill".to_string()]);
-    assert_eq!(agent.model, ModelRef::new("tier-strong"));
+    assert_eq!(agent.model, ModelRef::new("gw/deep-model"));
     assert!(agent.system_prompt.contains("base prompt"));
     assert!(agent.system_prompt.contains("Think deeply"));
     assert!(agent.system_prompt.contains("use-the-foo-skill"));
@@ -116,7 +176,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
         .await
         .unwrap();
 
-    let reg = CategoryRegistry::builtins();
+    let reg = config_registry();
     let base = AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("base"),
@@ -145,10 +205,10 @@ async fn four_categories_drive_four_distinct_model_calls() {
     assert_eq!(
         recorded,
         HashSet::from([
-            "tier-cheap".to_string(),
-            "tier-strong".to_string(),
-            "tier-max".to_string(),
-            "tier-writer".to_string(),
+            "gw/quick-model".to_string(),
+            "gw/deep-model".to_string(),
+            "gw/ultra-model".to_string(),
+            "gw/writer-model".to_string(),
         ])
     );
 }

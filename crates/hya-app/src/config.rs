@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_core::SubagentLimits;
+use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{HttpProvider, ProviderKind, ProviderRouter};
@@ -27,6 +27,8 @@ pub struct ResolvedConfig {
     pub plugins: BTreeMap<String, PluginEntry>,
     pub default_agent: Option<String>,
     pub subagents: SubagentLimits,
+    /// Logical model categories → ordered concrete `provider/model` candidates.
+    pub categories: CategoryRegistry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +79,11 @@ struct FileConfig {
     /// overrides (`HYA_SUBAGENT_*`) win over file values.
     #[serde(default)]
     subagents: Option<SubagentLimitsFile>,
+    /// Logical model categories: each maps a name (e.g. `deep`) to an ordered
+    /// list of concrete `provider/model` refs (first = preferred, rest =
+    /// failover). Absent → no categories (agents fall back to their own model).
+    #[serde(default)]
+    categories: BTreeMap<String, Vec<String>>,
 }
 
 /// File shape of the `subagents:` block. Every field is optional so a partial
@@ -771,6 +778,32 @@ pub fn resolve_event_bus_capacity() -> usize {
     hya_core::bus::DEFAULT_BUS_CAPACITY
 }
 
+/// Build a [`CategoryRegistry`] from the file's `categories:` block. Each entry
+/// is an ordered candidate list; empty lists are dropped since a category with
+/// no concrete refs cannot resolve to anything servable.
+fn resolve_categories(file: &FileConfig) -> CategoryRegistry {
+    let mut entries = std::collections::HashMap::new();
+    for (name, candidates) in &file.categories {
+        if let Some(entry) = CategoryEntry::from_candidates(candidates) {
+            entries.insert(name.clone(), entry);
+        }
+    }
+    CategoryRegistry::from_entries(entries)
+}
+
+/// Resolve model categories independent of provider config, so the offline path
+/// (where [`load`] returns `None`) and the spawn supervisor can build the same
+/// registry the runtime holds.
+#[must_use]
+pub fn load_categories() -> CategoryRegistry {
+    config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .map(|file| resolve_categories(&file))
+        .unwrap_or_default()
+}
+
 /// Resolve subagent caps independent of provider config, so the offline path
 /// (where [`load`] returns `None`) still honors configured/env limits.
 #[must_use]
@@ -833,6 +866,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
         return Ok(None);
     }
+    let categories = resolve_categories(&file);
     let default_model = choose_default(file.default_model, &models);
     let subagents = resolve_subagent_limits(file.subagents.as_ref());
     Ok(Some(ResolvedConfig {
@@ -844,6 +878,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         default_agent: file.default_agent,
         plugins: file.plugins,
         subagents,
+        categories,
     }))
 }
 
@@ -906,6 +941,28 @@ providers:
 
     fn parse_providers(yaml: &str) -> anyhow::Result<Vec<ParsedProvider>> {
         resolve_providers(&parse_config(yaml)?)
+    }
+
+    #[test]
+    fn parses_categories_into_ordered_registry() {
+        let file = parse_config(
+            "default_model: x\ncategories:\n  deep: [primary/opus, backup/sonnet]\n  quick: [gw/haiku]\n  empty: []\n",
+        )
+        .unwrap();
+        let registry = resolve_categories(&file);
+
+        // Ordered candidates: first is preferred, rest are failover.
+        let deep = registry.resolve("deep").unwrap();
+        assert_eq!(deep.model.as_str(), "primary/opus");
+        let chain: Vec<&str> = deep.fallback_chain.iter().map(|m| m.as_str()).collect();
+        assert_eq!(chain, vec!["primary/opus", "backup/sonnet"]);
+        assert!(registry.resolve("quick").is_some());
+        // An empty candidate list cannot resolve to anything → dropped.
+        assert!(registry.resolve("empty").is_none());
+
+        // Absent block → empty registry.
+        let bare = parse_config("default_model: x\n").unwrap();
+        assert!(resolve_categories(&bare).is_empty());
     }
 
     #[test]
