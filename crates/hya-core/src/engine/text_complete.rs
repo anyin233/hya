@@ -57,6 +57,10 @@ impl TextPartAccumulator {
             | Event::MemberSpawned { .. }
             | Event::MemberStatusChanged { .. }
             | Event::MemberFinished { .. }
+            | Event::AgentRegistered { .. }
+            | Event::MailSent { .. }
+            | Event::ChannelJoined { .. }
+            | Event::ChannelLeft { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

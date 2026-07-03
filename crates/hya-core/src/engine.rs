@@ -7,7 +7,7 @@ use hya_proto::{
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
-    AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, PermissionPlane,
+    AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
     PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane,
     discover_skills, skills_section,
 };
@@ -19,6 +19,7 @@ use crate::hooks::HookDispatcher;
 
 mod admission;
 mod fork;
+mod mailbox;
 mod members;
 mod session_cleanup;
 mod session_state;
@@ -54,6 +55,7 @@ pub struct SessionEngine {
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: SpawnerPlane,
+    mailbox: MailboxPlane,
     todo: TodoPlane,
     skills: SkillPlane,
     agents: AgentCatalogPlane,
@@ -78,6 +80,7 @@ impl SessionEngine {
     ) -> Self {
         let (interaction, _rx) = InteractionPlane::new();
         let (spawner, _srx) = SpawnerPlane::new();
+        let mailbox = MailboxPlane::disconnected();
         let todo = TodoPlane::default();
         let skills = SkillPlane::default();
         let agents = AgentCatalogPlane::default();
@@ -91,6 +94,7 @@ impl SessionEngine {
             permission,
             interaction,
             spawner,
+            mailbox,
             todo,
             skills,
             agents,
@@ -120,6 +124,16 @@ impl SessionEngine {
     #[must_use]
     pub fn with_spawner(mut self, spawner: SpawnerPlane) -> Self {
         self.spawner = spawner;
+        self
+    }
+
+    /// Inject the mailbox plane whose service loop this engine drives (see
+    /// [`run_mailbox_service`](crate::mailbox::run_mailbox_service)). Wired from
+    /// the app layer alongside the spawner, mirroring the established plane
+    /// pattern so `hya-tool` stays free of a `hya-core` dependency.
+    #[must_use]
+    pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
+        self.mailbox = mailbox;
         self
     }
 

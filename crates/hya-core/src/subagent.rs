@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::{MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId};
@@ -6,6 +7,43 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
+
+/// Assign a stable, team-scoped handle (`{type}-{ordinal}`) to each member in
+/// input order, continuing the per-type ordinal across earlier spawn batches.
+///
+/// Determinism (required for replay stability): the ordinal is derived only from
+/// the current team roster + the batch's input order — no `rand`, no wall-clock.
+/// Assigning sequentially here, before the parallel spawn, prevents concurrent
+/// members from racing to the same ordinal. The main/root registration (its
+/// session is the team root) is excluded from the counts so member handles start
+/// at `-1`.
+async fn assign_handles(
+    engine: &SessionEngine,
+    root: SessionId,
+    specs: &[MemberSpec],
+) -> Vec<String> {
+    let roster = engine
+        .read_projection(root)
+        .await
+        .map(|p| p.team.roster)
+        .unwrap_or_default();
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for entry in roster.values() {
+        if entry.session != root {
+            *counts
+                .entry(entry.agent_type.as_str().to_string())
+                .or_insert(0) += 1;
+        }
+    }
+    let mut handles = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let agent_type = spec.agent.name.as_str().to_string();
+        let ordinal = counts.entry(agent_type.clone()).or_insert(0);
+        *ordinal += 1;
+        handles.push(format!("{agent_type}-{ordinal}"));
+    }
+    handles
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +93,7 @@ async fn run_member(
     engine: Arc<SessionEngine>,
     lead: SessionId,
     spec: MemberSpec,
+    handle: String,
     cancel: CancellationToken,
 ) -> Result<(SessionId, String), CoreError> {
     let member = spec.id;
@@ -71,11 +110,7 @@ async fn run_member(
             .await?
     };
     // Announce the member so observers can render it live in the agent tree.
-    let depth = engine
-        .session_lineage(child)
-        .await
-        .map(|(_, d)| d)
-        .unwrap_or(0);
+    let (root, depth) = engine.session_lineage(child).await.unwrap_or((child, 0));
     let description: String = spec.directive.chars().take(80).collect();
     let _ = engine
         .record_member_spawned(
@@ -86,6 +121,11 @@ async fn run_member(
             description,
             depth,
         )
+        .await;
+    // Bind the member's session to its stable, team-scoped handle in the team-root
+    // log (ADR-0001). The roster is then read from the projection, never disk.
+    let _ = engine
+        .record_agent_registered(root, child, handle, spec.agent.name.clone())
         .await;
     let _ = engine
         .record_member_status(lead, member, MemberRunStatus::Running)
@@ -161,19 +201,26 @@ pub async fn run_team(
         specs
     };
 
-    let mut handles = Vec::new();
-    for spec in specs {
+    // Assign stable, team-scoped handles deterministically BEFORE the parallel
+    // spawn so concurrent members cannot race to the same ordinal. The main agent
+    // is registered first so it appears in the roster and is addressable.
+    let (root, _) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
+    let _ = engine.ensure_root_registered(root).await;
+    let handles = assign_handles(&engine, root, &specs).await;
+
+    let mut member_tasks = Vec::new();
+    for (spec, handle) in specs.into_iter().zip(handles) {
         let engine = engine.clone();
         let child_cancel = cancel.child_token();
         let id = spec.id;
-        let handle =
-            tokio::spawn(async move { run_member(engine, lead, spec, child_cancel).await });
-        handles.push((id, handle));
+        let task =
+            tokio::spawn(async move { run_member(engine, lead, spec, handle, child_cancel).await });
+        member_tasks.push((id, task));
     }
 
     let mut evidence = Vec::new();
-    for (id, handle) in handles {
-        let (entry, member_status, child) = match handle.await {
+    for (id, task) in member_tasks {
+        let (entry, member_status, child) = match task.await {
             Ok(Ok((session, summary))) => (
                 MemberEvidence {
                     member: id.to_string(),

@@ -18,6 +18,7 @@ use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
+use crate::mailbox::{ChannelsTool, JoinTool, LeaveTool, MailboxPlane, RosterTool, SendTool};
 use crate::permission::{Action, PermissionError, PermissionPlane, Resource, glob_match};
 use crate::plan::PlanExitTool;
 use crate::question::QuestionTool;
@@ -57,6 +58,7 @@ pub struct ToolCtx {
     pub permission: PermissionPlane,
     pub interaction: InteractionPlane,
     pub spawner: SpawnerPlane,
+    pub mailbox: MailboxPlane,
     pub session: Option<SessionId>,
     pub parent_session: Option<SessionId>,
     pub todo: TodoPlane,
@@ -127,6 +129,11 @@ impl ToolRegistry {
             Arc::new(ListAgentsTool),
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
+            Arc::new(SendTool),
+            Arc::new(RosterTool),
+            Arc::new(ChannelsTool),
+            Arc::new(JoinTool),
+            Arc::new(LeaveTool),
         ] {
             registry.insert_builtin(tool);
         }

@@ -26,6 +26,7 @@ fn ctx_with(rules: Vec<Rule>, session: SessionId, todo: TodoPlane) -> ToolCtx {
         permission: permission.for_session(session),
         interaction,
         spawner,
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo,

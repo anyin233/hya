@@ -240,6 +240,7 @@ impl SessionEngine {
                             ),
                             interaction: self.interaction.for_session(session),
                             spawner: self.spawner.for_session(session),
+                            mailbox: self.mailbox.for_session(session),
                             session: Some(session),
                             parent_session: projection.session.parent,
                             todo: self.todo.clone(),

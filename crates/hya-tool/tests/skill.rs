@@ -78,6 +78,7 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         permission,
         interaction,
         spawner,
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: None,
         parent_session: None,
         todo: TodoPlane::default(),

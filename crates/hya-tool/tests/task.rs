@@ -35,6 +35,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         permission,
         interaction,
         spawner: spawner.for_session(session),
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo: TodoPlane::default(),

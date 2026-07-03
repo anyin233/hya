@@ -33,6 +33,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),
         spawner,
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo: TodoPlane::default(),
