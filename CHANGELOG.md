@@ -1,4 +1,4 @@
-# 0.29.2
+# 0.29.3
 
-- Fixed formatter execution to resolve slash-containing relative commands from the workspace before spawning.
-- Reported formatter spawn and non-zero exit failures instead of treating failed formatting as successful.
+- Added a repo-local Claude Code launcher that uses `.claude` as an isolated config directory.
+- Added a shell regression test for the isolated Claude profile path resolution.

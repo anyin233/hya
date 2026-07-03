@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Launch Claude Code with this repository's isolated profile.
+set -euo pipefail
+
+source_path=${BASH_SOURCE[0]}
+while [ -L "$source_path" ]; do
+  source_dir=$(CDPATH= cd -- "$(dirname -- "$source_path")" && pwd -P)
+  target=$(readlink -- "$source_path")
+  case "$target" in
+    /*) source_path=$target ;;
+    *) source_path=$source_dir/$target ;;
+  esac
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$source_path")" && pwd -P)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+
+export CLAUDE_CONFIG_DIR="$repo_root/.claude"
+cd "$repo_root"
+
+if [ "${1-}" = "--print-isolated-profile" ]; then
+  printf 'repo_root=%s\n' "$repo_root"
+  printf 'CLAUDE_CONFIG_DIR=%s\n' "$CLAUDE_CONFIG_DIR"
+  printf 'skills_dir=%s\n' "$CLAUDE_CONFIG_DIR/skills"
+  exit 0
+fi
+
+exec claude "$@"
