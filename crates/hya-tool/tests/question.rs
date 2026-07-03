@@ -22,6 +22,7 @@ fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),
         spawner,
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo: TodoPlane::default(),

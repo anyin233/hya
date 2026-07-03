@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
@@ -234,6 +235,45 @@ pub enum Event {
         child: Option<SessionId>,
     },
 
+    // -------- event-sourced mailbox & channels (ADR-0001) --------
+    // Team-scoped comms. Every variant is appended to the TEAM-ROOT session's log
+    // (`session` = the root of the team tree) so a single replay reconstructs the
+    // whole team's inboxes/channels/roster, and the live bus carries them to the
+    // TUI for free. Additive variants — older binaries fold them via `Unknown`.
+    /// Bind a team member's session to its stable, team-scoped handle.
+    /// `agent_session` is the registered agent's own session; `session` is the
+    /// team-root log the binding is recorded in.
+    AgentRegistered {
+        session: SessionId,
+        agent_session: SessionId,
+        handle: String,
+        #[serde(default)]
+        agent_type: AgentName,
+    },
+    /// A message from one handle to another handle or a `#channel`. Channel sends
+    /// fan out to every current subscriber in the deterministic reducer, so no
+    /// recipient set is baked into the event.
+    MailSent {
+        session: SessionId,
+        from: String,
+        to: MailEndpoint,
+        #[serde(default)]
+        kind: MailKind,
+        body: String,
+    },
+    /// A handle subscribed to a channel; subsequent channel mail reaches it.
+    ChannelJoined {
+        session: SessionId,
+        channel: String,
+        member: String,
+    },
+    /// A handle unsubscribed from a channel.
+    ChannelLeft {
+        session: SessionId,
+        channel: String,
+        member: String,
+    },
+
     // -------- errors --------
     Error {
         session: Option<SessionId>,
@@ -297,6 +337,10 @@ impl Event {
             Event::MemberSpawned { session, .. }
             | Event::MemberStatusChanged { session, .. }
             | Event::MemberFinished { session, .. } => Some(*session),
+            Event::AgentRegistered { session, .. }
+            | Event::MailSent { session, .. }
+            | Event::ChannelJoined { session, .. }
+            | Event::ChannelLeft { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
@@ -336,5 +380,47 @@ mod tests {
         let env_json = format!(r#"{{"seq":7,"ts_millis":1,"event":{json}}}"#);
         let env: Envelope = serde_json::from_str(&env_json).expect("envelope decodes");
         assert_eq!(env.event, Event::Unknown);
+    }
+
+    #[test]
+    fn mailbox_events_round_trip_through_json() {
+        let root = SessionId::new();
+        let agent = SessionId::new();
+        for event in [
+            Event::AgentRegistered {
+                session: root,
+                agent_session: agent,
+                handle: "reviewer-3".to_string(),
+                agent_type: AgentName::new("reviewer"),
+            },
+            Event::MailSent {
+                session: root,
+                from: "main".to_string(),
+                to: MailEndpoint::Channel("build".to_string()),
+                kind: MailKind::Announcement,
+                body: "ship it".to_string(),
+            },
+            Event::MailSent {
+                session: root,
+                from: "reviewer-1".to_string(),
+                to: MailEndpoint::Handle("reviewer-2".to_string()),
+                kind: MailKind::Message,
+                body: "hi".to_string(),
+            },
+            Event::ChannelJoined {
+                session: root,
+                channel: "build".to_string(),
+                member: "reviewer-1".to_string(),
+            },
+            Event::ChannelLeft {
+                session: root,
+                channel: "build".to_string(),
+                member: "reviewer-1".to_string(),
+            },
+        ] {
+            let json = serde_json::to_string(&event).expect("serialize");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(event, back, "mailbox event must round-trip: {json}");
+        }
     }
 }

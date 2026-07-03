@@ -4,11 +4,14 @@
 
 mod helpers;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
 use crate::model::{AgentName, ModelRef, ToolName};
 
@@ -91,10 +94,71 @@ impl PartProjection {
     }
 }
 
+/// Team-scoped mailbox/channel state (ADR-0001), folded from the team-root log.
+///
+/// A replay of the root session's event log reconstructs this exactly: handles
+/// are baked into `AgentRegistered`, channel membership into `ChannelJoined`/
+/// `ChannelLeft`, and every `MailSent` is appended (in seq order) to the
+/// recipient inboxes / channel log the reducer resolves at fold time. Kept on the
+/// top-level [`Projection`] rather than [`SessionProjection`] because it belongs
+/// to the whole team tree, not one session's transcript.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TeamProjection {
+    /// Per-agent inbox keyed by handle, in delivery (seq) order. A direct message
+    /// lands in the recipient handle's inbox; a channel message lands in every
+    /// current subscriber's inbox.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inboxes: BTreeMap<String, Vec<MailMessage>>,
+    /// Channels keyed by name (no leading `#`): membership set + full message log.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub channels: BTreeMap<String, ChannelProjection>,
+    /// Live team roster keyed by handle.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roster: BTreeMap<String, RosterEntry>,
+}
+
+/// One channel: its current subscribers plus the ordered log of everything posted
+/// to it (independent of who was subscribed when).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChannelProjection {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub members: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log: Vec<MailMessage>,
+}
+
+/// A single delivered message as folded into an inbox / channel log.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MailMessage {
+    pub from: String,
+    pub to: MailEndpoint,
+    #[serde(default)]
+    pub kind: MailKind,
+    pub body: String,
+}
+
+/// A live team member: its handle, own session, and declared agent type. Status
+/// and current-task enrichment arrive with the resident lifecycle (Phase 4).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RosterEntry {
+    pub handle: String,
+    pub session: SessionId,
+    #[serde(default)]
+    pub agent_type: AgentName,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
     pub session: SessionProjection,
+    /// Team-scoped mailbox/channel/roster state. Empty on sessions that are not a
+    /// team root / carry no mail events.
+    #[serde(default, skip_serializing_if = "team_is_empty")]
+    pub team: TeamProjection,
     pub last_seq: u64,
+}
+
+fn team_is_empty(team: &TeamProjection) -> bool {
+    team.inboxes.is_empty() && team.channels.is_empty() && team.roster.is_empty()
 }
 
 impl Projection {
@@ -378,6 +442,75 @@ impl Projection {
                     entry.child = *child;
                 }
             }
+            Event::AgentRegistered {
+                agent_session,
+                handle,
+                agent_type,
+                ..
+            } => {
+                self.team.roster.insert(
+                    handle.clone(),
+                    RosterEntry {
+                        handle: handle.clone(),
+                        session: *agent_session,
+                        agent_type: agent_type.clone(),
+                    },
+                );
+            }
+            Event::ChannelJoined {
+                channel, member, ..
+            } => {
+                self.team
+                    .channels
+                    .entry(channel.clone())
+                    .or_default()
+                    .members
+                    .insert(member.clone());
+            }
+            Event::ChannelLeft {
+                channel, member, ..
+            } => {
+                if let Some(ch) = self.team.channels.get_mut(channel) {
+                    ch.members.remove(member);
+                }
+            }
+            Event::MailSent {
+                from,
+                to,
+                kind,
+                body,
+                ..
+            } => {
+                let message = MailMessage {
+                    from: from.clone(),
+                    to: to.clone(),
+                    kind: *kind,
+                    body: body.clone(),
+                };
+                match to {
+                    MailEndpoint::Handle(handle) => {
+                        self.team
+                            .inboxes
+                            .entry(handle.clone())
+                            .or_default()
+                            .push(message);
+                    }
+                    MailEndpoint::Channel(channel) => {
+                        let channel_state = self.team.channels.entry(channel.clone()).or_default();
+                        channel_state.log.push(message.clone());
+                        // Fan out to every CURRENT subscriber. Snapshot the member
+                        // set first so the inbox borrow does not alias the channel.
+                        let members: Vec<String> = channel_state.members.iter().cloned().collect();
+                        for member in members {
+                            self.team
+                                .inboxes
+                                .entry(member)
+                                .or_default()
+                                .push(message.clone());
+                        }
+                    }
+                }
+            }
             Event::TextEnd { .. }
             | Event::ReasoningEnd { .. }
             | Event::SessionStatus { .. }
@@ -481,5 +614,126 @@ mod member_tests {
             },
         ));
         assert_eq!(p.session.members[0].status, MemberRunStatus::Done);
+    }
+}
+
+#[cfg(test)]
+mod team_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::ids::EventSeq;
+
+    fn env(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        }
+    }
+
+    /// The full team event log for the invariant: two agents join `#build`, a
+    /// third posts to it, plus one direct message. Reused by both the fold test
+    /// and the replay test so they are provably reconstructing the SAME state.
+    fn build_log(root: SessionId) -> Vec<Envelope> {
+        let alice = SessionId::new();
+        let bob = SessionId::new();
+        vec![
+            env(
+                1,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: alice,
+                    handle: "reviewer-1".to_string(),
+                    agent_type: AgentName::new("reviewer"),
+                },
+            ),
+            env(
+                2,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: bob,
+                    handle: "reviewer-2".to_string(),
+                    agent_type: AgentName::new("reviewer"),
+                },
+            ),
+            env(
+                3,
+                Event::ChannelJoined {
+                    session: root,
+                    channel: "build".to_string(),
+                    member: "reviewer-1".to_string(),
+                },
+            ),
+            env(
+                4,
+                Event::ChannelJoined {
+                    session: root,
+                    channel: "build".to_string(),
+                    member: "reviewer-2".to_string(),
+                },
+            ),
+            env(
+                5,
+                Event::MailSent {
+                    session: root,
+                    from: "main".to_string(),
+                    to: MailEndpoint::Channel("build".to_string()),
+                    kind: MailKind::Announcement,
+                    body: "ship it".to_string(),
+                },
+            ),
+            env(
+                6,
+                Event::MailSent {
+                    session: root,
+                    from: "reviewer-1".to_string(),
+                    to: MailEndpoint::Handle("reviewer-2".to_string()),
+                    kind: MailKind::Message,
+                    body: "psst".to_string(),
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn channel_mail_folds_into_every_subscriber_inbox_and_survives_replay() {
+        let root = SessionId::new();
+        let log = build_log(root);
+
+        // Apply incrementally.
+        let mut live = Projection::default();
+        for e in &log {
+            live.apply(e);
+        }
+
+        // The channel post reached BOTH subscribers' inboxes...
+        let inbox_of = |p: &Projection, handle: &str| -> Vec<String> {
+            p.team
+                .inboxes
+                .get(handle)
+                .map(|msgs| msgs.iter().map(|m| m.body.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(inbox_of(&live, "reviewer-1"), vec!["ship it".to_string()]);
+        assert_eq!(
+            inbox_of(&live, "reviewer-2"),
+            vec!["ship it".to_string(), "psst".to_string()],
+            "reviewer-2 sees the channel post AND the direct message, in order"
+        );
+        // ...and the channel keeps its own ordered log.
+        let channel = live.team.channels.get("build").expect("channel exists");
+        assert_eq!(channel.members.len(), 2);
+        assert_eq!(channel.log.len(), 1);
+        assert_eq!(channel.log[0].body, "ship it");
+        // Roster bound both handles.
+        assert_eq!(live.team.roster.len(), 2);
+
+        // A fresh replay from the same log reconstructs identical team state.
+        let replayed = Projection::from_events(&log);
+        assert_eq!(
+            replayed.team, live.team,
+            "replay must reconstruct inboxes + channels + roster exactly"
+        );
     }
 }

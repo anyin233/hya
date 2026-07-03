@@ -253,6 +253,10 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::MemberSpawned { .. }
             | Event::MemberStatusChanged { .. }
             | Event::MemberFinished { .. }
+            | Event::AgentRegistered { .. }
+            | Event::MailSent { .. }
+            | Event::ChannelJoined { .. }
+            | Event::ChannelLeft { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         })

@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use hya_core::{
     AgentSpec, CategoryRegistry, CompactionConfig, CreateSession, EventBus, MemberSpec,
     MemberStatus, ModelSummarizer, PromptEnv, SessionEngine, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_team,
+    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_mailbox_service, run_team,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
@@ -15,8 +15,8 @@ use hya_proto::{AgentName, MemberId, ModelRef, SessionId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, AskRequest, InteractionPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
+    Action, AskRequest, InteractionPlane, MailboxPlane, MemberOutcome, Mode, PermissionPlane,
+    PermissionRules, QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
 };
 use std::collections::BTreeMap;
 
@@ -424,6 +424,7 @@ pub async fn build_session_engine(
     };
     let (interaction, questions) = InteractionPlane::new();
     let (spawner, spawn_rx) = SpawnerPlane::new();
+    let (mailbox, mailbox_rx) = MailboxPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
@@ -452,6 +453,7 @@ pub async fn build_session_engine(
         .with_formatter(formatter_config::load_plane())
         .with_interaction(interaction)
         .with_spawner(spawner)
+        .with_mailbox(mailbox)
         .with_agents(agents)
         .with_governor(governor);
     if !plugin_host.is_empty() {
@@ -466,6 +468,9 @@ pub async fn build_session_engine(
         spawn_router,
         categories,
     );
+    // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
+    // the team-root log and serve roster/channel reads (ADR-0001).
+    tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
     (engine, asks, questions, mcp_manager, plugin_host)
 }
 

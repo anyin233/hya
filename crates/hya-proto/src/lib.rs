@@ -7,6 +7,7 @@
 pub mod api;
 pub mod event;
 pub mod ids;
+pub mod mail;
 pub mod message;
 pub mod model;
 pub mod projection;
@@ -18,12 +19,14 @@ pub use ids::{
     EventSeq, GoalId, LoopRunId, MemberId, MessageId, PartId, PermissionRequestId,
     QuestionRequestId, SessionId, TeamRunId, ToolCallId,
 };
+pub use mail::{MailEndpoint, MailKind};
 pub use message::{
     CostBreakdown, FinishReason, MemberRunStatus, Message, Part, Role, TokenUsage, ToolPartState,
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
-    MemberProjection, MessageProjection, PartProjection, Projection, SessionProjection,
+    ChannelProjection, MailMessage, MemberProjection, MessageProjection, PartProjection,
+    Projection, RosterEntry, SessionProjection, TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use workspace::WorkspaceAdapterInfo;

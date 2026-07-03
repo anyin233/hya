@@ -246,6 +246,7 @@ for line in sys.stdin:
             permission,
             interaction,
             spawner,
+            mailbox: hya_tool::MailboxPlane::disconnected(),
             session: None,
             parent_session: None,
             todo: hya_tool::TodoPlane::default(),

@@ -43,6 +43,7 @@ fn ctx_with_rules(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         permission,
         interaction,
         spawner,
+        mailbox: hya_tool::MailboxPlane::disconnected(),
         session: None,
         parent_session: None,
         todo: TodoPlane::default(),
