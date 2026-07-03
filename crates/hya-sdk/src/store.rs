@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
+use crate::team::TeamProjection;
 use crate::types::{GlobalEvent, Message, Part, Session};
 
 const MESSAGE_CAP: usize = 100;
@@ -47,6 +48,9 @@ pub struct MessageStore {
     pub diffs: HashMap<String, Vec<Value>>,
     pub permissions: HashMap<String, Vec<Value>>,
     pub questions: HashMap<String, Vec<Value>>,
+    /// Team-scoped mailbox/channel/roster read-model (ADR-0001), folded from the
+    /// `hya.envelope`-wrapped team events on the global stream.
+    pub team: TeamProjection,
 }
 
 impl MessageStore {
@@ -158,6 +162,13 @@ impl MessageStore {
                     _ => false,
                 }
             }
+            // Team mailbox/channel/roster events arrive wrapped in a `hya.envelope`
+            // whose `properties` is the raw backend envelope; fold the inner event
+            // into the team read-model (roster/channel/inbox views render from it).
+            "hya.envelope" => match props.get("event") {
+                Some(event) => self.team.apply_event(event),
+                None => false,
+            },
             _ => false,
         }
     }
@@ -528,6 +539,51 @@ mod tests {
         .unwrap();
         assert!(store.apply_event(&rejected));
         assert_eq!(store.questions("ses_1").len(), 0);
+    }
+
+    #[test]
+    fn hya_envelope_team_events_fold_into_team_projection() {
+        // Team events reach the frontend wrapped in a `hya.envelope` global event
+        // whose `properties` is the raw backend envelope (`{ seq, ts_millis, event }`).
+        let mut store = MessageStore::default();
+        let registered: GlobalEvent = serde_json::from_value(serde_json::json!({
+            "payload": { "type": "hya.envelope", "properties": {
+                "seq": 1, "ts_millis": 1,
+                "event": {
+                    "type": "agent_registered", "session": "ses_root",
+                    "agent_session": "ses_child", "handle": "reviewer-3",
+                    "agent_type": "reviewer", "mode": "resident"
+                }
+            }}
+        }))
+        .unwrap();
+        assert!(
+            store.apply_event(&registered),
+            "team event mutates the store"
+        );
+        assert_eq!(
+            store
+                .team
+                .roster
+                .get("reviewer-3")
+                .map(|e| e.session.as_str()),
+            Some("ses_child"),
+            "roster folded from hya.envelope team event"
+        );
+
+        let mail: GlobalEvent = serde_json::from_value(serde_json::json!({
+            "payload": { "type": "hya.envelope", "properties": {
+                "seq": 2, "ts_millis": 2,
+                "event": {
+                    "type": "mail_sent", "session": "ses_root", "from": "main",
+                    "to": { "kind": "handle", "id": "reviewer-3" }, "body": "please review"
+                }
+            }}
+        }))
+        .unwrap();
+        assert!(store.apply_event(&mail));
+        assert_eq!(store.team.inboxes["reviewer-3"].len(), 1);
+        assert_eq!(store.team.inboxes["reviewer-3"][0].body, "please review");
     }
 
     #[test]

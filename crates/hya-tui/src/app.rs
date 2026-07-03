@@ -9,6 +9,11 @@ use crate::state::AppState;
 pub mod runtime;
 pub use runtime::{prompt_request_body, run_tui, AppRunError, RunTuiInput};
 
+pub(crate) mod panes;
+
+#[cfg(test)]
+mod harness;
+
 const BATCH_WINDOW: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

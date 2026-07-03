@@ -2,6 +2,7 @@ pub mod home;
 pub mod input_dialog;
 pub mod logo;
 pub mod palette;
+pub mod pane;
 pub mod permission;
 pub mod prompt_box;
 pub mod question;
