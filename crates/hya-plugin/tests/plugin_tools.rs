@@ -89,6 +89,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         formatter: FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         lsp: LspPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),

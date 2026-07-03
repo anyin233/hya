@@ -40,6 +40,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
         websearch,
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),
     }

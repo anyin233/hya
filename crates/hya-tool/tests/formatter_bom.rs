@@ -49,6 +49,7 @@ fn ctx_with_formatter(workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter,
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir,
         cancel: CancellationToken::new(),
     }

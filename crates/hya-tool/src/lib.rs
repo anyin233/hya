@@ -1,5 +1,6 @@
 //! `hya-tool` — Tool trait + registry + the allow/ask/deny permission plane.
 
+mod agents;
 mod apply_patch;
 mod edit;
 mod edit_replace;
@@ -33,6 +34,7 @@ mod websearch;
 mod websearch_response;
 mod write;
 
+pub use agents::{AgentCatalogPlane, AgentDef};
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
     FormatterProvider, FormatterStatus,
@@ -51,7 +53,7 @@ pub use skill_catalog::{
     ParsedSkill, SkillCatalogEntry, discover_skills, discover_skills_from_dirs, parse_skill,
     skill_dirs_for_workdir, skills_section,
 };
-pub use spawn::{MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
+pub use spawn::{InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{DuplicateName, Tool, ToolCtx, ToolError, ToolRegistry};
 pub use websearch::{WebSearchPlane, WebSearchProvider};

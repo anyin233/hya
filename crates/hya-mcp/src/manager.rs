@@ -253,6 +253,7 @@ for line in sys.stdin:
             websearch: hya_tool::WebSearchPlane::default(),
             lsp: hya_tool::LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
+            agents: hya_tool::AgentCatalogPlane::default(),
             workdir: std::path::PathBuf::from("."),
             cancel: CancellationToken::new(),
         }

@@ -22,6 +22,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 websearch: hya_tool::WebSearchPlane::default(),
                 lsp: hya_tool::LspPlane::default(),
                 formatter: hya_tool::FormatterPlane::default(),
+                agents: hya_tool::AgentCatalogPlane::default(),
                 workdir: std::path::PathBuf::from("."),
                 cancel: tokio_util::sync::CancellationToken::new(),
             },

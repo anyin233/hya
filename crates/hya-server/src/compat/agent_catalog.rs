@@ -105,6 +105,33 @@ fn configured_default(workdir: &Path, config_default: Option<&str>) -> Option<St
     super::agent_sources::default_agent(workdir).or_else(|| config_default.map(str::to_owned))
 }
 
+/// A flattened, model-facing agent definition. Public so the app layer can wire
+/// it into `hya_tool::AgentCatalogPlane` (the `list_agents` tool), avoiding a
+/// `hya-tool → hya-server` circular dependency.
+pub struct AgentDefinition {
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub mode: String,
+}
+
+/// The non-hidden agent definitions visible in `workdir`, for the model-facing
+/// `list_agents` tool. Hidden native agents (compaction/title/summary) are
+/// filtered out — they are not user-spawnable.
+#[must_use]
+pub fn agent_definitions(workdir: &Path, include_global: bool) -> Vec<AgentDefinition> {
+    merged_entries(workdir, include_global)
+        .into_iter()
+        .filter(|entry| !entry.hidden)
+        .map(|entry| AgentDefinition {
+            name: entry.name,
+            description: entry.description,
+            category: entry.category,
+            mode: entry.mode,
+        })
+        .collect()
+}
+
 pub(super) fn merged_entries(workdir: &Path, include_global: bool) -> Vec<AgentEntry> {
     let mut agents = native_entries();
     let global_permissions = super::agent_sources::global_permissions(workdir);

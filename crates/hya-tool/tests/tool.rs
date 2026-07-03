@@ -46,6 +46,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -274,6 +275,7 @@ async fn shell_happy_and_cancelled() {
         websearch: ctx.websearch.clone(),
         lsp: ctx.lsp.clone(),
         formatter: ctx.formatter.clone(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -305,6 +307,7 @@ async fn task_tool_is_lead_only() {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
@@ -333,6 +336,7 @@ async fn ask_user_select_returns_index_and_answer() {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        agents: hya_tool::AgentCatalogPlane::default(),
         workdir: dir,
         cancel: CancellationToken::new(),
     };
