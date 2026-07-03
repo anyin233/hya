@@ -1,0 +1,31 @@
+{
+  "id": "07-03-opencode-parity-pr-split",
+  "name": "07-03-opencode-parity-pr-split",
+  "title": "OpenCode parity worktree PR split",
+  "description": "Split the OpenCode parity review into independently reviewable worktree PRs with worker-agent ownership, TDD gates, and merge-order notes.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "codex",
+  "assignee": "codex",
+  "createdAt": "2026-07-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-03-opencode-version-release-hygiene",
+    "07-03-opencode-compat-mcp-import",
+    "07-03-opencode-revert-snapshot-baseline",
+    "07-03-opencode-tui-theme-picker"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
