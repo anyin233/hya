@@ -1,0 +1,10 @@
+# 0.30.0
+
+Multi-agent swarm: resident agents, event-sourced inter-agent mail, custom agents, and model categories.
+
+- Added runtime model **categories**: a `categories:` config block maps a logical name to an ordered list of `provider/model` candidates; the harness resolves a category to the first configured/healthy candidate at spawn time with failover. Agent files may declare a `category:`, and the main agent can override it per spawn. Precedence (highest wins): spawn model → spawn category → frontmatter model → frontmatter category → global default.
+- Added **custom-agent discovery** from `.claude/agents`, `~/.claude/agents`, and `.hya/agents` alongside existing directories, a model-facing `list_agents` tool, and ephemeral `inline_agent` definitions on the `task` tool (persistence stays opt-in via the write tool).
+- Added **event-sourced inter-agent mail and channels**: `MailSent`/`ChannelJoined`/`ChannelLeft`/`AgentRegistered` events fold into a team projection of per-agent inboxes, channel logs, and a roster. New `send`/`roster`/`channels`/`join`/`leave` tools. Deterministic team-scoped handles are assigned at spawn. Replaces the previous in-memory team plane.
+- Added **resident agents**: a long-lived, event-driven actor mode that idles at zero token cost and wakes on inbound mail to run exactly one turn. The main agent is a first-class actor woken by child mail to synthesize; a team reaches quiescence when all agents are idle with no mail in flight. Added per-team turn/message budgets with a kill path and raised the per-run spawn budget, all configurable via `SubagentLimitsFile` and `HYA_SUBAGENT_*` env vars. Transient subagents are unchanged.
+- Added a **tmux-style multi-pane TUI**: an uncloseable main-agent window with the input bar bound exclusively to the main agent, user-launchable read-only observation tabs for other agents, and roster/channel overlays sourced from the team projection.
+- Bridged the frontend `MessageStore` to fold backend team events so the TUI renders roster, channels, and inboxes live.

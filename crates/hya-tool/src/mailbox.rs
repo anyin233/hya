@@ -11,7 +11,7 @@
 //! so an agent can only see/address its own team (decision 6).
 
 use async_trait::async_trait;
-use hya_proto::{MailEndpoint, MailKind, RosterEntry, SessionId, ToolSchema};
+use hya_proto::{MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -277,34 +277,64 @@ impl Tool for RosterTool {
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
         let roster = ctx.mailbox.roster().await.map_err(map_err)?;
-        let members: Vec<Value> = roster
-            .iter()
-            .map(|entry| {
-                json!({
-                    "handle": entry.handle,
-                    "type": entry.agent_type.as_str(),
-                    "session": entry.session.to_string(),
-                    // Live status / current task land with the resident lifecycle
-                    // (Phase 4); everything in the roster today is an active member.
-                    "status": "active",
-                })
-            })
-            .collect();
-        let output = if members.is_empty() {
-            "No teammates registered yet.".to_string()
-        } else {
-            roster
-                .iter()
-                .map(|e| format!("{} ({})", e.handle, e.agent_type.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        Ok(json!({
-            "title": format!("{} teammate(s)", members.len()),
-            "output": output,
-            "members": members,
-        }))
+        Ok(render_roster(&roster))
     }
+}
+
+/// Human-readable label for a teammate's live activity, folded into the roster
+/// projection from `AgentActivityChanged` by the resident supervisor.
+fn status_label(status: &RosterStatus) -> &'static str {
+    match status {
+        RosterStatus::Idle => "idle",
+        RosterStatus::Busy => "busy",
+        RosterStatus::Done => "done",
+        RosterStatus::Failed => "failed",
+    }
+}
+
+/// Render the `roster` tool payload from the current team roster, surfacing each
+/// teammate's live `status`, scheduling `mode`, and `current_task` (all tracked
+/// in the projection) rather than a fixed placeholder.
+fn render_roster(roster: &[RosterEntry]) -> Value {
+    let members: Vec<Value> = roster
+        .iter()
+        .map(|entry| {
+            json!({
+                "handle": entry.handle,
+                "type": entry.agent_type.as_str(),
+                "session": entry.session.to_string(),
+                "mode": entry.mode,
+                "status": status_label(&entry.status),
+                "current_task": entry.current_task,
+            })
+        })
+        .collect();
+    let output = if members.is_empty() {
+        "No teammates registered yet.".to_string()
+    } else {
+        roster
+            .iter()
+            .map(|e| {
+                let mut line = format!(
+                    "{} ({}) · {}",
+                    e.handle,
+                    e.agent_type.as_str(),
+                    status_label(&e.status)
+                );
+                if let Some(task) = e.current_task.as_deref().filter(|t| !t.is_empty()) {
+                    line.push_str(" — ");
+                    line.push_str(task);
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    json!({
+        "title": format!("{} teammate(s)", members.len()),
+        "output": output,
+        "members": members,
+    })
 }
 
 pub(crate) struct ChannelsTool;
@@ -427,4 +457,41 @@ fn normalize_channel(raw: &str) -> Result<String, ToolError> {
         return Err(ToolError::Input("channel name is empty".to_string()));
     }
     Ok(channel.to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use hya_proto::{AgentName, SubagentMode};
+
+    #[test]
+    fn render_roster_surfaces_live_status_mode_and_task() {
+        let entry = RosterEntry {
+            handle: "reviewer-1".to_string(),
+            session: SessionId::new(),
+            agent_type: AgentName::new("reviewer"),
+            mode: SubagentMode::Resident,
+            status: RosterStatus::Busy,
+            current_task: Some("reviewing auth.rs".to_string()),
+        };
+        let value = render_roster(std::slice::from_ref(&entry));
+        let member = &value["members"][0];
+        assert_eq!(member["status"], "busy");
+        assert_eq!(member["mode"], "resident");
+        assert_eq!(member["current_task"], "reviewing auth.rs");
+        let output = value["output"].as_str().unwrap_or_default();
+        assert!(
+            output.contains("reviewer-1 (reviewer) · busy"),
+            "output was: {output}"
+        );
+        assert!(output.contains("reviewing auth.rs"), "output was: {output}");
+    }
+
+    #[test]
+    fn render_roster_reports_empty_team() {
+        let value = render_roster(&[]);
+        assert_eq!(value["title"], "0 teammate(s)");
+        assert_eq!(value["output"], "No teammates registered yet.");
+    }
 }
