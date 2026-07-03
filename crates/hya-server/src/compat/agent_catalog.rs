@@ -15,6 +15,9 @@ pub(super) struct AgentEntry {
     pub(super) hidden: bool,
     pub(super) native: bool,
     pub(super) model: Option<String>,
+    /// Logical model category (frontmatter `category:`); resolved to a concrete
+    /// `provider/model` at spawn time when no explicit `model` overrides it.
+    pub(super) category: Option<String>,
     pub(super) variant: Option<String>,
     pub(super) temperature: Option<f64>,
     pub(super) top_p: Option<f64>,
@@ -132,6 +135,7 @@ fn native_entries() -> Vec<AgentEntry> {
             hidden: agent.hidden,
             native: true,
             model: None,
+            category: None,
             variant: None,
             temperature: None,
             top_p: None,
@@ -167,6 +171,9 @@ fn apply_change(
         }
         if let Some(model) = change.model {
             existing.model = Some(model);
+        }
+        if let Some(category) = change.category {
+            existing.category = Some(category);
         }
         if let Some(variant) = change.variant {
             existing.variant = Some(variant);
@@ -206,6 +213,7 @@ fn apply_change(
             hidden: change.hidden.unwrap_or(false),
             native: false,
             model: change.model,
+            category: change.category,
             variant: change.variant,
             temperature: change.temperature,
             top_p: change.top_p,

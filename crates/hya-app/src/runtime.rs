@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_core::{
-    AgentSpec, CompactionConfig, CreateSession, EventBus, MemberSpec, MemberStatus,
-    ModelSummarizer, PromptEnv, SessionEngine, SubagentGovernor, Summarizer, TeamEvidenceEnvelope,
-    build_system_prompt, project_envelope, run_team,
+    AgentSpec, CategoryRegistry, CompactionConfig, CreateSession, EventBus, MemberSpec,
+    MemberStatus, ModelSummarizer, PromptEnv, SessionEngine, SubagentGovernor, Summarizer,
+    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_team,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
@@ -160,6 +160,8 @@ pub struct RuntimeConfig {
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub plugins: Vec<PluginSpec>,
     pub default_agent: Option<String>,
+    /// Logical model categories the runtime resolves at subagent spawn time.
+    pub categories: CategoryRegistry,
     /// Set when no usable config was found and the offline provider was chosen.
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
@@ -191,6 +193,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
                 default_agent: cfg.default_agent,
+                categories: cfg.categories,
                 offline_notice: None,
             }
         }
@@ -203,6 +206,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: None,
+                categories: CategoryRegistry::default(),
                 offline_notice: Some(OfflineNotice {
                     config_path: config::expected_config_path(),
                 }),
@@ -218,6 +222,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: None,
+                categories: CategoryRegistry::default(),
                 offline_notice: None,
             }
         }
@@ -241,28 +246,40 @@ pub fn spawn_team_supervisor(
     engine: Arc<SessionEngine>,
     base: AgentSpec,
     include_global_agents: bool,
+    router: Arc<ProviderRouter>,
+    categories: Arc<CategoryRegistry>,
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             let engine = engine.clone();
             let base = base.clone();
+            let router = router.clone();
+            let categories = categories.clone();
             tokio::spawn(async move {
                 let parent = req.parent;
                 let members = req.members;
                 let cancel = req.cancel;
                 let background = req.background;
                 let mut reply = Some(req.reply);
+                // A concrete category candidate is servable when the live router
+                // recognizes its provider; used for ordered category failover.
+                let is_servable = |model: &ModelRef| router.resolve(model).is_some();
                 let specs: Vec<MemberSpec> = if background {
                     let mut specs = Vec::new();
                     let mut started = Vec::new();
                     for member in members {
                         let id = MemberId::new();
-                        let agent = hya_server::resolve_subagent_agent(
-                            &base,
-                            &member.subagent_type,
-                            &base.workdir,
-                            include_global_agents,
-                        );
+                        let agent =
+                            hya_server::resolve_subagent_agent(hya_server::SubagentResolve {
+                                base: &base,
+                                subagent_type: &member.subagent_type,
+                                workdir: &base.workdir,
+                                include_global_agents,
+                                categories: &categories,
+                                spawn_model: member.model.as_deref(),
+                                spawn_category: member.category.as_deref(),
+                                is_servable: &is_servable,
+                            });
                         let session = match member
                             .task_id
                             .as_deref()
@@ -313,12 +330,17 @@ pub fn spawn_team_supervisor(
                     members
                         .into_iter()
                         .map(|m| {
-                            let agent = hya_server::resolve_subagent_agent(
-                                &base,
-                                &m.subagent_type,
-                                &base.workdir,
-                                include_global_agents,
-                            );
+                            let agent =
+                                hya_server::resolve_subagent_agent(hya_server::SubagentResolve {
+                                    base: &base,
+                                    subagent_type: &m.subagent_type,
+                                    workdir: &base.workdir,
+                                    include_global_agents,
+                                    categories: &categories,
+                                    spawn_model: m.model.as_deref(),
+                                    spawn_category: m.category.as_deref(),
+                                    is_servable: &is_servable,
+                                });
                             MemberSpec {
                                 id: MemberId::new(),
                                 agent,
@@ -404,6 +426,10 @@ pub async fn build_session_engine(
         Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(crate::config::load_subagent_limits());
+    // Clone the router before it is moved into the engine so the team supervisor
+    // can test category-candidate servability against the same live providers.
+    let spawn_router = router.clone();
+    let categories = Arc::new(crate::config::load_categories());
     let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
@@ -419,6 +445,8 @@ pub async fn build_session_engine(
         engine.clone(),
         agent_with_model(model),
         include_global_agents,
+        spawn_router,
+        categories,
     );
     (engine, asks, questions, mcp_manager, plugin_host)
 }
@@ -452,6 +480,7 @@ impl HyaRuntime {
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
                 default_agent: opts.default_agent,
+                categories: CategoryRegistry::default(),
                 offline_notice: None,
             }
         } else {

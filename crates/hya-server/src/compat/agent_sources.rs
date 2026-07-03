@@ -20,6 +20,9 @@ pub(super) struct AgentChange {
     pub(super) mode: Option<String>,
     pub(super) hidden: Option<bool>,
     pub(super) model: Option<String>,
+    /// Logical model category named by the agent; resolved to a concrete
+    /// `provider/model` at spawn time (lower precedence than an explicit `model`).
+    pub(super) category: Option<String>,
     pub(super) variant: Option<String>,
     pub(super) temperature: Option<f64>,
     pub(super) top_p: Option<f64>,
@@ -51,6 +54,7 @@ struct InlineAgent {
     mode: Option<String>,
     hidden: Option<bool>,
     model: Option<String>,
+    category: Option<String>,
     variant: Option<String>,
     temperature: Option<f64>,
     top_p: Option<f64>,
@@ -160,6 +164,7 @@ fn append_inline_agents(
             mode,
             hidden: agent.hidden,
             model: agent.model,
+            category: agent.category,
             variant: agent.variant,
             temperature: agent.temperature,
             top_p: agent.top_p,
