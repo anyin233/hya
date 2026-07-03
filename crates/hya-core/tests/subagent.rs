@@ -171,6 +171,7 @@ async fn governor_caps_streaming_concurrency() {
             max_depth: 5,
             max_concurrency: 2,
             per_run_budget: 100,
+            ..SubagentLimits::default()
         },
         provider,
     )
@@ -202,6 +203,7 @@ async fn governor_rejects_members_beyond_budget() {
             max_depth: 5,
             max_concurrency: 8,
             per_run_budget: 1,
+            ..SubagentLimits::default()
         },
         Arc::new(SelectiveFakeProvider),
     )
@@ -247,6 +249,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
             max_depth: 1,
             max_concurrency: 8,
             per_run_budget: 100,
+            ..SubagentLimits::default()
         },
         Arc::new(SelectiveFakeProvider),
     )

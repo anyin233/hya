@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hya_proto::{MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId};
+use hya_proto::{
+    MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
+};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -124,8 +126,16 @@ async fn run_member(
         .await;
     // Bind the member's session to its stable, team-scoped handle in the team-root
     // log (ADR-0001). The roster is then read from the projection, never disk.
+    // run_team is the transient (blocking-join) path by construction; resident
+    // members are spawned non-blocking through the ResidentSupervisor instead.
     let _ = engine
-        .record_agent_registered(root, child, handle, spec.agent.name.clone())
+        .record_agent_registered(
+            root,
+            child,
+            handle,
+            spec.agent.name.clone(),
+            SubagentMode::Transient,
+        )
         .await;
     let _ = engine
         .record_member_status(lead, member, MemberRunStatus::Running)

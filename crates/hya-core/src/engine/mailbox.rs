@@ -11,7 +11,9 @@
 //! subscribes to `MailSent` on the bus). The bus publish already happens inside
 //! [`SessionEngine::emit`], so the wake hook has its seam without further change.
 
-use hya_proto::{AgentName, Event, MailEndpoint, MailKind, RosterEntry, SessionId};
+use hya_proto::{
+    AgentName, Event, MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, SubagentMode,
+};
 use hya_tool::{ChannelInfo, MailReceipt};
 
 use crate::engine::SessionEngine;
@@ -28,15 +30,17 @@ impl SessionEngine {
         Ok(self.session_lineage(session).await?.0)
     }
 
-    /// Append an `AgentRegistered` binding `handle` (+ its type) to `agent_session`
-    /// in the team-root log. Idempotent-friendly: the reducer keys the roster by
-    /// handle, so re-registering the same handle is a no-op on state.
+    /// Append an `AgentRegistered` binding `handle` (+ its type + scheduling
+    /// `mode`) to `agent_session` in the team-root log. Idempotent-friendly: the
+    /// reducer keys the roster by handle, so re-registering the same handle
+    /// refreshes the binding without dropping its live status.
     pub(crate) async fn record_agent_registered(
         &self,
         root: SessionId,
         agent_session: SessionId,
         handle: String,
         agent_type: AgentName,
+        mode: SubagentMode,
     ) -> Result<(), CoreError> {
         self.emit(
             root,
@@ -45,6 +49,29 @@ impl SessionEngine {
                 agent_session,
                 handle,
                 agent_type,
+                mode,
+            },
+        )
+        .await
+    }
+
+    /// Append an `AgentActivityChanged` updating a member's live roster status
+    /// (idle ⇄ busy / done / failed) and optional current-task label. Appended to
+    /// the team-root log by the resident supervisor (ADR-0002).
+    pub(crate) async fn record_agent_activity(
+        &self,
+        root: SessionId,
+        handle: String,
+        status: RosterStatus,
+        current_task: Option<String>,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            root,
+            Event::AgentActivityChanged {
+                session: root,
+                handle,
+                status,
+                current_task,
             },
         )
         .await
@@ -70,8 +97,17 @@ impl SessionEngine {
             .agent
             .clone()
             .unwrap_or_else(|| AgentName::new(MAIN_HANDLE));
-        self.record_agent_registered(root, root, MAIN_HANDLE.to_string(), agent_type)
-            .await?;
+        // The main/root agent is registered as transient: it is the team root, not
+        // a resident subagent. Its actor behaviour (woken by child mail /
+        // quiescence) is driven by the resident supervisor, not this flag.
+        self.record_agent_registered(
+            root,
+            root,
+            MAIN_HANDLE.to_string(),
+            agent_type,
+            SubagentMode::Transient,
+        )
+        .await?;
         Ok(MAIN_HANDLE.to_string())
     }
 
@@ -105,7 +141,11 @@ impl SessionEngine {
     /// `MailSent` to the team-root log; the reducer fans a channel send out to
     /// every current subscriber. Returns a receipt with the resolved sender handle
     /// and the recipient count at send time.
-    pub(crate) async fn mail_send(
+    ///
+    /// Public so callers outside the mailbox service (the resident supervisor's
+    /// tests, integration drivers) can inject team mail directly; the normal path
+    /// is still the `MailboxPlane` → [`run_mailbox_service`](crate::run_mailbox_service).
+    pub async fn mail_send(
         &self,
         from_session: SessionId,
         to: MailEndpoint,
@@ -281,6 +321,7 @@ mod tests {
                 reviewer_1,
                 "reviewer-1".to_string(),
                 AgentName::new("reviewer"),
+                SubagentMode::Resident,
             )
             .await
             .unwrap();
@@ -290,6 +331,7 @@ mod tests {
                 reviewer_2,
                 "reviewer-2".to_string(),
                 AgentName::new("reviewer"),
+                SubagentMode::Resident,
             )
             .await
             .unwrap();

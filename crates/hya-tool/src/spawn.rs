@@ -19,6 +19,10 @@ pub struct SpawnMember {
     /// write). When present it supplies the system prompt + name and folds into
     /// the same model/category precedence chain (decision 11).
     pub inline_agent: Option<InlineAgent>,
+    /// Spawn-time opt-in to the resident (long-lived actor) lifecycle (ADR-0002).
+    /// OR'd with the agent's frontmatter/inline `resident:` — `true` from any
+    /// source makes the member resident. Default `false` (transient, unchanged).
+    pub resident: bool,
 }
 
 /// A runtime-authored, ephemeral agent definition attached to a single spawn.
@@ -38,6 +42,8 @@ pub struct InlineAgent {
     pub category: Option<String>,
     /// Concrete `provider/model` (`~` frontmatter `model:` in precedence).
     pub model: Option<String>,
+    /// Inline opt-in to the resident lifecycle (`~` frontmatter `resident:`).
+    pub resident: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +144,7 @@ mod tests {
                         model: None,
                         category: None,
                         inline_agent: None,
+                        resident: false,
                     }],
                     CancellationToken::new(),
                 )

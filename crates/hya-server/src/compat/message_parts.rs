@@ -204,6 +204,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::MemberStatusChanged { .. }
             | Event::MemberFinished { .. }
             | Event::AgentRegistered { .. }
+            | Event::AgentActivityChanged { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
@@ -358,6 +359,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::MemberStatusChanged { .. }
             | Event::MemberFinished { .. }
             | Event::AgentRegistered { .. }
+            | Event::AgentActivityChanged { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }

@@ -70,6 +70,7 @@ fn entry(variant: Option<&str>, options: BTreeMap<String, Value>) -> AgentEntry 
         native: true,
         model: Some("12th-anth/claude-opus-4-8".to_string()),
         category: None,
+        resident: false,
         variant: variant.map(str::to_string),
         temperature: None,
         top_p: None,

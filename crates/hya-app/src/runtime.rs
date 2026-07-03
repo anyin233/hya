@@ -5,8 +5,9 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_core::{
     AgentSpec, CategoryRegistry, CompactionConfig, CreateSession, EventBus, MemberSpec,
-    MemberStatus, ModelSummarizer, PromptEnv, SessionEngine, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_mailbox_service, run_team,
+    MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine, SubagentGovernor,
+    Summarizer, TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_mailbox_service,
+    run_team,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
@@ -16,7 +17,7 @@ use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, MailboxPlane, MemberOutcome, Mode, PermissionPlane,
-    PermissionRules, QuestionRequest, Rule, SpawnRequest, SpawnerPlane, ToolRegistry,
+    PermissionRules, QuestionRequest, Rule, SpawnMember, SpawnRequest, SpawnerPlane, ToolRegistry,
 };
 use std::collections::BTreeMap;
 
@@ -248,6 +249,7 @@ pub fn spawn_team_supervisor(
     include_global_agents: bool,
     router: Arc<ProviderRouter>,
     categories: Arc<CategoryRegistry>,
+    resident_supervisor: Arc<ResidentSupervisor>,
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
@@ -255,6 +257,7 @@ pub fn spawn_team_supervisor(
             let base = base.clone();
             let router = router.clone();
             let categories = categories.clone();
+            let resident_supervisor = resident_supervisor.clone();
             tokio::spawn(async move {
                 let parent = req.parent;
                 let members = req.members;
@@ -264,23 +267,81 @@ pub fn spawn_team_supervisor(
                 // A concrete category candidate is servable when the live router
                 // recognizes its provider; used for ordered category failover.
                 let is_servable = |model: &ModelRef| router.resolve(model).is_some();
+
+                // Resolve every member once, capturing its resident-ness (spawn-time
+                // flag OR the agent's frontmatter/inline `resident:`).
+                let resolved: Vec<(SpawnMember, AgentSpec, bool)> = members
+                    .into_iter()
+                    .map(|member| {
+                        let out = hya_server::resolve_subagent(hya_server::SubagentResolve {
+                            base: &base,
+                            subagent_type: &member.subagent_type,
+                            workdir: &base.workdir,
+                            include_global_agents,
+                            categories: &categories,
+                            spawn_model: member.model.as_deref(),
+                            spawn_category: member.category.as_deref(),
+                            is_servable: &is_servable,
+                            inline_agent: member.inline_agent.as_ref(),
+                        });
+                        let resident = member.resident || out.resident;
+                        (member, out.agent, resident)
+                    })
+                    .collect();
+
+                let mut resident_members = Vec::new();
+                let mut transient_members = Vec::new();
+                for entry in resolved {
+                    if entry.2 {
+                        resident_members.push(entry);
+                    } else {
+                        transient_members.push(entry);
+                    }
+                }
+
+                // Resident members are NON-BLOCKING: register each as a long-lived
+                // actor and return its handle immediately (ADR-0002). The parent's
+                // turn is not held on their work.
+                let mut resident_outcomes = Vec::new();
+                if !resident_members.is_empty() {
+                    // Register the team root as the main actor so child mail +
+                    // quiescence can wake it. Only done when the team actually has
+                    // residents, so pure-transient teams keep their old behavior.
+                    let root = engine
+                        .session_lineage(parent)
+                        .await
+                        .map(|(root, _)| root)
+                        .unwrap_or(parent);
+                    let _ = resident_supervisor.ensure_main(root, base.clone()).await;
+                    for (member, agent, _) in resident_members {
+                        match resident_supervisor
+                            .spawn_resident(parent, agent, member.prompt)
+                            .await
+                        {
+                            Ok((session, handle)) => resident_outcomes.push(MemberOutcome {
+                                member: handle.clone(),
+                                session: session.to_string(),
+                                status: "running".to_string(),
+                                summary: format!(
+                                    "Resident {handle} is live and will act on inbound mail."
+                                ),
+                            }),
+                            Err(err) => resident_outcomes.push(MemberOutcome {
+                                member: "-".to_string(),
+                                session: "-".to_string(),
+                                status: "failed".to_string(),
+                                summary: err.to_string(),
+                            }),
+                        }
+                    }
+                }
+
+                // Transient members keep the historical blocking-join semantics.
                 let specs: Vec<MemberSpec> = if background {
                     let mut specs = Vec::new();
-                    let mut started = Vec::new();
-                    for member in members {
+                    let mut started = resident_outcomes.clone();
+                    for (member, agent, _) in transient_members {
                         let id = MemberId::new();
-                        let agent =
-                            hya_server::resolve_subagent_agent(hya_server::SubagentResolve {
-                                base: &base,
-                                subagent_type: &member.subagent_type,
-                                workdir: &base.workdir,
-                                include_global_agents,
-                                categories: &categories,
-                                spawn_model: member.model.as_deref(),
-                                spawn_category: member.category.as_deref(),
-                                is_servable: &is_servable,
-                                inline_agent: member.inline_agent.as_ref(),
-                            });
                         let session = match member
                             .task_id
                             .as_deref()
@@ -328,41 +389,30 @@ pub fn spawn_team_supervisor(
                     }
                     specs
                 } else {
-                    members
+                    transient_members
                         .into_iter()
-                        .map(|m| {
-                            let agent =
-                                hya_server::resolve_subagent_agent(hya_server::SubagentResolve {
-                                    base: &base,
-                                    subagent_type: &m.subagent_type,
-                                    workdir: &base.workdir,
-                                    include_global_agents,
-                                    categories: &categories,
-                                    spawn_model: m.model.as_deref(),
-                                    spawn_category: m.category.as_deref(),
-                                    is_servable: &is_servable,
-                                    inline_agent: m.inline_agent.as_ref(),
-                                });
-                            MemberSpec {
-                                id: MemberId::new(),
-                                agent,
-                                directive: m.prompt,
-                                session: m
-                                    .task_id
-                                    .as_deref()
-                                    .and_then(|task_id| task_id.parse::<SessionId>().ok()),
-                            }
+                        .map(|(m, agent, _)| MemberSpec {
+                            id: MemberId::new(),
+                            agent,
+                            directive: m.prompt,
+                            session: m
+                                .task_id
+                                .as_deref()
+                                .and_then(|task_id| task_id.parse::<SessionId>().ok()),
                         })
                         .collect()
                 };
-                let evidence = run_team(engine.clone(), parent, specs, cancel).await;
-                let envelope = TeamEvidenceEnvelope {
-                    members: evidence.clone(),
-                };
-                let _ = project_envelope(&engine, parent, &envelope).await;
-                let outcomes: Vec<MemberOutcome> = evidence
-                    .into_iter()
-                    .map(|e| MemberOutcome {
+
+                // Only run the blocking join when there is transient work; a pure
+                // resident spawn replies immediately with the resident handles.
+                let mut outcomes = resident_outcomes;
+                if !specs.is_empty() {
+                    let evidence = run_team(engine.clone(), parent, specs, cancel).await;
+                    let envelope = TeamEvidenceEnvelope {
+                        members: evidence.clone(),
+                    };
+                    let _ = project_envelope(&engine, parent, &envelope).await;
+                    outcomes.extend(evidence.into_iter().map(|e| MemberOutcome {
                         member: e.member,
                         session: e.session,
                         status: match e.status {
@@ -370,8 +420,8 @@ pub fn spawn_team_supervisor(
                             MemberStatus::Failed => "failed".to_string(),
                         },
                         summary: e.summary,
-                    })
-                    .collect();
+                    }));
+                }
                 if !background && let Some(reply) = reply.take() {
                     let _ = reply.send(outcomes);
                 }
@@ -460,6 +510,9 @@ pub async fn build_session_engine(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
+    // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
+    // before the team supervisor so its bus subscription is live for the first mail.
+    let resident_supervisor = ResidentSupervisor::start(engine.clone());
     spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
@@ -467,6 +520,7 @@ pub async fn build_session_engine(
         include_global_agents,
         spawn_router,
         categories,
+        resident_supervisor,
     );
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).

@@ -23,6 +23,8 @@ struct InlineAgentInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    resident: Option<bool>,
 }
 
 impl InlineAgentInput {
@@ -40,6 +42,7 @@ impl InlineAgentInput {
             description: self.description,
             category: self.category,
             model: self.model,
+            resident: self.resident,
         }
     }
 }
@@ -54,6 +57,8 @@ struct TaskMemberInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    resident: bool,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
 }
@@ -76,6 +81,8 @@ struct TaskInput {
     command: Option<String>,
     #[serde(default)]
     background: bool,
+    #[serde(default)]
+    resident: bool,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
@@ -136,6 +143,10 @@ impl Tool for TaskTool {
                     "type": "boolean",
                     "description": "Run the agent in the background"
                 },
+                "resident": {
+                    "type": "boolean",
+                    "description": "Spawn as a long-lived resident actor: it stays addressable, is idle at zero token cost, and is woken by inbound mail to run one turn at a time. The spawn returns immediately (non-blocking) with the resident's handle. Default false (transient: run one turn, summarize, and die while you wait)."
+                },
                 "inline_agent": {
                     "type": "object",
                     "description": "Define an ephemeral agent for this spawn only (no disk file). Supplies its own system prompt + name and folds into the same model/category precedence chain. To reuse it later, have the agent save an .md via the write tool.",
@@ -144,7 +155,8 @@ impl Tool for TaskTool {
                         "prompt": { "type": "string", "description": "The system prompt / persona for the ephemeral agent" },
                         "description": { "type": "string" },
                         "category": { "type": "string", "description": "Logical model category (~ frontmatter category)" },
-                        "model": { "type": "string", "description": "Concrete provider/model (~ frontmatter model)" }
+                        "model": { "type": "string", "description": "Concrete provider/model (~ frontmatter model)" },
+                        "resident": { "type": "boolean", "description": "Make this ephemeral agent a resident actor (~ frontmatter resident)" }
                     }
                 },
                 "members": {
@@ -158,6 +170,7 @@ impl Tool for TaskTool {
                             "subagent_type": { "type": "string" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
+                            "resident": { "type": "boolean", "description": "Spawn this member as a resident actor (non-blocking)" },
                             "inline_agent": {
                                 "type": "object",
                                 "properties": {
@@ -165,7 +178,8 @@ impl Tool for TaskTool {
                                     "prompt": { "type": "string" },
                                     "description": { "type": "string" },
                                     "category": { "type": "string" },
-                                    "model": { "type": "string" }
+                                    "model": { "type": "string" },
+                                    "resident": { "type": "boolean" }
                                 }
                             }
                         },
@@ -211,6 +225,7 @@ impl Tool for TaskTool {
                     model: m.model,
                     category: m.category,
                     inline_agent,
+                    resident: m.resident,
                 }
             })
             .collect();
@@ -234,6 +249,7 @@ impl Tool for TaskTool {
                 model: input.model,
                 category: input.category,
                 inline_agent,
+                resident: input.resident,
             });
         }
         if background && members.len() != 1 {
