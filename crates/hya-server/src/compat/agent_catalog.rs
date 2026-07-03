@@ -18,6 +18,9 @@ pub(super) struct AgentEntry {
     /// Logical model category (frontmatter `category:`); resolved to a concrete
     /// `provider/model` at spawn time when no explicit `model` overrides it.
     pub(super) category: Option<String>,
+    /// Frontmatter `resident: true`: spawn this agent as a long-lived resident
+    /// actor (ADR-0002) rather than a transient one. Default false.
+    pub(super) resident: bool,
     pub(super) variant: Option<String>,
     pub(super) temperature: Option<f64>,
     pub(super) top_p: Option<f64>,
@@ -163,6 +166,7 @@ fn native_entries() -> Vec<AgentEntry> {
             native: true,
             model: None,
             category: None,
+            resident: false,
             variant: None,
             temperature: None,
             top_p: None,
@@ -201,6 +205,9 @@ fn apply_change(
         }
         if let Some(category) = change.category {
             existing.category = Some(category);
+        }
+        if let Some(resident) = change.resident {
+            existing.resident = resident;
         }
         if let Some(variant) = change.variant {
             existing.variant = Some(variant);
@@ -241,6 +248,7 @@ fn apply_change(
             native: false,
             model: change.model,
             category: change.category,
+            resident: change.resident.unwrap_or(false),
             variant: change.variant,
             temperature: change.temperature,
             top_p: change.top_p,

@@ -24,7 +24,9 @@ mod runs;
 mod state;
 
 pub use compat::agent_catalog::{AgentDefinition, agent_definitions};
-pub use compat::subagent_resolve::{SubagentResolve, resolve_subagent_agent};
+pub use compat::subagent_resolve::{
+    ResolvedSubagent, SubagentResolve, resolve_subagent, resolve_subagent_agent,
+};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use state::AppState;

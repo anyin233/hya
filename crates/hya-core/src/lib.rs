@@ -12,6 +12,7 @@ pub mod loop_mode;
 pub mod mailbox;
 pub mod orchestrator;
 pub mod prompt;
+pub mod resident;
 pub mod subagent;
 pub mod title;
 pub mod workspace;
@@ -39,8 +40,9 @@ pub use loop_mode::{
     cost_preflight, drive_loop, run_loop,
 };
 pub use mailbox::run_mailbox_service;
-pub use orchestrator::{SubagentGovernor, SubagentLimits};
+pub use orchestrator::{SubagentGovernor, SubagentLimits, TeamBudget};
 pub use prompt::{PromptEnv, build_system_prompt};
+pub use resident::ResidentSupervisor;
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
 };

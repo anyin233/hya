@@ -48,11 +48,29 @@ pub struct SubagentResolve<'a> {
     pub inline_agent: Option<&'a InlineAgent>,
 }
 
+/// A resolved subagent: its specialized [`AgentSpec`] plus whether it should be
+/// spawned as a resident (long-lived actor) — the OR of its frontmatter/inline
+/// `resident:` opt-in (ADR-0002). Spawn-time `resident: true` is layered on top by
+/// the caller (it lives on the spawn tool, not the agent definition).
+pub struct ResolvedSubagent {
+    pub agent: AgentSpec,
+    pub resident: bool,
+}
+
 /// Resolve `subagent_type` into a fully-specialized [`AgentSpec`]. Unknown types
 /// fall back to the native `general` subagent, then to `base` unchanged. The
 /// final `AgentSpec.model` reflects the winning precedence source (decision 9).
+///
+/// Thin wrapper over [`resolve_subagent`] for callers that only need the spec.
 #[must_use]
 pub fn resolve_subagent_agent(req: SubagentResolve<'_>) -> AgentSpec {
+    resolve_subagent(req).agent
+}
+
+/// Resolve `subagent_type` into its [`AgentSpec`] AND its resident-ness. See
+/// [`resolve_subagent_agent`] for the model-selection precedence.
+#[must_use]
+pub fn resolve_subagent(req: SubagentResolve<'_>) -> ResolvedSubagent {
     let mut agent = req.base.clone();
     agent.workdir = req.workdir.to_path_buf();
     agent.name = AgentName::new(req.subagent_type);
@@ -123,6 +141,15 @@ pub fn resolve_subagent_agent(req: SubagentResolve<'_>) -> AgentSpec {
         let active_model = agent.model.clone();
         super::reference::apply_agent_entry(&mut agent, entry, &active_model, &config);
     }
+    // Resident-ness (ADR-0002): the matched agent's frontmatter `resident:`, or an
+    // inline agent's own `resident:` (the more specific runtime spec wins). The
+    // spawn-time `resident: true` flag is OR'd on by the caller.
+    let resident = entry.map(|entry| entry.resident).unwrap_or(false)
+        || req
+            .inline_agent
+            .and_then(|inline| inline.resident)
+            .unwrap_or(false);
+
     // An inline agent's own prompt + name override the catalog entry (its
     // ephemeral definition is authoritative for this run). Reasoning inherited
     // from a matched/fallback entry is model-derived and left intact.
@@ -134,7 +161,7 @@ pub fn resolve_subagent_agent(req: SubagentResolve<'_>) -> AgentSpec {
             agent.name = AgentName::new(&inline.name);
         }
     }
-    agent
+    ResolvedSubagent { agent, resident }
 }
 
 #[cfg(test)]
@@ -219,6 +246,57 @@ mod tests {
             );
         }
         CategoryRegistry::new().with_overrides(overrides)
+    }
+
+    #[test]
+    fn frontmatter_and_inline_resident_flags_resolve() {
+        let dir =
+            std::env::temp_dir().join(format!("hya-subagent-resident-{}", std::process::id()));
+        let agent_dir = dir.join(".opencode/agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        // A disk agent that opts into the resident lifecycle via frontmatter.
+        std::fs::write(
+            agent_dir.join("watcher.md"),
+            "---\nresident: true\n---\nWatch prompt.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("worker.md"),
+            "---\ndescription: transient by default\n---\nWork prompt.\n",
+        )
+        .unwrap();
+
+        let registry = CategoryRegistry::new();
+        let resolve = |ty: &str, inline: Option<&InlineAgent>| {
+            resolve_subagent(SubagentResolve {
+                base: &base(),
+                subagent_type: ty,
+                workdir: &dir,
+                include_global_agents: false,
+                categories: &registry,
+                spawn_model: None,
+                spawn_category: None,
+                is_servable: &all_servable,
+                inline_agent: inline,
+            })
+            .resident
+        };
+
+        assert!(resolve("watcher", None), "frontmatter resident: true");
+        assert!(!resolve("worker", None), "default is transient");
+
+        // An inline ephemeral agent can declare resident itself.
+        let inline = InlineAgent {
+            name: "adhoc".to_string(),
+            prompt: "INLINE".to_string(),
+            description: None,
+            category: None,
+            model: None,
+            resident: Some(true),
+        };
+        assert!(resolve("worker", Some(&inline)), "inline resident: true");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -352,6 +430,7 @@ mod tests {
             description: None,
             category: Some("quick".to_string()),
             model: None,
+            resident: None,
         };
         let resolved = resolve_subagent_agent(SubagentResolve {
             base: &base(),

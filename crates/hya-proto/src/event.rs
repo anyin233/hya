@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
 use crate::mail::{MailEndpoint, MailKind};
-use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
+use crate::message::{
+    FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
+};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -249,6 +251,21 @@ pub enum Event {
         handle: String,
         #[serde(default)]
         agent_type: AgentName,
+        /// Transient vs resident scheduling (ADR-0002). `#[serde(default)]` so logs
+        /// predating Phase 4 replay every member as transient.
+        #[serde(default)]
+        mode: SubagentMode,
+    },
+    /// A team member's live activity changed (idle ⇄ busy, or a terminal
+    /// done/failed), optionally updating its short current-task label. Appended to
+    /// the TEAM-ROOT log by the resident supervisor so the roster status column
+    /// and quiescence view replay for free.
+    AgentActivityChanged {
+        session: SessionId,
+        handle: String,
+        status: RosterStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_task: Option<String>,
     },
     /// A message from one handle to another handle or a `#channel`. Channel sends
     /// fan out to every current subscriber in the deterministic reducer, so no
@@ -338,6 +355,7 @@ impl Event {
             | Event::MemberStatusChanged { session, .. }
             | Event::MemberFinished { session, .. } => Some(*session),
             Event::AgentRegistered { session, .. }
+            | Event::AgentActivityChanged { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. } => Some(*session),
@@ -392,6 +410,13 @@ mod tests {
                 agent_session: agent,
                 handle: "reviewer-3".to_string(),
                 agent_type: AgentName::new("reviewer"),
+                mode: SubagentMode::Resident,
+            },
+            Event::AgentActivityChanged {
+                session: root,
+                handle: "reviewer-3".to_string(),
+                status: RosterStatus::Busy,
+                current_task: Some("reviewing".to_string()),
             },
             Event::MailSent {
                 session: root,

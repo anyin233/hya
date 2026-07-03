@@ -96,6 +96,12 @@ struct SubagentLimitsFile {
     max_concurrency: Option<usize>,
     #[serde(default)]
     per_run_budget: Option<u64>,
+    /// Per-team resident turn budget (ADR-0002); a runaway re-wake trips it.
+    #[serde(default)]
+    per_team_turn_budget: Option<u64>,
+    /// Per-team mail message budget (ADR-0002); a message loop trips it.
+    #[serde(default)]
+    per_team_message_budget: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -745,6 +751,12 @@ fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits 
         per_run_budget: file
             .and_then(|f| f.per_run_budget)
             .unwrap_or(defaults.per_run_budget),
+        per_team_turn_budget: file
+            .and_then(|f| f.per_team_turn_budget)
+            .unwrap_or(defaults.per_team_turn_budget),
+        per_team_message_budget: file
+            .and_then(|f| f.per_team_message_budget)
+            .unwrap_or(defaults.per_team_message_budget),
     };
     if let Ok(v) = std::env::var("HYA_SUBAGENT_MAX_DEPTH")
         && let Ok(parsed) = v.trim().parse()
@@ -760,6 +772,16 @@ fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits 
         && let Ok(parsed) = v.trim().parse()
     {
         limits.per_run_budget = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_SUBAGENT_TURN_BUDGET")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        limits.per_team_turn_budget = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_SUBAGENT_MESSAGE_BUDGET")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        limits.per_team_message_budget = parsed;
     }
     limits
 }
@@ -890,19 +912,32 @@ mod tests {
 
     #[test]
     fn subagent_limits_parse_from_file_and_env_wins() {
-        // File block sets all three; a partial block keeps defaults elsewhere.
+        // File block sets every field; a partial block keeps defaults elsewhere.
         let file = parse_config(
-            "default_model: x\nsubagents:\n  max_depth: 9\n  max_concurrency: 200\n  per_run_budget: 1000\n",
+            "default_model: x\nsubagents:\n  max_depth: 9\n  max_concurrency: 200\n  per_run_budget: 1000\n  per_team_turn_budget: 700\n  per_team_message_budget: 800\n",
         )
         .unwrap();
         let from_file = resolve_subagent_limits(file.subagents.as_ref());
         assert_eq!(from_file.max_depth, 9);
         assert_eq!(from_file.max_concurrency, 200);
         assert_eq!(from_file.per_run_budget, 1000);
+        assert_eq!(from_file.per_team_turn_budget, 700);
+        assert_eq!(from_file.per_team_message_budget, 800);
 
-        // Absent block → all defaults.
+        // Absent block → all defaults (per_run_budget raised to 1024 for swarms).
         let defaults = resolve_subagent_limits(None);
         assert_eq!(defaults, SubagentLimits::default());
+        assert_eq!(defaults.per_run_budget, 1024);
+
+        // The new per-team budgets honor their env overrides too.
+        unsafe { std::env::set_var("HYA_SUBAGENT_MESSAGE_BUDGET", "5") };
+        let msg = resolve_subagent_limits(file.subagents.as_ref());
+        unsafe { std::env::remove_var("HYA_SUBAGENT_MESSAGE_BUDGET") };
+        assert_eq!(
+            msg.per_team_message_budget, 5,
+            "env wins for message budget"
+        );
+        assert_eq!(msg.per_team_turn_budget, 700, "untouched field stays file");
 
         // Env override wins over the file value.
         unsafe { std::env::set_var("HYA_SUBAGENT_MAX_DEPTH", "3") };

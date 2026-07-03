@@ -23,6 +23,9 @@ pub(super) struct AgentChange {
     /// Logical model category named by the agent; resolved to a concrete
     /// `provider/model` at spawn time (lower precedence than an explicit `model`).
     pub(super) category: Option<String>,
+    /// Frontmatter `resident: true` opt-in to the resident (long-lived actor)
+    /// lifecycle (ADR-0002). `None` → inherit the default (transient).
+    pub(super) resident: Option<bool>,
     pub(super) variant: Option<String>,
     pub(super) temperature: Option<f64>,
     pub(super) top_p: Option<f64>,
@@ -55,6 +58,7 @@ struct InlineAgent {
     hidden: Option<bool>,
     model: Option<String>,
     category: Option<String>,
+    resident: Option<bool>,
     variant: Option<String>,
     temperature: Option<f64>,
     top_p: Option<f64>,
@@ -165,6 +169,7 @@ fn append_inline_agents(
             hidden: agent.hidden,
             model: agent.model,
             category: agent.category,
+            resident: agent.resident,
             variant: agent.variant,
             temperature: agent.temperature,
             top_p: agent.top_p,

@@ -35,6 +35,61 @@ pub enum MemberRunStatus {
     Cancelled,
 }
 
+/// How a spawned subagent is scheduled (ADR-0002).
+///
+/// - `Transient` (default): the historical blocking join model — spawn, run one
+///   turn, summarize, and die while the parent waits. Unchanged behavior.
+/// - `Resident`: a long-lived, addressable event-driven actor. Idle at zero token
+///   cost; woken by inbound mail to run exactly one turn, then back to idle.
+///
+/// `Default` is `Transient` and the field is `#[serde(default)]` everywhere it is
+/// carried, so older logs (which never wrote a mode) replay as transient.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentMode {
+    #[default]
+    Transient,
+    Resident,
+}
+
+impl SubagentMode {
+    /// Parse a model-/frontmatter-supplied mode. Truthy resident markers map to
+    /// [`SubagentMode::Resident`]; everything else (including empty) is transient,
+    /// so a missing mode is never an error and defaults safely.
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "resident" | "true" | "yes" | "1" => SubagentMode::Resident,
+            _ => SubagentMode::Transient,
+        }
+    }
+
+    /// Whether this is the resident (long-lived actor) mode.
+    #[must_use]
+    pub fn is_resident(self) -> bool {
+        matches!(self, SubagentMode::Resident)
+    }
+}
+
+/// Live activity of a team member in the roster (ADR-0002). Drives the TUI status
+/// column and the team-scoped quiescence detector.
+///
+/// `Default` is `Idle` and it is `#[serde(default)]` on [`RosterEntry`], so older
+/// logs replay with idle members.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RosterStatus {
+    /// Parked at zero token cost, awaiting mail (or never yet woken).
+    #[default]
+    Idle,
+    /// Currently running (or queued to run) a turn.
+    Busy,
+    /// Finished its work and will not run again unless re-woken.
+    Done,
+    /// Terminated by cancellation / budget kill.
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     #[serde(default, alias = "prompt")]

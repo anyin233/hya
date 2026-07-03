@@ -12,7 +12,9 @@ use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{MemberId, MessageId, PartId, SessionId, ToolCallId};
 use crate::mail::{MailEndpoint, MailKind};
-use crate::message::{FinishReason, MemberRunStatus, Role, TokenUsage, ToolPartState};
+use crate::message::{
+    FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
+};
 use crate::model::{AgentName, ModelRef, ToolName};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -137,14 +139,28 @@ pub struct MailMessage {
     pub body: String,
 }
 
-/// A live team member: its handle, own session, and declared agent type. Status
-/// and current-task enrichment arrive with the resident lifecycle (Phase 4).
+/// A live team member: its handle, own session, and declared agent type, plus the
+/// resident-lifecycle enrichment (ADR-0002): its scheduling mode, live activity,
+/// and the short current-task label the TUI shows.
+///
+/// `mode`/`status`/`current_task` are `#[serde(default)]` so logs written before
+/// Phase 4 replay as transient, idle, and task-less.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
     pub handle: String,
     pub session: SessionId,
     #[serde(default)]
     pub agent_type: AgentName,
+    /// Transient vs resident scheduling (from `AgentRegistered`).
+    #[serde(default)]
+    pub mode: SubagentMode,
+    /// Live activity, updated by `AgentActivityChanged` as the resident
+    /// supervisor drives the member.
+    #[serde(default)]
+    pub status: RosterStatus,
+    /// A short human-facing description of what the member is currently doing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_task: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -446,16 +462,40 @@ impl Projection {
                 agent_session,
                 handle,
                 agent_type,
+                mode,
                 ..
             } => {
-                self.team.roster.insert(
-                    handle.clone(),
-                    RosterEntry {
+                // Re-registering an existing handle preserves its live status /
+                // current_task (the reducer keys the roster by handle) while
+                // refreshing the binding + mode.
+                let entry = self
+                    .team
+                    .roster
+                    .entry(handle.clone())
+                    .or_insert_with(|| RosterEntry {
                         handle: handle.clone(),
                         session: *agent_session,
                         agent_type: agent_type.clone(),
-                    },
-                );
+                        mode: *mode,
+                        status: RosterStatus::default(),
+                        current_task: None,
+                    });
+                entry.session = *agent_session;
+                entry.agent_type = agent_type.clone();
+                entry.mode = *mode;
+            }
+            Event::AgentActivityChanged {
+                handle,
+                status,
+                current_task,
+                ..
+            } => {
+                if let Some(entry) = self.team.roster.get_mut(handle) {
+                    entry.status = *status;
+                    if current_task.is_some() {
+                        entry.current_task = current_task.clone();
+                    }
+                }
             }
             Event::ChannelJoined {
                 channel, member, ..
@@ -646,6 +686,7 @@ mod team_tests {
                     agent_session: alice,
                     handle: "reviewer-1".to_string(),
                     agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Resident,
                 },
             ),
             env(
@@ -655,6 +696,7 @@ mod team_tests {
                     agent_session: bob,
                     handle: "reviewer-2".to_string(),
                     agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Resident,
                 },
             ),
             env(
