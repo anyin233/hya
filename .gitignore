@@ -11,6 +11,7 @@
 /.codegraph
 /.omo
 /.opencode
+/.claude
 docs/superpowers/plans/2026-06-30-hya-runtime-tui-atomic-tests.md
 /.planning/.active_plan
 /.planning/skill-lookup-fix/findings.md
