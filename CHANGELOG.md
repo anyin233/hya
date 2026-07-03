@@ -1,6 +1,11 @@
-# 0.30.1
+# 0.31.0
 
-Surface live team state in the comms tools and CLI (follow-ups from the 0.30.0 multi-agent verification).
+Multi-agent swarm release: resident agents, event-sourced inter-agent mail, custom agents, and runtime model categories — verified end-to-end against real multi-provider models.
 
-- The `roster` tool now reports each teammate's live `status` (idle/busy/done/failed), scheduling `mode` (transient/resident), and `current_task` — folded from `AgentActivityChanged` in the projection — instead of a fixed `active` placeholder.
-- `hya-backend agent list --all` now also lists user-defined agents discovered on disk (`.claude/agents`, `.hya/agents`, `~/.config/hya/agents`, …) with their category, so a user can confirm a markdown agent is picked up from the CLI. The default `agent list` output is unchanged (Compat-parity).
+- **Model categories.** A `categories:` config block maps a logical name to an ordered list of `provider/model` candidates; the harness resolves a category to the first configured/healthy candidate at spawn time with failover. Agent files may declare a `category:`, and the main agent can override it per spawn. Precedence (highest wins): spawn model → spawn category → frontmatter model → frontmatter category → global default.
+- **Custom agents.** Discover agent files from `.claude/agents`, `~/.claude/agents`, and `.hya/agents` alongside the existing directories; a model-facing `list_agents` tool; and ephemeral `inline_agent` definitions on the `task` tool (persistence stays opt-in via the write tool). `hya-backend agent list --all` also lists discovered disk agents (default output stays Compat-parity).
+- **Event-sourced mailbox and channels.** `MailSent`/`ChannelJoined`/`ChannelLeft`/`AgentRegistered` events fold into a team projection of per-agent inboxes, channel logs, and a roster. New `send`/`roster`/`channels`/`join`/`leave` tools; deterministic team-scoped handles assigned at spawn. Replaces the previous in-memory team plane.
+- **Resident agents & swarm.** A long-lived, event-driven actor mode that idles at zero token cost and wakes on inbound mail to run exactly one turn. The main agent is a first-class actor woken by child mail to synthesize; a team reaches quiescence when all agents are idle with no mail in flight. Per-team turn/message budgets with a kill path, raised per-run spawn budget, all configurable via `SubagentLimitsFile` and `HYA_SUBAGENT_*` env vars. Transient subagents are unchanged.
+- **tmux-style multi-pane TUI.** An uncloseable main-agent window with the input bar bound exclusively to the main agent, user-launchable read-only observation tabs for other agents, and roster/channel overlays sourced from the team projection. The frontend `MessageStore` folds backend team events so roster/channels/inboxes render live.
+- **`roster` tool** reports each teammate's live `status` (idle/busy/done/failed), scheduling `mode`, and `current_task` from the projection.
+- Adds a `CONTEXT.md` glossary and ADRs (event-sourced mailbox; resident actor model; tmux TUI; category resolution) documenting the model.
