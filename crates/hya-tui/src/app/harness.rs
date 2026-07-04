@@ -157,6 +157,11 @@ impl AppHarness {
         self.runtime.submitted_prompts().iter().any(|p| p == text)
     }
 
+    /// The main prompt composer's current text.
+    pub(crate) fn prompt_text(&self) -> &str {
+        self.runtime.prompt_text()
+    }
+
     /// Apply a server-sent event through the real `handle_event` path.
     pub(crate) async fn push_sse(&mut self, kind: &str, properties: serde_json::Value) {
         self.dispatch(AppEvent::Sse(global_event(kind, properties)))
@@ -311,8 +316,8 @@ mod tests {
     }
 
     /// Seed a main session plus a subagent (`ses_child`) transcript and register it
-    /// in the roster, then open the roster overlay and select it — leaving a focused,
-    /// read-only aux pane on the child session.
+    /// in the Roster, then open the Subagent manager and select it — leaving a focused,
+    /// read-only Subagent observation view on the child Session.
     async fn open_child_aux(h: &mut AppHarness) {
         h.navigate("ses_main").await;
         h.push_sse("session.created", json!({ "info": { "id": "ses_child" } }))
@@ -332,7 +337,7 @@ mod tests {
             "handle": "reviewer-3", "agent_type": "reviewer", "mode": "resident"
         }))
         .await;
-        // Leader chord (ctrl+x o) opens the roster; Enter selects the first entry.
+        // Leader chord (ctrl+x o) opens the Subagent manager; Enter selects the first entry.
         h.press_ctrl('x').await;
         h.press(Key::Char('o')).await;
         h.press(Key::Enter).await;
@@ -363,8 +368,8 @@ mod tests {
         h.press_ctrl('x').await;
         h.press(Key::Char('o')).await;
         assert!(
-            h.buffer_contains("Team roster"),
-            "leader+o opens the roster overlay; frame:\n{}",
+            h.buffer_contains("Subagent manager"),
+            "leader+o opens the Subagent manager; frame:\n{}",
             h.buffer_text()
         );
         assert!(
@@ -398,25 +403,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typing_while_aux_focused_routes_to_main_session() {
-        // The hard input-routing invariant (decision 2): with an aux pane focused,
-        // the bottom input bar STILL edits/submits the main session, never the aux.
+    async fn typing_while_subagent_observation_view_is_focused_is_ignored() {
         let mut h = AppHarness::new(100, 30).await;
         h.backend_ready().await;
         open_child_aux(&mut h).await;
-        assert!(!h.focus_is_main(), "aux pane is focused for this test");
+        assert!(
+            !h.focus_is_main(),
+            "the Subagent observation view is focused for this test"
+        );
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "the focused aux pane observes the child Subagent session"
+        );
 
-        h.type_text("hello main").await;
+        let typed = "ignore this";
+        let prompt_before = h.prompt_text().to_owned();
+
+        h.type_text(typed).await;
+
+        assert_eq!(
+            h.prompt_text(),
+            prompt_before,
+            "ordinary text typed into a focused Subagent observation view must not reach the main Prompt composer"
+        );
+        assert!(
+            !h.buffer_contains(typed),
+            "ignored text must not render in the main prompt; frame:\n{}",
+            h.buffer_text()
+        );
+
         h.press(Key::Enter).await;
 
         assert_eq!(
             h.main_route_session().as_deref(),
             Some("ses_main"),
-            "the prompt targets the main session"
+            "ignoring aux-focused typing must not retarget the main session route"
+        );
+        assert_eq!(
+            h.prompt_text(),
+            prompt_before,
+            "pressing Enter from a focused Subagent observation view must leave the main Prompt composer unchanged"
         );
         assert!(
-            h.submitted_prompt("hello main"),
-            "the prompt was submitted through the main input bar"
+            !h.submitted_prompt(typed),
+            "ignored aux-focused text must not be recorded as a submitted prompt"
         );
         let aux_user_messages = h
             .with_store(|store| {
@@ -430,7 +461,7 @@ mod tests {
             .await;
         assert_eq!(
             aux_user_messages, 0,
-            "no user input ever reaches the observed (aux) session"
+            "the observed child Session stays read-only and receives no user messages"
         );
     }
 
