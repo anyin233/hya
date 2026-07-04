@@ -50,12 +50,12 @@ pub(crate) async fn cmd_serve(
 }
 
 /// Default `hya`: run the HTTP/SSE backend in-process on an ephemeral loopback port and hand the
-/// terminal to the `hya` frontend (the replacement for `hya-legacy-tui`). The legacy TUI stays reachable
-/// via `hya --mini`.
+/// terminal to the current `hya` frontend.
 pub(crate) async fn cmd_tui_hya(
     model_override: Option<String>,
     db: String,
     yolo: bool,
+    resume: Option<String>,
 ) -> anyhow::Result<()> {
     use std::io::IsTerminal as _;
     if !std::io::stdout().is_terminal() {
@@ -112,17 +112,16 @@ pub(crate) async fn cmd_tui_hya(
         let _ = axum::serve(listener, server_router(state)).await;
     });
 
-    let result = launch_hya(&base_url).await;
+    let result = launch_hya(&base_url, resume.as_deref()).await;
     server.abort();
     drop(plugin_host);
     result
 }
 
-async fn launch_hya(base_url: &str) -> anyhow::Result<()> {
+async fn launch_hya(base_url: &str, resume: Option<&str>) -> anyhow::Result<()> {
     let bin = resolve_hya_bin();
     let status = tokio::process::Command::new(&bin)
-        .arg("--server")
-        .arg(base_url)
+        .args(hya_launch_args(base_url, resume))
         .status()
         .await
         .with_context(|| {
@@ -132,6 +131,15 @@ async fn launch_hya(base_url: &str) -> anyhow::Result<()> {
         anyhow::bail!("hya frontend exited with {status}");
     }
     Ok(())
+}
+
+fn hya_launch_args(base_url: &str, resume: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--server".to_string(), base_url.to_string()];
+    if let Some(session) = resume {
+        args.push("--resume".to_string());
+        args.push(session.to_string());
+    }
+    args
 }
 
 /// Resolve the `hya` binary: `HYA_FRONTEND_BIN`, then the most recently built workspace
@@ -177,6 +185,24 @@ mod tests {
                 .join("../../target")
                 .join("debug")
                 .join("hya")
+        );
+    }
+
+    #[test]
+    fn hya_launch_args_forwards_resume_session() {
+        let args = hya_launch_args("http://127.0.0.1:1234", Some("hysec_abcdefghijklmnopqrst"));
+
+        assert_eq!(
+            args,
+            [
+                "--server",
+                "http://127.0.0.1:1234",
+                "--resume",
+                "hysec_abcdefghijklmnopqrst",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
         );
     }
 }

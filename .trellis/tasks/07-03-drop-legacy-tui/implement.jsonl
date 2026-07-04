@@ -1,0 +1,7 @@
+{"file":"CONTEXT.md","reason":"Domain glossary for Session, Resume, TUI, and Legacy TUI terms."}
+{"file":"docs/adr/0005-drop-legacy-tui-surface.md","reason":"Accepted decision to delete legacy TUI, remove --mini, and preserve Resume only."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"TUI render testing and frontend verification rules."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Current frontend crate boundaries for hya-tui and hya-tui-lib."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend CLI/session persistence and release workflow contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Resume spans backend CLI, frontend CLI, client/runtime, and store boundaries."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Deletion/update requires searching all references and avoiding duplicate validation paths."}

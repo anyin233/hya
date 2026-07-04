@@ -43,8 +43,8 @@ Use this guide when deciding where a change belongs:
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |
 | Typed HTTP integration | `hya-client` |
-| Pure terminal rendering | `hya-legacy-tui` |
-| User-facing CLI command, config loading, terminal event loop | `hya-backend` |
+| Terminal UI rendering and interaction | `hya`, `hya-tui`, `hya-tui-lib` |
+| User-facing backend CLI command, config loading, server launch | `hya-backend` |
 
 ## Testing Strategy
 

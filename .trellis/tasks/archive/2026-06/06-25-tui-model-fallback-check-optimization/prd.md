@@ -1,5 +1,8 @@
 # TUI model fallback and check optimization
 
+> **Superseded note:** ADR-0005 removed the legacy `--mini` surface after this archived PRD. Treat `yaca --mini` below as historical context only.
+
+
 ## Goal
 
 Make native `yaca --mini` model switching fail safely when a user types an

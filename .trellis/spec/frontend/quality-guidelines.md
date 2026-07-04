@@ -78,8 +78,8 @@ changes should assert both accepted cases and typed rejection cases.
 
 ### 1. Scope / Trigger
 
-- Trigger: any native `--mini` TUI change that selects models, displays the active model, resolves reasoning effort, or persists per-model reasoning preferences.
-- Applies to `crates/hya-app/src/config.rs`, `crates/hya-backend/src/tui.rs`, `crates/hya-backend/src/tui/controller.rs`, and `crates/hya-backend/src/tui/history.rs`.
+- Trigger: any current `hya` TUI change that selects models, displays the active model, resolves reasoning effort, or persists per-model reasoning preferences.
+- Applies to `crates/hya-app/src/config.rs`, `crates/hya/src/main.rs`, `crates/hya/src/transport.rs`, `crates/hya-tui/src/app/runtime.rs`, and the relevant `crates/hya-tui/src/state`, `screens`, or `widgets` module.
 
 ### 2. Signatures
 
@@ -87,7 +87,7 @@ changes should assert both accepted cases and typed rejection cases.
 - `ModelEntry { id: String, provider: String, reasoning_variants: Vec<String> }` is the TUI/catalog identity type.
 - `ModelEntry::model_ref() -> String` returns `<provider>/<id>` when `provider` is known, otherwise `<id>`.
 - `ModelEntry::matches_model_ref(model: &str) -> bool` accepts both bare ids and provider-prefixed refs.
-- `HistoryStore::record_model_reasoning(provider, model, effort)` persists last-used effort keyed by exact provider/model.
+- Persisted reasoning preferences, if added, must be keyed by exact provider/model; do not key duplicate model ids by bare id.
 
 ### 3. Contracts
 
@@ -122,7 +122,7 @@ changes should assert both accepted cases and typed rejection cases.
 - Unit: `/think` dialog tests for provider-specific variants including `minimal`, `xhigh`, and `max`.
 - Unit: `/think` dialog test that `reasoning_effort: "none"` selects and marks the `off` row current.
 - Runtime/helper: selected `ModelEntry` converts to provider-prefixed `ModelRef` before engine switch.
-- Manual QA: run native `./target/debug/hya --mini` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
+- Manual QA: run native `./target/debug/hya` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
 
 ### 7. Wrong vs Correct
 

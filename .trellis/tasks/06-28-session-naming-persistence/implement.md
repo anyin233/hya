@@ -1,5 +1,8 @@
 # Session naming and persistence implementation plan
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI and JSON history surface after this plan. Do not implement the `crates/hya-backend/src/tui*` hooks below; use current `hya`/`hya-tui` frontend seams plus server/session APIs instead.
+
+
 > Executor requirement: follow RED -> GREEN -> REFACTOR for every production change. Do not edit production Rust before the corresponding failing test has been run and observed failing for the expected reason.
 
 ## Overview

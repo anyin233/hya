@@ -14,7 +14,6 @@ mod cli_args;
 mod models_cmd;
 mod rpc;
 mod serve;
-mod tui;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
@@ -211,69 +210,6 @@ async fn cmd_goal(
     Ok(())
 }
 
-async fn cmd_tui(
-    model_override: Option<String>,
-    db: String,
-    resume: Option<String>,
-    yolo: bool,
-) -> anyhow::Result<()> {
-    use std::io::IsTerminal as _;
-    if !std::io::stdout().is_terminal() {
-        println!(
-            "hya {} — a multi-agent coding agent",
-            env!("CARGO_PKG_VERSION")
-        );
-        println!(
-            "The interactive TUI needs a terminal. Try `hya-backend exec \"<prompt>\"`, \
-             `hya-backend -p \"<goal>\"`, or `hya-backend --help`."
-        );
-        return Ok(());
-    }
-    first_run_config_bootstrap(true)?;
-    let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override);
-    // Interactive startup (stdout is a terminal, checked above): explain the
-    // missing config and the offline fallback. Goes to stderr only.
-    if let Some(notice) = &runtime.offline_notice {
-        notice.emit();
-    }
-    let (engine, asks, questions, _mcp_manager, _plugin_host) = build_session_engine(
-        store,
-        runtime.router,
-        &runtime.model,
-        runtime.mcp,
-        runtime.plugins,
-        true,
-    )
-    .await;
-    let agent = agent_with_model(&runtime.model);
-    let session = match resume {
-        Some(id) => id.parse().context("parse resume session id")?,
-        None => engine
-            .create(CreateSession {
-                parent: None,
-                agent: agent.name.clone(),
-                model: agent.model.clone(),
-                workdir: agent.workdir.to_string_lossy().into_owned(),
-            })
-            .await
-            .context("create session")?,
-    };
-    tui::run(
-        engine,
-        agent,
-        tui::RunOptions {
-            model: runtime.model,
-            models: runtime.models,
-            asks,
-            questions,
-            initial_session: session,
-            initial_yolo: yolo,
-        },
-    )
-    .await
-}
-
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
@@ -324,8 +260,7 @@ async fn main() -> anyhow::Result<()> {
         return cmd_goal(goal, cli.max_iterations, model, yolo).await;
     }
     match cli.command {
-        None if cli.mini => cmd_tui(model, db, resume, yolo).await,
-        None => serve::cmd_tui_hya(model, db, yolo).await,
+        None => serve::cmd_tui_hya(model, db, yolo, resume).await,
         Some(Command::Run {
             message,
             format,

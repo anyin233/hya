@@ -1,5 +1,8 @@
 # TUI Model Fallback and `tui-check` Optimization Implementation Plan
 
+> **Superseded note:** ADR-0005 removed the legacy `--mini` surface after this archived plan. Treat `yaca --mini` below as historical context only.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Safely reject unknown native TUI `/model <id>` commands in yaca and track the durable upstream `tui-check` frame-grouping fix.

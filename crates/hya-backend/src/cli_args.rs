@@ -30,9 +30,6 @@ pub(crate) struct Cli {
     pub(crate) log_level: Option<String>,
     #[arg(long, global = true)]
     pub(crate) pure: bool,
-    /// Start the minimal interactive interface.
-    #[arg(long)]
-    pub(crate) mini: bool,
     /// SQLite database path. Empty string uses an in-memory store. Applies to
     /// the interactive TUI, headless exec/run persistence, serve, sessions, and replay.
     #[arg(long, global = true, default_value = "")]
@@ -46,8 +43,11 @@ pub(crate) struct Cli {
 
 impl Cli {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if self.mini && self.command.is_some() {
-            return Err("--mini must be used without a subcommand");
+        if self.resume.is_some() && self.prompt.is_some() {
+            return Err("--resume must be used only for interactive startup");
+        }
+        if self.resume.is_some() && self.command.is_some() {
+            return Err("--resume must be used without a subcommand");
         }
         Ok(())
     }
@@ -175,31 +175,53 @@ mod tests {
     }
 
     #[test]
-    fn parses_compat_mini_alias() {
+    fn rejects_mini_as_unknown_argument() {
+        let err = match Cli::try_parse_from(["hya-backend", "--mini"]) {
+            Ok(_) => panic!("--mini should be rejected once legacy TUI is removed"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert!(err.to_string().contains("--mini"));
+    }
+
+    #[test]
+    fn help_omits_mini_alias() {
+        let help = Cli::command().render_help().to_string();
+
+        assert!(!help.contains("--mini"));
+    }
+
+    #[test]
+    fn rejects_resume_with_subcommand() {
         let cli = parse([
             "hya-backend",
-            "--mini",
-            "--print-logs",
-            "--log-level=DEBUG",
-            "--pure",
+            "--resume",
+            "hysec_abcdefghijklmnopqrst",
+            "exec",
+            "hello",
         ]);
-        let flags = (cli.mini, cli.print_logs, cli.log_level.as_deref(), cli.pure);
-        assert_eq!(flags, (true, true, Some("DEBUG"), true));
+
+        assert_eq!(
+            cli.validate(),
+            Err("--resume must be used without a subcommand")
+        );
     }
 
     #[test]
-    fn rejects_mini_with_subcommand() {
-        let cli = parse(["hya-backend", "--mini", "exec", "hello"]);
-        let Err(error) = cli.validate() else {
-            panic!("mini with subcommand should be rejected");
-        };
-        assert_eq!(error, "--mini must be used without a subcommand");
-    }
+    fn rejects_resume_with_prompt_goal_mode() {
+        let cli = parse([
+            "hya-backend",
+            "--resume",
+            "hysec_abcdefghijklmnopqrst",
+            "--prompt",
+            "finish the task",
+        ]);
 
-    #[test]
-    fn help_exposes_mini_alias() {
-        let help = Cli::command().render_help().to_string();
-        assert!(help.contains("--mini"));
+        assert_eq!(
+            cli.validate(),
+            Err("--resume must be used only for interactive startup")
+        );
     }
 
     #[test]

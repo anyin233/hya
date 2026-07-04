@@ -19,7 +19,6 @@ hya-tool = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
-hya-legacy-tui = { workspace = true }
 hya-mcp = { workspace = true }
 hya-plugin = { workspace = true }
 hya-app = { workspace = true }

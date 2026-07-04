@@ -7,7 +7,7 @@ The backend CLI/API binary is `hya-backend`, defined in
 
 ```text
 hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
-     [--yolo] [--db <PATH>] [--resume <SESSION>] [--mini] [COMMAND]
+     [--yolo] [--db <PATH>] [--resume <SESSION>] [COMMAND]
 ```
 
 | Option | Meaning |
@@ -18,10 +18,9 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--yolo` | Auto-approve every tool action. This applies to TUI, headless, and server composition. |
 | `--db <PATH>` | SQLite database path. Empty string uses an in-memory store. Used by the TUI, `serve`, headless `exec`/`run`, `sessions`, and `tail-session`; goal mode and `rpc` stay in-memory. |
 | `--resume <SESSION>` | Resume a session in the interactive TUI. Accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID. |
-| `--mini` | Compat-compatible alias for the default TUI. Must be used without a subcommand. |
 | `--print-logs`, `--log-level`, `--pure` | Accepted Compat-compatible global flags. |
 
-When `--prompt` is present, it takes precedence over subcommand dispatch.
+`--resume` is interactive-only and cannot be combined with `--prompt` or a subcommand. When `--prompt` is present, it takes precedence over subcommand dispatch.
 
 When `--db <PATH>` is supplied, hya persists the canonical event log, not just
 the rendered transcript. The SQLite file can contain prompts, tool arguments,

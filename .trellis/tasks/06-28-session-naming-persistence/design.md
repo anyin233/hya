@@ -1,5 +1,8 @@
 # Session naming and persistence design
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI and JSON history surface after this plan. Treat `crates/hya-backend/src/tui*` hooks and legacy `HistoryStore` references below as historical context; current work should use `crates/hya`/`crates/hya-tui` frontend seams plus server/session APIs.
+
+
 ## Goal
 
 Make hya sessions durable, recoverable, and user-readable while preserving the event-sourced architecture. New hya sessions use `hysec_` IDs, the SQLite event log remains the source of truth, and session lists/switchers show names/titles instead of raw IDs.

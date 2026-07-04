@@ -13,6 +13,12 @@ A persisted, event-sourced conversation with its own transcript. The unit of per
 and TUI navigation. Every agent runs as a session.
 _Avoid_: conversation, thread, chat
 
+**Resume**:
+Opening an existing Session in the connected runtime as the active interactive session. Resume
+does not create a new Session, and it does not imply rerunning or continuing a model Turn. If the
+Session is unavailable, no Session has been resumed.
+_Avoid_: restart, replay, continue
+
 **Agent**:
 A role/config — name, system prompt, model or category, tools, permissions — sourced from a
 built-in ("native") agent or a user-authored markdown file. Distinct from the Session that runs it.
@@ -83,6 +89,19 @@ _Avoid_: room, topic, group chat
 The team-scoped directory of live agents (handle, type, status, current task), read from the
 projection — never from disk.
 _Avoid_: directory, registry, member list
+
+
+### Surfaces
+
+**TUI**:
+The terminal user interface surface for operating sessions. Distinct from server APIs and client
+runtimes.
+_Avoid_: terminal, UI (too broad)
+
+**Legacy TUI**:
+An older terminal user interface surface. Use this term only when contrasting that older surface
+with another TUI surface; it does not mean every terminal renderer or client.
+_Avoid_: TUI (too broad), all terminal UI
 
 ### Models
 

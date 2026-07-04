@@ -1,5 +1,8 @@
 # Progress: model-specific default reasoning effort
 
+> **Superseded note:** ADR-0005 removed the legacy `--mini` surface after this archived QA log. Treat `--mini` and legacy history-directory notes below as historical context only.
+
+
 ## 2026-06-24 planning
 
 - Created Trellis task `.trellis/tasks/06-24-model-default-reasoning-effort`.

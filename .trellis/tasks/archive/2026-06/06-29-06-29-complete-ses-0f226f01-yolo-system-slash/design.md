@@ -1,5 +1,8 @@
 # Complete ses_0f226f01 yolo and system slash cleanup — Design
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI modules referenced below. Treat `crates/hya-backend/src/tui*` paths in this archived design as historical context only.
+
+
 ## Architecture
 
 The change is a cleanup of command ownership, not a new command system.

@@ -47,10 +47,10 @@ archived `compat-ai/compat` repository as the Compat baseline.
   reviewed `packages/compat/src/agent/agent.ts` source confirmed `build`,
   `plan`, `general`, `explore`, plus hidden system agents. Treat `scout` as a
   docs/source drift note unless the upstream source changes.
-- **hya TUI transition:** existing docs describe the legacy
-  `hya-backend` + `hya-legacy-tui` split, while the repository also contains the
-  newer `crates/hya` and `crates/hya-tui` path. Compare hya's UI as an evolving
-  product surface, not a single frozen renderer.
+- **hya TUI transition:** hya's current UI surface is `crates/hya` plus
+  `crates/hya-tui`; the prior `hya-backend` + `hya-legacy-tui` renderer split
+  has been removed. Compare hya's UI as the current frontend, not the deleted
+  legacy renderer.
 
 ## 1. Tool Calling, MCP, and Skills
 
@@ -274,28 +274,23 @@ Evidence: Compat [agents](https://compat.ai/docs/agents),
 
 ### hya
 
-hya is terminal-first, but its UI surface is split across a documented legacy
-stack and a newer frontend. The legacy docs describe `hya-backend` owning
-terminal I/O with pure ratatui rendering in `hya-legacy-tui`; current code also
-has the `hya` binary call `hya_tui::app::run_tui`, create a pending SDK client,
-connect the backend off the render path, fetch agents/MCP status, and queue
-prompts while the backend starts. Current `hya-tui` runtime includes command
-palette entries for session/model/agent/theme/status/editor/export/copy flows,
-session/home routing, permission and question modals, model/provider status,
-MCP/LSP/formatter/plugin status display, subagent status, and toasts.
+hya is terminal-first. The current frontend has the `hya` binary call
+`hya_tui::app::run_tui`, create a pending SDK client, connect the backend off
+the render path, fetch agents/MCP status, and queue prompts while the backend
+starts. Current `hya-tui` runtime includes command palette entries for
+session/model/agent/theme/status/editor/export/copy flows, session/home routing,
+permission and question modals, model/provider status, MCP/LSP/formatter/plugin
+status display, subagent status, toasts, slash commands, model switching,
+session picking, transcript rendering, `/tools`, `/mcp`, `/export`, and
+`/compact`.
 
-Legacy TUI docs and parity notes also cover slash commands, model switching,
-session picking, permission/question overlays, transcript rendering, `/tools`,
-`/mcp`, `/export`, and `/compact`. Compat parity tracking shows hya implements
-some Compat-compatible TUI HTTP control routes, but still lacks full Compat
-TUI parity such as command palette depth, full theme picker/library, prompt
-stash, rich markdown/diff/code rendering, usage/cost display wiring, and full
-leader-key UX.
+Compat parity tracking shows hya implements some Compat-compatible TUI HTTP
+control routes, but still lacks full Compat TUI parity such as command palette
+depth, full theme picker/library, prompt stash, rich markdown/diff/code
+rendering, usage/cost display wiring, and full leader-key UX.
 
 Evidence: [TUI](architecture/tui.md),
 [Compat Parity Matrix](compat-parity.md),
-[`crates/hya-backend/src/tui.rs`](../crates/hya-backend/src/tui.rs),
-[`crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs),
 [`crates/hya/src/main.rs`](../crates/hya/src/main.rs), and
 [`crates/hya-tui/src/app/runtime.rs`](../crates/hya-tui/src/app/runtime.rs).
 

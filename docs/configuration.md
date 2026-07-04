@@ -209,8 +209,6 @@ hya honors the standard `HOME` and `XDG_CONFIG_HOME` for config/auth paths.
 | `HYA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/config.rs`, `crates/hya-app/src/runtime.rs` |
 | `HYA_COMPACTION_THRESHOLD` | Token count that triggers context compaction. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().token_threshold` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
 | `HYA_COMPACTION_KEEP_RECENT` | Number of most-recent messages kept verbatim when compacting. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().keep_recent` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
-| `HYA_HISTORY_DIR` | Directory for the TUI's JSONL session history. | `$HOME/.hya/history`, else a temp dir. | `crates/hya-backend/src/tui/history.rs` |
-| `HYA_EXPORT_DIR` | Directory where `/export` writes Markdown transcripts. | `$HOME/.hya/exports`, else a temp dir. | `crates/hya-backend/src/tui.rs` (`export_root`) |
 | `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (used for `kind: compat` plugins). | Bundled adapter in `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH`. | `crates/hya-backend/src/serve.rs` (`resolve_hya_bin`) |
 

@@ -69,4 +69,3 @@ If you want to understand the codebase:
 - Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
 - TUI frontend: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
 - TUI renderer (new): [`../crates/hya-tui/src/lib.rs`](../crates/hya-tui/src/lib.rs)
-- TUI renderer (legacy): [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs)

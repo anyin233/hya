@@ -1,5 +1,8 @@
 # Progress
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI and JSON history surface after this progress log. Treat `crates/hya-backend/src/tui*` and legacy history notes below as historical context only.
+
+
 ## 2026-06-28
 
 - Created Trellis task `.trellis/tasks/06-28-session-naming-persistence`.

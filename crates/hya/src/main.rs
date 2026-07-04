@@ -122,6 +122,20 @@ fn bootstrap_config_for_frontend(args: &Args) -> Result<(), Box<dyn Error>> {
     }
     Ok(())
 }
+async fn send_startup_resume(
+    client: &dyn hya_sdk::Client,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+    session_id: &str,
+) {
+    match client.session_get(session_id).await {
+        Ok(_) => {
+            let _ = tx.send(AppEvent::LoadSession(session_id.to_owned()));
+        }
+        Err(error) => {
+            let _ = tx.send(AppEvent::Toast(format!("resume failed: {error}")));
+        }
+    }
+}
 
 /// Connect to the backend off the render path: install the real client into `slot`, publish the
 /// agent list and MCP status, then signal `BackendReady`. Returns the transport guard so the
@@ -178,6 +192,9 @@ fn spawn_connect(
         }
         log("mcp status fetched");
         let _ = tx.send(AppEvent::BackendReady);
+        if let Some(session_id) = args.resume.as_deref() {
+            send_startup_resume(client.as_ref(), &tx, session_id).await;
+        }
 
         spawn_background_fetches(&client, &tx);
         Some(transport)
@@ -257,6 +274,106 @@ mod tests {
         assert!(
             config.contains("default_model: offline"),
             "created config should contain the offline starter model:\n{config}"
+        );
+    }
+
+    struct ResumeOnlyTransport {
+        requested_paths: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl hya_sdk::Transport for ResumeOnlyTransport {
+        fn base_url(&self) -> &str {
+            "http://hya.test"
+        }
+
+        fn directory(&self) -> &str {
+            "/tmp/hya-test"
+        }
+
+        async fn request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&serde_json::Value>,
+        ) -> std::result::Result<serde_json::Value, hya_sdk::SdkError> {
+            assert_eq!(method, "GET", "startup resume should validate via GET");
+            assert!(
+                body.is_none(),
+                "startup resume validation should not send a body"
+            );
+            self.requested_paths
+                .lock()
+                .expect("recorded requests")
+                .push(path.to_owned());
+
+            match path {
+                "/session/hysec_abcdefghijklmnopqrst" => Ok(serde_json::json!({
+                    "id": "hysec_abcdefghijklmnopqrst"
+                })),
+                _ => Err(hya_sdk::SdkError::Http(format!(
+                    "unexpected startup resume validation request: {method} {path}"
+                ))),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_startup_resume_sends_load_session_after_validation() {
+        let requested_paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client: std::sync::Arc<dyn hya_sdk::Client> =
+            std::sync::Arc::new(hya_sdk::ApiClient::with_transport(ResumeOnlyTransport {
+                requested_paths: std::sync::Arc::clone(&requested_paths),
+            }));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        send_startup_resume(client.as_ref(), &tx, "hysec_abcdefghijklmnopqrst").await;
+
+        assert_eq!(
+            requested_paths
+                .lock()
+                .expect("recorded requests")
+                .as_slice(),
+            ["/session/hysec_abcdefghijklmnopqrst"],
+            "startup resume should validate the requested session before navigating"
+        );
+
+        match rx.recv().await {
+            Some(AppEvent::LoadSession(session_id)) => {
+                assert_eq!(session_id, "hysec_abcdefghijklmnopqrst");
+            }
+            other => panic!("expected LoadSession event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_startup_resume_reports_failure_without_loading_session() {
+        let requested_paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client: std::sync::Arc<dyn hya_sdk::Client> =
+            std::sync::Arc::new(hya_sdk::ApiClient::with_transport(ResumeOnlyTransport {
+                requested_paths: std::sync::Arc::clone(&requested_paths),
+            }));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        send_startup_resume(client.as_ref(), &tx, "hysec_missingaaaaaaaaaaaa").await;
+
+        assert_eq!(
+            requested_paths
+                .lock()
+                .expect("recorded requests")
+                .as_slice(),
+            ["/session/hysec_missingaaaaaaaaaaaa"],
+            "startup resume should validate the requested session before reporting failure"
+        );
+        match rx.recv().await {
+            Some(AppEvent::Toast(message)) => {
+                assert!(message.contains("resume failed"), "toast: {message}");
+            }
+            other => panic!("expected resume failure toast, got {other:?}"),
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "invalid resume must not emit LoadSession"
         );
     }
 }

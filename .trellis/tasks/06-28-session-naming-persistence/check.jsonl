@@ -5,7 +5,7 @@
 {"file":".trellis/tasks/06-28-session-naming-persistence/findings.md","reason":"Task-specific findings to validate against implementation."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/design.md","reason":"Check implementation against accepted architecture and cleanup ownership."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/implement.md","reason":"Check execution followed ordered RED/GREEN waves and exact gates."}
-{"file":"crates/hya-backend/src/tui.rs","reason":"Review that exit/new/resume cleanup uses one shared empty-session predicate and idempotent deletion."}
+{"file":"crates/hya-tui/src/app/runtime.rs","reason":"ADR-0005 supersedes deleted backend TUI cleanup hooks; review current frontend session switching/resume seams if revisiting empty-session cleanup."}
 {"file":"crates/hya-core/src/engine.rs","reason":"Review deletion and projection access remain event-store authoritative."}
 {"file":"crates/hya-core/src/engine/session_cleanup.rs","reason":"Review shared cleanup helper ownership if created during implementation."}
 {"file":"crates/hya-server/tests/compat_session_v2_api.rs","reason":"Verify cleanup proves direct lookup/not-found, not list-only masking."}
