@@ -1,0 +1,5 @@
+{"file":"CONTEXT.md","reason":"Check terminology stays aligned after docs and CLI changes."}
+{"file":"docs/adr/0005-drop-legacy-tui-surface.md","reason":"Check implementation matches recorded removal decision."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check TUI render coverage and required frontend gates."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check CLI persistence, session ID, and release/changelog contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check resume validation and navigation across layers."}

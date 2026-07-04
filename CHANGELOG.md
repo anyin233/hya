@@ -1,11 +1,8 @@
-# 0.31.0
+# 0.32.0
 
-Multi-agent swarm release: resident agents, event-sourced inter-agent mail, custom agents, and runtime model categories — verified end-to-end against real multi-provider models.
+Legacy TUI removal release: deletes the old backend-owned TUI crate and makes the current `hya`/`hya-tui` frontend the only interactive surface.
 
-- **Model categories.** A `categories:` config block maps a logical name to an ordered list of `provider/model` candidates; the harness resolves a category to the first configured/healthy candidate at spawn time with failover. Agent files may declare a `category:`, and the main agent can override it per spawn. Precedence (highest wins): spawn model → spawn category → frontmatter model → frontmatter category → global default.
-- **Custom agents.** Discover agent files from `.claude/agents`, `~/.claude/agents`, and `.hya/agents` alongside the existing directories; a model-facing `list_agents` tool; and ephemeral `inline_agent` definitions on the `task` tool (persistence stays opt-in via the write tool). `hya-backend agent list --all` also lists discovered disk agents (default output stays Compat-parity).
-- **Event-sourced mailbox and channels.** `MailSent`/`ChannelJoined`/`ChannelLeft`/`AgentRegistered` events fold into a team projection of per-agent inboxes, channel logs, and a roster. New `send`/`roster`/`channels`/`join`/`leave` tools; deterministic team-scoped handles assigned at spawn. Replaces the previous in-memory team plane.
-- **Resident agents & swarm.** A long-lived, event-driven actor mode that idles at zero token cost and wakes on inbound mail to run exactly one turn. The main agent is a first-class actor woken by child mail to synthesize; a team reaches quiescence when all agents are idle with no mail in flight. Per-team turn/message budgets with a kill path, raised per-run spawn budget, all configurable via `SubagentLimitsFile` and `HYA_SUBAGENT_*` env vars. Transient subagents are unchanged.
-- **tmux-style multi-pane TUI.** An uncloseable main-agent window with the input bar bound exclusively to the main agent, user-launchable read-only observation tabs for other agents, and roster/channel overlays sourced from the team projection. The frontend `MessageStore` folds backend team events so roster/channels/inboxes render live.
-- **`roster` tool** reports each teammate's live `status` (idle/busy/done/failed), scheduling `mode`, and `current_task` from the projection.
-- Adds a `CONTEXT.md` glossary and ADRs (event-sourced mailbox; resident actor model; tmux TUI; category resolution) documenting the model.
+- **Removed legacy TUI.** Deleted `crates/hya-legacy-tui` and the backend legacy controller/render path. Bare `hya-backend` still starts the HTTP/SSE backend and launches the current `hya` frontend.
+- **Removed `--mini`.** `hya-backend --mini` is now an unknown argument instead of a compatibility alias.
+- **Preserved interactive Resume.** `hya --resume <session>` validates the session through the connected runtime before navigating; `hya-backend --resume <session>` forwards the id to the launched current frontend for interactive startup only.
+- **Updated docs and release bookkeeping.** Current TUI docs, compatibility notes, archived plans, Trellis references, and changelog history now describe the legacy surface as removed or superseded.

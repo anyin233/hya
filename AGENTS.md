@@ -51,13 +51,13 @@ projection for the TUI, HTTP API, and client surfaces.
 The main runtime path is:
 
 ```text
-hya-backend
-  -> config/auth/plugin/MCP setup
+hya / hya-backend / hya-server
+  -> hya-app config/auth/plugin/MCP setup
   -> hya-core::SessionEngine
   -> hya-provider streaming model route
   -> hya-tool builtin, MCP, or plugin tools
   -> hya-store SQLite event log
-  -> hya-legacy-tui or hya-server views over the same projection
+  -> hya-tui, hya-server, or hya-client views over the same projection
 ```
 
 The engine owns stop decisions. Goal mode and loop mode use separate evaluators
@@ -67,7 +67,10 @@ or verifiers; workers do not decide that their own objective is done.
 
 | Component | Feature |
 | --- | --- |
-| `crates/hya-backend` | Umbrella `hya` binary. Launches the interactive TUI by default; also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, slash commands, prompt templates, plugin loading, MCP setup, permission policy, and AGENTS/skills discovery. |
+| `crates/hya` | User-facing frontend binary. Runs the current interactive TUI, connects to an in-process/native/HTTP/Compat backend, queues input while connecting, and validates startup resume before navigation. |
+| `crates/hya-backend` | Backend umbrella binary. Bare startup still launches the interactive TUI by spawning the current `hya` frontend, but no longer owns a legacy TUI renderer/controller. Also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, prompt templates, plugin loading, MCP setup, permission policy, and AGENTS/skills discovery. |
+| `crates/hya-tui` | Current ratatui app runtime. Owns terminal setup, crossterm event input, app state, keymaps, panes, screens, widgets, theme, prompt/transcript rendering, status, overlays, permission prompts, and question prompts. |
+| `crates/hya-tui-lib` | Pure reusable terminal UI primitives: geometry, color, flex layout, overlay/layer validation, component descriptors, and ratatui adapters. |
 | `crates/hya-core` | Agent runtime. Owns `SessionEngine`, turn admission, streaming rounds, shell turns, event bus, prompt construction, compaction, goal/loop drivers, hook dispatch, subagents, team state, worktree/tmux helpers, and session forking. |
 | `crates/hya-proto` | Shared wire/domain types. Defines newtyped IDs, tagged `Event`/`Envelope`, messages, parts, roles, model/tool schema types, API DTOs, and the deterministic projection reducer. Keep this dependency-light so UI/client crates can reuse it cheaply. |
 | `crates/hya-provider` | Model provider abstraction. Normalizes OpenAI-compatible, Anthropic, Google, dev, and fake providers into one streamed `Event` model; handles protocol encoding/decoding, provider routing, capability metadata, reasoning effort, and preflight checks for tool-capable routes. |
@@ -75,7 +78,6 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-store` | Persistence. Stores events and token ledger entries in SQLite, runs migrations, lists/deletes sessions, replays event logs, and folds projections on read through `hya-proto::Projection`. |
 | `crates/hya-server` | Axum HTTP and SSE surface over `hya-core`. Serves native session/prompt/command/shell/events/stream APIs plus Compat-compatible session, event, file, project, VCS, MCP, PTY, TUI, permission, and question endpoints. |
 | `crates/hya-client` | Small typed `reqwest` client for the server API: create sessions, send prompts, and read events. |
-| `crates/hya-legacy-tui` | Pure ratatui rendering layer. Holds projected app state, input state, theme, transcript rendering, status line, overlays, pickers, permission prompts, and question prompts. Terminal I/O and the event loop stay in `hya-backend`. |
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
 | `crates/hya-plugin-compat` | Compat plugin compatibility. Rust crate pins the supported Compat package versions; the Bun adapter discovers Compat plugin config, loads plugins, translates hook/tool/event methods, and exposes the adapter runtime over JSON-RPC. |
@@ -93,7 +95,7 @@ or verifiers; workers do not decide that their own objective is done.
 - Preserve the event-sourced architecture: append events, replay with the shared
   projection, and avoid parallel read-model logic that can drift from replay.
 - Keep `hya-proto` free of heavy runtime dependencies.
-- Keep `hya-legacy-tui` as pure rendering/state; terminal I/O belongs in `hya-backend`.
+- Keep `hya-tui-lib` pure and app-neutral. `hya-tui` owns terminal runtime/rendering; do not reintroduce a backend-owned legacy TUI controller or renderer.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.

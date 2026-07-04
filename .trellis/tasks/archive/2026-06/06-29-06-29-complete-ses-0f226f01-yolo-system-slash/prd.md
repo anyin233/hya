@@ -1,5 +1,8 @@
 # Complete ses_0f226f01 yolo and system slash cleanup
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI modules referenced below. Treat `crates/hya-backend/src/tui*` paths in this archived PRD as historical context only.
+
+
 ## Source
 
 - Source session: `ses_0f226f01affemrXG9TnsGx2NBb`.

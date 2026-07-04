@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.31.0"
+version = "0.32.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,6 @@ hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-server = { path = "crates/hya-server" }
 hya-client = { path = "crates/hya-client" }
-hya-legacy-tui = { path = "crates/hya-legacy-tui" }
 hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }
 hya-app = { path = "crates/hya-app" }

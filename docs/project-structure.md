@@ -43,8 +43,10 @@ hya-core::SessionEngine
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, hooks, goal/loop drivers, teams, worktrees. |
 | `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API and Compat-compatible routes over `SessionEngine`. |
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
-| `hya-legacy-tui` | [`../crates/hya-legacy-tui/src/lib.rs`](../crates/hya-legacy-tui/src/lib.rs) | Pure ratatui view state, layout, theme, view-model conversion, and widgets. |
-| `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Umbrella binary: TUI, `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup. |
+| `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | User-facing frontend binary. Runs the current TUI, connects to an in-process/native/HTTP/Compat backend, and supports interactive resume. |
+| `hya-tui` | [`../crates/hya-tui/src/lib.rs`](../crates/hya-tui/src/lib.rs) | Current ratatui app runtime: terminal setup, crossterm input, state, keymaps, panes, screens, widgets, theme, and rendering. |
+| `hya-tui-lib` | [`../crates/hya-tui-lib/src/lib.rs`](../crates/hya-tui-lib/src/lib.rs) | Pure reusable terminal UI primitives with no hya runtime or app-state dependency. |
+| `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC, and interactive startup that launches the current `hya` frontend. |
 
 ## `hya-proto`
 
@@ -196,43 +198,48 @@ Compat-shaped HTTP bodies; exact parity is tracked in
 [`compat-parity.md`](compat-parity.md).
 
 `hya-client` is a small typed wrapper around create session, prompt, and events.
-The current interactive TUI runs in-process through `hya-backend`; it does not need
-the HTTP client to render local conversations.
 
-## `hya-legacy-tui` and `hya-backend`
+## `hya`, `hya-tui`, and `hya-tui-lib`
 
-`hya-legacy-tui` is pure rendering. It owns:
+The current interactive TUI is the `hya` frontend plus `hya-tui` runtime.
+`hya-backend` still defaults to interactive startup, but it does that by starting
+the backend surface and launching `hya`; it no longer owns a legacy renderer or
+controller.
 
-- `AppState`
-- `PermissionPrompt`
-- projection application
-- scroll state
-- app layout calculation
-- dark theme tokens
-- projection-to-timeline view-model conversion
-- ratatui widgets
+`crates/hya` owns frontend process wiring:
 
-`hya-backend/src/tui.rs` owns terminal side effects:
+- CLI flags such as `--server`, `--http`, `--compat`, `--backend-bin`, and `--resume`
+- first-run config bootstrap before entering the TUI
+- pending-client startup so the UI renders before the backend is ready
+- backend transport selection and shutdown
+- startup-resume validation before navigation
 
-- raw mode and alternate-screen setup/teardown
-- keyboard handling
-- permission prompt key handling
-- question prompt key handling
-- slash command, custom command, and `@` reference routing
-- spawning an async turn
-- subscribing to the engine event bus
+`crates/hya-tui` owns terminal app behavior:
+
+- raw mode, alternate screen, crossterm input, paste, mouse, and resize events
+- `RunTuiInput`, `run_tui`, `Runtime`, and `AppEvent`
+- `AppState`, routes, sync/project state, and message-store rendering
+- keymap dispatch, leader-key handling, prompt editing, and dialogs
+- session/model/agent/status/theme/export/copy flows
+- main-pane input plus read-only auxiliary session panes
+- ratatui screens, widgets, themes, prompt rendering, markdown/diff/transcript renderers
+
+`crates/hya-tui-lib` owns only reusable app-neutral primitives. Code that knows
+about hya sessions, providers, prompts, keymaps, async tasks, terminal events, or
+backend clients belongs in `hya-tui`, not the primitive library.
 
 Important TUI modules:
 
 | Module | Purpose |
 | --- | --- |
-| [`lib.rs`](../crates/hya-legacy-tui/src/lib.rs) | Public `AppState`, prompt/view structs, and top-level `draw`. |
-| [`layout.rs`](../crates/hya-legacy-tui/src/layout.rs) | Responsive terminal regions: status, timeline, optional sidebar, prompt, footer. |
-| [`theme.rs`](../crates/hya-legacy-tui/src/theme.rs) | Named color/style tokens for the dark terminal theme. |
-| [`view_model.rs`](../crates/hya-legacy-tui/src/view_model.rs) | Converts projections into timeline items, including text, reasoning, and tools. |
-| [`widgets.rs`](../crates/hya-legacy-tui/src/widgets.rs) | Renders status, timeline, sidebar, prompt, footer, permission panel, and cursor. |
-
-This split keeps rendering testable in [`../crates/hya-legacy-tui/tests`](../crates/hya-legacy-tui/tests).
+| [`crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Frontend entrypoint, pending client, backend connect task, startup resume. |
+| [`crates/hya/src/transport.rs`](../crates/hya/src/transport.rs) | Native, HTTP/SSE, and Compat backend connection modes. |
+| [`crates/hya-tui/src/tui.rs`](../crates/hya-tui/src/tui.rs) | Terminal setup/restore and crossterm event mapping. |
+| [`crates/hya-tui/src/app/runtime.rs`](../crates/hya-tui/src/app/runtime.rs) | Main async runtime and UI event handling. |
+| [`crates/hya-tui/src/app/panes.rs`](../crates/hya-tui/src/app/panes.rs) | Main input pane plus read-only auxiliary pane state. |
+| [`crates/hya-tui/src/state`](../crates/hya-tui/src/state) | App state, route, sync, project, and message-store ownership. |
+| [`crates/hya-tui/src/render`](../crates/hya-tui/src/render), [`screens`](../crates/hya-tui/src/screens), [`widgets`](../crates/hya-tui/src/widgets) | App rendering, screens, dialogs, transcript, status, prompt, and overlays. |
+| [`crates/hya-tui-lib/src/lib.rs`](../crates/hya-tui-lib/src/lib.rs) | Pure layout/component/layer/render primitives. |
 
 ## Tests
 
@@ -247,7 +254,7 @@ Tests are crate-local and map closely to runtime boundaries:
 | [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and Compat-compatible route behavior. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
 | [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
-| [`../crates/hya-legacy-tui/tests`](../crates/hya-legacy-tui/tests) | Rendering snapshots, permission panel, scroll behavior, tool lines. |
+| [`../crates/hya-tui/tests`](../crates/hya-tui/tests) | Runtime/render/input harness behavior, route state, W3C/keymap, and TUI scenarios. |
 
 ## Dependency Direction
 
@@ -255,15 +262,18 @@ The intended dependency direction is:
 
 ```text
 hya-proto
-  ^  ^  ^  ^  ^  ^
-  |  |  |  |  |  |
-provider tool store server/client/tui plugin
-        ^      ^       ^
-        |      |       |
-       mcp  hya-core  plugin-compat adapter
-                ^
-                |
-             hya-backend
+  ^  ^  ^  ^  ^
+  |  |  |  |  |
+provider tool store server/sdk
+        ^      ^
+        |      |
+       mcp  hya-core
+              ^
+              |
+            hya-app -- hya-native
+
+hya -> hya-tui -> hya-tui-lib
+hya-backend -> hya-app/hya-server and may launch hya for interactive startup
 ```
 
 The binary crate composes everything. Lower crates should avoid depending on the

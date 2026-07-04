@@ -8,11 +8,11 @@
 
 The frontend layer is split between the app-specific Rust terminal UI in
 `crates/hya-tui` and the reusable primitive library in `crates/hya-tui-lib`.
-`hya-tui` renders Hya screens from app state and owns prompt/keymap/theme/screen
-behavior. `hya-tui-lib` owns app-neutral geometry, color, flex layout, overlay,
-layer validation, declarative component descriptors, and ratatui adapter helpers.
-Terminal setup, crossterm events, async tasks, cancellation, and model streaming
-stay outside these presentation crates.
+`hya-tui` owns the current TUI runtime: terminal setup/restore, crossterm
+events, async app loop, prompt/keymap/theme/screen behavior, panes, widgets,
+and Hya-specific rendering. `hya-tui-lib` owns only app-neutral geometry, color,
+flex layout, overlay/layer validation, declarative component descriptors, and
+ratatui adapter helpers.
 
 For TUI work, keep app presentation modules inside `crates/hya-tui/src/`:
 
@@ -45,21 +45,29 @@ crates/hya-tui-lib/src/
     └── overlay.rs
 
 crates/hya-tui/src/
-├── contracts.rs
 ├── lib.rs
+├── app.rs
+├── tui.rs
+├── contracts.rs
+├── app/
+├── keymap/
 ├── render/
-├── theme.rs
-└── <app-specific screens/widgets/prompt modules>
+├── screens/
+├── state/
+├── theme/
+├── widgets/
+└── prompt/
+
 ```
 
 ---
 
 ## Module Organization
 
-Add app-specific TUI presentation behavior to the smallest matching
-`crates/hya-tui/src/` module. Create a new module only when a file would
-otherwise mix unrelated responsibilities, such as diff rendering, markdown
-rendering, or modal/dialog rendering.
+Add app-specific TUI runtime or presentation behavior to the smallest matching
+`crates/hya-tui/src/` module. `hya-tui` may reference Hya app state, terminal
+I/O, crossterm events, async tasks, prompt behavior, keymaps, themes,
+provider/model concepts, sessions, and screens.
 
 Add generic layout/component/layer/geometry primitives to `hya-tui-lib` only
 when they do not reference Hya runtime crates, app state, terminal I/O, async

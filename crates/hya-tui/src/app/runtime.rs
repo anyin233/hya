@@ -472,8 +472,8 @@ fn command_like_name(text: &str) -> Option<&str> {
 /// dispatch via `Runtime::handle_command`. Without this, typing `/help`, `/model` or
 /// `/new` in the prompt would be sent to the model as a prompt (or rejected as unknown for
 /// names absent from the backend command catalog), so the command never performs its action.
-/// Aliases mirror the `--mini` TUI vocabulary so both frontends accept the same names. Any
-/// trailing arguments are ignored — the action is still invoked. Prompt-macro commands and
+/// Aliases mirror the current TUI vocabulary so slash-command names stay stable. Any trailing
+/// arguments are ignored — the action is still invoked. Prompt-macro commands and
 /// custom/unknown commands fall through.
 fn builtin_client_command(text: &str) -> Option<&'static str> {
     let name = command_like_name(text)?;

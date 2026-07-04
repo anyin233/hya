@@ -1,5 +1,8 @@
 # Findings
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI and JSON history surface after these findings. Treat `crates/hya-backend/src/tui*` and `HistoryStore` facts below as historical context only.
+
+
 ## Repository facts
 
 - `crates/hya-proto/src/ids.rs`: `SessionId` is currently UUID-backed and displays `ses_<uuid-simple>`.

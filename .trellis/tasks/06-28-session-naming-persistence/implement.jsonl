@@ -5,7 +5,7 @@
 {"file":".trellis/tasks/06-28-session-naming-persistence/findings.md","reason":"Task-specific repository findings and pending Compat evidence."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/design.md","reason":"Accepted architecture and contracts for IDs, titles, empty-session cleanup, streaming durability, and migration."}
 {"file":".trellis/tasks/06-28-session-naming-persistence/implement.md","reason":"Ordered RED/GREEN execution waves, explicit dependencies, cleanup hooks, and verification commands."}
-{"file":"crates/hya-backend/src/tui.rs","reason":"Backend TUI owns concrete async exit/new/resume finalization hooks for empty-session cleanup."}
+{"file":"crates/hya-tui/src/app/runtime.rs","reason":"ADR-0005 supersedes deleted backend TUI finalization hooks; use current frontend session switching/resume seams instead of deleted backend TUI paths."}
 {"file":"crates/hya-core/src/engine.rs","reason":"Owns SessionEngine create/replay/read_projection/delete_session and durable emit path."}
 {"file":"crates/hya-core/src/engine/session_cleanup.rs","reason":"Potential shared core cleanup helper location for SessionEngine::cleanup_empty_unnamed_session."}
 {"file":"crates/hya-server/tests/compat_session_v2_api.rs","reason":"API-facing direct GET/delete/not-found cleanup proof target."}

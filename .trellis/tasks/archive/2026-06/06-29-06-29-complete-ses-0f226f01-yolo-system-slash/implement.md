@@ -1,5 +1,8 @@
 # Complete ses_0f226f01 yolo and system slash cleanup — Implementation Plan
 
+> **Superseded note:** ADR-0005 removed the backend legacy TUI modules referenced below. Treat `crates/hya-backend/src/tui*` paths in this archived plan as historical context only.
+
+
 > Execute inline from a new isolated worktree. Do not edit project code in the original dirty checkout.
 
 ## Goal

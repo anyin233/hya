@@ -275,6 +275,41 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn startup_resume_load_session_renders_resumed_transcript() {
+        let mut h = AppHarness::new(100, 30).await;
+        h.push_sse(
+            "session.created",
+            json!({ "info": { "id": "hysec_abcdefghijklmnopqrst" } }),
+        )
+        .await;
+        h.push_sse(
+            "message.updated",
+            json!({ "info": { "id": "msg_resume", "sessionID": "hysec_abcdefghijklmnopqrst", "role": "assistant", "time": { "created": 1 } } }),
+        )
+        .await;
+        h.push_sse(
+            "message.part.updated",
+            json!({ "part": { "id": "prt_resume", "messageID": "msg_resume", "sessionID": "hysec_abcdefghijklmnopqrst", "type": "text", "text": "resumed transcript visible" } }),
+        )
+        .await;
+
+        h.dispatch(AppEvent::LoadSession(
+            "hysec_abcdefghijklmnopqrst".to_owned(),
+        ))
+        .await;
+
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("hysec_abcdefghijklmnopqrst")
+        );
+        assert!(
+            h.buffer_contains("resumed transcript visible"),
+            "resumed transcript should render after LoadSession; frame:\n{}",
+            h.buffer_text()
+        );
+    }
+
     /// Seed a main session plus a subagent (`ses_child`) transcript and register it
     /// in the roster, then open the roster overlay and select it — leaving a focused,
     /// read-only aux pane on the child session.
