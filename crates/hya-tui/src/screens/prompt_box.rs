@@ -214,7 +214,7 @@ pub fn draw(
     let bg_el = theme.background_element;
     let panel_bg = Style::default().bg(rgba_to_color(bg_el, bg));
     let text_w = text_area_width(area.width);
-    let rows = textarea_rows(view.text, text_w);
+    let rows = textarea_rows(view.text, text_w).min(area.height.saturating_sub(5).max(1));
     let cursor = cursor_cell(view.text, view.cursor.min(view.text.len()), text_w);
     let total_rows = wrapped_rows(view.text, text_w);
     let viewport_start = cursor.map_or(0, |(_, row)| viewport_start(total_rows, row, rows));

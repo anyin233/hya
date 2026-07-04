@@ -93,8 +93,8 @@ fn default_mode(command: &BindingId) -> Option<KeymapMode> {
 }
 
 fn default_priority(command: &BindingId) -> i16 {
-    if command.0 == "session.background" {
-        return 1;
+    match command.0.as_str() {
+        "session.background" | "session.first" | "session.last" => 1,
+        _ => 0,
     }
-    0
 }

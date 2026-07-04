@@ -71,7 +71,7 @@ pub fn draw(
         header.push_str(&format!(" \u{b7} {status}"));
     }
     let header_line = Line(vec![
-        Span::styled(header, Some(accent), None, Attrs::default()),
+        Span::styled(header.clone(), Some(accent), None, Attrs::default()),
         Span::styled(
             "  [read-only]",
             Some(theme.text_muted),
@@ -116,6 +116,27 @@ pub fn draw(
     let old_height = scroll.content_height;
     scroll.viewport_height = body_area.height as usize;
     scroll.sticky_bottom(old_height, timeline.text.0.len());
+    if scroll.new_output {
+        let header_line = Line(vec![
+            Span::styled(header, Some(accent), None, Attrs::default()),
+            Span::styled(
+                "  [read-only]",
+                Some(theme.text_muted),
+                None,
+                Attrs::default(),
+            ),
+            Span::styled(
+                "  [new output]",
+                Some(theme.warning),
+                None,
+                Attrs::default(),
+            ),
+        ]);
+        frame.render_widget(
+            Paragraph::new(draw::text_to_ratatui(&Text(vec![header_line]), background)),
+            header_area,
+        );
+    }
 
     let body = draw::text_to_ratatui(&timeline.text, background);
     let messages = Paragraph::new(body)

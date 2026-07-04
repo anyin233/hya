@@ -72,7 +72,8 @@ Terminal spacing derives from a single cell.
 
 ### Grid
 
-- Layout is vertical: status, transcript, input, footer.
+- The main Session screen uses the vertical stack: status, transcript, Prompt composer, footer.
+- Subagent observation layouts may use tabs and split panes; observation views omit the Prompt composer.
 - Transcript content has 1-column side gutters.
 - Overlays sit near the bottom with 2-column side insets.
 
@@ -101,8 +102,8 @@ Terminal spacing derives from a single cell.
 
 - **Structure**: agent/model prefix plus grapheme-aware editor that soft-wraps by terminal width.
 - **Spacing**: `row-input` height with no border; text grows from 1 to 6 visible rows, then scrolls to keep the cursor row visible.
-- **States**: editable, disabled while running, hidden cursor when overlays are active.
-- **Accessibility**: cursor remains visible inside the viewport for long or wide Unicode text.
+- **States**: editable, disabled while running, hidden cursor when overlays are active, absent when a Subagent observation view is focused.
+- **Accessibility**: cursor remains visible inside the viewport for long or wide Unicode text when the composer is present.
 
 ### Overlay Prompt
 
