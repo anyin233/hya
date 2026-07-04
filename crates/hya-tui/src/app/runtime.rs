@@ -380,7 +380,7 @@ fn slash_autocomplete_filter(text: &str) -> Option<&str> {
 }
 
 fn roster_placeholder() -> DialogSelectItem<String> {
-    DialogSelectItem::new("No team members yet".to_owned(), String::new())
+    DialogSelectItem::new("No live subagents".to_owned(), String::new())
 }
 
 fn channels_placeholder() -> DialogSelectItem<String> {
@@ -595,7 +595,7 @@ impl DialogKind {
             DialogKind::Timeline => "Timeline",
             DialogKind::ThemeList => "Themes",
             DialogKind::Help => "Keybinds",
-            DialogKind::Roster => "Team roster",
+            DialogKind::Roster => "Subagent manager",
             DialogKind::Channels => "Channels & inboxes",
         }
     }
@@ -898,6 +898,12 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn submitted_prompts(&self) -> &[String] {
         &self.submitted_prompts
+    }
+
+    /// Test seam: the main prompt composer's current text.
+    #[cfg(test)]
+    pub(crate) fn prompt_text(&self) -> &str {
+        &self.prompt.text
     }
 
     pub(crate) async fn draw(&mut self) -> Result<(), AppRunError> {
@@ -1455,6 +1461,9 @@ impl Runtime {
         if self.leader_pending {
             return self.dispatch_key(key);
         }
+        if !self.panes.is_main_focused() {
+            return self.handle_observation_key(key);
+        }
         // The focused prompt intercepts editing/submit/exit keys before the global keymap
         // (managed-textarea precedence): several commands share these keys in base mode
         // (Enter is also diff.toggle, ctrl+c is also input.clear), so the prompt must win.
@@ -1462,6 +1471,15 @@ impl Runtime {
         if let Some(quit) = self.handle_prompt_key(key) {
             self.sync_slash_autocomplete_from_prompt();
             return quit;
+        }
+        self.dispatch_key(key)
+    }
+
+    fn handle_observation_key(&mut self, key: KeyEvent) -> bool {
+        let no_mods = !key.ctrl && !key.alt && !key.meta;
+        if no_mods && matches!(key.key, Key::Esc) {
+            self.panes.focus_main();
+            return false;
         }
         self.dispatch_key(key)
     }
