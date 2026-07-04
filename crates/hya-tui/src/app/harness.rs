@@ -146,6 +146,15 @@ impl AppHarness {
     pub(crate) fn aux_sessions(&self) -> Vec<String> {
         self.runtime.aux_pane_sessions()
     }
+    /// The current multi-pane placement mode.
+    pub(crate) fn pane_layout_kind(&self) -> super::panes::PaneLayoutKind {
+        self.runtime.pane_layout_kind()
+    }
+
+    /// The live Subagent-manager state when the roster dialog is open.
+    pub(crate) fn roster_dialog_state(&self) -> Option<super::runtime::RosterDialogState> {
+        self.runtime.roster_dialog_state()
+    }
 
     /// The main pane's route session id (what the input bar submits to).
     pub(crate) fn main_route_session(&self) -> Option<String> {
@@ -225,6 +234,7 @@ fn global_event(kind: &str, properties: serde_json::Value) -> GlobalEvent {
 
 #[cfg(test)]
 mod tests {
+    use super::super::panes::PaneLayoutKind;
     use super::*;
     use serde_json::json;
 
@@ -315,11 +325,19 @@ mod tests {
         );
     }
 
-    /// Seed a main session plus a subagent (`ses_child`) transcript and register it
-    /// in the Roster, then open the Subagent manager and select it — leaving a focused,
-    /// read-only Subagent observation view on the child Session.
-    async fn open_child_aux(h: &mut AppHarness) {
+    /// Seed a main session transcript, plus a child subagent transcript and roster entry.
+    async fn seed_main_and_child_roster(h: &mut AppHarness) {
         h.navigate("ses_main").await;
+        h.push_sse(
+            "message.updated",
+            json!({ "info": { "id": "msg_main", "sessionID": "ses_main", "role": "assistant", "time": { "created": 1 } } }),
+        )
+        .await;
+        h.push_sse(
+            "message.part.updated",
+            json!({ "part": { "id": "prt_main", "messageID": "msg_main", "sessionID": "ses_main", "type": "text", "text": "main working" } }),
+        )
+        .await;
         h.push_sse("session.created", json!({ "info": { "id": "ses_child" } }))
             .await;
         h.push_sse(
@@ -337,10 +355,74 @@ mod tests {
             "handle": "reviewer-3", "agent_type": "reviewer", "mode": "resident"
         }))
         .await;
+    }
+
+    async fn seed_main_root_and_child_roster(h: &mut AppHarness) {
+        seed_main_and_child_roster(h).await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_main",
+            "handle": "main", "agent_type": "main", "mode": "resident"
+        }))
+        .await;
+    }
+
+    async fn press_shift_char(h: &mut AppHarness, ch: char) {
+        h.dispatch(AppEvent::Key(KeyEvent {
+            shift: true,
+            ..KeyEvent::new(Key::Char(ch))
+        }))
+        .await;
+    }
+
+    /// Seed a main session plus a subagent (`ses_child`) transcript and register it
+    /// in the Roster, then open the Subagent manager and select it — leaving a focused,
+    /// read-only Subagent observation view on the child Session.
+    async fn open_child_aux(h: &mut AppHarness) {
+        seed_main_and_child_roster(h).await;
         // Leader chord (ctrl+x o) opens the Subagent manager; Enter selects the first entry.
         h.press_ctrl('x').await;
         h.press(Key::Char('o')).await;
         h.press(Key::Enter).await;
+    }
+
+    #[tokio::test]
+    async fn main_view_status_indicator_uses_roster_live_count_and_attention() {
+        let mut h = AppHarness::new(100, 30).await;
+        seed_main_and_child_roster(&mut h).await;
+
+        assert!(
+            h.focus_is_main(),
+            "the main Session should stay focused for the status indicator"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_main"),
+            "the main Session route should stay on the parent session"
+        );
+        assert!(
+            h.buffer_contains("1 subagent"),
+            "the main Session should show the live roster count even when the child session has no parentID; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.push_sse(
+            "permission.asked",
+            json!({
+                "id": "per_child",
+                "sessionID": "ses_child",
+                "permission": "edit",
+                "patterns": ["src/main.rs"],
+                "metadata": { "filepath": "src/main.rs" },
+                "always": []
+            }),
+        )
+        .await;
+
+        assert!(
+            h.buffer_contains("1 attention"),
+            "the main Session should show attention for a roster child with a pending permission request; frame:\n{}",
+            h.buffer_text()
+        );
     }
 
     #[tokio::test]
@@ -399,6 +481,78 @@ mod tests {
             h.buffer_contains("child working"),
             "the aux pane renders the observed transcript live; frame:\n{}",
             h.buffer_text()
+        );
+    }
+
+    #[tokio::test]
+    async fn roster_selection_does_not_open_main_session_as_aux_pane() {
+        let mut h = AppHarness::new(100, 30).await;
+        seed_main_root_and_child_roster(&mut h).await;
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('o')).await;
+        assert!(
+            h.buffer_contains("Subagent manager"),
+            "leader+o opens the Subagent manager; frame:\n{}",
+            h.buffer_text()
+        );
+
+        let roster = h
+            .roster_dialog_state()
+            .expect("Subagent manager should expose live roster state");
+        assert!(
+            roster
+                .item_sessions
+                .iter()
+                .any(|session| session == "ses_child"),
+            "the roster should still expose the real child session; state: {roster:?}"
+        );
+        assert!(
+            h.aux_sessions().iter().all(|session| session != "ses_main"),
+            "opening the manager alone must not create a main-session aux pane"
+        );
+
+        if roster
+            .item_sessions
+            .iter()
+            .any(|session| session == "ses_main")
+        {
+            if roster.selected_session.as_deref() != Some("ses_main") {
+                h.press(Key::Up).await;
+            }
+            let selected = h
+                .roster_dialog_state()
+                .expect("Subagent manager should remain open while checking root selection")
+                .selected_session;
+            if selected.as_deref() == Some("ses_main") {
+                h.press(Key::Enter).await;
+                assert!(
+                    h.aux_sessions().iter().all(|session| session != "ses_main"),
+                    "pressing Enter on the main/root roster row must not open ses_main as a read-only aux pane"
+                );
+                assert_eq!(
+                    h.main_route_session().as_deref(),
+                    Some("ses_main"),
+                    "the main route/input target must stay on ses_main"
+                );
+                return;
+            }
+        }
+
+        h.press(Key::Enter).await;
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "default roster selection should skip the main/root row and open the real child session"
+        );
+        assert!(
+            h.aux_sessions().iter().all(|session| session != "ses_main"),
+            "the Subagent manager must never open ses_main as a read-only aux pane"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_main"),
+            "opening a child aux pane must not retarget the main input route"
         );
     }
 
@@ -466,6 +620,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aux_transcript_new_output_indicator_persists_until_returning_to_bottom() {
+        let mut h = AppHarness::new(100, 12).await;
+        open_child_aux(&mut h).await;
+
+        assert!(
+            !h.focus_is_main(),
+            "the Subagent observation view is focused for aux-scroll coverage"
+        );
+
+        for index in 0..18 {
+            let msg_id = format!("msg_fill_{index}");
+            h.push_sse(
+                "message.updated",
+                json!({ "info": {
+                    "id": msg_id.clone(),
+                    "sessionID": "ses_child",
+                    "role": "assistant",
+                    "time": { "created": index + 2 }
+                } }),
+            )
+            .await;
+            h.push_sse(
+                "message.part.updated",
+                json!({ "part": {
+                    "id": format!("prt_fill_{index}"),
+                    "messageID": msg_id,
+                    "sessionID": "ses_child",
+                    "type": "text",
+                    "text": format!("fill line {index}")
+                } }),
+            )
+            .await;
+        }
+
+        h.press(Key::PageUp).await;
+        h.press(Key::PageUp).await;
+
+        let newest_marker = "brand_new_tail_marker";
+        h.push_sse(
+            "message.updated",
+            json!({ "info": {
+                "id": "msg_tail",
+                "sessionID": "ses_child",
+                "role": "assistant",
+                "time": { "created": 99 }
+            } }),
+        )
+        .await;
+        h.push_sse(
+            "message.part.updated",
+            json!({ "part": {
+                "id": "prt_tail",
+                "messageID": "msg_tail",
+                "sessionID": "ses_child",
+                "type": "text",
+                "text": newest_marker
+            } }),
+        )
+        .await;
+
+        assert!(
+            h.buffer_contains("new output"),
+            "manual aux scrolling should pin the view and surface a new output indicator; frame:\n{}",
+            h.buffer_text()
+        );
+        assert!(
+            !h.buffer_contains(newest_marker),
+            "a manually pinned aux pane should stay above bottom until the user returns there; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.settle().await;
+        assert!(
+            h.buffer_contains("new output"),
+            "the aux new-output indicator must persist after render instead of disappearing after one frame; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.press(Key::End).await;
+        assert!(
+            !h.buffer_contains("new output"),
+            "returning the focused aux transcript to bottom should clear the new-output indicator; frame:\n{}",
+            h.buffer_text()
+        );
+        assert!(
+            h.buffer_contains(newest_marker),
+            "returning to bottom should reveal the newest child output; frame:\n{}",
+            h.buffer_text()
+        );
+    }
+
+    #[tokio::test]
     async fn main_pane_uncloseable_and_aux_pane_is_readonly() {
         let mut h = AppHarness::new(100, 30).await;
         h.navigate("ses_main").await;
@@ -498,6 +744,450 @@ mod tests {
         h.press(Key::Char('w')).await;
         assert!(h.focus_is_main(), "closing the aux pane refocuses main");
         assert!(h.aux_sessions().is_empty(), "the aux pane was closed");
+    }
+
+    #[tokio::test]
+    async fn issue14_subagent_manager_v_and_s_request_split_placement() {
+        for (key, expected) in [
+            ('v', PaneLayoutKind::VerticalSplit),
+            ('s', PaneLayoutKind::HorizontalSplit),
+        ] {
+            let mut h = AppHarness::new(120, 30).await;
+            seed_main_and_child_roster(&mut h).await;
+
+            h.press_ctrl('x').await;
+            h.press(Key::Char('o')).await;
+            assert!(
+                h.buffer_contains("Subagent manager"),
+                "ctrl+x o should open the Subagent manager before '{key}'; frame:\n{}",
+                h.buffer_text()
+            );
+
+            h.press(Key::Char(key)).await;
+
+            assert_eq!(
+                h.aux_sessions(),
+                vec!["ses_child".to_owned()],
+                "manager '{key}' should immediately open the selected child session"
+            );
+            assert!(
+                !h.focus_is_main(),
+                "manager '{key}' should focus the new Subagent observation view"
+            );
+            assert_eq!(
+                h.main_route_session().as_deref(),
+                Some("ses_main"),
+                "manager '{key}' must not retarget the main input session"
+            );
+            assert_eq!(
+                h.pane_layout_kind(),
+                expected,
+                "manager '{key}' should request the expected split placement"
+            );
+            assert!(
+                h.buffer_contains("main working"),
+                "manager '{key}' split should keep the main transcript visible; frame:\n{}",
+                h.buffer_text()
+            );
+            assert!(
+                h.buffer_contains("child working"),
+                "manager '{key}' split should render the child transcript; frame:\n{}",
+                h.buffer_text()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn issue14_subagent_direct_shortcuts_preselect_requested_split() {
+        for (shortcut, expected) in [
+            ('v', PaneLayoutKind::VerticalSplit),
+            ('s', PaneLayoutKind::HorizontalSplit),
+        ] {
+            let mut h = AppHarness::new(120, 30).await;
+            seed_main_and_child_roster(&mut h).await;
+
+            assert_eq!(h.pane_layout_kind(), PaneLayoutKind::MainOnly);
+            h.press_ctrl('x').await;
+            press_shift_char(&mut h, shortcut).await;
+
+            assert_eq!(
+                h.pane_layout_kind(),
+                PaneLayoutKind::MainOnly,
+                "ctrl+x Shift+{shortcut} should only open the selector before Enter"
+            );
+            assert!(
+                h.buffer_contains("Subagent manager"),
+                "ctrl+x Shift+{shortcut} should open the placement-aware selector; frame:\n{}",
+                h.buffer_text()
+            );
+
+            h.press(Key::Enter).await;
+
+            assert_eq!(
+                h.aux_sessions(),
+                vec!["ses_child".to_owned()],
+                "ctrl+x Shift+{shortcut} Enter should open the selected child session"
+            );
+            assert_eq!(
+                h.pane_layout_kind(),
+                expected,
+                "ctrl+x Shift+{shortcut} Enter should commit the preselected placement"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn issue14_subagent_explicit_split_key_overrides_preselected_shortcut() {
+        let mut h = AppHarness::new(120, 30).await;
+        seed_main_and_child_roster(&mut h).await;
+
+        h.press_ctrl('x').await;
+        press_shift_char(&mut h, 'v').await;
+        assert!(
+            h.buffer_contains("Subagent manager"),
+            "ctrl+x Shift+v should open the placement-aware selector before override; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.press(Key::Char('s')).await;
+        h.press(Key::Enter).await;
+
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "overriding the preselected placement should still open the selected child session"
+        );
+        assert_eq!(
+            h.pane_layout_kind(),
+            PaneLayoutKind::HorizontalSplit,
+            "explicit 's' should override ctrl+x Shift+v preselection"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue14_open_roster_dialog_stays_live_across_team_updates() {
+        let mut h = AppHarness::new(120, 30).await;
+        h.navigate("ses_main").await;
+        h.push_sse(
+            "message.updated",
+            json!({ "info": { "id": "msg_main", "sessionID": "ses_main", "role": "assistant", "time": { "created": 1 } } }),
+        )
+        .await;
+        h.push_sse(
+            "message.part.updated",
+            json!({ "part": { "id": "prt_main", "messageID": "msg_main", "sessionID": "ses_main", "type": "text", "text": "main working" } }),
+        )
+        .await;
+        h.push_sse("session.created", json!({ "info": { "id": "ses_alpha" } }))
+            .await;
+        h.push_sse("session.created", json!({ "info": { "id": "ses_child" } }))
+            .await;
+        h.push_sse(
+            "message.updated",
+            json!({ "info": { "id": "msg_child", "sessionID": "ses_child", "role": "assistant", "time": { "created": 1 } } }),
+        )
+        .await;
+        h.push_sse(
+            "message.part.updated",
+            json!({ "part": { "id": "prt_child", "messageID": "msg_child", "sessionID": "ses_child", "type": "text", "text": "child working" } }),
+        )
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_alpha",
+            "handle": "reviewer-1", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_child",
+            "handle": "reviewer-3", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+
+        h.press_ctrl('x').await;
+        press_shift_char(&mut h, 'v').await;
+        h.press(Key::Char('/')).await;
+        h.type_text("reviewer-").await;
+        h.press(Key::Down).await;
+
+        let before = h
+            .roster_dialog_state()
+            .expect("Subagent manager should stay open while filtering");
+        assert_eq!(before.filter, "reviewer-");
+        assert!(before.filtering, "'/' should leave roster filtering active");
+        assert_eq!(before.placement, Some(PaneLayoutKind::VerticalSplit));
+        assert_eq!(
+            before.selected_session.as_deref(),
+            Some("ses_child"),
+            "the focused roster entry before the SSE update should be the child session"
+        );
+        assert_eq!(
+            before.item_sessions,
+            vec!["ses_alpha".to_owned(), "ses_child".to_owned()],
+            "the filtered roster should start with the two matching registered agents"
+        );
+
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_beta",
+            "handle": "reviewer-2", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_activity_changed", "session": "ses_main", "handle": "reviewer-3",
+            "status": "busy", "current_task": "triaging"
+        }))
+        .await;
+
+        assert!(
+            h.buffer_contains("Subagent manager"),
+            "team SSE updates should not close the open roster dialog; frame:\n{}",
+            h.buffer_text()
+        );
+
+        let after = h
+            .roster_dialog_state()
+            .expect("Subagent manager should remain open after the SSE update");
+        assert_eq!(after.filter, "reviewer-");
+        assert!(
+            after.filtering,
+            "the roster should stay in filtering mode after SSE"
+        );
+        assert_eq!(
+            after.placement,
+            Some(PaneLayoutKind::VerticalSplit),
+            "the preselected split placement should survive SSE refreshes"
+        );
+        assert_eq!(
+            after.selected_session.as_deref(),
+            Some("ses_child"),
+            "refreshing the roster should keep the same selected session when it still exists"
+        );
+        assert_eq!(
+            after.item_sessions,
+            vec![
+                "ses_alpha".to_owned(),
+                "ses_beta".to_owned(),
+                "ses_child".to_owned(),
+            ],
+            "the filtered roster should refresh to include the new matching agent"
+        );
+        assert!(
+            after
+                .item_titles
+                .iter()
+                .any(|title| title.contains("reviewer-2")),
+            "the refreshed roster items should include the newly registered agent"
+        );
+        assert!(
+            after
+                .item_titles
+                .iter()
+                .any(|title| title.contains("reviewer-3")
+                    && title.contains("busy")
+                    && title.contains("triaging")),
+            "the refreshed roster items should include updated live status/task metadata"
+        );
+
+        h.press(Key::Enter).await;
+
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "Enter should still open the session that stayed selected across the SSE refresh"
+        );
+        assert_eq!(
+            h.pane_layout_kind(),
+            PaneLayoutKind::VerticalSplit,
+            "the retained roster placement should still apply when opening the aux pane"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_auto_close_done_status_closes_aux_without_removing_roster_entry() {
+        let mut h = AppHarness::new(120, 30).await;
+        open_child_aux(&mut h).await;
+
+        assert_eq!(h.aux_sessions(), vec!["ses_child".to_owned()]);
+        assert!(
+            !h.focus_is_main(),
+            "the child observation pane starts focused"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        assert!(
+            h.focus_is_main(),
+            "leader+0 should move focus back to the main pane before the lifecycle event"
+        );
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "focusing main should not close the observed child pane"
+        );
+
+        h.push_team_event(json!({
+            "type": "agent_activity_changed", "session": "ses_main", "handle": "reviewer-3",
+            "status": "done", "current_task": null
+        }))
+        .await;
+
+        assert!(
+            h.aux_sessions().is_empty(),
+            "terminal lifecycle status should auto-close the observed child pane even when main is focused"
+        );
+        assert!(
+            h.focus_is_main(),
+            "auto-closing a background aux pane should leave focus normalized on main"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('o')).await;
+        let roster = h
+            .roster_dialog_state()
+            .expect("Subagent manager should open after lifecycle auto-close");
+        assert!(
+            roster
+                .item_sessions
+                .iter()
+                .any(|session| session == "ses_child"),
+            "the roster entry should remain after the observed pane auto-closes"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_auto_close_member_finished_closes_aux_by_child_session() {
+        let mut h = AppHarness::new(120, 30).await;
+        open_child_aux(&mut h).await;
+
+        assert_eq!(h.aux_sessions(), vec!["ses_child".to_owned()]);
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        h.push_team_event(json!({
+            "type": "member_finished", "status": "done", "child": "ses_child"
+        }))
+        .await;
+
+        assert!(
+            h.aux_sessions().is_empty(),
+            "member_finished should close the observed child pane even when the team store does not mutate"
+        );
+        assert!(
+            h.focus_is_main(),
+            "auto-closing a member_finished aux pane should leave focus normalized on main"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_completed_assistant_message_keeps_live_roster_aux_open() {
+        let mut h = AppHarness::new(120, 30).await;
+        open_child_aux(&mut h).await;
+
+        assert_eq!(h.aux_sessions(), vec!["ses_child".to_owned()]);
+        assert!(
+            !h.focus_is_main(),
+            "the child observation pane starts focused"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        assert!(
+            h.focus_is_main(),
+            "leader+0 should move focus back to the main pane before the completion event"
+        );
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "focusing main should not close the observed child pane"
+        );
+
+        h.push_sse(
+            "message.updated",
+            json!({ "info": {
+                "id": "msg_c",
+                "sessionID": "ses_child",
+                "role": "assistant",
+                "time": { "created": 1, "completed": 2 }
+            } }),
+        )
+        .await;
+
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "a completed assistant message is only a turn boundary and must not close a live roster observation"
+        );
+        assert!(
+            h.focus_is_main(),
+            "ignoring message completion should keep focus on main"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_main"),
+            "ignoring message completion should not retarget the main input session"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('o')).await;
+        let roster = h
+            .roster_dialog_state()
+            .expect("Subagent manager should open after message completion");
+        assert!(
+            roster
+                .item_sessions
+                .iter()
+                .any(|session| session == "ses_child"),
+            "the roster entry should remain selectable after the observed child completes one turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_auto_close_incomplete_assistant_message_keeps_aux_open() {
+        let mut h = AppHarness::new(120, 30).await;
+        open_child_aux(&mut h).await;
+
+        assert_eq!(h.aux_sessions(), vec!["ses_child".to_owned()]);
+        assert!(
+            !h.focus_is_main(),
+            "the child observation pane starts focused"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        assert!(
+            h.focus_is_main(),
+            "leader+0 should move focus back to the main pane before the message-start update"
+        );
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "focusing main should not close the observed child pane"
+        );
+
+        h.push_sse(
+            "message.updated",
+            json!({ "info": {
+                "id": "msg_c2",
+                "sessionID": "ses_child",
+                "role": "assistant",
+                "time": { "created": 2 }
+            } }),
+        )
+        .await;
+
+        assert_eq!(
+            h.aux_sessions(),
+            vec!["ses_child".to_owned()],
+            "an assistant message-start update without completion must not auto-close the observed child pane"
+        );
+        assert!(
+            h.focus_is_main(),
+            "ignoring a non-terminal child message update should keep focus on main"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_main"),
+            "ignoring a non-terminal child message update should not retarget the main input session"
+        );
     }
 
     #[tokio::test]

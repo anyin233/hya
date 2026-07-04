@@ -230,13 +230,15 @@ pub(crate) fn timeline_dialog_items(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentStatus {
-    Parent { count: usize },
+    Parent { count: usize, attention: usize },
     Child { index: usize, total: usize },
 }
 
 pub(crate) fn subagent_status(store: &MessageStore, session_id: &str) -> Option<SubagentStatus> {
-    let session = store.session(session_id)?;
-    if let Some(parent_id) = session.parent_id.as_deref() {
+    if let Some(parent_id) = store
+        .session(session_id)
+        .and_then(|session| session.parent_id.as_deref())
+    {
         let siblings = store.child_sessions(parent_id);
         let index = siblings
             .iter()
@@ -247,20 +249,55 @@ pub(crate) fn subagent_status(store: &MessageStore, session_id: &str) -> Option<
             total: siblings.len(),
         });
     }
+
+    let mut roster_sessions = store
+        .team
+        .roster
+        .values()
+        .filter_map(|entry| {
+            let session = entry.session.as_str();
+            (!session.is_empty() && session != session_id).then_some(session)
+        })
+        .collect::<Vec<_>>();
+    roster_sessions.sort_unstable();
+    roster_sessions.dedup();
+
+    let count = roster_sessions.len();
+    if count > 0 {
+        let attention = roster_sessions
+            .iter()
+            .filter(|session| {
+                !store.permissions(session).is_empty() || !store.questions(session).is_empty()
+            })
+            .count();
+        return Some(SubagentStatus::Parent { count, attention });
+    }
+
     let count = store.child_sessions(session_id).len();
-    (count > 0).then_some(SubagentStatus::Parent { count })
+    (count > 0).then_some(SubagentStatus::Parent {
+        count,
+        attention: 0,
+    })
 }
 
 fn subagent_status_line(status: SubagentStatus, theme: &ResolvedTheme) -> Line {
     let (marker, marker_color, text) = match status {
-        SubagentStatus::Parent { count } => (
-            "● ",
-            theme.success,
-            format!(
-                "{count} subagent{} · ctrl+x ↓ view",
-                if count == 1 { "" } else { "s" }
-            ),
-        ),
+        SubagentStatus::Parent { count, attention } => {
+            let suffix = if attention > 0 {
+                format!(" · {attention} attention")
+            } else {
+                String::new()
+            };
+            (
+                "● ",
+                theme.success,
+                format!(
+                    "{count} subagent{}{} · ctrl+x o manager",
+                    if count == 1 { "" } else { "s" },
+                    suffix
+                ),
+            )
+        }
         SubagentStatus::Child { index, total } if total > 1 => (
             "▲ ",
             theme.accent,
@@ -303,6 +340,16 @@ pub fn draw(
     scroll: &mut ScrollState,
     theme: &ResolvedTheme,
 ) -> prompt_box::PromptHits {
+    draw_in_area(frame, frame.area(), view, scroll, theme)
+}
+
+pub fn draw_in_area(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    view: &SessionView<'_>,
+    scroll: &mut ScrollState,
+    theme: &ResolvedTheme,
+) -> prompt_box::PromptHits {
     let SessionView {
         store,
         session_id,
@@ -321,7 +368,6 @@ pub fn draw(
         show_cursor,
         yolo,
     } = *view;
-    let area = frame.area();
     let background = theme.background;
     frame.render_widget(
         Block::default().style(
@@ -341,21 +387,45 @@ pub fn draw(
         (area, None)
     };
 
-    let prompt_rows = prompt_box::box_height(&prompt.text, main_area.width);
-    let subagent_rows = u16::from(subagent.is_some());
-    let chunks = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Min(1),
-        ratatui::layout::Constraint::Length(subagent_rows),
-        ratatui::layout::Constraint::Length(prompt_rows),
-    ])
-    .split(main_area);
+    let desired_prompt_rows = prompt_box::box_height(&prompt.text, main_area.width);
+    let min_prompt_rows = 6.min(main_area.height);
+    let prompt_rows = desired_prompt_rows
+        .min(main_area.height)
+        .max(min_prompt_rows);
+    let subagent_rows =
+        u16::from(subagent.is_some()).min(main_area.height.saturating_sub(prompt_rows));
+    let timeline_rows = main_area
+        .height
+        .saturating_sub(prompt_rows)
+        .saturating_sub(subagent_rows);
+    let timeline_area = ratatui::layout::Rect {
+        x: main_area.x,
+        y: main_area.y,
+        width: main_area.width,
+        height: timeline_rows,
+    };
+    let subagent_area = ratatui::layout::Rect {
+        x: main_area.x,
+        y: main_area.y.saturating_add(timeline_rows),
+        width: main_area.width,
+        height: subagent_rows,
+    };
+    let prompt_chunk = ratatui::layout::Rect {
+        x: main_area.x,
+        y: main_area
+            .y
+            .saturating_add(timeline_rows)
+            .saturating_add(subagent_rows),
+        width: main_area.width,
+        height: prompt_rows,
+    };
 
     let timeline_agent_color = prompt_box::agent_color(theme, agents, active_agent);
     let timeline = timeline_text(
         store,
         session_id,
         pending,
-        chunks[0].width as usize,
+        timeline_area.width as usize,
         timeline_agent_color,
         agents,
         model_names,
@@ -364,7 +434,7 @@ pub fn draw(
         theme,
     );
     let old_height = scroll.content_height;
-    scroll.viewport_height = chunks[0].height as usize;
+    scroll.viewport_height = timeline_area.height as usize;
     scroll.sticky_bottom(old_height, timeline.text.0.len());
 
     let body = draw::text_to_ratatui(&timeline.text, background);
@@ -372,7 +442,7 @@ pub fn draw(
         .scroll((scroll.offset as u16, 0))
         .wrap(Wrap { trim: false })
         .style(ratatui::style::Style::default().fg(draw::rgba_to_color(theme.text, background)));
-    frame.render_widget(messages, chunks[0]);
+    frame.render_widget(messages, timeline_area);
 
     let agent_label = active_agent.map(prompt_box::titlecase);
     let view = PromptBoxView {
@@ -398,15 +468,15 @@ pub fn draw(
             Paragraph::new(rendered).style(
                 ratatui::style::Style::default().bg(draw::rgba_to_color(background, background)),
             ),
-            chunks[1],
+            subagent_area,
         );
     }
 
     let prompt_area = crate::contracts::Rect {
-        x: chunks[2].x,
-        y: chunks[2].y,
-        width: chunks[2].width,
-        height: chunks[2].height,
+        x: prompt_chunk.x,
+        y: prompt_chunk.y,
+        width: prompt_chunk.width,
+        height: prompt_chunk.height,
     };
 
     let hits = prompt_box::draw(frame, prompt_area, &view, theme);
@@ -1351,6 +1421,76 @@ mod tests {
         assert!(
             row_text(buffer, height - 1, width).contains("commands"),
             "soft-wrapped prompt should reserve enough parent height for the hints row"
+        );
+    }
+
+    #[test]
+    fn draw_when_terminal_too_short_clips_transcript_before_prompt() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": { "id": "msg_1", "sessionID": "ses_1", "role": "assistant", "time": { "created": 1 } } }),
+        ));
+        store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": { "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1", "type": "text", "text": "transcript-clipped" } }),
+        ));
+
+        let theme = theme();
+        let agents = vec!["build".to_owned()];
+        let prompt_text = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
+        let prompt = PromptDoc {
+            text: prompt_text.to_owned(),
+            cursor: prompt_text.len(),
+            ..PromptDoc::default()
+        };
+        let width = 60;
+        let height = 6;
+        assert!(
+            prompt_box::box_height(&prompt.text, width) > height,
+            "test prompt should want more rows than the short terminal height"
+        );
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut scroll = ScrollState::default();
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &SessionView {
+                        store: &store,
+                        session_id: "ses_1",
+                        pending: &[],
+                        prompt: &prompt,
+                        agents: &agents,
+                        model_names: &[],
+                        active_agent: Some("build"),
+                        model_label: Some("dev"),
+                        provider_label: None,
+                        context_limit: None,
+                        spinner: "",
+                        show_timestamps: false,
+                        sidebar_visible: false,
+                        subagent: None,
+                        show_cursor: true,
+                        yolo: false,
+                    },
+                    &mut scroll,
+                    &theme,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let frame_text = rows_text(buffer, 0, height, width);
+        assert!(
+            !frame_text.contains("transcript-clipped"),
+            "transcript viewport should be clipped before the prompt on a short terminal; frame:\n{frame_text}"
+        );
+        assert!(
+            row_text(buffer, height - 1, width).contains("commands"),
+            "prompt composer should draw its hints inside the allocated prompt area; frame:\n{frame_text}"
         );
     }
 

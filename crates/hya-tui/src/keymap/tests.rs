@@ -96,6 +96,20 @@ fn command_palette_binding_dispatches_directly() {
     );
 }
 
+#[test]
+fn bare_home_and_end_in_base_mode_dispatch_to_session_scroll_navigation() {
+    let mut dispatcher = default_dispatcher().expect("default keymap should parse");
+
+    assert_eq!(
+        dispatcher.dispatch(key(Key::Home), KeymapMode::Base),
+        DispatchOutcome::Matched(BindingId("session.first".to_owned()))
+    );
+    assert_eq!(
+        dispatcher.dispatch(key(Key::End), KeymapMode::Base),
+        DispatchOutcome::Matched(BindingId("session.last".to_owned()))
+    );
+}
+
 fn leader_dispatches_to(second: Key, expected: &str) {
     let mut dispatcher = default_dispatcher().expect("default keymap should parse");
     assert_eq!(
@@ -219,8 +233,8 @@ fn picks_highest_priority_binding_when_chords_collide() {
 fn default_catalog_contains_known_origin_mappings() {
     let bindings = default_bindings().expect("default keymap should parse");
 
-    assert_eq!(command_mapping().len(), 164);
-    assert_eq!(default_binding_specs().len(), 185);
+    assert_eq!(command_mapping().len(), 167);
+    assert_eq!(default_binding_specs().len(), 188);
     assert_eq!(
         canonical_command("dialog.select.next"),
         BindingId("dialog.select.next".to_owned())

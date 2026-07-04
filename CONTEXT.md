@@ -102,6 +102,33 @@ The terminal user interface surface for operating sessions. Distinct from server
 runtimes.
 _Avoid_: terminal, UI (too broad)
 
+**Session screen**:
+The TUI screen for operating one active Session.
+_Avoid_: normal mode
+
+**Subagent manager**:
+The TUI surface for inspecting the current Team's Roster and choosing subagent Sessions to observe.
+It is scoped to the active main agent's Team, not to global Session history.
+_Avoid_: global subagent browser, session browser
+
+**Subagent selector**:
+The choice point inside the Subagent manager for binding one live Roster entry to a Subagent
+observation view.
+_Avoid_: agent picker, session picker
+
+**Subagent observation view**:
+A read-only TUI surface for observing one subagent Session without addressing it through the Prompt
+composer.
+_Avoid_: subagent prompt, subagent terminal
+
+**Transcript viewport**:
+The TUI region that renders the active Session's transcript for reading. Distinct from the prompt composer, which accepts new user input.
+_Avoid_: display area, output pane
+
+**Prompt composer**:
+The TUI input surface where the user composes a prompt for the main agent. Distinct from the transcript viewport and from a stored prompt Event.
+_Avoid_: input area, command box
+
 **Legacy TUI**:
 An older terminal user interface surface. Use this term only when contrasting that older surface
 with another TUI surface; it does not mean every terminal renderer or client.
