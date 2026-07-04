@@ -24,6 +24,10 @@ A role/config — name, system prompt, model or category, tools, permissions —
 built-in ("native") agent or a user-authored markdown file. Distinct from the Session that runs it.
 _Avoid_: role, persona, bot
 
+**Agent catalog**:
+The disk- and config-discovered set of Agent definitions available for selection or spawning. Distinct from the live **Roster**, which is projected from a running Team.
+_Avoid_: roster, directory, list
+
 **Subagent**:
 A child session spawned by another agent. Every subagent *is* a full Session, not a lightweight
 object. In the runtime code the spawned unit is called a **Member**.
