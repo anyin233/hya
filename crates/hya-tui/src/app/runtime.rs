@@ -1,7 +1,10 @@
 use std::fs;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hya_sdk::{Client, SdkError};
@@ -43,6 +46,7 @@ const COMMAND_VARIANT_LIST: &str = "variant.list";
 const COMMAND_VARIANT_CYCLE: &str = "variant.cycle";
 const COMMAND_SESSION_LIST: &str = "session.list";
 const COMMAND_SESSION_TIMELINE: &str = "session.timeline";
+const NO_LAZY_ROUTE_OWNER: u64 = u64::MAX;
 const COMMAND_THEME_LIST: &str = "theme.switch";
 const COMMAND_SESSION_RENAME: &str = "session.rename";
 const COMMAND_SESSION_DELETE: &str = "session.delete";
@@ -662,8 +666,12 @@ pub(crate) struct Runtime {
     pub(crate) input: RunTuiInput,
     prompt: PromptDoc,
     submitted_prompts: Vec<String>,
+    submitted_prompt_ids: Vec<u64>,
+    next_submitted_prompt_id: u64,
     /// Prompts typed before the backend finished connecting, replayed on `BackendReady`.
     pending_prompts: Vec<String>,
+    route_epoch: Arc<AtomicU64>,
+    lazy_route_owner: Arc<AtomicU64>,
     backend_ready: bool,
     history_index: Option<usize>,
     command_names: Vec<String>,
@@ -739,7 +747,11 @@ impl Runtime {
             input,
             prompt: PromptDoc::default(),
             submitted_prompts: Vec::new(),
+            submitted_prompt_ids: Vec::new(),
+            next_submitted_prompt_id: 0,
             pending_prompts: Vec::new(),
+            route_epoch: Arc::new(AtomicU64::new(0)),
+            lazy_route_owner: Arc::new(AtomicU64::new(NO_LAZY_ROUTE_OWNER)),
             backend_ready: false,
             history_index: None,
             command_names: Vec::new(),
@@ -1101,6 +1113,10 @@ impl Runtime {
         let question_state = self.question_state.clone();
         let show_timestamps = self.show_timestamps;
         let sidebar_visible = self.sidebar_visible;
+        let team_session = match &route {
+            Route::Session { session_id, .. } => Some(data.team_root_for(session_id)),
+            _ => None,
+        };
         let agents = self.input.agent_names.as_slice();
         let model_names = self.model_names.as_slice();
         let status_dialog_open = self.status_dialog_open;
@@ -1128,11 +1144,13 @@ impl Runtime {
                 .panes
                 .focused_aux()
                 .is_some_and(|focused| focused.session_id == pane.session_id);
-            let entry = data
-                .team
-                .roster
-                .values()
-                .find(|entry| entry.session == pane.session_id);
+            let entry = team_session
+                .and_then(|session_id| data.team_for(session_id))
+                .and_then(|team| {
+                    team.roster
+                        .values()
+                        .find(|entry| entry.session == pane.session_id)
+                });
             AuxRender {
                 session_id: pane.session_id.clone(),
                 handle: pane.handle.clone(),
@@ -1405,11 +1423,18 @@ impl Runtime {
                 Ok(false)
             }
             AppEvent::Navigate(session_id) => {
-                self.panes.clear();
-                self.input.state.navigate(Route::Session {
-                    session_id,
-                    prompt: None,
-                });
+                self.navigate_session_route(session_id);
+                Ok(false)
+            }
+            AppEvent::NavigateIfCurrent { session_id, epoch } => {
+                if self.route_epoch.load(Ordering::SeqCst) == epoch {
+                    self.panes.clear();
+                    self.input.state.navigate(Route::Session {
+                        session_id,
+                        prompt: None,
+                    });
+                    self.clear_lazy_route_owner();
+                }
                 Ok(false)
             }
             AppEvent::LoadSession(session_id) => {
@@ -1500,6 +1525,10 @@ impl Runtime {
             }
             AppEvent::Toast(message) => {
                 self.toast = Some((message, Instant::now() + TOAST_DURATION));
+                Ok(false)
+            }
+            AppEvent::RetractSubmittedPrompts(ids) => {
+                self.retract_submitted_prompts(&ids);
                 Ok(false)
             }
             AppEvent::AgentList(agents, default_agent) => {
@@ -2167,6 +2196,40 @@ impl Runtime {
         }
     }
 
+    fn record_submitted_prompt(&mut self, text: String) -> u64 {
+        let id = self.next_submitted_prompt_id;
+        self.next_submitted_prompt_id = self.next_submitted_prompt_id.saturating_add(1);
+        self.submitted_prompt_ids.push(id);
+        self.submitted_prompts.push(text);
+        id
+    }
+
+    fn retract_submitted_prompts(&mut self, ids: &[u64]) {
+        for id in ids {
+            if let Some(index) = self
+                .submitted_prompt_ids
+                .iter()
+                .position(|candidate| candidate == id)
+            {
+                self.submitted_prompt_ids.remove(index);
+                self.submitted_prompts.remove(index);
+            }
+        }
+        match self.history_index {
+            Some(_) if self.submitted_prompts.is_empty() => {
+                self.history_index = None;
+                self.prompt.clear_input();
+            }
+            Some(index) if index >= self.submitted_prompts.len() => {
+                let index = self.submitted_prompts.len() - 1;
+                self.history_index = Some(index);
+                self.prompt.set_text(self.submitted_prompts[index].clone());
+            }
+            Some(index) => self.prompt.set_text(self.submitted_prompts[index].clone()),
+            None => {}
+        }
+    }
+
     fn trigger_file_complete(&mut self) {
         let Some(query) = trailing_mention(&self.prompt.text) else {
             return;
@@ -2337,11 +2400,14 @@ impl Runtime {
                 else {
                     return Vec::new();
                 };
+                let Some(team_session) = event.get("session").and_then(serde_json::Value::as_str)
+                else {
+                    return Vec::new();
+                };
                 let store = self.input.state.data.read().await;
                 store
-                    .team
-                    .roster
-                    .get(&handle)
+                    .team_for(team_session)
+                    .and_then(|team| team.roster.get(&handle))
                     .map(|entry| vec![entry.session.clone()])
                     .unwrap_or_default()
             }
@@ -2368,12 +2434,21 @@ impl Runtime {
         let Ok(store) = self.input.state.data.try_read() else {
             return vec![roster_placeholder()];
         };
-        let main_session = self.current_session_id();
-        let items = store
-            .team
+        let Some(main_session) = self.current_session_id() else {
+            return vec![roster_placeholder()];
+        };
+        let team_root = store.team_root_for(&main_session);
+        let Some(team) = store.team_for(team_root) else {
+            return vec![roster_placeholder()];
+        };
+        let items = team
             .roster
             .values()
-            .filter(|entry| main_session.as_deref() != Some(entry.session.as_str()))
+            .filter(|entry| {
+                !entry.session.is_empty()
+                    && entry.session != main_session
+                    && entry.session != team_root
+            })
             .map(|entry| {
                 let mut title = entry.handle.clone();
                 if !entry.agent_type.is_empty() {
@@ -2405,8 +2480,15 @@ impl Runtime {
         let Ok(store) = self.input.state.data.try_read() else {
             return vec![channels_placeholder()];
         };
+        let Some(session_id) = self.current_session_id() else {
+            return vec![channels_placeholder()];
+        };
+        let team_root = store.team_root_for(&session_id);
+        let Some(team) = store.team_for(team_root) else {
+            return vec![channels_placeholder()];
+        };
         let mut items: Vec<DialogSelectItem<String>> = Vec::new();
-        for (name, channel) in &store.team.channels {
+        for (name, channel) in &team.channels {
             let category = format!("#{name} ({} members)", channel.members.len());
             if channel.log.is_empty() {
                 items.push(
@@ -2424,7 +2506,7 @@ impl Runtime {
                 );
             }
         }
-        for (handle, inbox) in &store.team.inboxes {
+        for (handle, inbox) in &team.inboxes {
             let category = format!("@{handle} inbox");
             for message in inbox {
                 items.push(
@@ -2804,12 +2886,40 @@ impl Runtime {
         });
     }
 
-    fn load_session(&mut self, session_id: String) {
+    fn navigate_session_route(&mut self, session_id: String) {
+        self.route_epoch.fetch_add(1, Ordering::SeqCst);
+        self.clear_lazy_route_owner();
         self.panes.clear();
         self.input.state.navigate(Route::Session {
-            session_id: session_id.clone(),
+            session_id,
             prompt: None,
         });
+    }
+
+    fn navigate_home_route(&mut self) {
+        self.route_epoch.fetch_add(1, Ordering::SeqCst);
+        self.clear_lazy_route_owner();
+        self.panes.clear();
+        self.input.state.navigate(Route::default());
+    }
+
+    fn lazy_route_guard(&self) -> Option<LazyRouteGuard> {
+        match &self.input.state.route {
+            Route::Session { .. } => None,
+            _ => Some(LazyRouteGuard::new(
+                Arc::clone(&self.route_epoch),
+                Arc::clone(&self.lazy_route_owner),
+            )),
+        }
+    }
+
+    fn clear_lazy_route_owner(&self) {
+        self.lazy_route_owner
+            .store(NO_LAZY_ROUTE_OWNER, Ordering::SeqCst);
+    }
+
+    fn load_session(&mut self, session_id: String) {
+        self.navigate_session_route(session_id.clone());
         self.reset_prompt();
         self.spawn_session_backfill(session_id, true);
     }
@@ -2857,6 +2967,7 @@ impl Runtime {
     /// even for a subagent the user has not visited. The handle label is resolved
     /// from the live roster, falling back to a short session id.
     fn open_aux_pane(&mut self, session_id: String, layout: PaneLayoutKind) {
+        let team_session = self.current_session_id();
         let handle = self
             .input
             .state
@@ -2864,12 +2975,17 @@ impl Runtime {
             .try_read()
             .ok()
             .and_then(|store| {
-                store
-                    .team
-                    .roster
-                    .values()
-                    .find(|entry| entry.session == session_id)
-                    .map(|entry| entry.handle.clone())
+                team_session.as_deref().and_then(|session| {
+                    let root = store.team_root_for(session);
+                    store
+                        .team_for(root)
+                        .and_then(|team| {
+                            team.roster
+                                .values()
+                                .find(|entry| entry.session == session_id)
+                        })
+                        .map(|entry| entry.handle.clone())
+                })
             })
             .unwrap_or_else(|| session_id.chars().take(8).collect());
         let created = self
@@ -2966,10 +3082,10 @@ impl Runtime {
     }
 
     fn show_queued_prompts(&mut self) {
-        let message = if self.submitted_prompts.is_empty() {
+        let message = if self.pending_prompts.is_empty() {
             "No queued prompts".to_owned()
         } else {
-            format!("Submitted prompts: {}", self.submitted_prompts.join(" | "))
+            format!("Queued prompts: {}", self.pending_prompts.join(" | "))
         };
         self.toast = Some((message, Instant::now() + TOAST_DURATION));
     }
@@ -2987,16 +3103,19 @@ impl Runtime {
             Route::Session { session_id, .. } => Some(session_id.clone()),
             _ => None,
         };
+        let lazy_guard = self.lazy_route_guard();
         tokio::spawn(async move {
-            let session_id = match existing {
-                Some(id) => id,
-                None => match client.session_create().await {
-                    Ok(session) => {
-                        let _ = tx.send(AppEvent::Navigate(session.id.clone()));
-                        session.id
-                    }
-                    Err(_) => return,
-                },
+            let (session_id, created_session) = match existing {
+                Some(id) => (id, None),
+                None => {
+                    let Some(guard) = lazy_guard.as_ref() else {
+                        return;
+                    };
+                    let Some(id) = create_lazy_session(&client, &tx, guard, false).await else {
+                        return;
+                    };
+                    (id.clone(), Some(id))
+                }
             };
             let mut body = json!({ "command": name, "arguments": "" });
             if let Some(agent) = agent {
@@ -3004,6 +3123,9 @@ impl Runtime {
             }
             if let Some((provider_id, model_id)) = model {
                 body["model"] = json!(format!("{provider_id}/{model_id}"));
+            }
+            if lazy_route_stale(&client, lazy_guard.as_ref(), created_session.as_deref()).await {
+                return;
             }
             let _ = client.session_command(&session_id, body).await;
         });
@@ -3019,11 +3141,7 @@ impl Runtime {
             COMMAND_HALF_DOWN => self.with_active_scroll(ScrollState::half_page_down),
             COMMAND_FIRST => self.with_active_scroll(ScrollState::to_top),
             COMMAND_LAST => self.with_active_scroll(ScrollState::to_bottom),
-            COMMAND_SESSION_NEW => {
-                self.panes.clear();
-                self.input.state.navigate(Route::default());
-                self.reset_prompt();
-            }
+            COMMAND_SESSION_NEW => self.reset_session_screen(),
             COMMAND_COMMAND_PALETTE => self.open_dialog(DialogKind::CommandPalette),
             COMMAND_AGENT_LIST => self.open_dialog(DialogKind::AgentSwitch),
             COMMAND_MODEL_LIST => self.open_dialog(DialogKind::ModelSwitch),
@@ -3263,11 +3381,28 @@ impl Runtime {
         };
         let client = Arc::clone(&self.input.client);
         let data = Arc::clone(&self.input.state.data);
+        let tx = self.input.tx.clone();
         tokio::spawn(async move {
             if data.read().await.is_working(&session_id) {
-                let _ = client.session_abort(&session_id).await;
+                if let Err(error) = client.session_abort(&session_id).await {
+                    let message = match error {
+                        SdkError::Http(message) => message,
+                        other => other.to_string(),
+                    };
+                    let _ = tx.send(AppEvent::Toast(format!("abort failed: {message}")));
+                }
             }
         });
+    }
+
+    fn reset_session_screen(&mut self) {
+        self.spawn_session_abort();
+        self.navigate_home_route();
+        self.reset_prompt();
+        self.pending_prompts.clear();
+        self.submitted_prompts.clear();
+        self.submitted_prompt_ids.clear();
+        self.history_index = None;
     }
 
     fn spawn_session_compact(&mut self) {
@@ -3462,17 +3597,95 @@ impl Runtime {
                         let _ = tx.send(AppEvent::Toast(format!("delete failed: {error}")));
                     }
                 });
-                self.panes.clear();
-                self.input.state.navigate(Route::default());
+                self.navigate_home_route();
             }
         }
     }
 
     /// Replay prompts queued before the backend was ready, in the order they were typed.
     fn drain_pending_prompts(&mut self) {
+        let agent = self.active_agent.clone();
+        let model = self.active_model.clone();
+        let variant = self.active_variant.clone();
+        let mut requests = Vec::new();
         for text in std::mem::take(&mut self.pending_prompts) {
-            self.prompt.set_text(text);
-            self.submit_prompt();
+            if let Some(request) = self.submit_request_from_text(text, agent.as_deref()) {
+                requests.push(request);
+            }
+        }
+        self.reset_prompt();
+        if requests.is_empty() {
+            return;
+        }
+
+        let client = Arc::clone(&self.input.client);
+        let tx = self.input.tx.clone();
+        let lazy_guard = self.lazy_route_guard();
+        let existing = match &self.input.state.route {
+            Route::Session { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        };
+        let mut optimistic_ids = submit_prompt_ids(&requests);
+        tokio::spawn(async move {
+            let (session_id, created_session) = match existing {
+                Some(id) => (id, None),
+                None => {
+                    let Some(guard) = lazy_guard.as_ref() else {
+                        return;
+                    };
+                    let Some(id) = create_lazy_session(&client, &tx, guard, true).await else {
+                        retract_submitted_prompts(&tx, optimistic_ids);
+                        return;
+                    };
+                    (id.clone(), Some(id))
+                }
+            };
+            let mut sent_any = false;
+            for request in requests {
+                let cleanup = if sent_any {
+                    None
+                } else {
+                    created_session.as_deref()
+                };
+                if lazy_route_stale(&client, lazy_guard.as_ref(), cleanup).await {
+                    retract_submitted_prompts(&tx, optimistic_ids);
+                    return;
+                }
+                let sent_id = request.optimistic_id();
+                let _ = send_submit_request(
+                    &client,
+                    &session_id,
+                    request,
+                    agent.as_deref(),
+                    model.as_ref(),
+                    variant.as_deref(),
+                )
+                .await;
+                if let Some(id) = sent_id {
+                    optimistic_ids.retain(|candidate| *candidate != id);
+                }
+                sent_any = true;
+            }
+        });
+    }
+
+    fn submit_request_from_text(&mut self, text: String, agent: Option<&str>) -> Option<Submit> {
+        if let Some(command) = text.strip_prefix('!').filter(|_| agent.is_some()) {
+            Some(Submit::Shell(command.trim().to_owned()))
+        } else if let Some((name, arguments)) = slash_command(&text, &self.command_names) {
+            Some(Submit::Command { name, arguments })
+        } else if let Some(name) = command_like_name(&text) {
+            self.toast = Some((
+                format!("Unknown command /{name} — press / then Tab to list commands"),
+                Instant::now() + TOAST_DURATION,
+            ));
+            None
+        } else {
+            let optimistic_id = self.record_submitted_prompt(text.clone());
+            Some(Submit::Prompt {
+                body: json!({"parts":[{"type":"text","text":text}]}),
+                optimistic_id,
+            })
         }
     }
 
@@ -3513,72 +3726,244 @@ impl Runtime {
             self.reset_prompt();
             return;
         } else {
-            self.submitted_prompts.push(text.clone());
-            Submit::Prompt(prompt_request_body(&self.prompt))
+            let optimistic_id = self.record_submitted_prompt(text.clone());
+            Submit::Prompt {
+                body: prompt_request_body(&self.prompt),
+                optimistic_id,
+            }
         };
         self.reset_prompt();
 
         let client = Arc::clone(&self.input.client);
         let tx = self.input.tx.clone();
+        let lazy_guard = self.lazy_route_guard();
         let existing = match &self.input.state.route {
             Route::Session { session_id, .. } => Some(session_id.clone()),
             _ => None,
         };
+        let optimistic_id = request.optimistic_id();
         // Off-loop on purpose: session.prompt/shell block until the turn completes, so an
-        // await here would freeze redraws and key handling. Navigate is posted back async.
+        // await here would freeze redraws and key handling. Lazy session creation is
+        // route-gated so stale background tasks cannot retarget later navigation.
         tokio::spawn(async move {
-            let session_id = match existing {
-                Some(id) => id,
-                None => match client.session_create().await {
-                    Ok(session) => {
-                        let _ = tx.send(AppEvent::Navigate(session.id.clone()));
-                        session.id
-                    }
-                    Err(error) => {
-                        let _ = tx.send(AppEvent::Toast(format!("session create failed: {error}")));
+            let (session_id, created_session) = match existing {
+                Some(id) => (id, None),
+                None => {
+                    let Some(guard) = lazy_guard.as_ref() else {
                         return;
-                    }
-                },
-            };
-            let _ = match request {
-                Submit::Shell(command) => {
-                    let mut body = json!({ "command": command });
-                    if let Some(agent) = agent {
-                        body["agent"] = json!(agent);
-                    }
-                    if let Some((provider_id, model_id)) = &model {
-                        body["model"] = model_spec(provider_id, model_id, variant.as_deref());
-                    }
-                    client.session_shell(&session_id, body).await
-                }
-                Submit::Command { name, arguments } => {
-                    let mut body = json!({ "command": name, "arguments": arguments });
-                    if let Some(agent) = agent {
-                        body["agent"] = json!(agent);
-                    }
-                    if let Some((provider_id, model_id)) = &model {
-                        body["model"] = json!(format!("{provider_id}/{model_id}"));
-                    }
-                    client.session_command(&session_id, body).await
-                }
-                Submit::Prompt(mut body) => {
-                    if let Some(agent) = agent {
-                        body["agent"] = json!(agent);
-                    }
-                    if let Some((provider_id, model_id)) = &model {
-                        body["model"] = model_spec(provider_id, model_id, variant.as_deref());
-                    }
-                    client.session_prompt(&session_id, body).await
+                    };
+                    let Some(id) = create_lazy_session(&client, &tx, guard, true).await else {
+                        retract_submitted_prompts(&tx, optimistic_id.into_iter().collect());
+                        return;
+                    };
+                    (id.clone(), Some(id))
                 }
             };
+            if lazy_route_stale(&client, lazy_guard.as_ref(), created_session.as_deref()).await {
+                retract_submitted_prompts(&tx, optimistic_id.into_iter().collect());
+                return;
+            }
+            let _ = send_submit_request(
+                &client,
+                &session_id,
+                request,
+                agent.as_deref(),
+                model.as_ref(),
+                variant.as_deref(),
+            )
+            .await;
         });
     }
 }
 
+struct LazyRouteGuard {
+    start_epoch: u64,
+    current_epoch: AtomicU64,
+    route_epoch: Arc<AtomicU64>,
+    lazy_route_owner: Arc<AtomicU64>,
+    owns_route: bool,
+}
+
+impl LazyRouteGuard {
+    fn new(route_epoch: Arc<AtomicU64>, lazy_route_owner: Arc<AtomicU64>) -> Self {
+        let start_epoch = route_epoch.load(Ordering::SeqCst);
+        let owns_route = lazy_route_owner
+            .compare_exchange(
+                NO_LAZY_ROUTE_OWNER,
+                start_epoch,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok();
+        Self {
+            start_epoch,
+            current_epoch: AtomicU64::new(start_epoch),
+            route_epoch,
+            lazy_route_owner,
+            owns_route,
+        }
+    }
+
+    fn claim(&self) -> Option<u64> {
+        if !self.owns_route || self.lazy_route_owner.load(Ordering::SeqCst) != self.start_epoch {
+            return None;
+        }
+        let claimed_epoch = self.start_epoch.checked_add(1)?;
+        if self
+            .route_epoch
+            .compare_exchange(
+                self.start_epoch,
+                claimed_epoch,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            self.current_epoch.store(claimed_epoch, Ordering::SeqCst);
+            Some(claimed_epoch)
+        } else {
+            self.release_owner();
+            None
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        self.route_epoch.load(Ordering::SeqCst) == self.current_epoch.load(Ordering::SeqCst)
+    }
+
+    fn owns_current_route(&self) -> bool {
+        self.owns_route
+            && self.lazy_route_owner.load(Ordering::SeqCst) == self.start_epoch
+            && self.is_current()
+    }
+
+    fn release_owner(&self) {
+        if self.owns_route {
+            let _ = self.lazy_route_owner.compare_exchange(
+                self.start_epoch,
+                NO_LAZY_ROUTE_OWNER,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+    }
+}
+
+async fn create_lazy_session(
+    client: &Arc<dyn Client>,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+    guard: &LazyRouteGuard,
+    report_error: bool,
+) -> Option<String> {
+    match client.session_create().await {
+        Ok(session) => {
+            let Some(epoch) = guard.claim() else {
+                let _ = client.session_delete(&session.id).await;
+                return None;
+            };
+            let _ = tx.send(AppEvent::NavigateIfCurrent {
+                session_id: session.id.clone(),
+                epoch,
+            });
+            Some(session.id)
+        }
+        Err(error) => {
+            if report_error && guard.owns_current_route() {
+                let _ = tx.send(AppEvent::Toast(format!("session create failed: {error}")));
+            }
+            guard.release_owner();
+            None
+        }
+    }
+}
+
+async fn send_submit_request(
+    client: &Arc<dyn Client>,
+    session_id: &str,
+    request: Submit,
+    agent: Option<&str>,
+    model: Option<&(String, String)>,
+    variant: Option<&str>,
+) -> std::result::Result<serde_json::Value, SdkError> {
+    match request {
+        Submit::Shell(command) => {
+            let mut body = json!({ "command": command });
+            if let Some(agent) = agent {
+                body["agent"] = json!(agent);
+            }
+            if let Some((provider_id, model_id)) = model {
+                body["model"] = model_spec(provider_id, model_id, variant);
+            }
+            client.session_shell(session_id, body).await
+        }
+        Submit::Command { name, arguments } => {
+            let mut body = json!({ "command": name, "arguments": arguments });
+            if let Some(agent) = agent {
+                body["agent"] = json!(agent);
+            }
+            if let Some((provider_id, model_id)) = model {
+                body["model"] = json!(format!("{provider_id}/{model_id}"));
+            }
+            client.session_command(session_id, body).await
+        }
+        Submit::Prompt { mut body, .. } => {
+            if let Some(agent) = agent {
+                body["agent"] = json!(agent);
+            }
+            if let Some((provider_id, model_id)) = model {
+                body["model"] = model_spec(provider_id, model_id, variant);
+            }
+            client.session_prompt(session_id, body).await
+        }
+    }
+}
+
+async fn lazy_route_stale(
+    client: &Arc<dyn Client>,
+    guard: Option<&LazyRouteGuard>,
+    created_session: Option<&str>,
+) -> bool {
+    let Some(guard) = guard else {
+        return false;
+    };
+    if guard.is_current() {
+        return false;
+    }
+    if let Some(session_id) = created_session {
+        let _ = client.session_delete(session_id).await;
+    }
+    true
+}
+
 enum Submit {
     Shell(String),
-    Command { name: String, arguments: String },
-    Prompt(serde_json::Value),
+    Command {
+        name: String,
+        arguments: String,
+    },
+    Prompt {
+        body: serde_json::Value,
+        optimistic_id: u64,
+    },
+}
+
+impl Submit {
+    fn optimistic_id(&self) -> Option<u64> {
+        match self {
+            Submit::Prompt { optimistic_id, .. } => Some(*optimistic_id),
+            Submit::Shell(_) | Submit::Command { .. } => None,
+        }
+    }
+}
+
+fn submit_prompt_ids(requests: &[Submit]) -> Vec<u64> {
+    requests.iter().filter_map(Submit::optimistic_id).collect()
+}
+
+fn retract_submitted_prompts(tx: &mpsc::UnboundedSender<AppEvent>, ids: Vec<u64>) {
+    if !ids.is_empty() {
+        let _ = tx.send(AppEvent::RetractSubmittedPrompts(ids));
+    }
 }
 
 /// Owned snapshot of the active aux pane, staged out of `PaneState` so the draw

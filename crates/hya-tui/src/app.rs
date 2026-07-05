@@ -41,6 +41,11 @@ pub enum AppEvent {
     /// (agent name, optional provider/model) pairs + the default agent name.
     AgentList(Vec<(String, Option<(String, String)>)>, Option<String>),
     Navigate(String),
+    NavigateIfCurrent {
+        session_id: String,
+        epoch: u64,
+    },
+    RetractSubmittedPrompts(Vec<u64>),
     LoadSession(String),
     FileMatches(Vec<String>),
     CommandList(Vec<String>),
@@ -131,6 +136,8 @@ async fn apply_batch(state: &mut AppState, batch: &[AppEvent], stats: &mut RunSt
             AppEvent::BackendReady
             | AppEvent::AgentList(_, _)
             | AppEvent::Navigate(_)
+            | AppEvent::NavigateIfCurrent { .. }
+            | AppEvent::RetractSubmittedPrompts(_)
             | AppEvent::LoadSession(_)
             | AppEvent::FileMatches(_)
             | AppEvent::CommandList(_)

@@ -1,4 +1,4 @@
-use hya_sdk::{MessageStore, Part, StoredPart};
+use hya_sdk::{MemberProjection, MessageStore, Part, RosterEntry, StoredPart};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 
 use crate::contracts::{PromptDoc, Rgba};
@@ -111,6 +111,12 @@ pub fn timeline_text(
             _ => {}
         }
     }
+    push_member_activity_rows(
+        &mut lines,
+        store.members.get(session_id).map_or(&[][..], Vec::as_slice),
+        width,
+        theme,
+    );
     let queued = store.is_working(session_id);
     for prompt in pending {
         if shown_user.iter().any(|shown| shown.trim() == prompt.trim()) {
@@ -129,6 +135,61 @@ pub fn timeline_text(
     TimelineRender {
         text: Text(lines),
         message_offsets,
+    }
+}
+
+fn push_member_activity_rows(
+    lines: &mut Vec<Line>,
+    members: &[MemberProjection],
+    _width: usize,
+    theme: &ResolvedTheme,
+) {
+    for member in members {
+        lines.push(member_activity_line(member, theme));
+    }
+}
+
+fn member_activity_line(member: &MemberProjection, theme: &ResolvedTheme) -> Line {
+    let color = status_color(&member.status, theme);
+    Line(vec![
+        Span::styled("◇ ", Some(color), None, Attrs::default()),
+        Span::styled(
+            member_activity_text(member),
+            Some(theme.text_muted),
+            None,
+            Attrs::default(),
+        ),
+    ])
+}
+
+fn member_activity_text(member: &MemberProjection) -> String {
+    let label = if member.subagent_type.is_empty() {
+        "Subagent".to_owned()
+    } else {
+        format!("{} Subagent", prompt_box::titlecase(&member.subagent_type))
+    };
+    let mut text = format!("{label} spawned");
+    if !member.description.is_empty() {
+        text.push_str(" — ");
+        text.push_str(&member.description);
+    }
+    if member.status != "spawning" {
+        text.push_str(" · ");
+        text.push_str(&member.status);
+    }
+    if !member.summary.is_empty() {
+        text.push_str(" — ");
+        text.push_str(&member.summary);
+    }
+    text
+}
+
+fn status_color(status: &str, theme: &ResolvedTheme) -> Rgba {
+    match status {
+        "done" => theme.success,
+        "failed" | "cancelled" => theme.error,
+        "busy" | "running" | "spawning" => theme.warning,
+        _ => theme.text_muted,
     }
 }
 
@@ -249,14 +310,15 @@ pub(crate) fn subagent_status(store: &MessageStore, session_id: &str) -> Option<
             total: siblings.len(),
         });
     }
-
+    let team_root = store.team_root_for(session_id);
     let mut roster_sessions = store
-        .team
-        .roster
-        .values()
+        .team_for(team_root)
+        .into_iter()
+        .flat_map(|team| team.roster.values())
         .filter_map(|entry| {
             let session = entry.session.as_str();
-            (!session.is_empty() && session != session_id).then_some(session)
+            (!session.is_empty() && session != session_id && session != team_root)
+                .then_some(session)
         })
         .collect::<Vec<_>>();
     roster_sessions.sort_unstable();
@@ -539,6 +601,7 @@ pub(crate) fn draw_sidebar(
     let cost = session_cost(store, session_id).unwrap_or(0.0);
     lines.push(muted_line(format!("${cost:.2} spent"), theme));
 
+    push_roster_block(&mut lines, store, session_id, inner.width as usize, theme);
     push_todo_block(&mut lines, store.todos(session_id), theme);
     push_files_block(
         &mut lines,
@@ -656,6 +719,71 @@ fn push_files_block(
         }
         lines.push(Line(spans));
     }
+}
+
+fn push_roster_block(
+    lines: &mut Vec<Line>,
+    store: &MessageStore,
+    session_id: &str,
+    width: usize,
+    theme: &ResolvedTheme,
+) {
+    let team_root = store.team_root_for(session_id);
+    let mut header_written = false;
+    for entry in store
+        .team_for(team_root)
+        .into_iter()
+        .flat_map(|team| team.roster.values())
+        .filter(|entry| roster_entry_actionable(store, session_id, team_root, entry))
+    {
+        if !header_written {
+            lines.push(Line::default());
+            lines.push(Line(vec![Span::styled(
+                "Subagents",
+                Some(theme.text),
+                None,
+                bold(),
+            )]));
+            header_written = true;
+        }
+        let task = entry
+            .current_task
+            .as_deref()
+            .filter(|task| !task.is_empty())
+            .map(|task| format!(" — {task}"))
+            .unwrap_or_default();
+        let line = format!("{} {}{}", entry.handle, entry.status, task);
+        let shown = truncate_right(&line, width);
+        lines.push(Line(vec![Span::styled(
+            shown,
+            Some(status_color(&entry.status, theme)),
+            None,
+            Attrs::default(),
+        )]));
+    }
+}
+
+fn roster_entry_actionable(
+    store: &MessageStore,
+    session_id: &str,
+    team_root: &str,
+    entry: &RosterEntry,
+) -> bool {
+    if entry.session.is_empty() || entry.session == session_id || entry.session == team_root {
+        return false;
+    }
+    let attention = !store.permissions(&entry.session).is_empty()
+        || !store.questions(&entry.session).is_empty();
+    matches!(entry.status.as_str(), "busy" | "failed") || attention
+}
+
+fn truncate_right(text: &str, budget: usize) -> String {
+    if text.chars().count() <= budget {
+        return text.to_owned();
+    }
+    let keep = budget.saturating_sub(1);
+    let head: String = text.chars().take(keep).collect();
+    format!("{head}…")
 }
 
 fn truncate_left(text: &str, budget: usize) -> String {
@@ -1100,8 +1228,10 @@ pub fn background(theme: &ResolvedTheme) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::transcript::{format_store_transcript, TranscriptOptions};
     use crate::theme::{builtin_theme, resolve, Mode, DEFAULT_THEME};
     use hya_sdk::GlobalEvent;
+
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -1114,6 +1244,32 @@ mod tests {
             "payload": { "type": kind, "properties": properties }
         }))
         .unwrap()
+    }
+    fn team_event(event: serde_json::Value) -> GlobalEvent {
+        serde_json::from_value(serde_json::json!({
+            "payload": {
+                "type": "hya.envelope",
+                "properties": { "seq": 1, "event": event }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn render_sidebar_text(
+        store: &MessageStore,
+        session_id: &str,
+        width: u16,
+        height: u16,
+    ) -> String {
+        let theme = theme();
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_sidebar(frame, frame.area(), store, session_id, None, &theme);
+            })
+            .unwrap();
+        rows_text(terminal.backend().buffer(), 0, height, width)
     }
 
     fn flatten(text: &Text) -> String {
@@ -1618,6 +1774,476 @@ mod tests {
         assert_eq!(
             rendered.message_offsets,
             vec![("msg_1".to_owned(), 0), ("msg_3".to_owned(), 5)],
+        );
+    }
+
+    #[test]
+    fn issue21_timeline_renders_subagent_spawn_row_and_keeps_task_tool_row_visible() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": {
+                "id": "msg_tool",
+                "sessionID": "ses_1",
+                "role": "assistant",
+                "time": { "created": 1, "completed": 2 }
+            } }),
+        ));
+        store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": {
+                "id": "prt_tool",
+                "messageID": "msg_tool",
+                "sessionID": "ses_1",
+                "type": "tool",
+                "tool": "task",
+                "state": {
+                    "status": "completed",
+                    "input": {
+                        "subagent_type": "general",
+                        "description": "delegate tool call"
+                    }
+                }
+            } }),
+        ));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_spawned",
+            "session": "ses_1",
+            "member": "mem_1",
+            "child": "ses_child",
+            "subagent_type": "oracle",
+            "description": "review the plan",
+            "depth": 1
+        })));
+
+        let theme = theme();
+        let rendered = flatten(
+            &timeline_text(
+                &store,
+                "ses_1",
+                &[],
+                80,
+                theme.border,
+                &[],
+                &[],
+                "",
+                false,
+                &theme,
+            )
+            .text,
+        );
+
+        assert!(
+            rendered.contains("General Task"),
+            "task tool row missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("delegate tool call"),
+            "task tool description missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("spawned"),
+            "spawn activity row missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("Oracle"),
+            "subagent type missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("review the plan"),
+            "spawn description missing: {rendered}"
+        );
+    }
+
+    #[test]
+    fn issue21_timeline_renders_terminal_subagent_outcome_row() {
+        let mut store = MessageStore::default();
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_finished",
+            "session": "ses_1",
+            "member": "mem_1",
+            "status": "failed",
+            "summary": "needs approval",
+            "child": "ses_child"
+        })));
+
+        let theme = theme();
+        let rendered = timeline_text(
+            &store,
+            "ses_1",
+            &[],
+            120,
+            theme.border,
+            &[],
+            &[],
+            "",
+            false,
+            &theme,
+        );
+        let flattened = flatten(&rendered.text);
+
+        assert_eq!(
+            rendered.text.0.len(),
+            1,
+            "member_finished should render one compact terminal Subagent activity row"
+        );
+        assert!(
+            flattened.contains("failed"),
+            "terminal status missing: {flattened}"
+        );
+        assert!(
+            flattened.contains("needs approval"),
+            "terminal summary missing: {flattened}"
+        );
+    }
+
+    #[test]
+    fn issue21_agent_activity_changed_does_not_add_extra_timeline_row_or_copy_task_text() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": { "id": "msg_1", "sessionID": "ses_1", "role": "user", "time": { "created": 1 } } }),
+        ));
+        store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": { "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1", "type": "text", "text": "start" } }),
+        ));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_1",
+            "agent_session": "ses_child",
+            "handle": "oracle-1",
+            "agent_type": "oracle",
+            "mode": "transient"
+        })));
+        let theme = theme();
+        let baseline = timeline_text(
+            &store,
+            "ses_1",
+            &[],
+            120,
+            theme.border,
+            &[],
+            &[],
+            "",
+            false,
+            &theme,
+        )
+        .text
+        .0
+        .len();
+
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_spawned",
+            "session": "ses_1",
+            "member": "mem_1",
+            "child": "ses_child",
+            "subagent_type": "oracle",
+            "description": "review the plan",
+            "depth": 1
+        })));
+        let after_spawn = timeline_text(
+            &store,
+            "ses_1",
+            &[],
+            120,
+            theme.border,
+            &[],
+            &[],
+            "",
+            false,
+            &theme,
+        );
+
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_1",
+            "handle": "oracle-1",
+            "status": "busy",
+            "current_task": "triaging"
+        })));
+        let after_running = timeline_text(
+            &store,
+            "ses_1",
+            &[],
+            120,
+            theme.border,
+            &[],
+            &[],
+            "",
+            false,
+            &theme,
+        );
+        let after_running_text = flatten(&after_running.text);
+
+        assert_eq!(
+            after_spawn.text.0.len(),
+            baseline + 1,
+            "member_spawned should add one compact Subagent activity row"
+        );
+        assert_eq!(
+            after_running.text.0.len(),
+            after_spawn.text.0.len(),
+            "running/current-task roster updates should not add another transcript row"
+        );
+        assert!(
+            !after_running_text.contains("triaging"),
+            "agent_activity_changed current_task should stay out of transcript copy: {after_running_text}"
+        );
+    }
+
+    #[test]
+    fn issue21_transcript_export_stays_message_only() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_1", "title": "Main Session" } }),
+        ));
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": { "id": "msg_1", "sessionID": "ses_1", "role": "user", "time": { "created": 1 } } }),
+        ));
+        store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": { "id": "prt_1", "messageID": "msg_1", "sessionID": "ses_1", "type": "text", "text": "ship it" } }),
+        ));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_spawned",
+            "session": "ses_1",
+            "member": "mem_1",
+            "child": "ses_child",
+            "subagent_type": "oracle",
+            "description": "review the plan",
+            "depth": 1
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_finished",
+            "session": "ses_1",
+            "member": "mem_1",
+            "status": "done",
+            "summary": "looks good",
+            "child": "ses_child"
+        })));
+
+        let theme = theme();
+        let live = flatten(
+            &timeline_text(
+                &store,
+                "ses_1",
+                &[],
+                80,
+                theme.border,
+                &[],
+                &[],
+                "",
+                false,
+                &theme,
+            )
+            .text,
+        );
+        let transcript = format_store_transcript(&store, "ses_1", TranscriptOptions::default())
+            .expect("stored transcript");
+
+        assert!(
+            live.contains("spawned"),
+            "live timeline should include derived activity rows: {live}"
+        );
+        assert!(
+            live.contains("looks good"),
+            "live terminal activity should show the summary: {live}"
+        );
+        assert!(
+            transcript.contains("ship it"),
+            "stored message transcript missing user message: {transcript}"
+        );
+        assert!(
+            !transcript.contains("review the plan"),
+            "derived spawn rows must stay out of exported transcript: {transcript}"
+        );
+        assert!(
+            !transcript.contains("looks good"),
+            "derived finish summaries must stay out of exported transcript: {transcript}"
+        );
+    }
+
+    #[test]
+    fn issue22_sidebar_renders_actionable_roster_entries_and_filters_idle_done() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_main", "title": "Main Session" } }),
+        ));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_main",
+            "agent_session": "ses_main",
+            "handle": "reviewer-main",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        })));
+        for (handle, session) in [
+            ("reviewer-1", "ses_busy"),
+            ("reviewer-2", "ses_failed"),
+            ("reviewer-3", "ses_idle"),
+            ("reviewer-4", "ses_done"),
+            ("reviewer-5", "ses_blocked"),
+        ] {
+            store.apply_event(&team_event(serde_json::json!({
+                "type": "agent_registered",
+                "session": "ses_main",
+                "agent_session": session,
+                "handle": handle,
+                "agent_type": "reviewer",
+                "mode": "resident"
+            })));
+        }
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-1",
+            "status": "busy",
+            "current_task": "triaging"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-2",
+            "status": "failed",
+            "current_task": "needs approval"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-main",
+            "status": "busy",
+            "current_task": "coordinating root"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-3",
+            "status": "idle"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-4",
+            "status": "done"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-5",
+            "status": "idle",
+            "current_task": "waiting approval"
+        })));
+        store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_other", "title": "Other Team" } }),
+        ));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_other",
+            "agent_session": "ses_other",
+            "handle": "reviewer-other-root",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_other",
+            "agent_session": "ses_other_failed",
+            "handle": "reviewer-other-failed",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_other",
+            "handle": "reviewer-other-root",
+            "status": "busy",
+            "current_task": "triaging other team"
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_other",
+            "handle": "reviewer-other-failed",
+            "status": "failed",
+            "current_task": "other team failure"
+        })));
+        store.apply_event(&event(
+            "permission.asked",
+            serde_json::json!({
+                "id": "per_blocked",
+                "sessionID": "ses_blocked",
+                "permission": "edit",
+                "patterns": ["src/main.rs"],
+                "metadata": { "filepath": "src/main.rs" },
+                "always": []
+            }),
+        ));
+
+        let rendered = render_sidebar_text(&store, "ses_main", SIDEBAR_WIDTH, 18);
+
+        assert!(
+            rendered.contains("reviewer-1"),
+            "busy roster entry missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("busy"),
+            "busy roster status missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("triaging"),
+            "busy roster task missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("reviewer-2"),
+            "failed roster entry missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("failed"),
+            "failed roster status missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("reviewer-5"),
+            "user-blocked roster entry should stay visible in the compact sidebar: {rendered}"
+        );
+        assert!(
+            rendered.contains("waiting approval"),
+            "attention-needed roster task missing: {rendered}"
+        );
+        assert!(
+            !rendered.contains("reviewer-3"),
+            "idle entries without attention should stay out of the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("reviewer-4"),
+            "done entries without attention should stay out of the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("reviewer-main"),
+            "active/root session roster entry must not appear as a subagent in the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("coordinating root"),
+            "active/root session task must not appear as a subagent task in the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("reviewer-other-root"),
+            "unrelated team root roster entry must not appear in the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("triaging other team"),
+            "unrelated team root task must not appear in the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("reviewer-other-failed"),
+            "unrelated team failed roster entry must not appear in the compact sidebar: {rendered}"
+        );
+        assert!(
+            !rendered.contains("other team failure"),
+            "unrelated team failed task must not appear in the compact sidebar: {rendered}"
         );
     }
 

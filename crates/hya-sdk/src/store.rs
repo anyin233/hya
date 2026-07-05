@@ -37,6 +37,25 @@ impl StoredPart {
     }
 }
 
+/// A spawned subagent as projected for its parent session's live timeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberProjection {
+    /// Stable member id within the parent session.
+    pub member: String,
+    /// Child session id when the backend reports one.
+    pub child: Option<String>,
+    /// Agent type requested for the subagent.
+    pub subagent_type: String,
+    /// Short task description supplied at spawn time.
+    pub description: String,
+    /// Spawn depth in the subagent tree.
+    pub depth: u32,
+    /// Wire lifecycle status: spawning, running, done, failed, or cancelled.
+    pub status: String,
+    /// Terminal summary reported by member_finished.
+    pub summary: String,
+}
+
 /// Live conversation store: `sessionID -> messages` and `messageID -> parts`, each kept
 /// id-sorted. Backend IDs are ULID-like (time-prefixed), so lexical order is chronological.
 #[derive(Debug, Default)]
@@ -48,8 +67,11 @@ pub struct MessageStore {
     pub diffs: HashMap<String, Vec<Value>>,
     pub permissions: HashMap<String, Vec<Value>>,
     pub questions: HashMap<String, Vec<Value>>,
-    /// Team-scoped mailbox/channel/roster read-model (ADR-0001), folded from the
-    /// `hya.envelope`-wrapped team events on the global stream.
+    /// Subagents spawned by parent session, folded from member lifecycle events.
+    pub members: HashMap<String, Vec<MemberProjection>>,
+    /// Per-team mailbox/channel/roster read-models keyed by team-root session id.
+    pub teams: HashMap<String, TeamProjection>,
+    /// Backward-compatible single-team aggregate; new TUI surfaces use [`Self::team_for`].
     pub team: TeamProjection,
 }
 
@@ -162,15 +184,146 @@ impl MessageStore {
                     _ => false,
                 }
             }
-            // Team mailbox/channel/roster events arrive wrapped in a `hya.envelope`
-            // whose `properties` is the raw backend envelope; fold the inner event
-            // into the team read-model (roster/channel/inbox views render from it).
+            // Team and member lifecycle events arrive wrapped in a `hya.envelope`
+            // whose `properties` is the raw backend envelope. Fold the inner event
+            // into the small frontend read-models the TUI renders from.
             "hya.envelope" => match props.get("event") {
-                Some(event) => self.team.apply_event(event),
+                Some(event) => {
+                    let member_changed = self.apply_member_event(event);
+                    let team_changed = self.apply_team_event(event);
+                    member_changed || team_changed
+                }
                 None => false,
             },
             _ => false,
         }
+    }
+
+    fn apply_team_event(&mut self, event: &Value) -> bool {
+        let scoped = str_field(event, "session")
+            .map(|session| {
+                self.teams
+                    .entry(session.to_owned())
+                    .or_default()
+                    .apply_event(event)
+            })
+            .unwrap_or(false);
+        self.team.apply_event(event) || scoped
+    }
+
+    /// Returns the live Team projection keyed by its root session id.
+    ///
+    /// Child routes should call `team_root_for` first when they need the Team
+    /// that owns a child session, because Team events are not keyed by child id.
+    #[must_use]
+    pub fn team_for(&self, root_session: &str) -> Option<&TeamProjection> {
+        self.teams.get(root_session)
+    }
+
+    /// Returns the topmost team session for `session_id`.
+    ///
+    /// Team events are keyed by the root session. If the starting session is not
+    /// known locally, the input id is already the safest key. If a stored child
+    /// points at a parent that is not cached, the parent id is still returned so
+    /// child routes can see root-scoped Team events before the root Session row
+    /// has been hydrated.
+    #[must_use]
+    pub fn team_root_for<'a>(&'a self, session_id: &'a str) -> &'a str {
+        let mut current = session_id;
+        for _ in 0..=self.sessions.len() {
+            let Some(parent) = self
+                .sessions
+                .get(current)
+                .and_then(|session| session.parent_id.as_deref())
+                .filter(|parent| !parent.is_empty())
+            else {
+                return current;
+            };
+            current = parent;
+        }
+        session_id
+    }
+
+    fn apply_member_event(&mut self, event: &Value) -> bool {
+        let Some(kind) = event.get("type").and_then(Value::as_str) else {
+            return false;
+        };
+        match kind {
+            "member_spawned" => {
+                let (Some(session), Some(member)) =
+                    (str_field(event, "session"), str_field(event, "member"))
+                else {
+                    return false;
+                };
+                let child = str_field(event, "child").map(str::to_owned);
+                let subagent_type = str_field(event, "subagent_type")
+                    .unwrap_or_default()
+                    .to_owned();
+                let description = str_field(event, "description")
+                    .unwrap_or_default()
+                    .to_owned();
+                let depth = event
+                    .get("depth")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32;
+                let entry = self.member_mut(session, member);
+                entry.child = child;
+                entry.subagent_type = subagent_type;
+                entry.description = description;
+                entry.depth = depth;
+                entry.status = "spawning".to_owned();
+                true
+            }
+            "member_status_changed" => {
+                let (Some(session), Some(member), Some(status)) = (
+                    str_field(event, "session"),
+                    str_field(event, "member"),
+                    str_field(event, "status"),
+                ) else {
+                    return false;
+                };
+                self.member_mut(session, member).status = status.to_owned();
+                true
+            }
+            "member_finished" => {
+                let (Some(session), Some(member), Some(status)) = (
+                    str_field(event, "session"),
+                    str_field(event, "member"),
+                    str_field(event, "status"),
+                ) else {
+                    return false;
+                };
+                let summary = str_field(event, "summary").unwrap_or_default().to_owned();
+                let child = str_field(event, "child").map(str::to_owned);
+                let entry = self.member_mut(session, member);
+                entry.status = status.to_owned();
+                entry.summary = summary;
+                if child.is_some() {
+                    entry.child = child;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn member_mut(&mut self, session: &str, member: &str) -> &mut MemberProjection {
+        let list = self.members.entry(session.to_owned()).or_default();
+        if let Some(index) = list.iter().position(|entry| entry.member == member) {
+            return &mut list[index];
+        }
+        list.push(MemberProjection {
+            member: member.to_owned(),
+            child: None,
+            subagent_type: String::new(),
+            description: String::new(),
+            depth: 0,
+            status: "spawning".to_owned(),
+            summary: String::new(),
+        });
+        let last = list.len() - 1;
+        &mut list[last]
     }
 
     #[must_use]
@@ -561,12 +714,9 @@ mod tests {
             store.apply_event(&registered),
             "team event mutates the store"
         );
+        let team = store.team_for("ses_root").expect("scoped team");
         assert_eq!(
-            store
-                .team
-                .roster
-                .get("reviewer-3")
-                .map(|e| e.session.as_str()),
+            team.roster.get("reviewer-3").map(|e| e.session.as_str()),
             Some("ses_child"),
             "roster folded from hya.envelope team event"
         );
@@ -582,8 +732,82 @@ mod tests {
         }))
         .unwrap();
         assert!(store.apply_event(&mail));
-        assert_eq!(store.team.inboxes["reviewer-3"].len(), 1);
-        assert_eq!(store.team.inboxes["reviewer-3"][0].body, "please review");
+        let team = store.team_for("ses_root").expect("scoped team");
+        assert_eq!(team.inboxes["reviewer-3"].len(), 1);
+        assert_eq!(team.inboxes["reviewer-3"][0].body, "please review");
+    }
+
+    #[test]
+    fn hya_envelope_team_rosters_are_scoped_by_root_session() {
+        let mut store = MessageStore::default();
+        let event = |root: &str, child: &str, status: Option<&str>| -> GlobalEvent {
+            let mut inner = serde_json::json!({
+                "type": "agent_registered",
+                "session": root,
+                "agent_session": child,
+                "handle": "reviewer-1",
+                "agent_type": "reviewer",
+                "mode": "resident"
+            });
+            if let Some(status) = status {
+                inner = serde_json::json!({
+                    "type": "agent_activity_changed",
+                    "session": root,
+                    "handle": "reviewer-1",
+                    "status": status,
+                    "current_task": format!("reviewing {root}")
+                });
+            }
+            serde_json::from_value(serde_json::json!({
+                "payload": { "type": "hya.envelope", "properties": { "seq": 1, "event": inner } }
+            }))
+            .unwrap()
+        };
+
+        assert!(store.apply_event(&event("ses_a", "ses_a_child", None)));
+        assert!(store.apply_event(&event("ses_b", "ses_b_child", None)));
+        assert!(store.apply_event(&event("ses_a", "", Some("busy"))));
+
+        let team_a = store.team_for("ses_a").expect("team a");
+        let team_b = store.team_for("ses_b").expect("team b");
+
+        assert_eq!(team_a.roster["reviewer-1"].session, "ses_a_child");
+        assert_eq!(team_a.roster["reviewer-1"].status, "busy");
+        assert_eq!(
+            team_a.roster["reviewer-1"].current_task.as_deref(),
+            Some("reviewing ses_a")
+        );
+        assert_eq!(team_b.roster["reviewer-1"].session, "ses_b_child");
+        assert_eq!(team_b.roster["reviewer-1"].status, "idle");
+        assert_eq!(team_b.roster["reviewer-1"].current_task, None);
+    }
+
+    #[test]
+    fn team_root_for_walks_parent_chain_and_defaults_safely() {
+        fn session_created(id: &str, parent_id: Option<&str>) -> GlobalEvent {
+            let mut info = serde_json::json!({ "id": id });
+            if let Some(parent_id) = parent_id {
+                info["parentID"] = serde_json::Value::String(parent_id.to_owned());
+            }
+            serde_json::from_value(serde_json::json!({
+                "payload": { "type": "session.created", "properties": { "info": info } }
+            }))
+            .unwrap()
+        }
+
+        let mut store = MessageStore::default();
+        assert_eq!(store.team_root_for("missing"), "missing");
+
+        assert!(store.apply_event(&session_created("ses_child", Some("ses_root"))));
+        assert!(store.apply_event(&session_created("ses_grandchild", Some("ses_child"))));
+
+        assert_eq!(store.team_root_for("ses_grandchild"), "ses_root");
+        assert_eq!(store.team_root_for("ses_child"), "ses_root");
+        assert_eq!(store.team_root_for("ses_root"), "ses_root");
+
+        assert!(store.apply_event(&session_created("cycle_a", Some("cycle_b"))));
+        assert!(store.apply_event(&session_created("cycle_b", Some("cycle_a"))));
+        assert_eq!(store.team_root_for("cycle_a"), "cycle_a");
     }
 
     #[test]
