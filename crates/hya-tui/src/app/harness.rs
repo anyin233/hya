@@ -236,7 +236,269 @@ fn global_event(kind: &str, properties: serde_json::Value) -> GlobalEvent {
 mod tests {
     use super::super::panes::PaneLayoutKind;
     use super::*;
+    use async_trait::async_trait;
+    use hya_sdk::{ApiClient, Client, SdkError, Transport};
     use serde_json::json;
+    use serde_json::Value;
+    use std::{
+        collections::VecDeque,
+        sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+    use tokio::sync::{Notify, Semaphore};
+
+    #[derive(Debug)]
+    struct RecordingTransportState {
+        next_session_ids: Mutex<VecDeque<String>>,
+        requests: Mutex<Vec<(String, String, Option<Value>)>>,
+        session_create_started: AtomicUsize,
+        block_session_create: AtomicBool,
+        session_create_releases: Mutex<Vec<Arc<Semaphore>>>,
+        next_session_create_release_ordinal: AtomicUsize,
+        session_create_error: Mutex<Option<String>>,
+        abort_started: AtomicUsize,
+        block_abort: AtomicBool,
+        abort_error: Mutex<Option<String>>,
+        abort_release: Notify,
+    }
+
+    impl RecordingTransportState {
+        fn new(next_session_id: &str) -> Self {
+            Self {
+                next_session_ids: Mutex::new(VecDeque::from([next_session_id.to_owned()])),
+                requests: Mutex::new(Vec::new()),
+                session_create_started: AtomicUsize::new(0),
+                block_session_create: AtomicBool::new(false),
+                session_create_releases: Mutex::new(Vec::new()),
+                next_session_create_release_ordinal: AtomicUsize::new(0),
+                session_create_error: Mutex::new(None),
+                abort_started: AtomicUsize::new(0),
+                block_abort: AtomicBool::new(false),
+                abort_error: Mutex::new(None),
+                abort_release: Notify::new(),
+            }
+        }
+
+        fn count_requests(&self, path: &str) -> usize {
+            self.requests
+                .lock()
+                .expect("request log")
+                .iter()
+                .filter(|(_, candidate, _)| candidate == path)
+                .count()
+        }
+        fn count_method_requests(&self, method: &str, path: &str) -> usize {
+            self.requests
+                .lock()
+                .expect("request log")
+                .iter()
+                .filter(|(candidate_method, candidate_path, _)| {
+                    candidate_method == method && candidate_path == path
+                })
+                .count()
+        }
+        fn request_bodies(&self, method: &str, path: &str) -> Vec<Value> {
+            self.requests
+                .lock()
+                .expect("request log")
+                .iter()
+                .filter_map(|(candidate_method, candidate_path, candidate_body)| {
+                    (candidate_method == method && candidate_path == path)
+                        .then(|| candidate_body.clone())
+                        .flatten()
+                })
+                .collect()
+        }
+
+        fn abort_started(&self) -> usize {
+            self.abort_started.load(Ordering::SeqCst)
+        }
+        fn queue_session_create_id(&self, session_id: &str) {
+            self.next_session_ids
+                .lock()
+                .expect("session create ids")
+                .push_back(session_id.to_owned());
+        }
+        fn block_session_create(&self) {
+            self.block_session_create.store(true, Ordering::SeqCst);
+        }
+
+        fn release_session_create(&self) {
+            let ordinal = self
+                .next_session_create_release_ordinal
+                .fetch_add(1, Ordering::SeqCst)
+                + 1;
+            self.release_session_create_ordinal(ordinal);
+        }
+        fn release_session_create_ordinal(&self, ordinal: usize) {
+            let release = self
+                .session_create_releases
+                .lock()
+                .expect("session create releases")
+                .get(
+                    ordinal
+                        .checked_sub(1)
+                        .expect("session create ordinals start at 1"),
+                )
+                .cloned()
+                .unwrap_or_else(|| panic!("session create #{ordinal} not started"));
+            release.add_permits(1);
+        }
+        fn fail_session_create(&self, message: &str) {
+            *self
+                .session_create_error
+                .lock()
+                .expect("session create error") = Some(message.to_owned());
+        }
+
+        async fn wait_for_session_create_started(&self, target: usize) {
+            while self.session_create_started.load(Ordering::SeqCst) < target {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        fn block_abort(&self) {
+            self.block_abort.store(true, Ordering::SeqCst);
+        }
+
+        fn release_abort(&self) {
+            self.block_abort.store(false, Ordering::SeqCst);
+            self.abort_release.notify_waiters();
+        }
+
+        fn fail_abort(&self, message: &str) {
+            *self.abort_error.lock().expect("abort error") = Some(message.to_owned());
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct RecordingTransport {
+        state: Arc<RecordingTransportState>,
+    }
+
+    #[async_trait]
+    impl Transport for RecordingTransport {
+        fn base_url(&self) -> &str {
+            "http://test.invalid"
+        }
+
+        fn directory(&self) -> &str {
+            "."
+        }
+
+        async fn request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&Value>,
+        ) -> Result<Value, SdkError> {
+            self.state.requests.lock().expect("request log").push((
+                method.to_owned(),
+                path.to_owned(),
+                body.cloned(),
+            ));
+            match (method, path) {
+                ("POST", "/session") => {
+                    let (release, session_id) = {
+                        let mut releases = self
+                            .state
+                            .session_create_releases
+                            .lock()
+                            .expect("session create releases");
+                        let mut ids = self
+                            .state
+                            .next_session_ids
+                            .lock()
+                            .expect("session create ids");
+                        let release = Arc::new(Semaphore::new(0));
+                        releases.push(Arc::clone(&release));
+                        let started = self
+                            .state
+                            .session_create_started
+                            .fetch_add(1, Ordering::SeqCst)
+                            + 1;
+                        debug_assert_eq!(
+                            releases.len(),
+                            started,
+                            "session create releases should track request ordinals in start order"
+                        );
+                        let session_id = if ids.len() > 1 {
+                            ids.pop_front().expect("queued session create id")
+                        } else {
+                            ids.front().cloned().expect("default session create id")
+                        };
+                        (release, session_id)
+                    };
+                    if self.state.block_session_create.load(Ordering::SeqCst) {
+                        release
+                            .acquire()
+                            .await
+                            .expect("session create release permit")
+                            .forget();
+                    }
+                    if let Some(message) = self
+                        .state
+                        .session_create_error
+                        .lock()
+                        .expect("session create error")
+                        .clone()
+                    {
+                        return Err(SdkError::Http(message));
+                    }
+                    Ok(json!({ "id": session_id }))
+                }
+                (_, abort_path) if abort_path.ends_with("/abort") => {
+                    self.state.abort_started.fetch_add(1, Ordering::SeqCst);
+                    if self.state.block_abort.load(Ordering::SeqCst) {
+                        self.state.abort_release.notified().await;
+                    }
+                    if let Some(message) =
+                        self.state.abort_error.lock().expect("abort error").clone()
+                    {
+                        return Err(SdkError::Http(message));
+                    }
+                    Ok(Value::Null)
+                }
+                _ => Ok(Value::Null),
+            }
+        }
+    }
+
+    fn recording_client(next_session_id: &str) -> (Arc<RecordingTransportState>, Arc<dyn Client>) {
+        let state = Arc::new(RecordingTransportState::new(next_session_id));
+        let client: Arc<dyn Client> = Arc::new(ApiClient::with_transport(RecordingTransport {
+            state: Arc::clone(&state),
+        }));
+        (state, client)
+    }
+
+    async fn harness_with_client(width: u16, height: u16, client: Arc<dyn Client>) -> AppHarness {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let state = AppState::default();
+        let data = Arc::clone(&state.data);
+        let input = RunTuiInput {
+            tui: Tui::from_test_backend(width, height).expect("test backend"),
+            state,
+            client,
+            events: rx,
+            tx: tx.clone(),
+            input_task: None,
+            default_agent: None,
+            default_model: None,
+            agent_names: Vec::new(),
+        };
+        let mut runtime = Runtime::new(input).expect("build runtime");
+        runtime.draw().await.expect("initial draw");
+        AppHarness {
+            runtime,
+            data,
+            tx,
+            width,
+            height,
+        }
+    }
 
     #[tokio::test]
     async fn home_screen_renders_connecting_placeholder() {
@@ -553,6 +815,60 @@ mod tests {
             h.main_route_session().as_deref(),
             Some("ses_main"),
             "opening a child aux pane must not retarget the main input route"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_route_roster_uses_root_team_scope_and_skips_self_and_main_row() {
+        let mut h = AppHarness::new(120, 30).await;
+        h.push_sse(
+            "session.created",
+            json!({ "info": { "id": "ses_child", "parentID": "ses_main" } }),
+        )
+        .await;
+        h.push_sse(
+            "session.created",
+            json!({ "info": { "id": "ses_sibling", "parentID": "ses_main" } }),
+        )
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_main",
+            "handle": "main", "agent_type": "main", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_child",
+            "handle": "reviewer-1", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_sibling",
+            "handle": "reviewer-2", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+
+        h.navigate("ses_child").await;
+        h.press_ctrl('x').await;
+        h.press(Key::Char('o')).await;
+
+        assert!(
+            h.buffer_contains("Subagent manager"),
+            "leader+o opens the Subagent manager from a child route; frame:\n{}",
+            h.buffer_text()
+        );
+
+        let roster = h
+            .roster_dialog_state()
+            .expect("Subagent manager should expose live roster state on a child route");
+        assert_eq!(
+            roster.item_sessions,
+            vec!["ses_sibling".to_owned()],
+            "a child route should resolve the root Team, list only sibling subagents, and skip both itself and the root/main row; state: {roster:?}"
+        );
+        assert_eq!(
+            roster.selected_session.as_deref(),
+            Some("ses_sibling"),
+            "the sibling subagent should be the only selectable roster target from a child route"
         );
     }
 
@@ -1187,6 +1503,610 @@ mod tests {
             h.main_route_session().as_deref(),
             Some("ses_main"),
             "ignoring a non-terminal child message update should not retarget the main input session"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_backend_ready_replays_all_startup_queued_prompts_into_created_session_in_order(
+    ) {
+        let (transport, client) = recording_client("ses_startup");
+        transport.queue_session_create_id("ses_should_stay_unused");
+        let mut h = harness_with_client(120, 30, client).await;
+
+        h.type_text("first queued prompt").await;
+        h.press(Key::Enter).await;
+        h.type_text("second queued prompt").await;
+        h.press(Key::Enter).await;
+
+        assert!(
+            h.buffer_contains("queued prompt (2)"),
+            "precondition: both startup prompts should queue before backend readiness; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.backend_ready().await;
+        h.settle().await;
+
+        assert_eq!(
+            transport.count_method_requests("POST", "/session"),
+            1,
+            "backend-ready replay should lazily create a single session for the queued startup prompts"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_startup"),
+            "replaying queued startup prompts should land on the created session"
+        );
+        assert_eq!(
+            transport.request_bodies("POST", "/session/ses_startup/message"),
+            vec![
+                json!({ "parts": [{ "type": "text", "text": "first queued prompt" }] }),
+                json!({ "parts": [{ "type": "text", "text": "second queued prompt" }] }),
+            ],
+            "backend-ready replay should post both queued startup prompts to the created session in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_session_new_clears_startup_queue_and_keeps_lazy_session_creation() {
+        let (transport, client) = recording_client("ses_after_new");
+        let mut h = harness_with_client(100, 30, client).await;
+
+        h.type_text("old pending").await;
+        h.press(Key::Enter).await;
+        assert!(
+            h.buffer_contains("queued prompt (1)"),
+            "startup submit should queue locally before backend readiness; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('q')).await;
+        assert!(
+            h.buffer_contains("old pending"),
+            "queued-prompts command should show the pending startup prompt; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('n')).await;
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "/new should navigate to a clean Session screen immediately"
+        );
+        assert_eq!(h.prompt_text(), "", "/new should clear the prompt composer");
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('q')).await;
+        assert!(
+            h.buffer_contains("No queued prompts"),
+            "/new should clear the startup queue before queued-prompts reporting; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.backend_ready().await;
+        assert_eq!(
+            transport.count_requests("/session"),
+            0,
+            "/new must not create a persisted empty session before the next submitted prompt"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_after_new/message"),
+            0,
+            "cleared startup prompts must not replay after backend readiness"
+        );
+
+        h.type_text("fresh prompt").await;
+        h.press(Key::Enter).await;
+
+        assert_eq!(
+            transport.count_requests("/session"),
+            1,
+            "the next submitted prompt after /new should lazily create the persisted session"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_after_new/message"),
+            1,
+            "only the fresh prompt should be sent after /new"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_after_new"),
+            "the freshly created session should become the active route"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_session_new_clears_submitted_state_and_panes() {
+        let (_transport, client) = recording_client("ses_unused");
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+        open_child_aux(&mut h).await;
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        h.type_text("submitted prompt").await;
+        h.press(Key::Enter).await;
+        h.press(Key::Up).await;
+        assert_eq!(
+            h.prompt_text(),
+            "submitted prompt",
+            "precondition: prompt history should surface the submitted prompt before /new"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('n')).await;
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "/new should navigate away from the old session immediately"
+        );
+        assert!(
+            h.aux_sessions().is_empty(),
+            "/new should clear old Session-screen panes"
+        );
+        assert_eq!(h.prompt_text(), "", "/new should clear the prompt composer");
+
+        h.press(Key::Up).await;
+        assert_eq!(
+            h.prompt_text(),
+            "",
+            "/new should reset prompt history so Up does not resurrect the prior submitted prompt"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('q')).await;
+        assert!(
+            h.buffer_contains("No queued prompts"),
+            "submitted prompts should not survive /new as queued prompts; frame:\n{}",
+            h.buffer_text()
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_session_new_schedules_abort_without_blocking_navigation() {
+        let (transport, client) = recording_client("ses_unused");
+        transport.block_abort();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+        open_child_aux(&mut h).await;
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('0')).await;
+        h.press_ctrl('x').await;
+        h.press(Key::Char('n')).await;
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "/new should navigate away from the old session without waiting for abort completion"
+        );
+        assert_eq!(
+            transport.abort_started(),
+            1,
+            "/new should schedule an asynchronous abort for the old active turn"
+        );
+        transport.fail_abort("abort backend exploded");
+
+        transport.release_abort();
+        h.settle().await;
+        assert!(
+            h.buffer_contains("abort failed: abort backend exploded"),
+            "abort failure should surface as a toast after /new releases the async abort; frame:\n{}",
+            h.buffer_text()
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_session_new_drops_inflight_lazy_first_prompt_submission() {
+        let (transport, client) = recording_client("ses_stale");
+        transport.block_session_create();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+
+        h.type_text("stale prompt").await;
+        h.press(Key::Enter).await;
+        transport.wait_for_session_create_started(1).await;
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "precondition: the lazy first submit should still be waiting on session creation"
+        );
+
+        h.press_ctrl('x').await;
+        h.press(Key::Char('n')).await;
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "/new should keep the main route reset while the stale lazy submit is in flight"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "releasing the stale lazy submit after /new must not navigate back into the created session"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_stale/message"),
+            0,
+            "releasing the stale lazy submit after /new must not send the stale prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_lazy_first_submit_stale_success_cleans_up_created_session_after_route_change()
+    {
+        let (transport, client) = recording_client("ses_stale");
+        transport.block_session_create();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+
+        h.type_text("stale prompt").await;
+        h.press(Key::Enter).await;
+        transport.wait_for_session_create_started(1).await;
+
+        h.push_sse("session.created", json!({ "info": { "id": "ses_live" } }))
+            .await;
+        h.dispatch(AppEvent::LoadSession("ses_live".to_owned()))
+            .await;
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "precondition: the explicit route change should load the replacement session before the stale create resolves"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_stale"),
+            1,
+            "a stale lazy first submit that already created an empty session should clean it up after the route changes"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_stale/message"),
+            0,
+            "the stale lazy first submit must not post its prompt after the main route changes"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "releasing the stale lazy first submit must keep the explicitly loaded session active"
+        );
+    }
+    #[tokio::test]
+    async fn issue20_home_lazy_first_submit_accepts_first_create_and_stales_second() {
+        let (transport, client) = recording_client("ses_first");
+        transport.queue_session_create_id("ses_second");
+        transport.block_session_create();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+
+        h.type_text("first prompt").await;
+        h.press(Key::Enter).await;
+        transport.wait_for_session_create_started(1).await;
+
+        h.type_text("second prompt").await;
+        h.press(Key::Enter).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            transport.wait_for_session_create_started(2),
+        )
+        .await
+        .expect("submitting a second prompt from Home while the first lazy create is still pending should start a second lazy session create");
+
+        assert_eq!(
+            transport.count_method_requests("POST", "/session"),
+            2,
+            "two Home-route submits before either create resolves should issue two in-flight lazy session creates"
+        );
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "precondition: neither lazy create should navigate before the first create returns"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_first"),
+            "accepting the first resolved lazy create should navigate to the first created session"
+        );
+        assert_eq!(
+            transport.request_bodies("POST", "/session/ses_first/message"),
+            vec![json!({ "parts": [{ "type": "text", "text": "first prompt" }] })],
+            "the first lazy prompt should post exactly once to the first created session"
+        );
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_first"),
+            0,
+            "accepting the first resolved lazy create must not delete the accepted session"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_first"),
+            "resolving the second stale lazy create must not navigate over the first accepted session"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_second/message"),
+            0,
+            "the second stale lazy create must not post its prompt to the second created session"
+        );
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_second"),
+            1,
+            "the second stale lazy create should delete only the second newly created empty session"
+        );
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_first"),
+            0,
+            "the accepted first session must not be deleted when the second create resolves stale"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_home_lazy_first_submit_keeps_first_owner_when_second_create_resolves_first() {
+        let (transport, client) = recording_client("ses_first");
+        transport.queue_session_create_id("ses_second");
+        transport.block_session_create();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+
+        h.type_text("first prompt").await;
+        h.press(Key::Enter).await;
+        transport.wait_for_session_create_started(1).await;
+
+        h.type_text("second prompt").await;
+        h.press(Key::Enter).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            transport.wait_for_session_create_started(2),
+        )
+        .await
+        .expect("submitting a second prompt from Home while the first lazy create is still pending should start a second lazy session create");
+
+        assert_eq!(
+            transport.count_method_requests("POST", "/session"),
+            2,
+            "two Home-route submits before either create resolves should issue two in-flight lazy session creates"
+        );
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "precondition: neither lazy create should navigate before the first create returns"
+        );
+
+        transport.release_session_create_ordinal(2);
+        h.settle().await;
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "releasing the second lazy create first must not let the later Home submit take over before the first create resolves"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_second/message"),
+            0,
+            "releasing the second lazy create first must not post the second prompt"
+        );
+
+        transport.release_session_create_ordinal(1);
+        h.settle().await;
+
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_first"),
+            "once the first lazy create resolves, the first Home submit should own the created session"
+        );
+        assert_eq!(
+            transport.request_bodies("POST", "/session/ses_first/message"),
+            vec![json!({ "parts": [{ "type": "text", "text": "first prompt" }] })],
+            "the first lazy prompt should post exactly once to the first created session even when the second create response wins the race"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_second/message"),
+            0,
+            "the second lazy create must never post its prompt when it resolves before the first create"
+        );
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_second"),
+            1,
+            "the second created session should be deleted as stale after the first Home submit wins ownership"
+        );
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_first"),
+            0,
+            "the accepted first session must not be deleted when the second create response resolves earlier"
+        );
+        assert!(
+            !h.buffer_contains("second prompt"),
+            "the stale second prompt must not render in the owned session after cleanup settles; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.press(Key::Up).await;
+        let recalled = h.prompt_text().to_string();
+        assert!(
+            recalled.is_empty() || recalled == "first prompt",
+            "prompt history after stale cleanup must not resurrect the stale second prompt; got {recalled:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_lazy_first_submit_stale_create_error_does_not_render_after_route_change() {
+        let (transport, client) = recording_client("ses_stale");
+        transport.block_session_create();
+        transport.fail_session_create("session backend exploded");
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+
+        h.type_text("stale prompt").await;
+        h.press(Key::Enter).await;
+        transport.wait_for_session_create_started(1).await;
+
+        h.push_sse("session.created", json!({ "info": { "id": "ses_live" } }))
+            .await;
+        h.dispatch(AppEvent::LoadSession("ses_live".to_owned()))
+            .await;
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "precondition: the explicit route change should load the replacement session before the stale create error resolves"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert!(
+            !h.buffer_contains("session create failed"),
+            "a stale session-create failure must not render a toast after the main route changes; frame:\n{}",
+            h.buffer_text()
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "the stale create failure must keep the explicitly loaded session active"
+        );
+    }
+
+    #[tokio::test]
+    async fn issue20_command_palette_lazy_create_stale_route_change_cleans_up_without_posting_command(
+    ) {
+        let (transport, client) = recording_client("ses_stale");
+        transport.block_session_create();
+        let mut h = harness_with_client(120, 30, client).await;
+        h.backend_ready().await;
+        h.dispatch(AppEvent::CommandList(vec!["review".to_owned()]))
+            .await;
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "precondition: the command-palette action should start from a non-session route"
+        );
+
+        h.press_ctrl('p').await;
+        assert!(
+            h.buffer_contains("Commands"),
+            "ctrl+p should open the command palette; frame:\n{}",
+            h.buffer_text()
+        );
+
+        h.type_text("review").await;
+        let frame = h.buffer_text();
+        let (row, column) = frame
+            .lines()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                line.find("review")
+                    .map(|column| (row as u16, column as u16))
+            })
+            .last()
+            .expect("filtering the command palette should render the discovered review command");
+        h.dispatch(AppEvent::Mouse {
+            column,
+            row,
+            kind: super::super::MouseKind::Press,
+        })
+        .await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            transport.wait_for_session_create_started(1),
+        )
+        .await
+        .expect("selecting the discovered review command from the command palette should start lazy session creation");
+
+        assert_eq!(
+            h.main_route_session(),
+            None,
+            "precondition: the command-palette lazy create should still be waiting on session creation"
+        );
+
+        h.push_sse("session.created", json!({ "info": { "id": "ses_live" } }))
+            .await;
+        h.dispatch(AppEvent::LoadSession("ses_live".to_owned()))
+            .await;
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "precondition: the explicit route change should load the replacement session before the stale command create resolves"
+        );
+
+        transport.release_session_create();
+        h.settle().await;
+
+        assert_eq!(
+            transport.count_method_requests("DELETE", "/session/ses_stale"),
+            1,
+            "a stale command-palette lazy create should delete the empty session it created after the route changes"
+        );
+        assert_eq!(
+            transport.count_requests("/session/ses_stale/command"),
+            0,
+            "the stale command-palette lazy create must not post its command after the main route changes"
+        );
+        assert_eq!(
+            h.main_route_session().as_deref(),
+            Some("ses_live"),
+            "releasing the stale command-palette lazy create must keep the explicitly loaded session active"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_route_channels_overlay_uses_root_team_scope_for_inbox_mail() {
+        let mut h = AppHarness::new(120, 30).await;
+        h.push_sse("session.created", json!({ "info": { "id": "ses_main" } }))
+            .await;
+        h.push_sse(
+            "session.created",
+            json!({ "info": { "id": "ses_child", "parentID": "ses_main" } }),
+        )
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_main",
+            "handle": "main", "agent_type": "main", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_child",
+            "handle": "reviewer-1", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+        h.push_team_event(json!({
+            "type": "mail_sent", "session": "ses_main", "from": "main",
+            "to": { "kind": "handle", "id": "reviewer-1" }, "body": "please review"
+        }))
+        .await;
+
+        h.navigate("ses_child").await;
+        h.press_ctrl('x').await;
+        h.press(Key::Char('i')).await;
+
+        assert!(
+            h.buffer_contains("Channels & inboxes"),
+            "leader+i opens the channel/inbox overlay from a child route; frame:\n{}",
+            h.buffer_text()
+        );
+        assert!(
+            h.buffer_contains("main: please review"),
+            "a child route should resolve the root Team projection and show root-scoped inbox mail; frame:\n{}",
+            h.buffer_text()
+        );
+        assert!(
+            !h.buffer_contains("No channel activity yet"),
+            "root-scoped inbox mail should replace the empty placeholder on a child route; frame:\n{}",
+            h.buffer_text()
         );
     }
 

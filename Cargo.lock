@@ -934,7 +934,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "hya-app",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "hya-client"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "hya-proto",
  "reqwest",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "futures",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "hya-parity"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "hya-sdk",
  "hya-tui",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -1087,15 +1087,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.32.3"
+version = "0.32.4"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.32.3"
+version = "0.32.4"
 
 [[package]]
 name = "hya-proto"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "base64",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "hya-proto",
  "serde_json",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "async-trait",
  "base64",
@@ -1200,8 +1200,9 @@ dependencies = [
 
 [[package]]
 name = "hya-tui"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
+ "async-trait",
  "crossterm",
  "futures-util",
  "fuzzy-matcher",
@@ -1222,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tui-lib"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "ratatui 0.29.0",
 ]
@@ -3681,7 +3682,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.32.3"
+version = "0.32.4"
 dependencies = [
  "anyhow",
  "serde",

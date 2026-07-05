@@ -21,3 +21,6 @@ time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync"] }
 unicode-segmentation = "1"
 unicode-width = "0.2"
+
+[dev-dependencies]
+async-trait = { workspace = true }
