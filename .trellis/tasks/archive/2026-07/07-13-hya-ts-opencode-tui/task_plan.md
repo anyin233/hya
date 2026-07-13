@@ -16,7 +16,7 @@ Plan and then execute the smallest supportable migration of OpenCode's TUI to
   - [complete] Add real-backend question reply/reject coverage and correct only the completion payload fields it proves wrong.
   - [complete] Remove the remaining shipped SDK server/Console source, branding, and mutable workflow-ref failures demonstrated by the rerun.
 - [complete] Re-run the independent check and full verification gates.
-- [in_progress] Update durable specs, commit and push only task-owned files, then finish the Trellis task.
+- [complete] Update durable specs, commit and push only task-owned files, then finish the Trellis task.
 
 ## Decisions
 
