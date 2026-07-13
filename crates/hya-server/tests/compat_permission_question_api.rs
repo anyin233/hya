@@ -2,10 +2,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef, SessionId};
@@ -102,6 +103,20 @@ async fn wait_for_data(app: axum::Router, uri: &str) -> Value {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     panic!("pending request did not appear");
+}
+
+async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> Value {
+    let chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("event")
+        .expect("body chunk")
+        .expect("valid chunk");
+    let frame = String::from_utf8(chunk.to_vec()).unwrap();
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("data line");
+    serde_json::from_str(data).unwrap()
 }
 
 #[tokio::test]
@@ -305,6 +320,150 @@ async fn compat_question_request_lists_replies_and_rejects() {
     assert_eq!(
         reject_task.await.unwrap().unwrap(),
         QuestionAnswer::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn compat_global_event_streams_question_lifecycle_once() {
+    let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (interaction, question_rx) = InteractionPlane::new();
+    let (engine, agent) = base_engine(permission, Some(interaction.clone()), tempdir()).await;
+    let session = create_session(&engine, &agent).await;
+    let other_session = create_session(&engine, &agent).await;
+    let app = router(AppState::new(engine, agent).with_question_requests(question_rx));
+
+    let response = request(app.clone(), "GET", "/global/event", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    assert_eq!(
+        read_sse_json(&mut stream).await["payload"]["type"],
+        "server.connected"
+    );
+
+    let ask_session = session.parse().unwrap();
+    let ask = tokio::spawn({
+        let interaction = interaction.clone();
+        async move {
+            interaction
+                .for_session(ask_session)
+                .ask(
+                    "Continue?".to_string(),
+                    QuestionKind::Select {
+                        options: vec!["yes".to_string(), "no".to_string()],
+                        allow_custom: false,
+                    },
+                )
+                .await
+        }
+    });
+    let asked = read_sse_json(&mut stream).await;
+    assert_eq!(asked["payload"]["type"], "question.asked");
+    let request_id = asked["payload"]["properties"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(request_id.starts_with("q_"));
+    assert_eq!(asked["payload"]["properties"]["sessionID"], session);
+    assert_eq!(
+        asked["payload"]["properties"]["questions"][0]["options"],
+        json!([
+            {"label": "yes", "description": ""},
+            {"label": "no", "description": ""}
+        ])
+    );
+
+    let reply = request(
+        app.clone(),
+        "POST",
+        &format!("/api/session/{session}/question/{request_id}/reply"),
+        Some(json!({"answers": [["yes"]]})),
+    )
+    .await;
+    assert_eq!(reply.status(), StatusCode::NO_CONTENT);
+    assert_eq!(ask.await.unwrap().unwrap(), QuestionAnswer::Selected(0));
+    let replied = read_sse_json(&mut stream).await;
+    assert_eq!(replied["payload"]["type"], "question.replied");
+    assert_eq!(
+        replied["payload"]["properties"],
+        json!({"sessionID": session, "requestID": request_id, "answers": [["yes"]]})
+    );
+
+    let duplicate = request(
+        app.clone(),
+        "POST",
+        &format!("/api/session/{session}/question/{request_id}/reply"),
+        Some(json!({"answers": [["yes"]]})),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::NOT_FOUND);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err(),
+        "duplicate reply emitted an event"
+    );
+
+    let reject_session = session.parse().unwrap();
+    let reject = tokio::spawn(async move {
+        interaction
+            .for_session(reject_session)
+            .ask(
+                "Name?".to_string(),
+                QuestionKind::FreeText { default: None },
+            )
+            .await
+    });
+    let asked = read_sse_json(&mut stream).await;
+    assert_eq!(asked["payload"]["type"], "question.asked");
+    let reject_id = asked["payload"]["properties"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let wrong_session = request(
+        app.clone(),
+        "POST",
+        &format!("/api/session/{other_session}/question/{reject_id}/reject"),
+        None,
+    )
+    .await;
+    assert_eq!(wrong_session.status(), StatusCode::NOT_FOUND);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err(),
+        "wrong-session reject emitted an event"
+    );
+
+    let response = request(
+        app.clone(),
+        "POST",
+        &format!("/api/session/{session}/question/{reject_id}/reject"),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(reject.await.unwrap().unwrap(), QuestionAnswer::Cancelled);
+    let rejected = read_sse_json(&mut stream).await;
+    assert_eq!(rejected["payload"]["type"], "question.rejected");
+    assert_eq!(
+        rejected["payload"]["properties"],
+        json!({"sessionID": session, "requestID": reject_id})
+    );
+
+    let duplicate = request(
+        app,
+        "POST",
+        &format!("/api/session/{session}/question/{reject_id}/reject"),
+        None,
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::NOT_FOUND);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err(),
+        "duplicate reject emitted an event"
     );
 }
 

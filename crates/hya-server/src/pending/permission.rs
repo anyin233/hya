@@ -37,6 +37,26 @@ pub(crate) struct PermissionRequestView {
     save: Option<Vec<String>>,
 }
 
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct LegacyPermissionRequestView {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    permission: String,
+    patterns: Vec<String>,
+    metadata: Value,
+    always: Vec<String>,
+    tool: PermissionToolView,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PermissionToolView {
+    #[serde(rename = "messageID")]
+    message_id: String,
+    #[serde(rename = "callID")]
+    call_id: String,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum PermissionReply {
     Once,
@@ -96,6 +116,19 @@ impl PermissionRequests {
             .await
             .iter()
             .filter_map(|(id, entry)| permission_view(id, entry))
+            .collect()
+    }
+
+    pub(crate) async fn list_legacy(&self) -> Vec<LegacyPermissionRequestView> {
+        self.inner
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .session
+                    .map(|session| legacy_permission_view(id, entry, session.to_string()))
+            })
             .collect()
     }
 
@@ -235,6 +268,33 @@ fn permission_view(id: &str, entry: &PendingPermission) -> Option<PermissionRequ
     })
 }
 
+fn legacy_permission_view(
+    id: &str,
+    entry: &PendingPermission,
+    session_id: String,
+) -> LegacyPermissionRequestView {
+    LegacyPermissionRequestView {
+        id: id.to_string(),
+        session_id,
+        permission: action_name(entry.action),
+        patterns: vec![entry.resource.pattern()],
+        metadata: json!({}),
+        always: vec!["*".to_string()],
+        tool: PermissionToolView {
+            message_id: entry
+                .message_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            call_id: entry
+                .call_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        },
+    }
+}
+
 async fn tool_correlation(
     store: &SessionStore,
     req: &AskRequest,
@@ -310,27 +370,14 @@ fn input_mentions_resource(input: &Value, resource: &str) -> bool {
 }
 
 fn permission_asked_event(request_id: &str, entry: &PendingPermission) -> Value {
-    let message_id = entry
-        .message_id
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let call_id = entry
-        .call_id
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
     json!({
         "id": format!("evt_hya_perm_{request_id}"),
         "type": "permission.asked",
-        "properties": {
-            "id": request_id,
-            "sessionID": entry.session.map(|session| session.to_string()).unwrap_or_default(),
-            "permission": action_name(entry.action),
-            "patterns": [entry.resource.pattern()],
-            "metadata": {},
-            "tool": { "messageID": message_id, "callID": call_id },
-        },
+        "properties": legacy_permission_view(
+            request_id,
+            entry,
+            entry.session.map(|session| session.to_string()).unwrap_or_default(),
+        ),
     })
 }
 

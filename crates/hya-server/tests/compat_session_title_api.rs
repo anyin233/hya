@@ -148,6 +148,16 @@ async fn prompt_without_resume(app: axum::Router, session: &str, text: &str) {
 }
 
 #[tokio::test]
+async fn compat_legacy_session_create_preserves_requested_title() {
+    let app = router(state_with_script(vec![]).await);
+
+    let (status, created) = post_json(app, "/session", json!({"title": "SDK workflow"})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["title"], "SDK workflow");
+}
+
+#[tokio::test]
 async fn compat_title_replaces_root_fallback_with_clean_title_output() {
     let app = router(
         state_with_script(vec![vec![

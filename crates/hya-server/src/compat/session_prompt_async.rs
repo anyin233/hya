@@ -2,7 +2,6 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use hya_proto::api::PromptRequest;
 use hya_proto::{Envelope, Event, SessionId, now_millis};
 use serde_json::json;
 
@@ -11,9 +10,10 @@ use crate::{ApiError, ServerState, parse_session};
 pub(super) async fn prompt_async(
     State(st): State<ServerState>,
     Path(id): Path<String>,
-    Json(req): Json<PromptRequest>,
+    Json(req): Json<super::session_prompt_legacy::PromptPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    let text = super::session_prompt_legacy::prompt_text(&req)?;
     match super::load_session(&st, session, None).await {
         Ok(_) => {}
         Err(error) if error.status == StatusCode::NOT_FOUND => {
@@ -34,7 +34,7 @@ pub(super) async fn prompt_async(
         let guard = run;
         publish_session_status(&engine, session, "busy").await;
         let result = async {
-            engine.admit_user_prompt(session, req.text).await?;
+            engine.admit_user_prompt(session, text).await?;
             let _ = engine.auto_title_session(session, &agent.model).await;
             engine
                 .run_turn_with_external_dirs(session, &agent, cancel, &external_dirs)

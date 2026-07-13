@@ -16,6 +16,7 @@ pub(super) fn router() -> Router<ServerState> {
 #[derive(Default, Deserialize)]
 struct CreateLegacyRequest {
     id: Option<String>,
+    title: Option<String>,
     #[serde(rename = "parentID")]
     parent_id: Option<String>,
     parent: Option<String>,
@@ -70,6 +71,9 @@ async fn create(
             },
         )
         .await?;
+    if let Some(title) = req.title {
+        st.engine.set_title(session, title).await?;
+    }
     Ok(Json(super::load_session(&st, session, None).await?.info))
 }
 

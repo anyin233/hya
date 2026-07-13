@@ -7,11 +7,13 @@ use hya_tool::{
     QuestionRequest,
 };
 use serde::Serialize;
-use tokio::sync::{Mutex, mpsc};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct QuestionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingQuestion>>>,
+    events: broadcast::Sender<Value>,
 }
 
 struct PendingQuestion {
@@ -47,9 +49,19 @@ struct QuestionOption {
 
 impl QuestionRequests {
     #[must_use]
+    fn new() -> Self {
+        let (events, _) = broadcast::channel(256);
+        Self {
+            inner: Arc::default(),
+            events,
+        }
+    }
+
+    #[must_use]
     pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        let requests = Self::default();
+        let requests = Self::new();
         let inner = requests.inner.clone();
+        let events = requests.events.clone();
         std::mem::drop(tokio::spawn(async move {
             while let Some(req) = rx.recv().await {
                 let entry = PendingQuestion {
@@ -57,10 +69,19 @@ impl QuestionRequests {
                     questions: req.questions,
                     reply: req.reply,
                 };
-                inner.lock().await.insert(req.id.to_string(), entry);
+                let request_id = req.id.to_string();
+                let asked = question_asked_event(&request_id, &entry);
+                inner.lock().await.insert(request_id, entry);
+                if let Some(asked) = asked {
+                    let _published = events.send(asked);
+                }
             }
         }));
         requests
+    }
+
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
+        self.events.subscribe()
     }
 
     pub(crate) async fn list(&self) -> Vec<QuestionRequestView> {
@@ -95,10 +116,15 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        entry
+        let event_answers = answers.clone();
+        let ok = entry
             .reply
             .send_many(answers_from_reply(entry.questions, answers))
-            .is_ok()
+            .is_ok();
+        if ok {
+            self.publish_replied(Some(session), id, event_answers);
+        }
+        ok
     }
 
     pub(crate) async fn reject(&self, session: SessionId, id: &str) -> bool {
@@ -106,7 +132,11 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        reject_entry(entry)
+        let ok = reject_entry(entry);
+        if ok {
+            self.publish_rejected(Some(session), id);
+        }
+        ok
     }
 
     pub(crate) async fn contains(&self, id: &str) -> bool {
@@ -118,10 +148,16 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        entry
+        let session = entry.session;
+        let event_answers = answers.clone();
+        let ok = entry
             .reply
             .send_many(answers_from_reply(entry.questions, answers))
-            .is_ok()
+            .is_ok();
+        if ok {
+            self.publish_replied(session, id, event_answers);
+        }
+        ok
     }
 
     pub(crate) async fn reject_any(&self, id: &str) -> bool {
@@ -129,7 +165,12 @@ impl QuestionRequests {
         let Some(entry) = entry else {
             return false;
         };
-        reject_entry(entry)
+        let session = entry.session;
+        let ok = reject_entry(entry);
+        if ok {
+            self.publish_rejected(session, id);
+        }
+        ok
     }
 
     async fn take(&self, session: SessionId, id: &str) -> Option<PendingQuestion> {
@@ -143,6 +184,35 @@ impl QuestionRequests {
 
     async fn take_any(&self, id: &str) -> Option<PendingQuestion> {
         self.inner.lock().await.remove(id)
+    }
+
+    fn publish_replied(&self, session: Option<SessionId>, id: &str, answers: Vec<Vec<String>>) {
+        let _published = self.events.send(json!({
+            "id": format!("evt_hya_question_complete_{id}"),
+            "type": "question.replied",
+            "properties": {
+                "sessionID": session.map(|session| session.to_string()).unwrap_or_default(),
+                "requestID": id,
+                "answers": answers,
+            },
+        }));
+    }
+
+    fn publish_rejected(&self, session: Option<SessionId>, id: &str) {
+        let _published = self.events.send(json!({
+            "id": format!("evt_hya_question_complete_{id}"),
+            "type": "question.rejected",
+            "properties": {
+                "sessionID": session.map(|session| session.to_string()).unwrap_or_default(),
+                "requestID": id,
+            },
+        }));
+    }
+}
+
+impl Default for QuestionRequests {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -173,6 +243,15 @@ fn question_info(info: &ToolQuestionInfo) -> QuestionInfo {
         multiple: info.multiple.then_some(true),
         custom: info.custom,
     }
+}
+
+fn question_asked_event(id: &str, entry: &PendingQuestion) -> Option<Value> {
+    let properties = question_view(id, entry)?;
+    Some(json!({
+        "id": format!("evt_hya_question_{id}"),
+        "type": "question.asked",
+        "properties": properties,
+    }))
 }
 
 fn answers_from_reply(

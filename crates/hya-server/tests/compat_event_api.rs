@@ -203,6 +203,7 @@ async fn compat_global_event_route_streams_connected_event() {
 
     let mut stream = resp.into_body().into_data_stream();
     let event = read_sse_json(&mut stream).await;
+    assert_eq!(event["directory"], WORKDIR);
     assert_eq!(event["payload"]["type"], "server.connected");
     assert!(event["payload"].get("location").is_none());
     assert_eq!(event["payload"]["properties"], json!({}));

@@ -65,8 +65,8 @@ enum WirePermissionReply {
 
 async fn list_root_requests(
     State(st): State<ServerState>,
-) -> Json<Vec<crate::pending::PermissionRequestView>> {
-    Json(st.permission_requests.list().await)
+) -> Json<Vec<crate::pending::LegacyPermissionRequestView>> {
+    Json(st.permission_requests.list_legacy().await)
 }
 
 async fn list_requests(

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The migration spans Rust launcher, HTTP/SSE contracts, generated SDK types, TUI reducers, and distribution; preserve one typed contract across every boundary."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the existing ServerHandle, Compat routes, SDK reducer, and platform APIs rather than duplicating lifecycle or payload logic."}
+{"file":".trellis/tasks/07-13-hya-ts-opencode-tui/research/upstream-boundary-and-license.md","reason":"Pins the exact OpenCode TUI source, permitted runtime closure, excluded systems, branding inventory, and MIT obligations."}
+{"file":".trellis/tasks/07-13-hya-ts-opencode-tui/research/hya-integration-contract.md","reason":"Records the existing hya launcher/Compat seams, confirmed question-event gap, storage scope, and distribution boundary."}

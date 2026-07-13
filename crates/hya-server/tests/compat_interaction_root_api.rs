@@ -126,6 +126,10 @@ async fn compat_permission_root_routes_list_reply_and_type_missing_errors() {
     let listed = wait_for_array(app.clone(), "/permission").await;
     let request_id = listed[0]["id"].as_str().unwrap().to_string();
     assert_eq!(listed[0]["sessionID"], session);
+    assert_eq!(listed[0]["permission"], "bash");
+    assert_eq!(listed[0]["patterns"], json!(["pwd"]));
+    assert_eq!(listed[0]["metadata"], json!({}));
+    assert_eq!(listed[0]["always"], json!(["*"]));
 
     let invalid = request(
         app.clone(),
