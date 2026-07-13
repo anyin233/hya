@@ -1,4 +1,8 @@
-# hya
+<p align="center">
+  <img src="imgs/Hya%20icon%20v7.png" alt="Hya icon">
+</p>
+
+<h1 align="center">Hya</h1>
 
 hya is an event-sourced, terminal-first multi-agent coding agent written in
 Rust. It runs an event-sourced session engine, normalizes model providers
