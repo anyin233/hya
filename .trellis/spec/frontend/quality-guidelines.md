@@ -141,3 +141,80 @@ let model = ModelRef::new(entry.model_ref());
 ```
 
 This preserves exact provider/model identity through the TUI -> engine -> provider boundary.
+
+---
+
+## Scenario: Prepared Bun runtime excludes SDK server entrypoints
+
+### 1. Scope / Trigger
+
+- Trigger: installing or release-packaging `packages/hya-tui-ts`, or changing
+  the pinned `@opencode-ai/sdk` version/layout.
+- The TypeScript TUI is a client of hya's backend. It must not ship an unused
+  SDK path capable of spawning an OpenCode server or TUI.
+
+### 2. Signatures
+
+- Prepare dependencies with `bun install --frozen-lockfile --production` in the
+  staged runtime.
+- Then run
+  `bun packages/hya-tui-ts/scripts/prune-sdk-server.ts <runtime-directory>`.
+- The staged runtime contains `package.json`, `bun.lock`, `LICENSE`,
+  `UPSTREAM.md`, `src/`, and production `node_modules/`.
+
+### 3. Contracts
+
+- Retain `@opencode-ai/sdk` client exports, including `.` and `./v2`, and their
+  `dist/index.js` / `dist/v2/index.js` files.
+- Remove exports `./server` and `./v2/server`, plus `dist/server.*`,
+  `dist/v2/server.*`, and the pinned server-only `dist/process.*` helpers.
+- Installer and release packaging call the same pruning script after the locked
+  production install. Do not maintain two pruning lists.
+- The script fails when the pinned SDK no longer has the expected server
+  exports; an SDK layout change requires review rather than silent fallback.
+
+### 4. Validation & Error Matrix
+
+- Missing runtime argument -> preparation fails.
+- Missing SDK manifest or expected server exports -> preparation fails before
+  placement/archive creation.
+- Any server export/file remaining -> installer/release smoke fails.
+- Missing client entrypoint or failed `@opencode-ai/sdk/v2` import -> runtime
+  verification fails.
+- Preparation failure during install -> rollback leaves the prior binaries and
+  runtime intact.
+
+### 5. Good/Base/Bad Cases
+
+- Good: the prepared runtime imports `createOpencodeClient` from SDK v2 while
+  no SDK server export or process launcher remains.
+- Base: development `node_modules` may contain the complete pinned package;
+  only the staged install/release runtime is pruned.
+- Bad: copying production `node_modules` verbatim and claiming server code is
+  excluded merely because the frontend never imports it.
+
+### 6. Tests Required
+
+- Installer fixture creates client and server SDK files, then asserts client
+  files remain, server/process files and exports are absent, and rollback works.
+- Release smoke repeats the client-present/server-absent assertions against the
+  extracted archive.
+- Before release, prepare one real locked runtime and import
+  `@opencode-ai/sdk/v2` from that runtime.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```sh
+bun install --frozen-lockfile --production
+mv "$runtime" "$install_dir"
+```
+
+#### Correct
+
+```sh
+bun install --frozen-lockfile --production
+bun packages/hya-tui-ts/scripts/prune-sdk-server.ts "$runtime"
+mv "$runtime" "$install_dir"
+```

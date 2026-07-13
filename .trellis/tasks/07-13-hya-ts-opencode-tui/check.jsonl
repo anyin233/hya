@@ -1,0 +1,4 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check exact SDK request/event shapes through backend, reducer, and rendered interaction without parallel payload parsing."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Audit for duplicated process supervision, API adapters, reducers, and speculative compatibility helpers."}
+{"file":".trellis/tasks/07-13-hya-ts-opencode-tui/research/upstream-boundary-and-license.md","reason":"Verify forbidden imports, de-branding allowlists, full MIT text, provenance, and copied-source scope."}
+{"file":".trellis/tasks/07-13-hya-ts-opencode-tui/research/hya-integration-contract.md","reason":"Verify owned/attached process behavior, question SSE lifecycle, existing storage semantics, and packaged runtime contents."}

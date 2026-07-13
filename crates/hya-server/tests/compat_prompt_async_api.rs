@@ -38,6 +38,28 @@ async fn compat_prompt_async_returns_no_content_and_records_messages() {
 }
 
 #[tokio::test]
+async fn compat_prompt_async_accepts_sdk_parts_body() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/session/{session}/prompt_async"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"parts": [{"type": "text", "text": "SDK parts prompt"}]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn compat_prompt_async_missing_session_returns_not_found() {
     let app = router(state().await);
     let missing = SessionId::new().to_string();

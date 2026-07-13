@@ -113,6 +113,87 @@ Ok(Json(response))
 
 ---
 
+## Scenario: Root Compat permission and question lifecycle
+
+### 1. Scope / Trigger
+
+- Trigger: changes to the root OpenCode-compatible permission/question routes,
+  pending interaction storage, or `/global/event` serialization.
+- The root routes implement the pinned SDK contract. `/api/*` routes retain
+  their separate V2 wrappers and field names.
+
+### 2. Signatures
+
+- `GET /permission` -> `LegacyPermissionRequestView[]` with `id`, `sessionID`,
+  `permission`, `patterns`, `metadata`, `always`, and
+  `tool.{messageID,callID}`.
+- `POST /permission/:request/reply` with
+  `{ "reply": "once" | "always" | "reject", "message"?: string }`.
+- `GET /question` -> entries with `id`, `sessionID`, and `questions`.
+- `POST /question/:request/reply` with `{ "answers": string[][] }`.
+- `POST /question/:request/reject` with no required body.
+- `GET /global/event` -> SSE data shaped as
+  `{ "directory": string, "payload": { "id", "type", "properties" } }`.
+
+### 3. Contracts
+
+- `permission.asked.properties` uses the same legacy view as `GET /permission`;
+  do not substitute the `/api/*` `action/resources/save` view.
+- `question.replied.properties` includes `sessionID`, `requestID`, and the
+  submitted `answers`; `question.rejected.properties` includes `sessionID` and
+  `requestID`.
+- Every `/global/event` item, including connected, engine, permission,
+  question, and heartbeat events, carries the requested project `directory`.
+- Pending insertion precedes the asked event. Pending removal plus successful
+  reply-channel completion precedes the completion event. This makes duplicate
+  replies return not-found without publishing a second completion.
+
+### 4. Validation & Error Matrix
+
+- Invalid root permission/question request ID -> `400 Bad Request`.
+- Missing, wrong-session, or duplicate request -> `404 Not Found`; no
+  completion event.
+- Invalid permission reply or non-`string[][]` question answers ->
+  `400 Bad Request`.
+- Successful root reply/reject -> JSON `true`; exactly one completion event;
+  request absent from the next list response.
+- Dropped reply channel -> no successful response claim and no completion
+  event.
+
+### 5. Good/Base/Bad Cases
+
+- Good: the pinned SDK receives a live request, replies once, observes one
+  completion event, and a duplicate reply returns `404`.
+- Base: an empty pending set returns `[]` and the global stream still emits a
+  directory-bearing connected/heartbeat envelope.
+- Bad: publishing `question.replied` before the reply channel succeeds, or
+  emitting a root permission view with only `action/resources/save`.
+
+### 6. Tests Required
+
+- Route tests assert the complete root permission/question field sets and
+  duplicate `404` behavior.
+- `/global/event` tests assert `directory` on connected and interaction events,
+  and assert question reply `answers`.
+- A real pinned-SDK test must cover permission once/reject and question
+  reply/reject, side effects, exactly-once events, and final empty pending lists.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```json
+{"payload":{"type":"question.replied","properties":{"requestID":"q_1"}}}
+```
+
+#### Correct
+
+```json
+{"directory":"/project","payload":{"type":"question.replied","properties":{"sessionID":"hysec_...","requestID":"q_1","answers":[["Yes"]]}}}
+```
+
+---
+
 ## Scenario: Session ID compatibility across routes and fixtures
 
 ### 1. Scope / Trigger
@@ -229,7 +310,7 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 ### 2. Signatures
 
 - Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya` package version.
-- Cargo command: `cargo build --release --locked --bin hya --target x86_64-unknown-linux-gnu`.
+- Cargo command: `cargo build --release --locked -p hya -p hya-backend -p hya-ts --bins --target x86_64-unknown-linux-gnu`.
 - Release archive: `hya-<version>-x86_64-unknown-linux-gnu.tar.gz`.
 - Checksum file: `SHA256SUMS` generated beside the release archive.
 
@@ -264,7 +345,9 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 - Parse workflow YAML, run `actionlint`, and syntax-check every embedded shell `run` block.
 - Run the tag/version/changelog validation logic with a representative tag.
 - Run the release build command for the configured target.
-- Package the built binary, verify `SHA256SUMS`, extract the archive, and run packaged `hya --version` plus `hya --help`.
+- Package all three binaries plus the prepared `hya-tui-ts` runtime, verify
+  `SHA256SUMS`, extract the archive, run each binary smoke, and assert the legal,
+  client-present, and server-absent runtime files.
 - Confirm third-party actions are pinned to commit SHAs and release publication uses the `release` environment.
 
 ### 7. Wrong vs Correct

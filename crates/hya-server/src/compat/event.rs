@@ -55,8 +55,15 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
                 Err(_lagged) => None,
             }
         });
+    let questions =
+        BroadcastStream::new(st.question_requests.subscribe()).filter_map(|result| async move {
+            match result {
+                Ok(value) => Some(Ok(json_event(&value))),
+                Err(_lagged) => None,
+            }
+        });
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(live, permissions),
+        stream::select(stream::select(live, permissions), questions),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
@@ -99,6 +106,7 @@ async fn subscribe_api(
             }
         }
     });
+    let question_location = perm_location.clone();
     let permissions =
         BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
             let location_info = perm_location.clone();
@@ -109,45 +117,93 @@ async fn subscribe_api(
                 }
             }
         });
+    let questions =
+        BroadcastStream::new(st.question_requests.subscribe()).filter_map(move |result| {
+            let location_info = question_location.clone();
+            async move {
+                match result {
+                    Ok(value) => Some(Ok(json_event(&native_event_payload(&location_info, value)))),
+                    Err(_lagged) => None,
+                }
+            }
+        });
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(live, permissions),
+        stream::select(stream::select(live, permissions), questions),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
 
 async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Response {
-    let connected = json_event(&json!({
-        "payload": EventPayload {
+    let directory = super::location::workdir(&st).to_string_lossy().into_owned();
+    let connected = json_event(&global_event_payload(
+        &directory,
+        EventPayload {
             id: event_id(),
             kind: "server.connected",
             properties: json!({}),
         },
-    }));
+    ));
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
+    let live_directory = directory.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
         let st = live_st.clone();
+        let directory = live_directory.clone();
         async move {
             match result {
                 Ok(envelope) => {
                     let payload = api_envelope_payload(&st, envelope).await;
-                    Some(Ok(json_event(&json!({ "payload": payload }))))
+                    Some(Ok(json_event(&global_event_payload(&directory, payload))))
                 }
                 Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
             }
         }
     });
+    let permission_directory = directory.clone();
     let permissions =
-        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(|result| async move {
-            match result {
-                Ok(value) => Some(Ok(json_event(&json!({ "payload": value })))),
-                Err(_lagged) => None,
+        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
+            let directory = permission_directory.clone();
+            async move {
+                match result {
+                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
+                    Err(_lagged) => None,
+                }
             }
         });
+    let question_directory = directory.clone();
+    let questions =
+        BroadcastStream::new(st.question_requests.subscribe()).filter_map(move |result| {
+            let directory = question_directory.clone();
+            async move {
+                match result {
+                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
+                    Err(_lagged) => None,
+                }
+            }
+        });
+    let heartbeat_directory = directory;
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(live, permissions),
-        super::event_heartbeat::stream(global_heartbeat_event),
+        stream::select(stream::select(live, permissions), questions),
+        super::event_heartbeat::stream(move || global_heartbeat_event(&heartbeat_directory)),
     ))))
+}
+
+fn global_event_payload<T: Serialize>(directory: &str, payload: T) -> Value {
+    json!({
+        "directory": directory,
+        "payload": payload,
+    })
+}
+
+fn global_heartbeat_event(directory: &str) -> SseEvent {
+    json_event(&global_event_payload(
+        directory,
+        EventPayload {
+            id: event_id(),
+            kind: "server.heartbeat",
+            properties: json!({}),
+        },
+    ))
 }
 
 fn heartbeat_event() -> SseEvent {
@@ -156,16 +212,6 @@ fn heartbeat_event() -> SseEvent {
         kind: "server.heartbeat",
         properties: json!({}),
     })
-}
-
-fn global_heartbeat_event() -> SseEvent {
-    json_event(&json!({
-        "payload": EventPayload {
-            id: event_id(),
-            kind: "server.heartbeat",
-            properties: json!({}),
-        },
-    }))
 }
 
 async fn envelope_matches_location(

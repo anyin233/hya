@@ -13,7 +13,7 @@ pub(super) fn router() -> Router<ServerState> {
 }
 
 #[derive(Deserialize)]
-struct PromptPayload {
+pub(super) struct PromptPayload {
     #[serde(default, rename = "noReply")]
     no_reply: bool,
     #[serde(default)]
@@ -67,7 +67,7 @@ async fn prompt(
     Ok(Json(super::session_legacy::load_message(&st, session, message).await?).into_response())
 }
 
-fn prompt_text(req: &PromptPayload) -> Result<String, ApiError> {
+pub(super) fn prompt_text(req: &PromptPayload) -> Result<String, ApiError> {
     if let Some(text) = &req.text
         && !text.trim().is_empty()
     {
