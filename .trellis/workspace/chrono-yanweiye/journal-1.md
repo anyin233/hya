@@ -114,3 +114,36 @@ Implemented safe native TUI direct /model rejection for unknown and ambiguous re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Migrate OpenCode TUI to hya-ts
+
+**Date**: 2026-07-13
+**Task**: Migrate OpenCode TUI to hya-ts
+**Branch**: `main`
+
+### Summary
+
+Added the Bun/OpenTUI frontend and hya-ts launcher, closed SDK Compat lifecycle gaps, added install and release packaging, and passed all Rust, Bun, installer, runtime, and independent-review gates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `44dd829e5b22eede322b918a867fb4057f9dde41` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
