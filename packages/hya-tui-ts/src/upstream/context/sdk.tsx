@@ -1,5 +1,4 @@
-import { createOpencodeClient } from "@opencode-ai/sdk/v2"
-import type { GlobalEvent } from "@opencode-ai/sdk/v2"
+import { createOpencodeClient, type GlobalEvent } from "@opencode-ai/sdk/v2/client"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
 

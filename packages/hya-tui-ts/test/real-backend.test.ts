@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { createOpencodeClient, type GlobalEvent } from "@opencode-ai/sdk/v2"
+import { createOpencodeClient, type GlobalEvent } from "@opencode-ai/sdk/v2/client"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"

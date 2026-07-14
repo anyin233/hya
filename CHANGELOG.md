@@ -1,7 +1,6 @@
-# 0.33.0
+# 0.33.1
 
-TypeScript terminal frontend migration.
+Prepared TypeScript runtime fix.
 
-- Added the Bun-powered `hya-ts` frontend alongside the existing Rust `hya` frontend.
-- Connected the migrated TUI to hya's Compat HTTP/SSE API, including live question lifecycle events and retained SDK workflows.
-- Added prepared runtime installation and release packaging for `hya-tui-ts`, including pinned upstream provenance and the full MIT notice.
+- Fixed the installed `hya-tui-ts` SDK client import after removing OpenCode server launchers.
+- Included the Bun/OpenTUI preload and TypeScript JSX configuration in installed and release runtimes.

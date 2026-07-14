@@ -159,27 +159,32 @@ This preserves exact provider/model identity through the TUI -> engine -> provid
   staged runtime.
 - Then run
   `bun packages/hya-tui-ts/scripts/prune-sdk-server.ts <runtime-directory>`.
-- The staged runtime contains `package.json`, `bun.lock`, `LICENSE`,
-  `UPSTREAM.md`, `src/`, and production `node_modules/`.
+- The staged runtime contains `package.json`, `bun.lock`, `bunfig.toml`,
+  `tsconfig.json`, `LICENSE`, `UPSTREAM.md`, `src/`, and production
+  `node_modules/`.
 
 ### 3. Contracts
 
-- Retain `@opencode-ai/sdk` client exports, including `.` and `./v2`, and their
-  `dist/index.js` / `dist/v2/index.js` files.
-- Remove exports `./server` and `./v2/server`, plus `dist/server.*`,
+- Retain `@opencode-ai/sdk`'s `./v2/client` export and map `./v2` directly to
+  the same client target.
+- Remove exports `.`, `./server`, and `./v2/server`, plus the eager
+  `dist/index.*` / `dist/v2/index.*` barrels, `dist/server.*`,
   `dist/v2/server.*`, and the pinned server-only `dist/process.*` helpers.
 - Installer and release packaging call the same pruning script after the locked
   production install. Do not maintain two pruning lists.
-- The script fails when the pinned SDK no longer has the expected server
-  exports; an SDK layout change requires review rather than silent fallback.
+- The script fails when the pinned SDK no longer has the expected v2 client
+  export or the remapped `@opencode-ai/sdk/v2` client cannot be imported; an
+  SDK layout change requires review rather than silent fallback.
 
 ### 4. Validation & Error Matrix
 
 - Missing runtime argument -> preparation fails.
-- Missing SDK manifest or expected server exports -> preparation fails before
+- Missing SDK manifest or expected v2 client export -> preparation fails before
   placement/archive creation.
 - Any server export/file remaining -> installer/release smoke fails.
 - Missing client entrypoint or failed `@opencode-ai/sdk/v2` import -> runtime
+  verification fails.
+- Missing `bunfig.toml` or `tsconfig.json` -> the staged source build/runtime
   verification fails.
 - Preparation failure during install -> rollback leaves the prior binaries and
   runtime intact.
@@ -195,12 +200,13 @@ This preserves exact provider/model identity through the TUI -> engine -> provid
 
 ### 6. Tests Required
 
-- Installer fixture creates client and server SDK files, then asserts client
-  files remain, server/process files and exports are absent, and rollback works.
+- Installer fixture creates client, barrel, and server SDK files, then asserts
+  the client leaf remains, eager/server/process files and exports are absent,
+  runtime config is installed, and rollback works.
 - Release smoke repeats the client-present/server-absent assertions against the
   extracted archive.
-- Before release, prepare one real locked runtime and import
-  `@opencode-ai/sdk/v2` from that runtime.
+- Prepare one real locked runtime, import `@opencode-ai/sdk/v2`, and compile its
+  actual `src/main.tsx` using the staged configuration.
 
 ### 7. Wrong vs Correct
 

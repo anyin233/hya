@@ -194,6 +194,7 @@ run install -m 0755 "$target_dir/hya" "$tmp_hya"
 run install -m 0755 "$target_dir/hya-backend" "$tmp_backend"
 run install -m 0755 "$target_dir/hya-ts" "$tmp_ts"
 run cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
+  packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
   packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$tmp_runtime/"
 run cp -R packages/hya-tui-ts/src/. "$tmp_runtime/src/"
 say "+ (cd $tmp_runtime && bun install --frozen-lockfile --production)"
@@ -232,6 +233,8 @@ if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya-backend" --help >/dev/null
   "$bin_dir/hya-ts" --help >/dev/null
   test -f "$lib_dir/hya-tui-ts/src/main.tsx"
+  test -f "$lib_dir/hya-tui-ts/bunfig.toml"
+  test -f "$lib_dir/hya-tui-ts/tsconfig.json"
   test -f "$lib_dir/hya-tui-ts/LICENSE"
   test -f "$lib_dir/hya-tui-ts/UPSTREAM.md"
   test -d "$lib_dir/hya-tui-ts/node_modules"
@@ -250,6 +253,8 @@ else
   say "+ $bin_dir/hya-backend --help"
   say "+ $bin_dir/hya-ts --help"
   say "+ test -f $lib_dir/hya-tui-ts/src/main.tsx"
+  say "+ test -f $lib_dir/hya-tui-ts/bunfig.toml"
+  say "+ test -f $lib_dir/hya-tui-ts/tsconfig.json"
   say "+ test -f $lib_dir/hya-tui-ts/LICENSE"
   say "+ test -f $lib_dir/hya-tui-ts/UPSTREAM.md"
   say "+ test -d $lib_dir/hya-tui-ts/node_modules"

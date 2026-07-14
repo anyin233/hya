@@ -28,6 +28,12 @@ release_workflow=$(<.github/workflows/release.yml)
 contains "$script" "set -Eeuo pipefail"
 contains "$script" "scripts/prune-sdk-server.ts"
 contains "$release_workflow" "scripts/prune-sdk-server.ts"
+contains "$script" "packages/hya-tui-ts/bunfig.toml"
+contains "$script" "packages/hya-tui-ts/tsconfig.json"
+contains "$release_workflow" "packages/hya-tui-ts/bunfig.toml"
+contains "$release_workflow" "packages/hya-tui-ts/tsconfig.json"
+contains "$release_workflow" "for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts"
+contains "$release_workflow" "! grep -F '\".\"'"
 
 for workflow in "$ci_workflow" "$release_workflow"; do
   while IFS= read -r line; do
@@ -126,6 +132,9 @@ test -f package.json
 test -f bun.lock
 mkdir -p node_modules/runtime-dependency
 printf '%s\n' '{"name":"runtime-dependency"}' >node_modules/runtime-dependency/package.json
+mkdir -p node_modules/@opentui/solid
+printf '%s\n' '{"name":"@opentui/solid","exports":{"./preload":"./preload.js"}}' >node_modules/@opentui/solid/package.json
+: >node_modules/@opentui/solid/preload.js
 sdk=node_modules/@opencode-ai/sdk
 mkdir -p "$sdk/dist/v2"
 cat >"$sdk/package.json" <<'SDK_PACKAGE'
@@ -135,11 +144,16 @@ cat >"$sdk/package.json" <<'SDK_PACKAGE'
     ".": "./dist/index.js",
     "./server": "./dist/server.js",
     "./v2": "./dist/v2/index.js",
+    "./v2/client": "./dist/v2/client.js",
     "./v2/server": "./dist/v2/server.js"
   }
 }
 SDK_PACKAGE
-touch "$sdk/dist/index.js" "$sdk/dist/v2/index.js" \
+cat >"$sdk/dist/v2/client.js" <<'SDK_CLIENT'
+export function createOpencodeClient() { return {} }
+SDK_CLIENT
+touch "$sdk/dist/v2/client.d.ts" "$sdk/dist/index.js" "$sdk/dist/index.d.ts" \
+  "$sdk/dist/v2/index.js" "$sdk/dist/v2/index.d.ts" \
   "$sdk/dist/server.js" "$sdk/dist/server.d.ts" "$sdk/dist/v2/server.js" \
   "$sdk/dist/v2/server.d.ts" "$sdk/dist/process.js" "$sdk/dist/process.d.ts"
 FAKE_BUN
@@ -152,18 +166,19 @@ for name in hya hya-backend hya-ts; do
   [[ -x "$install_root/bin/$name" ]] || fail "missing installed binary: $name"
 done
 runtime="$install_root/lib/hya/hya-tui-ts"
-for path in package.json bun.lock src/main.tsx LICENSE UPSTREAM.md node_modules/runtime-dependency/package.json; do
+for path in package.json bun.lock bunfig.toml tsconfig.json src/main.tsx LICENSE UPSTREAM.md node_modules/runtime-dependency/package.json; do
   [[ -e "$runtime/$path" ]] || fail "missing installed runtime path: $path"
 done
 sdk="$runtime/node_modules/@opencode-ai/sdk"
-[[ -f "$sdk/dist/index.js" && -f "$sdk/dist/v2/index.js" ]] || fail "runtime pruning removed SDK client code"
-for path in dist/server.js dist/server.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
+[[ -f "$sdk/dist/v2/client.js" ]] || fail "runtime pruning removed SDK client code"
+for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
   [[ ! -e "$sdk/$path" ]] || fail "installed runtime contains SDK server code: $path"
 done
 sdk_package=$(<"$sdk/package.json")
 not_contains "$sdk_package" '"./server"'
 not_contains "$sdk_package" '"./v2/server"'
-for path in test dist tsconfig.json bunfig.toml; do
+not_contains "$sdk_package" '"."'
+for path in test dist; do
   [[ ! -e "$runtime/$path" ]] || fail "installed runtime contains build/test-only path: $path"
 done
 
