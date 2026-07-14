@@ -9,7 +9,7 @@ migration.
 
 - [complete] Add focused staged-runtime and installer regressions; observe RED.
 - [complete] Remap the pinned SDK v2 export to its client and ship runtime config.
-- [in_progress] Bump to `0.33.1`, run all gates, independently review, commit, push, and archive.
+- [complete] Bump to `0.33.1`, run all gates, independently review, commit, push, and archive.
 
 ## Constraints
 
