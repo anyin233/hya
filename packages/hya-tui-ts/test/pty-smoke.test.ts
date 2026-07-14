@@ -75,7 +75,19 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
       },
     )
 
-    await Bun.sleep(5_000)
+    const marker = "(hya dev provider) You said"
+    const deadline = Date.now() + 10_000
+    while (!stripAnsi(await readFile(transcript, "utf8").catch(() => "")).includes(marker)) {
+      const exited = await Promise.race([
+        process.exited.then((status) => ({ status })),
+        Bun.sleep(100).then(() => undefined),
+      ])
+      if (exited) throw new Error(`PTY exited before rendering the response with status ${exited.status}`)
+      if (Date.now() >= deadline) {
+        process.kill(9)
+        throw new Error("PTY did not render the response before timeout")
+      }
+    }
     process.stdin.write("\x03")
     process.stdin.end()
     const status = await Promise.race([
@@ -90,11 +102,11 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
     expect(status).toBe(0)
     expect(output.toLowerCase()).toContain("hya")
     expect(output).toContain("PTY session smoke")
-    expect(output).toContain("(hya dev provider) You said")
+    expect(output).toContain(marker)
     expect(output).toContain("Session")
   } finally {
     server.kill()
     await Promise.race([server.exited, Bun.sleep(2_000).then(() => server.kill(9))])
     await rm(temp, { recursive: true, force: true })
   }
-}, 20_000)
+}, 45_000)
