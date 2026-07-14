@@ -109,6 +109,7 @@ jobs:
           chmod 755 "dist/$package_dir/bin/hya" "dist/$package_dir/bin/hya-backend" \
             "dist/$package_dir/bin/hya-ts"
           cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
+            packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
             packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$runtime/"
           cp -R packages/hya-tui-ts/src/. "$runtime/src/"
           (cd "$runtime" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
@@ -142,15 +143,19 @@ jobs:
           runtime="$scratch/$package_dir/lib/hya/hya-tui-ts"
           test -f "$runtime/package.json"
           test -f "$runtime/bun.lock"
+          test -f "$runtime/bunfig.toml"
+          test -f "$runtime/tsconfig.json"
           test -f "$runtime/src/main.tsx"
           cmp packages/hya-tui-ts/LICENSE "$runtime/LICENSE"
           cmp packages/hya-tui-ts/UPSTREAM.md "$runtime/UPSTREAM.md"
           test -d "$runtime/node_modules"
           sdk="$runtime/node_modules/@opencode-ai/sdk"
-          test -f "$sdk/dist/index.js"
-          test -f "$sdk/dist/v2/index.js"
-          test ! -e "$sdk/dist/server.js"
-          test ! -e "$sdk/dist/v2/server.js"
+          (cd "$runtime" && "$HOME/.bun/bin/bun" -e 'import { createOpencodeClient } from "@opencode-ai/sdk/v2"; if (typeof createOpencodeClient !== "function") process.exit(1)')
+          test -f "$sdk/dist/v2/client.js"
+          for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
+            test ! -e "$sdk/$path"
+          done
+          ! grep -F '"."' "$sdk/package.json"
           ! grep -F '"./server"' "$sdk/package.json"
           ! grep -F '"./v2/server"' "$sdk/package.json"
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
@@ -160,6 +165,8 @@ jobs:
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/LICENSE" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/UPSTREAM.md" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/main.tsx" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/hya-tui-ts/bunfig.toml" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/hya-tui-ts/tsconfig.json" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/hya-tui-ts/node_modules/" "$scratch/archive.txt" >/dev/null
 
       - name: Attest release assets

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve release, version, immutable-action, and verification contracts."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Preserve the prepared TypeScript runtime and client-only SDK boundary."}
+{"file":".trellis/tasks/archive/2026-07/07-13-hya-ts-opencode-tui/research/upstream-boundary-and-license.md","reason":"Retain the pinned upstream, legal, and excluded-runtime boundary."}
+{"file":".trellis/tasks/archive/2026-07/07-13-hya-ts-opencode-tui/research/hya-integration-contract.md","reason":"Retain launcher discovery and install/release layout contracts."}

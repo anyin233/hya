@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check release/version rules and all required gates."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check staged runtime importability and forbidden server code absence."}
+{"file":".trellis/tasks/archive/2026-07/07-13-hya-ts-opencode-tui/research/upstream-boundary-and-license.md","reason":"Check attribution and excluded module boundaries remain intact."}
+{"file":".trellis/tasks/archive/2026-07/07-13-hya-ts-opencode-tui/research/hya-integration-contract.md","reason":"Check installed layout still matches hya-ts runtime resolution."}
