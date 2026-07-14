@@ -147,3 +147,36 @@ Added the Bun/OpenTUI frontend and hya-ts launcher, closed SDK Compat lifecycle 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Fix hya-ts prepared runtime
+
+**Date**: 2026-07-14
+**Task**: Fix hya-ts prepared runtime
+**Branch**: `main`
+
+### Summary
+
+Repaired the client-only prepared Bun runtime, added staged-runtime and installer regressions, shipped required runtime config, bumped to 0.33.1, and passed the full Bun/Rust/release verification gates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `71e23bdc` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
