@@ -35,3 +35,5 @@
   passed. Independent read-only review found three verification gaps; the
   release artifact assertions and two test time budgets were corrected, and
   the follow-up review reported no actionable findings.
+- Pushed atomic work commits `babd7fb7` (`test: wait for rendered PTY response`)
+  and `71e23bdc` (`fix: repair prepared TypeScript runtime`) to `origin/main`.
