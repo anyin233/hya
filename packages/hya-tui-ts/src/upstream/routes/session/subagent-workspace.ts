@@ -144,6 +144,18 @@ export function treeSessionIDs(tree: RunTreeNode): Set<string> {
   return new Set(flattenRunTree(tree).flatMap((row) => (row.node.session ? [row.node.session] : [])))
 }
 
+export function terminalTreeSessionIDs(tree: RunTreeNode): Set<string> {
+  return new Set(
+    flattenRunTree(tree).flatMap(({ node }) =>
+      node.session &&
+      (["done", "failed", "cancelled"].includes(node.member?.status ?? "") ||
+        ["done", "failed"].includes(node.roster?.status ?? ""))
+        ? [node.session]
+        : [],
+    ),
+  )
+}
+
 export type RunTreeEventEffect = { refresh: boolean; terminalSessionIDs: string[] }
 
 export function runTreeEventEffect(value: unknown, tree?: RunTreeNode): RunTreeEventEffect {

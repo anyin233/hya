@@ -14,9 +14,9 @@ export function DialogSubagent(props: {
 }) {
   const placement = () => props.placement[0]!.toUpperCase() + props.placement.slice(1)
   const options = createMemo(() => {
-    const tree = props.resource().tree
-    if (!tree) return []
-    return flattenRunTree(tree).map((row) => {
+    const resource = props.resource()
+    const rows = resource.tree ? flattenRunTree(resource.tree) : []
+    const options = rows.map((row) => {
       const node = row.node
       const sessionID = node.session
       const label =
@@ -37,6 +37,9 @@ export function DialogSubagent(props: {
         footer: sessionID ? (props.isFocused(sessionID) ? "focused" : props.isOpen(sessionID) ? "open" : undefined) : undefined,
       }
     })
+    return resource.status === "error"
+      ? [{ title: "Subagent tree unavailable - press r to retry", value: "subagent-tree-error", disabled: true }, ...options]
+      : options
   })
   return (
     <DialogSelect

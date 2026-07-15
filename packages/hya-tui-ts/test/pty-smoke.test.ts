@@ -166,6 +166,12 @@ async function runChildObservation(columns: number) {
         { throwOnError: true },
       )
     ).data!
+    const scrollChildSession = (
+      await client.session.create(
+        { title: "@scroll subagent", parentID: rootSession.id },
+        { throwOnError: true },
+      )
+    ).data!
     const grandchildSession = (
       await client.session.create(
         { title: "@researcher subagent", parentID: childSession.id },
@@ -177,6 +183,8 @@ async function runChildObservation(columns: number) {
     const childTranscript = "CHILD_TRANSCRIPT_98ac"
     const secondChildTranscript = "SECOND_CHILD_TRANSCRIPT_42de"
     const grandchildTranscript = "GRANDCHILD_TRANSCRIPT_51bf"
+    const scrollChildTranscript = "SCROLL_CHILD_TRANSCRIPT_51bf"
+    const scrollChildTail = "SCROLL_CHILD_TAIL_b419"
     const resetRootTranscript = "RESET_ROOT_TRANSCRIPT_4ae1"
     await client.session.promptAsync(
       { sessionID: rootSession.id, parts: [{ type: "text", text: rootTranscript }] },
@@ -192,6 +200,13 @@ async function runChildObservation(columns: number) {
     )
     await client.session.promptAsync(
       { sessionID: grandchildSession.id, parts: [{ type: "text", text: grandchildTranscript }] },
+      { throwOnError: true },
+    )
+    await client.session.promptAsync(
+      {
+        sessionID: scrollChildSession.id,
+        parts: [{ type: "text", text: `${scrollChildTranscript}\n${"SCROLL_FILLER\n".repeat(40)}${scrollChildTail}` }],
+      },
       { throwOnError: true },
     )
     await client.session.promptAsync(
@@ -223,8 +238,14 @@ async function runChildObservation(columns: number) {
         return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${marker}\\"`)
       }, `${marker} fixture`)
     }
+    await waitFor(async () => {
+      const messages = (await client.session.messages({ sessionID: scrollChildSession.id })).data
+      const value = JSON.stringify(messages)
+      return value.includes("(hya dev provider) You said") && value.includes(scrollChildTranscript) && value.includes(scrollChildTail)
+    }, "observation scroll fixture")
 
     const requests: Array<{ method: string; path: string }> = []
+    let treeUnavailable = false
     const proxy = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -232,6 +253,9 @@ async function runChildObservation(columns: number) {
       async fetch(request) {
         const incoming = new URL(request.url)
         requests.push({ method: request.method, path: incoming.pathname })
+        if (request.method === "GET" && incoming.pathname === `/session/${childSession.id}/tree`) {
+          return new Response("unavailable", { status: 503 })
+        }
         if (request.method === "GET" && incoming.pathname === `/session/${resetRootSession.id}/tree`) {
           return Response.json({ session: resetRootSession.id, agent: "build", children: [] })
         }
@@ -239,6 +263,7 @@ async function runChildObservation(columns: number) {
           request.method === "GET" &&
           incoming.pathname === `/session/${rootSession.id}/tree`
         ) {
+          if (treeUnavailable) return new Response("unavailable", { status: 503 })
           return Response.json({
             session: rootSession.id,
             agent: "build",
@@ -314,6 +339,26 @@ async function runChildObservation(columns: number) {
                   status: "idle",
                 },
               },
+              {
+                session: scrollChildSession.id,
+                member: {
+                  member: "member-scroll",
+                  child: scrollChildSession.id,
+                  subagent_type: "explore",
+                  description: "Inspect scrolling",
+                  depth: 1,
+                  status: "running",
+                  summary: "",
+                },
+                roster: {
+                  handle: "scroll-1",
+                  session: scrollChildSession.id,
+                  agent_type: "explore",
+                  mode: "transient",
+                  status: "busy",
+                  current_task: "Inspect scrolling",
+                },
+              },
             ],
           })
         }
@@ -352,6 +397,56 @@ async function runChildObservation(columns: number) {
     })
 
     try {
+      if (columns === 80) {
+        const recoveryTranscript = path.join(temp, "typescript-child-recovery")
+        const recovery = Bun.spawn(
+          [
+            "/usr/bin/script",
+            "-q",
+            "-e",
+            "-f",
+            "-c",
+            `stty rows 30 cols ${columns}; "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_CHILD_SESSION"`,
+            recoveryTranscript,
+          ],
+          {
+            cwd: path.join(root, "packages/hya-tui-ts"),
+            env: {
+              ...env,
+              HYA_PTY_PROJECT: project,
+              HYA_PTY_URL: `http://127.0.0.1:${proxy.port}`,
+              HYA_CHILD_SESSION: childSession.id,
+              HYA_TS: launcher,
+              HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+              TERM: "xterm-256color",
+            },
+            stdin: "pipe",
+            stdout: "ignore",
+            stderr: "pipe",
+          },
+        )
+        try {
+          const recoveryOutput = async () => stripAnsi(await readFile(recoveryTranscript, "utf8").catch(() => ""))
+          await waitFor(async () => {
+            const frame = await recoveryOutput()
+            return frame.includes(childTranscript) && frame.includes("Subagent tree unavailable")
+          }, "child read-only recovery")
+          const revertPath = `/session/${childSession.id}/revert`
+          const revertsBefore = requests.filter((request) => request.path === revertPath).length
+          recovery.stdin.write("\x18")
+          await Bun.sleep(100)
+          recovery.stdin.write("u")
+          await Bun.sleep(300)
+          expect(requests.filter((request) => request.path === revertPath)).toHaveLength(revertsBefore)
+          recovery.stdin.write("\x03")
+          recovery.stdin.end()
+          expect(await recovery.exited).toBe(0)
+        } finally {
+          recovery.kill()
+          await Promise.race([recovery.exited, Bun.sleep(2_000).then(() => recovery.kill(9))])
+        }
+      }
+
       const process = Bun.spawn(
         [
           "/usr/bin/script",
@@ -382,19 +477,48 @@ async function runChildObservation(columns: number) {
       try {
         const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
         await waitFor(async () => (await output()).includes(rootTranscript), "root session frame")
+        await waitFor(async () => (await output()).includes("commands"), "root prompt")
         expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
 
         const rootDraft = "ROOT_DRAFT_c281"
         const beforeDraft = (await output()).length
-        process.stdin.write(rootDraft)
-        await waitFor(async () => (await output()).slice(beforeDraft).includes(rootDraft), "root draft")
-        expect(await output()).toContain("commands")
-
+        await waitFor(async () => {
+          const frame = (await output()).slice(beforeDraft)
+          if (frame.includes(rootDraft)) return true
+          process.stdin.write(rootDraft)
+          return false
+        }, "root draft").catch(async (error) => {
+          const frame = (await output()).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        })
+        const waitForMain = async (start: number, message: string) => {
+          await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
+        }
+        const confirmMainInput = async (start: number, marker: string, escape = false) => {
+          await waitFor(async () => {
+            const frame = (await output()).slice(start)
+            if (frame.includes(marker) && frame.includes(rootDraft)) return true
+            if (escape) {
+              process.stdin.write("\x1b")
+              await Bun.sleep(50)
+            }
+            process.stdin.write(marker)
+            return false
+          }, `${marker} in Main`).catch(async (error) => {
+            const frame = (await output()).slice(-5000)
+            throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+          })
+        }
         const rootFrame = await output()
         expect(rootFrame).toContain("ctrl+x o")
         expect(rootFrame).toContain("subagent roster")
         expect(rootFrame).not.toContain("view subagents")
-        const descendantRoutes = new Set([childSession.id, grandchildSession.id, secondChildSession.id])
+        const descendantRoutes = new Set([
+          childSession.id,
+          grandchildSession.id,
+          secondChildSession.id,
+          scrollChildSession.id,
+        ])
         const descendantGets = () =>
           requests.filter(
             (request) =>
@@ -414,6 +538,10 @@ async function runChildObservation(columns: number) {
         await waitFor(async () => (await output()).slice(legacyStart).includes(legacySafe), "legacy commands leave Main editable")
         expect(descendantGets()).toBe(descendantGetsBefore)
 
+        treeUnavailable = true
+        const failedRefreshCount = requests.filter(
+          (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
+        ).length
         process.stdin.write("\x18")
         await Bun.sleep(100)
         const managerStart = (await output()).length
@@ -427,6 +555,28 @@ async function runChildObservation(columns: number) {
           const frame = (await output()).slice(managerStart).slice(-5000)
           throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
         })
+        await waitFor(
+          () =>
+            requests.filter(
+              (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
+            ).length ===
+            failedRefreshCount + 1,
+          "failed retained-tree refresh",
+        )
+        await waitFor(
+          async () => (await output()).slice(managerStart).includes("Subagent tree unavailable"),
+          "retained-tree error row",
+        )
+        treeUnavailable = false
+        process.stdin.write("r")
+        await waitFor(
+          () =>
+            requests.filter(
+              (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
+            ).length ===
+            failedRefreshCount + 2,
+          "retained-tree retry",
+        )
         const managerFrame = (await output()).slice(managerStart)
         expect(managerFrame.indexOf("worker-1")).toBeLessThan(managerFrame.indexOf("researcher-1"))
         expect(managerFrame.indexOf("researcher-1")).toBeLessThan(managerFrame.indexOf("pending"))
@@ -437,8 +587,9 @@ async function runChildObservation(columns: number) {
         await waitFor(async () => (await output()).slice(managerStart).includes("researcher-1"), "filtered grandchild")
         process.stdin.write("\x1b")
         await Bun.sleep(100)
+        const closeFilteredManagerStart = (await output()).length
         process.stdin.write("\x1b")
-        await Bun.sleep(500)
+        await waitForMain(closeFilteredManagerStart, "Main after filtered manager")
 
         for (const [command, placement] of [
           ["Open subagent in tab", "Tab"],
@@ -458,8 +609,9 @@ async function runChildObservation(columns: number) {
             const frame = (await output()).slice(directStart).slice(-5000)
             throw new Error(`direct placement failed: ${error instanceof Error ? error.message : error}\n${frame}`)
           })
+          const closePlacementManagerStart = (await output()).length
           process.stdin.write("\x1b")
-          await Bun.sleep(200)
+          await waitForMain(closePlacementManagerStart, `Main after ${placement} manager`)
         }
 
         const hydrationPaths = [
@@ -468,17 +620,58 @@ async function runChildObservation(columns: number) {
           `/session/${grandchildSession.id}/todo`,
           `/session/${grandchildSession.id}/diff`,
         ]
-        const openGrandchild = async () => {
+        const waitForFocusedHeader = async (start: number, handle: string) => {
+          await waitFor(async () => {
+            const frame = (await output()).slice(start)
+            return frame.includes(handle) && frame.includes("focused") && frame.includes("read-only")
+          }, `${handle} focused header`)
+        }
+        const openSubagentByHandle = async (handle: string) => {
           process.stdin.write("\x18")
           await Bun.sleep(100)
           process.stdin.write("o")
           await Bun.sleep(100)
           process.stdin.write("/")
           await Bun.sleep(100)
-          process.stdin.write("researcher-1")
+          process.stdin.write(handle)
           await Bun.sleep(100)
+          const focusStart = (await output()).length
           process.stdin.write("\r")
+          await waitForFocusedHeader(focusStart, handle)
+          await Bun.sleep(100)
         }
+        const openGrandchild = () => openSubagentByHandle("researcher-1")
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("o")
+        await Bun.sleep(100)
+        process.stdin.write("/")
+        await Bun.sleep(100)
+        process.stdin.write("scroll-1")
+        await Bun.sleep(100)
+        const scrollPaneStart = (await output()).length
+        process.stdin.write("\r")
+        await waitFor(
+          async () => (await output()).slice(scrollPaneStart).includes(scrollChildTail),
+          "tall observation transcript",
+        )
+        await waitForFocusedHeader(scrollPaneStart, "scroll-1")
+        await Bun.sleep(100)
+        const scrollTopStart = (await output()).length
+        process.stdin.write("\x1b[H")
+        await waitFor(
+          async () => (await output()).slice(scrollTopStart).includes(scrollChildTranscript),
+          "focused observation scroll to first message",
+        )
+        const scrollBottomStart = (await output()).length
+        process.stdin.write("\x1b[F")
+        await waitFor(
+          async () => (await output()).slice(scrollBottomStart).includes(scrollChildTail),
+          "focused observation scroll to last message",
+        )
+        const closeScrollStart = (await output()).length
+        await confirmMainInput(closeScrollStart, "MAIN_AFTER_SCROLL_62d1", true)
+
         const observationStart = (await output()).length
         await openGrandchild()
         await waitFor(
@@ -490,7 +683,6 @@ async function runChildObservation(columns: number) {
           return frame.includes(grandchildTranscript) && frame.includes("researcher-1") && frame.toLowerCase().includes("read-only")
         }, "grandchild observation transcript")
         await openGrandchild()
-        await Bun.sleep(300)
         for (const path of hydrationPaths) {
           expect(requests.filter((request) => request.method === "GET" && request.path === path)).toHaveLength(1)
         }
@@ -599,44 +791,46 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(100)
         process.stdin.write("\r")
         await waitFor(async () => (await output()).slice(redrawStart).includes(secondChildTranscript), "auxiliary reviewer tab")
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("0")
-        await Bun.sleep(200)
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("w")
-        await Bun.sleep(200)
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write(".")
-        await Bun.sleep(200)
-        const collapseStart = (await output()).length
+        const reviewerMainStart = (await output()).length
+        process.stdin.write("\x1b")
+        await confirmMainInput(reviewerMainStart, "MAIN_BEFORE_COLLAPSE_81ea", true)
         process.stdin.write("\x18")
         await Bun.sleep(100)
         process.stdin.write("w")
-        await Bun.sleep(100)
+        await Bun.sleep(200)
+        const workerFocusStart = (await output()).length
         process.stdin.write("\x18")
         await Bun.sleep(100)
         process.stdin.write(".")
-        await waitFor(async () => (await output()).slice(collapseStart).includes(researcherLate), "collapse closed split leaf")
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("0")
-        await Bun.sleep(200)
-        const focusMainCommandStart = (await output()).length
-        for (let index = 0; index < 2; index++) {
-          process.stdin.write("\x18")
-          await Bun.sleep(100)
-          process.stdin.write(".")
-          await Bun.sleep(200)
-        }
-        await waitFor(async () => (await output()).slice(focusMainCommandStart).includes(secondChildTranscript), "preserved auxiliary tab")
+        await waitForFocusedHeader(workerFocusStart, "worker-1")
+        const closeWorkerStart = (await output()).length
+        await confirmMainInput(closeWorkerStart, "MAIN_AFTER_WORKER_59e0", true)
+        const researcherFocusStart = (await output()).length
+        await openGrandchild()
+        await waitForFocusedHeader(researcherFocusStart, "researcher-1")
+        await waitFor(
+          async () => {
+            const frame = (await output()).slice(researcherFocusStart)
+            return (
+              ["researcher-1", "research", "busy", "Trace nested path", "focused", "read-only"].every((value) =>
+                frame.includes(value),
+              ) && ["tab", "vertical", "horizontal"].some((placement) => frame.includes(placement))
+            )
+          },
+          "focused observation header",
+        ).catch(async (error) => {
+          const frame = (await output()).slice(researcherFocusStart).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        })
+        const collapsedMainStart = (await output()).length
+        process.stdin.write("\x1b")
+        await confirmMainInput(collapsedMainStart, "MAIN_BEFORE_TABS_1c54", true)
+        const reviewerCycleStart = (await output()).length
+        await openSubagentByHandle("reviewer-1")
+        await waitForFocusedHeader(reviewerCycleStart, "reviewer-1")
+        expect((await output()).slice(reviewerCycleStart)).toContain(secondChildTranscript)
         const closeTabStart = (await output()).length
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("w")
-        await waitFor(async () => (await output()).slice(closeTabStart).includes(rootTranscript), "close auxiliary tab")
+        await confirmMainInput(closeTabStart, "MAIN_AFTER_TAB_763f", true)
 
         process.stdin.write("\x18")
         await Bun.sleep(100)
@@ -651,6 +845,7 @@ async function runChildObservation(columns: number) {
         expect(resetFrame).not.toContain("worker-1")
         expect(resetFrame).not.toContain("researcher-1")
         expect(resetFrame).not.toContain("reviewer-1")
+        expect(resetFrame).not.toContain("scroll-1")
         const resetSentinel = "RESET_ROOT_INPUT_d3c7"
         process.stdin.write(resetSentinel)
         process.stdin.write("\r")
