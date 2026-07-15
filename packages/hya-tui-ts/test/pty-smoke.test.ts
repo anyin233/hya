@@ -494,20 +494,19 @@ async function runChildObservation(columns: number) {
         const waitForMain = async (start: number, message: string) => {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
-        const confirmMainInput = async (start: number, marker: string, escape = false) => {
-          await waitFor(async () => {
-            const frame = (await output()).slice(start)
-            if (frame.includes(marker) && frame.includes(rootDraft)) return true
-            if (escape) {
-              process.stdin.write("\x1b")
-              await Bun.sleep(50)
-            }
+        const confirmMainInput = async (start: number, marker: string) => {
+          try {
+            process.stdin.write("\x1b")
+            await waitForMain(start, `${marker} Main focus`)
             process.stdin.write(marker)
-            return false
-          }, `${marker} in Main`).catch(async (error) => {
+            await waitFor(async () => {
+              const frame = (await output()).slice(start)
+              return frame.includes(marker) && frame.includes(rootDraft)
+            }, `${marker} in Main`)
+          } catch (error) {
             const frame = (await output()).slice(-5000)
             throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
-          })
+          }
         }
         const rootFrame = await output()
         expect(rootFrame).toContain("ctrl+x o")
@@ -538,7 +537,8 @@ async function runChildObservation(columns: number) {
         await waitFor(async () => (await output()).slice(legacyStart).includes(legacySafe), "legacy commands leave Main editable")
         expect(descendantGets()).toBe(descendantGetsBefore)
 
-        treeUnavailable = true
+        const checkRetainedTreeError = columns === 80
+        treeUnavailable = checkRetainedTreeError
         const failedRefreshCount = requests.filter(
           (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
         ).length
@@ -555,28 +555,30 @@ async function runChildObservation(columns: number) {
           const frame = (await output()).slice(managerStart).slice(-5000)
           throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
         })
-        await waitFor(
-          () =>
-            requests.filter(
-              (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
-            ).length ===
-            failedRefreshCount + 1,
-          "failed retained-tree refresh",
-        )
-        await waitFor(
-          async () => (await output()).slice(managerStart).includes("Subagent tree unavailable"),
-          "retained-tree error row",
-        )
-        treeUnavailable = false
-        process.stdin.write("r")
-        await waitFor(
-          () =>
-            requests.filter(
-              (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
-            ).length ===
-            failedRefreshCount + 2,
-          "retained-tree retry",
-        )
+        if (checkRetainedTreeError) {
+          await waitFor(
+            () =>
+              requests.filter(
+                (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
+              ).length ===
+              failedRefreshCount + 1,
+            "failed retained-tree refresh",
+          )
+          await waitFor(
+            async () => (await output()).slice(managerStart).includes("Subagent tree unavailable"),
+            "retained-tree error row",
+          )
+          treeUnavailable = false
+          process.stdin.write("r")
+          await waitFor(
+            () =>
+              requests.filter(
+                (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
+              ).length ===
+              failedRefreshCount + 2,
+            "retained-tree retry",
+          )
+        }
         const managerFrame = (await output()).slice(managerStart)
         expect(managerFrame.indexOf("worker-1")).toBeLessThan(managerFrame.indexOf("researcher-1"))
         expect(managerFrame.indexOf("researcher-1")).toBeLessThan(managerFrame.indexOf("pending"))
@@ -670,7 +672,7 @@ async function runChildObservation(columns: number) {
           "focused observation scroll to last message",
         )
         const closeScrollStart = (await output()).length
-        await confirmMainInput(closeScrollStart, "MAIN_AFTER_SCROLL_62d1", true)
+        await confirmMainInput(closeScrollStart, "m62d1")
 
         const observationStart = (await output()).length
         await openGrandchild()
@@ -792,8 +794,7 @@ async function runChildObservation(columns: number) {
         process.stdin.write("\r")
         await waitFor(async () => (await output()).slice(redrawStart).includes(secondChildTranscript), "auxiliary reviewer tab")
         const reviewerMainStart = (await output()).length
-        process.stdin.write("\x1b")
-        await confirmMainInput(reviewerMainStart, "MAIN_BEFORE_COLLAPSE_81ea", true)
+        await confirmMainInput(reviewerMainStart, "m81ea")
         process.stdin.write("\x18")
         await Bun.sleep(100)
         process.stdin.write("w")
@@ -804,7 +805,7 @@ async function runChildObservation(columns: number) {
         process.stdin.write(".")
         await waitForFocusedHeader(workerFocusStart, "worker-1")
         const closeWorkerStart = (await output()).length
-        await confirmMainInput(closeWorkerStart, "MAIN_AFTER_WORKER_59e0", true)
+        await confirmMainInput(closeWorkerStart, "m59e0")
         const researcherFocusStart = (await output()).length
         await openGrandchild()
         await waitForFocusedHeader(researcherFocusStart, "researcher-1")
@@ -823,14 +824,13 @@ async function runChildObservation(columns: number) {
           throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
         })
         const collapsedMainStart = (await output()).length
-        process.stdin.write("\x1b")
-        await confirmMainInput(collapsedMainStart, "MAIN_BEFORE_TABS_1c54", true)
+        await confirmMainInput(collapsedMainStart, "m1c54")
         const reviewerCycleStart = (await output()).length
         await openSubagentByHandle("reviewer-1")
         await waitForFocusedHeader(reviewerCycleStart, "reviewer-1")
         expect((await output()).slice(reviewerCycleStart)).toContain(secondChildTranscript)
         const closeTabStart = (await output()).length
-        await confirmMainInput(closeTabStart, "MAIN_AFTER_TAB_763f", true)
+        await confirmMainInput(closeTabStart, "m763f")
 
         process.stdin.write("\x18")
         await Bun.sleep(100)

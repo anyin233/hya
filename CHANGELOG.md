@@ -1,3 +1,3 @@
-# 0.33.4
+# 0.33.5
 
-- Hardened TypeScript TUI subagent observations with terminal cleanup, focused scrolling, retained-tree recovery, complete pane labels, and child-route command isolation.
+- Stabilized TypeScript TUI PTY verification under CI load.
