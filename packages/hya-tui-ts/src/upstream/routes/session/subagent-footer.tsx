@@ -80,6 +80,7 @@ export function SubagentFooter() {
             <text fg={theme.text}>
               <b>{subagentInfo().label}</b>
             </text>
+            <text fg={theme.textMuted}>Read-only</text>
             <Show when={subagentInfo().total > 0}>
               <text style={{ fg: theme.textMuted }}>
                 ({subagentInfo().index} of {subagentInfo().total})
