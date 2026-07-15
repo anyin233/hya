@@ -24,3 +24,7 @@ serde_json = { workspace = true }
 serde_norway = { workspace = true }
 anyhow = { workspace = true }
 time = { workspace = true }
+
+[dev-dependencies]
+http-body-util = { workspace = true }
+tower = { workspace = true }

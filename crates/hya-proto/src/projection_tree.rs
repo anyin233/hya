@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::SessionId;
 use crate::model::{AgentName, ModelRef};
-use crate::projection::{MemberProjection, SessionProjection};
+use crate::projection::{MemberProjection, RosterEntry, SessionProjection};
 
 /// One node of the run tree: a session plus the member metadata that spawned it
 /// (`member` is `None` for the root) and its child members.
@@ -27,6 +27,8 @@ pub struct RunTreeNode {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<MemberProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roster: Option<RosterEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<RunTreeNode>,
 }
@@ -38,15 +40,17 @@ pub struct RunTreeNode {
 pub fn build_run_tree(
     root: SessionId,
     lookup: &HashMap<SessionId, SessionProjection>,
+    roster: &HashMap<SessionId, RosterEntry>,
 ) -> RunTreeNode {
     let mut visited = HashSet::new();
-    build_node(root, None, lookup, &mut visited)
+    build_node(root, None, lookup, roster, &mut visited)
 }
 
 fn build_node(
     session: SessionId,
     member: Option<&MemberProjection>,
     lookup: &HashMap<SessionId, SessionProjection>,
+    roster: &HashMap<SessionId, RosterEntry>,
     visited: &mut HashSet<SessionId>,
 ) -> RunTreeNode {
     let proj = lookup.get(&session);
@@ -56,6 +60,7 @@ fn build_node(
         model: proj.and_then(|p| p.model.clone()),
         title: proj.and_then(|p| p.title.clone()),
         member: member.cloned(),
+        roster: member.and_then(|_| roster.get(&session).cloned()),
         children: Vec::new(),
     };
     if !visited.insert(session) {
@@ -64,15 +69,17 @@ fn build_node(
     if let Some(proj) = proj {
         for m in &proj.members {
             match m.child {
-                Some(child) => node
-                    .children
-                    .push(build_node(child, Some(m), lookup, visited)),
+                Some(child) => {
+                    node.children
+                        .push(build_node(child, Some(m), lookup, roster, visited))
+                }
                 None => node.children.push(RunTreeNode {
                     session: None,
                     agent: None,
                     model: None,
                     title: None,
                     member: Some(m.clone()),
+                    roster: None,
                     children: Vec::new(),
                 }),
             }
@@ -87,7 +94,8 @@ mod tests {
 
     use super::*;
     use crate::ids::MemberId;
-    use crate::message::MemberRunStatus;
+    use crate::message::{MemberRunStatus, RosterStatus, SubagentMode};
+    use crate::projection::RosterEntry;
 
     fn proj_with_members(
         id: SessionId,
@@ -138,7 +146,7 @@ mod tests {
         lookup.insert(child_b, proj_with_members(child_b, "plan", vec![]));
         lookup.insert(grandchild, proj_with_members(grandchild, "explore", vec![]));
 
-        let tree = build_run_tree(root, &lookup);
+        let tree = build_run_tree(root, &lookup, &HashMap::new());
         assert_eq!(tree.session, Some(root));
         assert!(tree.member.is_none(), "root is not a member");
         assert_eq!(tree.children.len(), 2);
@@ -163,7 +171,44 @@ mod tests {
         lookup.insert(a, proj_with_members(a, "x", vec![member(b, "y")]));
         lookup.insert(b, proj_with_members(b, "y", vec![member(a, "x")]));
         // Must terminate despite the a→b→a cycle.
-        let tree = build_run_tree(a, &lookup);
+        let tree = build_run_tree(a, &lookup, &HashMap::new());
         assert_eq!(tree.session, Some(a));
+    }
+
+    #[test]
+    fn attaches_roster_metadata_by_session() {
+        let root = SessionId::new();
+        let child = SessionId::new();
+        let mut pending = member(SessionId::new(), "plan");
+        pending.child = None;
+
+        let mut lookup = HashMap::new();
+        lookup.insert(
+            root,
+            proj_with_members(root, "build", vec![member(child, "explore"), pending]),
+        );
+        lookup.insert(child, proj_with_members(child, "explore", vec![]));
+
+        let entry = RosterEntry {
+            handle: "explorer-1".to_string(),
+            session: child,
+            agent_type: AgentName::new("explore"),
+            mode: SubagentMode::Transient,
+            status: RosterStatus::Busy,
+            current_task: Some("inspect tree".to_string()),
+        };
+        let roster = HashMap::from([(child, entry.clone())]);
+
+        let tree = build_run_tree(root, &lookup, &roster);
+        assert_eq!(tree.children[0].roster, Some(entry));
+        assert!(tree.roster.is_none());
+        assert!(tree.children[1].roster.is_none());
+
+        let root_json = serde_json::to_value(&tree).expect("serialize root");
+        let child_json = serde_json::to_value(&tree.children[0]).expect("serialize child");
+        let pending_json = serde_json::to_value(&tree.children[1]).expect("serialize pending");
+        assert!(root_json.get("roster").is_none());
+        assert!(child_json.get("roster").is_some());
+        assert!(pending_json.get("roster").is_none());
     }
 }

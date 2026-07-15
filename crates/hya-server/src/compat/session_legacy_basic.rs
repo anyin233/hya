@@ -68,6 +68,7 @@ pub(super) async fn tree(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut lookup: std::collections::HashMap<_, _> = std::collections::HashMap::new();
+    let mut roster = std::collections::HashMap::new();
     let mut queue = vec![root];
     while let Some(sid) = queue.pop() {
         if lookup.contains_key(&sid) {
@@ -85,9 +86,19 @@ pub(super) async fn tree(
                 queue.push(child);
             }
         }
+        if sid == root {
+            roster.extend(
+                projection
+                    .team
+                    .roster
+                    .values()
+                    .cloned()
+                    .map(|entry| (entry.session, entry)),
+            );
+        }
         lookup.insert(sid, projection.session);
     }
-    let tree = hya_proto::build_run_tree(root, &lookup);
+    let tree = hya_proto::build_run_tree(root, &lookup, &roster);
     Ok(Json(tree).into_response())
 }
 
