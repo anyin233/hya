@@ -1,3 +1,3 @@
-# 0.33.2
+# 0.33.3
 
-- Added a visible read-only status to child-session observation views.
+- Restored an explicit running indicator below the Prompt composer.

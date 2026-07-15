@@ -1581,6 +1581,56 @@ mod tests {
     }
 
     #[test]
+    fn draw_when_session_is_working_shows_running_indicator_below_prompt() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": { "id": "msg_1", "sessionID": "ses_1", "role": "user", "time": { "created": 1 } } }),
+        ));
+        let theme = theme();
+        let prompt = PromptDoc::default();
+        let width = 60;
+        let height = 12;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut scroll = ScrollState::default();
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &SessionView {
+                        store: &store,
+                        session_id: "ses_1",
+                        pending: &[],
+                        prompt: &prompt,
+                        agents: &[],
+                        model_names: &[],
+                        active_agent: None,
+                        model_label: None,
+                        provider_label: None,
+                        context_limit: None,
+                        spinner: "⠋",
+                        show_timestamps: false,
+                        sidebar_visible: false,
+                        subagent: None,
+                        show_cursor: true,
+                        yolo: false,
+                    },
+                    &mut scroll,
+                    &theme,
+                );
+            })
+            .unwrap();
+
+        let status = row_text(terminal.backend().buffer(), height - 1, width);
+        assert!(
+            status.contains("⠋ Running"),
+            "working session should show a running indicator below the prompt; row: {status}"
+        );
+    }
+
+    #[test]
     fn draw_when_terminal_too_short_clips_transcript_before_prompt() {
         let mut store = MessageStore::default();
         store.apply_event(&event(
