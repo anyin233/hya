@@ -15,6 +15,7 @@ use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{HttpProvider, ProviderKind, ProviderRouter};
+use hya_tool::{InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget};
 use serde::Deserialize;
 use serde_norway::{Mapping, Value};
 
@@ -29,6 +30,7 @@ pub struct ResolvedConfig {
     pub subagents: SubagentLimits,
     /// Logical model categories → ordered concrete `provider/model` candidates.
     pub categories: CategoryRegistry,
+    pub permission: InvocationPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +86,40 @@ struct FileConfig {
     /// failover). Absent → no categories (agents fall back to their own model).
     #[serde(default)]
     categories: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    permission: Option<PermissionConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PermissionConfig {
+    #[serde(default)]
+    model: PermissionModel,
+    #[serde(default)]
+    rules: Vec<PermissionRuleConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionRuleConfig {
+    target: PermissionTarget,
+    selector: String,
+    permission: PermissionModeConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+enum PermissionModeConfig {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl From<PermissionModeConfig> for Mode {
+    fn from(permission: PermissionModeConfig) -> Self {
+        match permission {
+            PermissionModeConfig::Allow => Self::Allow,
+            PermissionModeConfig::Deny => Self::Deny,
+            PermissionModeConfig::Ask => Self::Ask,
+        }
+    }
 }
 
 /// File shape of the `subagents:` block. Every field is optional so a partial
@@ -143,7 +179,7 @@ struct ParsedProvider {
     models: Vec<String>,
 }
 
-const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\n";
+const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedConfig {
@@ -308,6 +344,33 @@ fn resolve_secret(raw: &str) -> anyhow::Result<String> {
 
 fn parse_config(yaml: &str) -> anyhow::Result<FileConfig> {
     serde_norway::from_str(yaml).context("parse hya config.yaml")
+}
+
+fn resolve_permission(file: &FileConfig) -> anyhow::Result<InvocationPolicy> {
+    let model = file
+        .permission
+        .as_ref()
+        .map_or(PermissionModel::Default, |permission| permission.model);
+    let rules = file
+        .permission
+        .as_ref()
+        .map(|permission| {
+            permission
+                .rules
+                .iter()
+                .map(|rule| {
+                    InvocationRule::new(rule.target, &rule.selector, rule.permission.into())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    InvocationPolicy::compile(model, rules).context("compile permission.rules selector regex")
+}
+
+fn has_meaningful_permission(file: &FileConfig) -> bool {
+    file.permission.as_ref().is_some_and(|permission| {
+        permission.model != PermissionModel::Default || !permission.rules.is_empty()
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -560,6 +623,9 @@ fn render_imported_hya_config(default_model: &str, providers: &[ImportedProvider
     }
     lines.push("mcp: {}".to_string());
     lines.push("plugins: {}".to_string());
+    lines.push("permission:".to_string());
+    lines.push("  model: default".to_string());
+    lines.push("  rules: []".to_string());
     let mut out = lines.join("\n");
     out.push('\n');
     out
@@ -865,9 +931,11 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let file = parse_config(&yaml)?;
+    let permission = resolve_permission(&file)?;
+    let has_permission = has_meaningful_permission(&file);
     let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
-    if parsed.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
+    if parsed.is_empty() && mcp.is_empty() && file.plugins.is_empty() && !has_permission {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
@@ -885,7 +953,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         authorized.push(p);
     }
     let models = model_entries(&authorized);
-    if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() {
+    if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() && !has_permission {
         return Ok(None);
     }
     let categories = resolve_categories(&file);
@@ -901,6 +969,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         plugins: file.plugins,
         subagents,
         categories,
+        permission,
     }))
 }
 
@@ -909,6 +978,70 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use hya_tool::{Invocation, Mode};
+
+    #[test]
+    fn permission_yaml_compiles_documented_rules_defaults_and_validation() {
+        let file = parse_config(
+            r#"
+permission:
+  model: default
+  rules:
+    - target: tool
+      selector: "^(read|grep)$"
+      permission: Allow
+    - target: mcp
+      selector: "^mcp__github__"
+      permission: Ask
+    - target: command
+      selector: "^git (status|diff)"
+      permission: Deny
+"#,
+        )
+        .unwrap();
+        let policy = resolve_permission(&file).unwrap();
+        assert_eq!(
+            policy.evaluate(&Invocation::tool("read", Mode::Ask)).mode,
+            Mode::Allow
+        );
+        assert_eq!(
+            policy.evaluate(&Invocation::mcp("mcp__github__issue")).mode,
+            Mode::Ask
+        );
+        assert_eq!(
+            policy
+                .evaluate(&Invocation::command("shell", "git status"))
+                .mode,
+            Mode::Deny
+        );
+
+        let omitted = parse_config("{}").unwrap();
+        assert_eq!(
+            resolve_permission(&omitted)
+                .unwrap()
+                .evaluate(&Invocation::tool("read", Mode::Allow))
+                .mode,
+            Mode::Allow
+        );
+        let invalid_regex = parse_config(
+            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: Allow\n",
+        )
+        .unwrap();
+        assert!(resolve_permission(&invalid_regex).is_err());
+        assert!(parse_config("permission:\n  model: unknown\n").is_err());
+        assert!(
+            parse_config(
+                "permission:\n  rules:\n    - target: unknown\n      selector: x\n      permission: Allow\n",
+            )
+            .is_err()
+        );
+        assert!(
+            parse_config(
+                "permission:\n  rules:\n    - target: tool\n      selector: x\n      permission: allow\n",
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn subagent_limits_parse_from_file_and_env_wins() {

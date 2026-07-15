@@ -4,7 +4,7 @@ use std::sync::Arc;
 // allow: SIZE_OK - pending permission state, HTTP views, and SSE payloads share one owner.
 use hya_proto::{Envelope, Event, MessageId, SessionId, ToolCallId};
 use hya_store::{SessionStore, StoreError};
-use hya_tool::{Action, AskRequest, Decision, Resource};
+use hya_tool::{Action, AskRequest, Decision, RememberScope, Resource};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
@@ -23,6 +23,7 @@ struct PendingPermission {
     call_id: Option<ToolCallId>,
     action: Action,
     resource: Resource,
+    remember: RememberScope,
     reply: oneshot::Sender<Decision>,
 }
 
@@ -89,6 +90,7 @@ impl PermissionRequests {
                     call_id,
                     action: req.action,
                     resource: req.resource,
+                    remember: req.remember,
                     reply: req.reply,
                 };
                 let request_id = req.id.to_string();
@@ -161,21 +163,19 @@ impl PermissionRequests {
                 return Ok(false);
             }
             let action = entry.action;
+            let remember = entry.remember.clone();
             let entry = pending.remove(id);
-            let related = match reply {
-                PermissionReply::Once => Vec::new(),
-                PermissionReply::Always => take_related(&mut pending, session, Some(action)),
-                PermissionReply::Reject => take_related(&mut pending, session, None),
-            };
+            let related = take_related_for_reply(&mut pending, session, reply, &remember, action);
             (entry, related)
         };
         let Some(entry) = entry else {
             return Ok(false);
         };
         let save_action = entry.action;
+        let save_pattern = entry.remember.pattern().to_string();
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.saved.remember(id, save_action).await?;
+            self.saved.remember(id, save_action, save_pattern).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
@@ -198,27 +198,23 @@ impl PermissionRequests {
                 return Ok(false);
             };
             let action = entry.action;
+            let remember = entry.remember.clone();
             let session = entry.session;
             let entry = pending.remove(id);
-            let related = match (reply, session) {
-                (PermissionReply::Once, _) | (_, None) => Vec::new(),
-                (PermissionReply::Always, Some(session)) => {
-                    take_related(&mut pending, session, Some(action))
-                }
-                (PermissionReply::Reject, Some(session)) => {
-                    take_related(&mut pending, session, None)
-                }
-            };
+            let related = session.map_or_else(Vec::new, |session| {
+                take_related_for_reply(&mut pending, session, reply, &remember, action)
+            });
             (entry, related)
         };
         let Some(entry) = entry else {
             return Ok(false);
         };
         let save_action = entry.action;
+        let save_pattern = entry.remember.pattern().to_string();
         let replied_session = entry.session;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.saved.remember(id, save_action).await?;
+            self.saved.remember(id, save_action, save_pattern).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
@@ -241,15 +237,38 @@ impl PermissionRequests {
     }
 }
 
+fn take_related_for_reply(
+    pending: &mut BTreeMap<String, PendingPermission>,
+    session: SessionId,
+    reply: PermissionReply,
+    remember: &RememberScope,
+    action: Action,
+) -> Vec<PendingPermission> {
+    let scope = match (reply, remember) {
+        (PermissionReply::Once, _) => return Vec::new(),
+        (PermissionReply::Always, _) | (PermissionReply::Reject, RememberScope::Exact(_)) => {
+            Some((remember, action))
+        }
+        (PermissionReply::Reject, RememberScope::LegacyAction) => None,
+    };
+    take_related(pending, session, scope)
+}
+
 fn take_related(
     pending: &mut BTreeMap<String, PendingPermission>,
     session: SessionId,
-    action: Option<Action>,
+    scope: Option<(&RememberScope, Action)>,
 ) -> Vec<PendingPermission> {
     let ids: Vec<String> = pending
         .iter()
         .filter(|(_, entry)| {
-            entry.session == Some(session) && action.is_none_or(|action| entry.action == action)
+            entry.session == Some(session)
+                && scope.is_none_or(|(remember, action)| match remember {
+                    RememberScope::LegacyAction => {
+                        entry.action == action && entry.remember == RememberScope::LegacyAction
+                    }
+                    RememberScope::Exact(_) => entry.remember == *remember,
+                })
         })
         .map(|(id, _)| id.clone())
         .collect();
@@ -264,7 +283,7 @@ fn permission_view(id: &str, entry: &PendingPermission) -> Option<PermissionRequ
         session_id: entry.session?.to_string(),
         action: action_name(entry.action),
         resources: vec![entry.resource.pattern()],
-        save: Some(vec!["*".to_string()]),
+        save: Some(vec![entry.remember.pattern().to_string()]),
     })
 }
 
@@ -279,7 +298,7 @@ fn legacy_permission_view(
         permission: action_name(entry.action),
         patterns: vec![entry.resource.pattern()],
         metadata: json!({}),
-        always: vec!["*".to_string()],
+        always: vec![entry.remember.pattern().to_string()],
         tool: PermissionToolView {
             message_id: entry
                 .message_id
@@ -421,6 +440,7 @@ fn related_decision(reply: PermissionReply) -> Decision {
 mod tests {
     use super::*;
     use hya_proto::PermissionRequestId;
+    use hya_tool::{ExactSubject, PermissionTarget, RememberScope};
 
     #[test]
     fn permission_asked_event_includes_tool_correlation_when_available() {
@@ -434,6 +454,7 @@ mod tests {
             call_id: Some(call),
             action: Action::Bash,
             resource: Resource::Command("pwd".to_string()),
+            remember: RememberScope::LegacyAction,
             reply,
         };
 
@@ -444,5 +465,100 @@ mod tests {
             message.to_string()
         );
         assert_eq!(event["properties"]["tool"]["callID"], call.to_string());
+    }
+
+    #[test]
+    fn exact_always_groups_and_displays_only_the_identical_subject() {
+        fn pending(session: SessionId, tool: &str, remember: RememberScope) -> PendingPermission {
+            let (reply, _rx) = tokio::sync::oneshot::channel();
+            PendingPermission {
+                session: Some(session),
+                message_id: None,
+                call_id: None,
+                action: Action::Tool,
+                resource: Resource::Tool(tool.to_string()),
+                remember,
+                reply,
+            }
+        }
+
+        let session = SessionId::new();
+        let write = RememberScope::Exact(ExactSubject::new(PermissionTarget::Tool, "write"));
+        let edit = RememberScope::Exact(ExactSubject::new(PermissionTarget::Tool, "edit"));
+        let mut requests = BTreeMap::from([
+            ("same".to_string(), pending(session, "write", write.clone())),
+            ("other".to_string(), pending(session, "edit", edit)),
+            (
+                "legacy".to_string(),
+                pending(session, "write", RememberScope::LegacyAction),
+            ),
+        ]);
+
+        let related = take_related(&mut requests, session, Some((&write, Action::Tool)));
+        assert_eq!(related.len(), 1);
+        assert!(requests.contains_key("other"));
+        assert!(requests.contains_key("legacy"));
+
+        let exact = pending(session, "write", write);
+        assert_eq!(
+            permission_view("id", &exact).and_then(|view| view.save),
+            Some(vec!["write".to_string()])
+        );
+        assert_eq!(
+            legacy_permission_view("id", &exact, session.to_string()).always,
+            vec!["write".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_reject_groups_only_the_identical_subject()
+    -> Result<(), Box<dyn std::error::Error>> {
+        fn pending(
+            session: SessionId,
+            tool: &str,
+            remember: RememberScope,
+        ) -> (PendingPermission, oneshot::Receiver<Decision>) {
+            let (reply, rx) = oneshot::channel();
+            (
+                PendingPermission {
+                    session: Some(session),
+                    message_id: None,
+                    call_id: None,
+                    action: Action::Tool,
+                    resource: Resource::Tool(tool.to_string()),
+                    remember,
+                    reply,
+                },
+                rx,
+            )
+        }
+
+        let store = SessionStore::connect_memory().await?;
+        let requests = PermissionRequests::new(store);
+        let session = SessionId::new();
+        let write = RememberScope::Exact(ExactSubject::new(PermissionTarget::Tool, "write"));
+        let edit = RememberScope::Exact(ExactSubject::new(PermissionTarget::Tool, "edit"));
+        let (selected, selected_rx) = pending(session, "write", write.clone());
+        let (same, same_rx) = pending(session, "write", write);
+        let (other, _other_rx) = pending(session, "edit", edit);
+        let (legacy, _legacy_rx) = pending(session, "write", RememberScope::LegacyAction);
+        requests.inner.lock().await.extend([
+            ("selected".to_string(), selected),
+            ("same".to_string(), same),
+            ("other".to_string(), other),
+            ("legacy".to_string(), legacy),
+        ]);
+
+        assert!(
+            requests
+                .reply(session, "selected", PermissionReply::Reject, None)
+                .await?
+        );
+        assert!(matches!(selected_rx.await?, Decision::Reject { .. }));
+        assert!(matches!(same_rx.await?, Decision::Reject { .. }));
+        let pending = requests.inner.lock().await;
+        assert!(pending.contains_key("other"));
+        assert!(pending.contains_key("legacy"));
+        Ok(())
     }
 }

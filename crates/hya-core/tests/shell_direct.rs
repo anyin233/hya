@@ -8,7 +8,10 @@ use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{
+    Action, Decision, ExactSubject, InvocationPolicy, Mode, PermissionModel, PermissionPlane,
+    PermissionRules, PermissionTarget, RememberScope, Rule, ToolRegistry,
+};
 use tokio_util::sync::CancellationToken;
 
 fn tempdir() -> PathBuf {
@@ -96,4 +99,70 @@ async fn direct_shell_runs_command_and_records_tool_part() {
             } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("direct-shell-ok")
         )
     }));
+}
+
+#[tokio::test]
+async fn direct_shell_authorizes_once_with_call_correlation() {
+    let dir = tempdir();
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let (permission, mut asks) = PermissionPlane::new_with_policy(
+        PermissionRules::default(),
+        InvocationPolicy::compile(PermissionModel::Default, Vec::new()).unwrap(),
+    );
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        Arc::new(ToolRegistry::builtins()),
+        permission,
+        EventBus::default(),
+    ));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    let runner = engine.clone();
+    let task = tokio::spawn(async move {
+        runner
+            .run_shell(
+                session,
+                &agent,
+                "printf direct-policy".to_string(),
+                CancellationToken::new(),
+            )
+            .await
+    });
+
+    let request = tokio::time::timeout(std::time::Duration::from_secs(1), asks.recv())
+        .await
+        .expect("permission request timeout")
+        .expect("permission request");
+    let correlation = (request.session, request.message_id, request.call_id);
+    let remember = request.remember.clone();
+    request.reply.send(Decision::AllowOnce).unwrap();
+    let (message, finish) = task.await.unwrap().unwrap();
+
+    assert_eq!(finish, FinishReason::Stop);
+    assert_eq!(correlation.0, Some(session));
+    assert_eq!(correlation.1, Some(message));
+    assert!(correlation.2.is_some());
+    assert_eq!(
+        remember,
+        RememberScope::Exact(ExactSubject::new(
+            PermissionTarget::Command,
+            "printf direct-policy",
+        ))
+    );
+    assert!(asks.try_recv().is_err(), "direct shell must prompt once");
 }

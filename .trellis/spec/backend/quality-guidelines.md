@@ -385,3 +385,26 @@ jobs:
 
 - New release.
 ```
+
+---
+
+## Scenario: Tool Invocation And Resource Permissions
+
+### 1. Scope / Trigger
+
+- Trigger: changes to permission config, tool registration, model/direct-shell dispatch, permission asks, or headless execution.
+
+### 2. Contracts
+
+- Invocation policy and wildcard resource rules are separate layers. Do not convert path, URL, external-directory, or legacy action rules into invocation regexes.
+- Registry metadata explicitly classifies canonical tools as read-only, task, standard tool, command, or MCP. Never infer MCP classification from a name prefix.
+- Dispatch order is before-hook, successful registry lookup, post-hook input validation, one native authorization, then execution with the returned call-scoped plane. Unknown or malformed calls do not prompt.
+- Native `AllowAlways` remembers one exact target/value subject; legacy `AllowAlways` remains action-wide. Effective denies and external-directory checks are not bypassed by a call grant.
+- Interactive TUI/server asks keep their existing channels. Headless `exec`, RPC, and goal modes reject residual asks; `--yolo` sets the effective invocation model to `danger` before engine construction.
+
+### 3. Tests Required
+
+- Evaluator tests cover all models, ordered regex matching, defaults, and invalid regexes.
+- Dispatch tests cover lookup-before-ask, post-hook command matching, call correlation, and one prompt per invocation.
+- Permission-plane tests cover exact native grants, legacy action grants, deny precedence, and the external-directory exception.
+- Config/runtime tests cover omission, permission-only offline config, strict malformed-config fallback, yolo override, and fail-closed headless asks.

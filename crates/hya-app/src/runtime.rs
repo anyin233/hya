@@ -16,13 +16,13 @@ use hya_proto::{AgentName, MemberId, ModelRef, SessionId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, AskRequest, InteractionPlane, MailboxPlane, MemberOutcome, Mode, PermissionPlane,
-    PermissionRules, QuestionRequest, Rule, SpawnMember, SpawnRequest, SpawnerPlane, ToolRegistry,
+    Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
+    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnMember,
+    SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry,
 };
 use std::collections::BTreeMap;
 
 use crate::config;
-use crate::permission::{PermissionPolicy, spawn_auto_responder};
 use crate::{formatter_config, plugins};
 
 pub fn today() -> String {
@@ -64,16 +64,6 @@ pub fn host_info() -> HostInfo {
     HostInfo {
         name: "hya".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-    }
-}
-
-pub fn headless_policy(yolo: bool, workdir: &std::path::Path) -> PermissionPolicy {
-    if yolo {
-        PermissionPolicy::Yolo
-    } else {
-        PermissionPolicy::Scoped {
-            workdir: workdir.to_path_buf(),
-        }
     }
 }
 
@@ -166,6 +156,17 @@ pub struct RuntimeConfig {
     /// Set when no usable config was found and the offline provider was chosen.
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
+    pub permission: InvocationPolicy,
+}
+
+impl RuntimeConfig {
+    #[must_use]
+    pub fn with_yolo(mut self, yolo: bool) -> Self {
+        if yolo {
+            self.permission = self.permission.with_model(PermissionModel::Danger);
+        }
+        self
+    }
 }
 
 /// Resolve a provider router + active model from hya's config, falling back
@@ -196,6 +197,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 default_agent: cfg.default_agent,
                 categories: cfg.categories,
                 offline_notice: None,
+                permission: cfg.permission,
             }
         }
         Ok(None) => {
@@ -211,6 +213,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 offline_notice: Some(OfflineNotice {
                     config_path: config::expected_config_path(),
                 }),
+                permission: InvocationPolicy::default(),
             }
         }
         Err(e) => {
@@ -225,6 +228,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 default_agent: None,
                 categories: CategoryRegistry::default(),
                 offline_notice: None,
+                permission: InvocationPolicy::default().with_model(PermissionModel::Strict),
             }
         }
     }
@@ -436,6 +440,7 @@ pub async fn build_session_engine(
     model: &str,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
+    invocation_policy: InvocationPolicy,
     include_global_agents: bool,
 ) -> (
     Arc<SessionEngine>,
@@ -448,7 +453,7 @@ pub async fn build_session_engine(
     let mut registry = ToolRegistry::builtins();
     let mcp_manager = hya_mcp::McpManager::connect_all(mcp).await;
     for tool in mcp_manager.tools() {
-        if let Err(error) = registry.register(tool) {
+        if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
             eprintln!("hya: skipping MCP tool ({error})");
         }
     }
@@ -464,7 +469,7 @@ pub async fn build_session_engine(
         Rule::new(Action::Glob, "*", Mode::Allow),
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]);
-    let (permission, asks) = PermissionPlane::new(rules);
+    let (permission, asks) = PermissionPlane::new_with_policy(rules, invocation_policy);
     let permission = if plugin_host.is_empty() {
         permission
     } else {
@@ -541,7 +546,6 @@ pub struct HyaRuntime {
     router: axum::Router,
     engine: Arc<SessionEngine>,
     app_state: hya_server::AppState,
-    _permission_responder: Option<tokio::task::JoinHandle<()>>,
     _plugin_host: Arc<hya_plugin::PluginHost>,
 }
 
@@ -559,6 +563,7 @@ impl HyaRuntime {
                 default_agent: opts.default_agent,
                 categories: CategoryRegistry::default(),
                 offline_notice: None,
+                permission: InvocationPolicy::default(),
             }
         } else {
             let mut runtime = resolve_runtime(opts.model);
@@ -566,13 +571,18 @@ impl HyaRuntime {
                 runtime.default_agent = opts.default_agent;
             }
             runtime
-        };
+        }
+        .with_yolo(opts.yolo);
+        if opts.yolo {
+            eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
+        }
         let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
             store,
             runtime.router,
             &runtime.model,
             runtime.mcp,
             runtime.plugins,
+            runtime.permission,
             opts.include_global_agents,
         )
         .await;
@@ -583,20 +593,13 @@ impl HyaRuntime {
                 .with_workspace_adapters(plugin_host.workspace_adapters())
                 .with_default_agent(runtime.default_agent.clone())
                 .with_global_agents(opts.include_global_agents);
-        let _permission_responder = if opts.yolo {
-            eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
-            Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))
-        } else {
-            state = state.with_permission_requests(asks);
-            None
-        };
+        state = state.with_permission_requests(asks);
         let app_state = state.clone();
         let router = hya_server::router(state);
         Ok(Self {
             router,
             engine,
             app_state,
-            _permission_responder,
             _plugin_host: plugin_host,
         })
     }
@@ -621,6 +624,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use hya_tool::PermissionModel;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -728,6 +732,32 @@ mod tests {
             .expect("missing-config path must carry an offline notice");
         assert!(notice.config_path.ends_with("hya/config.yaml"));
         assert!(notice.render().contains("OFFLINE"));
+    }
+
+    #[test]
+    fn permission_only_config_is_kept_and_config_errors_fall_back_to_strict() {
+        let dir = tempdir();
+        let _env = EnvGuard::set(&dir, &dir);
+        let config_path = dir.join("hya/config.yaml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(&config_path, "permission:\n  model: allow\n").unwrap();
+
+        let runtime = resolve_runtime(None);
+        assert_eq!(runtime.model, "offline");
+        assert_eq!(runtime.permission.model(), PermissionModel::Allow);
+        assert!(runtime.offline_notice.is_none());
+        assert_eq!(
+            runtime.with_yolo(true).permission.model(),
+            PermissionModel::Danger
+        );
+
+        std::fs::write(
+            &config_path,
+            "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: Allow\n",
+        )
+        .unwrap();
+        let fallback = resolve_runtime(None);
+        assert_eq!(fallback.permission.model(), PermissionModel::Strict);
     }
 
     #[test]

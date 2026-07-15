@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend guideline entry point for the Rust config, runtime, server, and tool changes."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Owns the existing permission request/reply lifecycle and required test contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The policy must retain one validated contract across YAML, runtime, engine, server, plugin, and TUI boundaries."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of the existing permission plane and one shared evaluator instead of parallel permission logic."}
+{"file":".trellis/tasks/07-15-permission-policy-models/research/permission-flow.md","reason":"Verified current permission, dispatch, config, MCP, plugin, task, and headless call paths."}
+{"file":".trellis/tasks/07-15-permission-policy-models/research/planner-synthesis.md","reason":"Records merged planner decisions, rejected alternatives, and final product semantics."}

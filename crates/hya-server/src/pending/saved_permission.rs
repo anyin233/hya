@@ -38,12 +38,13 @@ impl SavedPermissions {
         &self,
         request_id: &str,
         action: Action,
+        resource: String,
     ) -> Result<(), StoreError> {
         let entry = SavedPermissionInfo {
             id: format!("psv_{request_id}"),
             project_id: "global".to_string(),
             action: action_name(action),
-            resource: "*".to_string(),
+            resource,
         };
         self.store
             .save_permission(&SavedPermission::from(entry))

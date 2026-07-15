@@ -29,13 +29,13 @@ use hya_proto::{ModelRef, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
-use crate::permission::spawn_auto_responder;
+use crate::permission::spawn_reject_responder;
 use cli_args::{Cli, Command};
 
 pub use hya_app::{
-    RuntimeConfig, agent_with_model, build_session_engine, compaction_config,
-    discover_context_files, headless_policy, host_info, offline_router, open_store,
-    resolve_runtime, spawn_team_supervisor, today,
+    InvocationPolicy, RuntimeConfig, agent_with_model, build_session_engine, compaction_config,
+    discover_context_files, host_info, offline_router, open_store, resolve_runtime,
+    spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -51,18 +51,19 @@ async fn cmd_exec(
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let store = open_store(db).await?;
-    let runtime = resolve_runtime(model_override);
+    let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        runtime.permission,
         true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
-    let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
+    let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -103,18 +104,19 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override);
+    let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        runtime.permission,
         true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
-    let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
+    let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -165,7 +167,7 @@ async fn cmd_goal(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override);
+    let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let evaluator_router = runtime.router.clone();
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
@@ -173,11 +175,12 @@ async fn cmd_goal(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        runtime.permission,
         true,
     )
     .await;
     let agent = agent_with_model(&runtime.model);
-    let _responder = spawn_auto_responder(asks, headless_policy(yolo, &agent.workdir));
+    let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -214,8 +217,16 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
-    let (engine, _asks, _, _mcp_manager, _plugin_host) =
-        build_session_engine(store, router, &model, BTreeMap::new(), Vec::new(), true).await;
+    let (engine, _asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+        store,
+        router,
+        &model,
+        BTreeMap::new(),
+        Vec::new(),
+        InvocationPolicy::default(),
+        true,
+    )
+    .await;
     let envelopes = engine.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {

@@ -9,7 +9,7 @@ use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
     QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx,
-    ToolRegistry, WebSearchPlane,
+    ToolPermission, ToolRegistry, WebSearchPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -75,6 +75,28 @@ impl Tool for DuplicateTool {
     }
 }
 
+struct NamedTestTool(&'static str);
+
+#[async_trait]
+impl Tool for NamedTestTool {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new(self.0),
+            description: "test".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: None,
+        }
+    }
+
+    async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, hya_tool::ToolError> {
+        Ok(json!({ "ok": true }))
+    }
+}
+
 #[test]
 fn registry_rejects_duplicate_tool_name() {
     let mut registry = ToolRegistry::builtins();
@@ -121,6 +143,75 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
             "{alias} schema should be hidden"
         );
     }
+}
+
+#[test]
+fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
+    let mut registry = ToolRegistry::builtins();
+
+    for name in [
+        "read",
+        "ls",
+        "glob",
+        "find",
+        "grep",
+        "lsp",
+        "skill",
+        "list_agents",
+        "roster",
+        "channels",
+    ] {
+        assert_eq!(
+            registry.resolve(name).unwrap().permission,
+            ToolPermission::ReadOnly
+        );
+    }
+    assert_eq!(
+        registry.resolve("task").unwrap().permission,
+        ToolPermission::Task
+    );
+    assert_eq!(
+        registry.resolve("write").unwrap().permission,
+        ToolPermission::Tool
+    );
+    assert_eq!(
+        registry.resolve("webfetch").unwrap().permission,
+        ToolPermission::Tool
+    );
+    assert_eq!(
+        registry.resolve("shell").unwrap().permission,
+        ToolPermission::Command
+    );
+    assert_eq!(
+        registry.resolve("bash").unwrap().permission,
+        ToolPermission::Command
+    );
+    assert!(
+        registry
+            .resolve("shell")
+            .unwrap()
+            .invocation(&json!({ "command": 1 }))
+            .is_err()
+    );
+
+    let alias = registry.resolve("fetch").unwrap();
+    assert_eq!(alias.tool.name(), "webfetch");
+    assert_eq!(alias.permission, ToolPermission::Tool);
+
+    registry
+        .register(Arc::new(NamedTestTool("mcp__looks_like_mcp")))
+        .unwrap();
+    assert_eq!(
+        registry.resolve("mcp__looks_like_mcp").unwrap().permission,
+        ToolPermission::Tool
+    );
+    registry
+        .register_with_permission(Arc::new(NamedTestTool("explicit_mcp")), ToolPermission::Mcp)
+        .unwrap();
+    assert_eq!(
+        registry.resolve("explicit_mcp").unwrap().permission,
+        ToolPermission::Mcp
+    );
 }
 
 #[test]

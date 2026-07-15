@@ -1,3 +1,3 @@
-# 0.33.7
+# 0.33.8
 
-- Stabilized TypeScript TUI subagent workspace focus transitions in PTY tests.
+- Added configurable invocation permission models for tools, MCP calls, and shell commands.

@@ -4,7 +4,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine, session_workdir};
+use super::{AgentSpec, SessionEngine, authorize_tool_call, session_workdir};
 use crate::error::CoreError;
 use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 
@@ -143,26 +143,37 @@ impl SessionEngine {
         let workdir = session_workdir(agent, &projection);
         let input_for_after = self.hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
-        let result = match self.tools.get(&tool) {
-            Some(shell) => {
-                let ctx = ToolCtx {
-                    permission: self.permission.for_session(session),
-                    interaction: self.interaction.for_session(session),
-                    spawner: self.spawner.for_session(session),
-                    mailbox: self.mailbox.for_session(session),
-                    session: Some(session),
-                    parent_session: projection.session.parent,
-                    todo: self.todo.clone(),
-                    skills: self.skills.clone(),
-                    agents: self.agents.clone(),
-                    websearch: self.websearch.clone(),
-                    lsp: self.lsp.clone(),
-                    formatter: self.formatter.clone(),
-                    workdir,
-                    cancel,
-                };
-                shell.execute(&ctx, input).await
-            }
+        let result = match self.tools.resolve(&tool) {
+            Some(resolved) => match authorize_tool_call(
+                &resolved,
+                &input,
+                self.permission.for_session(session),
+                shell_part.message,
+                shell_part.call,
+            )
+            .await
+            {
+                Ok(permission) => {
+                    let ctx = ToolCtx {
+                        permission,
+                        interaction: self.interaction.for_session(session),
+                        spawner: self.spawner.for_session(session),
+                        mailbox: self.mailbox.for_session(session),
+                        session: Some(session),
+                        parent_session: projection.session.parent,
+                        todo: self.todo.clone(),
+                        skills: self.skills.clone(),
+                        agents: self.agents.clone(),
+                        websearch: self.websearch.clone(),
+                        lsp: self.lsp.clone(),
+                        formatter: self.formatter.clone(),
+                        workdir,
+                        cancel,
+                    };
+                    resolved.tool.execute(&ctx, input).await
+                }
+                Err(error) => Err(error),
+            },
             None => Err(ToolError::Other("unknown tool: shell".to_string())),
         };
         let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

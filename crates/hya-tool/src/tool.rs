@@ -19,7 +19,9 @@ use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::mailbox::{ChannelsTool, JoinTool, LeaveTool, MailboxPlane, RosterTool, SendTool};
-use crate::permission::{Action, PermissionError, PermissionPlane, Resource, glob_match};
+use crate::permission::{
+    Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
+};
 use crate::plan::PlanExitTool;
 use crate::question::QuestionTool;
 use crate::read::ReadTool;
@@ -103,8 +105,41 @@ impl Tool for NamedTool {
 }
 
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
-    aliases: HashMap<String, Arc<dyn Tool>>,
+    tools: HashMap<String, ResolvedTool>,
+    aliases: HashMap<String, ResolvedTool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolPermission {
+    ReadOnly,
+    Task,
+    Tool,
+    Command,
+    Mcp,
+}
+
+#[derive(Clone)]
+pub struct ResolvedTool {
+    pub tool: Arc<dyn Tool>,
+    pub permission: ToolPermission,
+}
+
+impl ResolvedTool {
+    pub fn invocation(&self, input: &Value) -> Result<Invocation, ToolError> {
+        let name = self.tool.name();
+        match self.permission {
+            ToolPermission::ReadOnly | ToolPermission::Task => {
+                Ok(Invocation::tool(name, Mode::Allow))
+            }
+            ToolPermission::Tool => Ok(Invocation::tool(name, Mode::Ask)),
+            ToolPermission::Command => input
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| Invocation::command(name, command))
+                .ok_or_else(|| ToolError::Input("command must be a string".to_string())),
+            ToolPermission::Mcp => Ok(Invocation::mcp(name)),
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -149,16 +184,29 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
+        self.register_with_permission(tool, ToolPermission::Tool)
+    }
+
+    pub fn register_with_permission(
+        &mut self,
+        tool: Arc<dyn Tool>,
+        permission: ToolPermission,
+    ) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
         if self.tools.contains_key(&name) || self.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
-        self.tools.insert(name, tool);
+        self.tools.insert(name, ResolvedTool { tool, permission });
         Ok(())
     }
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.resolve(name).map(|resolved| resolved.tool)
+    }
+
+    #[must_use]
+    pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
         self.tools
             .get(name)
             .or_else(|| self.aliases.get(name))
@@ -167,32 +215,60 @@ impl ToolRegistry {
 
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.tools.values().map(|t| t.schema()).collect()
+        self.tools
+            .values()
+            .map(|resolved| resolved.tool.schema())
+            .collect()
     }
 
     fn insert_builtin(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name().to_string(), tool);
+        let name = tool.name().to_string();
+        self.tools.insert(
+            name.clone(),
+            ResolvedTool {
+                tool,
+                permission: builtin_permission(&name),
+            },
+        );
     }
 
     fn insert_named_builtin(&mut self, name: &str, tool: Arc<dyn Tool>) {
         self.tools.insert(
             name.to_string(),
-            Arc::new(NamedTool {
-                name: name.to_string(),
-                inner: tool,
-            }),
+            ResolvedTool {
+                tool: Arc::new(NamedTool {
+                    name: name.to_string(),
+                    inner: tool,
+                }),
+                permission: builtin_permission(name),
+            },
         );
     }
 
     fn insert_aliased_builtin(&mut self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
+        let permission = builtin_permission(canonical);
         self.tools.insert(
             canonical.to_string(),
-            Arc::new(NamedTool {
-                name: canonical.to_string(),
-                inner: tool.clone(),
-            }),
+            ResolvedTool {
+                tool: Arc::new(NamedTool {
+                    name: canonical.to_string(),
+                    inner: tool.clone(),
+                }),
+                permission,
+            },
         );
-        self.aliases.insert(legacy.to_string(), tool);
+        self.aliases
+            .insert(legacy.to_string(), ResolvedTool { tool, permission });
+    }
+}
+
+fn builtin_permission(name: &str) -> ToolPermission {
+    match name {
+        "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents" | "roster"
+        | "channels" => ToolPermission::ReadOnly,
+        "task" => ToolPermission::Task,
+        "shell" | "bash" => ToolPermission::Command,
+        _ => ToolPermission::Tool,
     }
 }
 

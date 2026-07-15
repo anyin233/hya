@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check permission lifecycle compatibility, typed failures, and required regression coverage."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit that config values and decisions survive every runtime and UI boundary consistently."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated evaluators, scattered classifications, or bypassed shared permission paths."}
+{"file":".trellis/tasks/07-15-permission-policy-models/research/permission-flow.md","reason":"Compare the final implementation against every verified execution and ask path."}
+{"file":".trellis/tasks/07-15-permission-policy-models/research/planner-synthesis.md","reason":"Verify final code preserves the reconciled security and compatibility decisions."}

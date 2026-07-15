@@ -38,6 +38,7 @@ fn from_rule(rule: &Rule) -> PermissionRule {
 
 fn permission_name(action: Action) -> &'static str {
     match action {
+        Action::Tool => "tool",
         Action::Read => "read",
         Action::Edit => "edit",
         Action::Glob => "glob",

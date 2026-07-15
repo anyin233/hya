@@ -75,6 +75,9 @@ impl PluginHost {
 
 fn resource_to_wire(resource: &Resource) -> WireResource {
     match resource {
+        Resource::Tool(value) => WireResource::Tool {
+            value: value.clone(),
+        },
         Resource::Path(value) => WireResource::Path {
             value: value.clone(),
         },
