@@ -440,6 +440,10 @@ test("pinned SDK drives the retained TUI workflow against a real hya backend", a
     () => JSON.stringify(events).includes("(hya dev provider) You said") && JSON.stringify(events).includes("deterministic SDK prompt"),
     "streamed assistant text",
   )
+  await waitFor(
+    async () => (await client.session.status({}, { throwOnError: true })).data![sessionID]?.type !== "busy",
+    "completed prompt",
+  )
 
   await client.session.shell({ sessionID, command: "printf sdk-tool-activity" }, { throwOnError: true })
   await waitFor(
