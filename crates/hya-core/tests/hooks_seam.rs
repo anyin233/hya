@@ -15,7 +15,11 @@ use hya_core::{
 use hya_proto::{AgentName, Envelope, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
+use hya_tool::{
+    Action, Decision, ExactSubject, InvocationPolicy, InvocationRule, Mode, PermissionModel,
+    PermissionPlane, PermissionRules, PermissionTarget, RememberScope, Resource, Rule,
+    ToolRegistry,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -103,7 +107,11 @@ impl HookDispatcher for CountingHost {
 
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
         self.counts.tool_before.fetch_add(1, Ordering::SeqCst);
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
+        let mut value = input.input;
+        if input.tool == "shell" {
+            value["command"] = json!("printf post-hook");
+        }
+        ToolExecuteBeforeOutcome::Continue { input: value }
     }
 
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
@@ -112,6 +120,91 @@ impl HookDispatcher for CountingHost {
             result: input.result,
         }
     }
+}
+
+#[tokio::test]
+async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlation() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "missing_tool".to_string(),
+                input: json!({}),
+            },
+            FakeStep::ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "printf pre-hook" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let policy = InvocationPolicy::compile(
+        PermissionModel::Default,
+        vec![
+            InvocationRule::new(PermissionTarget::Command, "^printf pre-hook$", Mode::Deny),
+            InvocationRule::new(PermissionTarget::Command, "^printf post-hook$", Mode::Ask),
+        ],
+    )
+    .unwrap();
+    let (permission, mut asks) =
+        PermissionPlane::new_with_policy(PermissionRules::default(), policy);
+    let store = SessionStore::connect_memory().await.unwrap();
+    let counts = Arc::new(Counts::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            store,
+            router,
+            Arc::new(ToolRegistry::builtins()),
+            permission,
+            EventBus::default(),
+        )
+        .with_hooks(Arc::new(CountingHost { counts })),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "run shell".to_string())
+        .await
+        .unwrap();
+
+    let runner = engine.clone();
+    let task_agent = agent(&dir);
+    let task = tokio::spawn(async move {
+        runner
+            .run_turn(session, &task_agent, CancellationToken::new())
+            .await
+    });
+    let request = tokio::time::timeout(std::time::Duration::from_secs(1), asks.recv())
+        .await
+        .expect("permission request timeout")
+        .expect("permission request");
+    let correlation = (request.session, request.message_id, request.call_id);
+    let remember = request.remember.clone();
+    let resource = request.resource.clone();
+    request.reply.send(Decision::AllowOnce).unwrap();
+    assert_eq!(task.await.unwrap().unwrap(), FinishReason::Stop);
+
+    assert_eq!(correlation.0, Some(session));
+    assert!(correlation.1.is_some());
+    assert!(correlation.2.is_some());
+    assert_eq!(resource, Resource::Command("printf post-hook".to_string()));
+    assert_eq!(
+        remember,
+        RememberScope::Exact(ExactSubject::new(
+            PermissionTarget::Command,
+            "printf post-hook",
+        ))
+    );
+    assert!(asks.try_recv().is_err(), "one invocation must prompt once");
 }
 
 struct MaskingAfterHost;

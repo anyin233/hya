@@ -216,6 +216,7 @@ pub enum WireToolResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireResource {
+    Tool { value: String },
     Path { value: String },
     Glob { value: String },
     Command { value: String },

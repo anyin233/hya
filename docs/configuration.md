@@ -7,7 +7,8 @@ hya reads its own YAML config from:
 
 If no usable provider route is configured, hya falls back to `DevProvider`, the
 offline echo provider from [`../crates/hya-provider/src/dev.rs`](../crates/hya-provider/src/dev.rs).
-The same config file also drives MCP servers, plugins, and formatter status.
+The same config file also drives MCP servers, plugins, permissions, and
+formatter status.
 
 ## First-Run / Offline Behavior
 
@@ -23,6 +24,9 @@ default_model: offline
 providers: {}
 mcp: {}
 plugins: {}
+permission:
+  model: default
+  rules: []
 ```
 
 A missing, empty, or provider-less config is **not an error** — hya falls back
@@ -86,6 +90,21 @@ default_model: claude-sonnet-4-6
 # Optional: agent profile selected when a workdir does not specify one.
 # Falls back to the built-in `build` agent when omitted.
 default_agent: build
+
+# Invocation policy. Selectors are Rust regular expressions and are evaluated
+# in order. Use anchors when you need a full-name or full-command match.
+permission:
+  model: default                         # allow | default | strict | danger
+  rules:
+    - target: tool                       # tool | mcp | command
+      selector: "^(read|grep)$"
+      permission: Allow                  # Allow | Ask | Deny
+    - target: mcp
+      selector: "^mcp__github__"
+      permission: Ask
+    - target: command
+      selector: "^git (status|diff)"
+      permission: Allow
 
 # Each entry under `providers.<id>` becomes one HTTP route. The <id> is also the
 # name used by `hya-backend login <id>` and shown as the provider in model refs.
@@ -197,6 +216,53 @@ hya-backend models gateway --verbose
 
 The selected model must be served by one configured route. If no route reports
 capabilities for the model, the router returns `unknown provider for model`.
+
+## Permissions
+
+`permission` controls registered tool, MCP, and shell-command invocations:
+
+```yaml
+permission:
+  model: default
+  rules:
+    - target: tool
+      selector: "^(read|grep)$"
+      permission: Allow
+    - target: mcp
+      selector: "^mcp__github__"
+      permission: Ask
+    - target: command
+      selector: "^git (status|diff)"
+      permission: Deny
+```
+
+`model` accepts lowercase `allow`, `default`, `strict`, or `danger`. Rule
+`target` accepts lowercase `tool`, `mcp`, or `command`; `permission` accepts
+`Allow`, `Ask`, or `Deny`. Selectors use Rust regular-expression search
+semantics, so `read` also matches `read_file`; use `^read$` for an exact match.
+Invalid values or regular expressions produce a config error and a strict
+permission fallback.
+
+Rules are evaluated in file order:
+
+| Model | Behavior |
+| --- | --- |
+| `allow` | Any matching `Deny` denies; otherwise allow. |
+| `default` | The last matching rule wins. Without a match, local read-only and task tools allow; other tools, MCP calls, and commands ask. |
+| `strict` | Any matching `Deny` denies; otherwise ask, except for an exact subject previously approved with Allow Always. |
+| `danger` | Allow immediately, bypassing configured and legacy permission checks. |
+
+The default local read-only set is `read`, `ls`, `glob`, `find`, `grep`, `lsp`,
+`skill`, `list_agents`, `roster`, and `channels`; `task` also allows by default.
+Network reads (`webfetch` and `websearch`), writes, plugins, MCP tools, and shell
+commands ask by default. Existing path, URL, external-directory, and other
+resource rules still apply after an invocation is approved.
+
+Interactive TUI and server modes forward asks to their existing permission UI
+or endpoint. Headless `exec`, RPC, and goal modes reject unresolved asks.
+`--yolo` replaces the effective model with `danger` before engine construction.
+Omitting `permission` is equivalent to `model: default` with no rules; a
+permission-only config remains active while hya uses the offline provider.
 
 ## Environment Variables
 

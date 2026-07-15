@@ -11,8 +11,9 @@ pub mod permission;
 pub mod plugins;
 pub mod runtime;
 
+pub use hya_tool::InvocationPolicy;
 pub use runtime::{
     HyaRuntime, OfflineNotice, RuntimeConfig, RuntimeOptions, agent_with_model,
-    build_session_engine, compaction_config, discover_context_files, headless_policy, host_info,
-    offline_router, open_store, resolve_runtime, spawn_team_supervisor, today,
+    build_session_engine, compaction_config, discover_context_files, host_info, offline_router,
+    open_store, resolve_runtime, spawn_team_supervisor, today,
 };

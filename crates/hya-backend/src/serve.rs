@@ -3,8 +3,6 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_server::{AppState, router as server_router};
 
-use crate::permission::{PermissionPolicy, spawn_auto_responder};
-
 use super::{agent_with_model, build_session_engine, open_store, resolve_runtime};
 
 pub(crate) async fn cmd_serve(
@@ -15,13 +13,14 @@ pub(crate) async fn cmd_serve(
 ) -> anyhow::Result<()> {
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override);
+    let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
         store,
         runtime.router,
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        runtime.permission,
         true,
     )
     .await;
@@ -31,13 +30,10 @@ pub(crate) async fn cmd_serve(
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_global_agents(true);
-    let _responder = if yolo {
+    if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
-        Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))
-    } else {
-        state = state.with_permission_requests(asks);
-        None
-    };
+    }
+    state = state.with_permission_requests(asks);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
@@ -72,7 +68,7 @@ pub(crate) async fn cmd_tui_hya(
 
     super::first_run_config_bootstrap(true)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override);
+    let runtime = resolve_runtime(model_override).with_yolo(yolo);
     // Interactive startup (stdout is a terminal, checked above): explain the
     // missing config and the offline fallback. Goes to stderr only.
     if let Some(notice) = &runtime.offline_notice {
@@ -84,6 +80,7 @@ pub(crate) async fn cmd_tui_hya(
         &runtime.model,
         runtime.mcp,
         runtime.plugins,
+        runtime.permission,
         true,
     )
     .await;
@@ -93,13 +90,10 @@ pub(crate) async fn cmd_tui_hya(
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_global_agents(true);
-    let _responder = if yolo {
+    if yolo {
         eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
-        Some(spawn_auto_responder(asks, PermissionPolicy::Yolo))
-    } else {
-        state = state.with_permission_requests(asks);
-        None
-    };
+    }
+    state = state.with_permission_requests(asks);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

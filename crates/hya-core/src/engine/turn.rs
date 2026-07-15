@@ -5,7 +5,7 @@ use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine, effective_agent_for_projection};
+use super::{AgentSpec, SessionEngine, authorize_tool_call, effective_agent_for_projection};
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
@@ -230,30 +230,37 @@ impl SessionEngine {
                 }
                 let input_for_after = self.hooks.as_ref().map(|_| tc.input.clone());
                 let started = std::time::Instant::now();
-                let result = match self.tools.get(&tc.name) {
-                    Some(tool) => {
-                        let ctx = ToolCtx {
-                            permission: permission_for_session(
-                                &self.permission,
-                                session,
-                                external_dirs,
-                            ),
-                            interaction: self.interaction.for_session(session),
-                            spawner: self.spawner.for_session(session),
-                            mailbox: self.mailbox.for_session(session),
-                            session: Some(session),
-                            parent_session: projection.session.parent,
-                            todo: self.todo.clone(),
-                            skills: self.skills.clone(),
-                            agents: self.agents.clone(),
-                            websearch: self.websearch.clone(),
-                            lsp: self.lsp.clone(),
-                            formatter: self.formatter.clone(),
-                            workdir: agent.workdir.clone(),
-                            cancel: cancel.clone(),
-                        };
-                        tool.execute(&ctx, tc.input).await
-                    }
+                let result = match self.tools.resolve(&tc.name) {
+                    Some(resolved) => match authorize_tool_call(
+                        &resolved,
+                        &tc.input,
+                        permission_for_session(&self.permission, session, external_dirs),
+                        message,
+                        tc.call,
+                    )
+                    .await
+                    {
+                        Ok(permission) => {
+                            let ctx = ToolCtx {
+                                permission,
+                                interaction: self.interaction.for_session(session),
+                                spawner: self.spawner.for_session(session),
+                                mailbox: self.mailbox.for_session(session),
+                                session: Some(session),
+                                parent_session: projection.session.parent,
+                                todo: self.todo.clone(),
+                                skills: self.skills.clone(),
+                                agents: self.agents.clone(),
+                                websearch: self.websearch.clone(),
+                                lsp: self.lsp.clone(),
+                                formatter: self.formatter.clone(),
+                                workdir: agent.workdir.clone(),
+                                cancel: cancel.clone(),
+                            };
+                            resolved.tool.execute(&ctx, tc.input).await
+                        }
+                        Err(error) => Err(error),
+                    },
                     None => Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
                 };
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

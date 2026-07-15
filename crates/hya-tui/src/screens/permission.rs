@@ -219,6 +219,19 @@ fn info(request: &Value, input: &Value, theme: &ResolvedTheme) -> Info {
                 body,
             }
         }
+        "tool" => {
+            let tool = request
+                .get("patterns")
+                .and_then(Value::as_array)
+                .and_then(|patterns| patterns.first())
+                .and_then(Value::as_str)
+                .unwrap_or("tool");
+            Info {
+                icon: "⚙",
+                title: format!("Call tool {tool}"),
+                body: muted_line("Tool: ", tool, theme),
+            }
+        }
         other => Info {
             icon: "⚙",
             title: format!("Call tool {other}"),

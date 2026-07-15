@@ -47,8 +47,9 @@ pub use interaction::{
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
 pub use permission::{
-    Action, AskRequest, Decision, Mode, PermissionError, PermissionInterceptor, PermissionPlane,
-    PermissionRules, Resource, Rule, glob_match,
+    Action, AskRequest, Decision, ExactSubject, Invocation, InvocationDecision, InvocationPolicy,
+    InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
+    PermissionRules, PermissionTarget, RememberScope, Resource, Rule, glob_match,
 };
 pub use skill::SkillPlane;
 pub use skill_catalog::{
@@ -57,5 +58,7 @@ pub use skill_catalog::{
 };
 pub use spawn::{InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
-pub use tool::{DuplicateName, Tool, ToolCtx, ToolError, ToolRegistry};
+pub use tool::{
+    DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
+};
 pub use websearch::{WebSearchPlane, WebSearchProvider};

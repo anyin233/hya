@@ -2,15 +2,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, ModelRef, Projection, SessionId, ToolSchema, now_millis,
+    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, Projection, SessionId, ToolCallId,
+    ToolSchema, now_millis,
 };
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
     AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolRegistry, WebSearchPlane,
-    discover_skills, skills_section,
+    PermissionRules, ResolvedTool, SkillPlane, SpawnerPlane, TodoPlane, ToolError, ToolRegistry,
+    WebSearchPlane, discover_skills, skills_section,
 };
+use serde_json::Value;
 
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, Summarizer};
@@ -31,6 +33,21 @@ mod text_complete;
 mod todos;
 mod tool_error;
 mod turn;
+
+async fn authorize_tool_call(
+    resolved: &ResolvedTool,
+    input: &Value,
+    permission: PermissionPlane,
+    message: MessageId,
+    call: ToolCallId,
+) -> Result<PermissionPlane, ToolError> {
+    let invocation = resolved.invocation(input)?;
+    permission
+        .for_tool_call(message, call)
+        .authorize(&invocation)
+        .await
+        .map_err(ToolError::from)
+}
 
 pub struct CreateSession {
     pub parent: Option<SessionId>,
