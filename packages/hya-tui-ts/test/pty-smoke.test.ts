@@ -246,6 +246,7 @@ async function runChildObservation(columns: number) {
 
     const requests: Array<{ method: string; path: string }> = []
     let treeUnavailable = false
+    const escapeKey = "\x1b[27;1;27~"
     const proxy = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -494,9 +495,23 @@ async function runChildObservation(columns: number) {
         const waitForMain = async (start: number, message: string) => {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
+        const focusMain = async (start: number, label: string) => {
+          process.stdin.write("\x10")
+          await waitFor(async () => {
+            const frame = (await output()).slice(start)
+            return frame.includes("Commands") && frame.includes("Search")
+          }, `${label} command palette`)
+          const filterStart = (await output()).length
+          process.stdin.write("Focus Main pane")
+          await waitFor(
+            async () => (await output()).slice(filterStart).includes("Focus Main pane"),
+            `${label} filtered command`,
+          )
+          process.stdin.write("\x1b[B\r")
+        }
         const confirmMainInput = async (start: number, marker: string) => {
           try {
-            process.stdin.write("\x1b")
+            await focusMain(start, marker)
             await waitForMain(start, `${marker} Main focus`)
             process.stdin.write(marker)
             await waitFor(async () => {
@@ -587,10 +602,10 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(100)
         process.stdin.write("researcher-1")
         await waitFor(async () => (await output()).slice(managerStart).includes("researcher-1"), "filtered grandchild")
-        process.stdin.write("\x1b")
+        process.stdin.write(escapeKey)
         await Bun.sleep(100)
         const closeFilteredManagerStart = (await output()).length
-        process.stdin.write("\x1b")
+        process.stdin.write(escapeKey)
         await waitForMain(closeFilteredManagerStart, "Main after filtered manager")
 
         for (const [command, placement] of [
@@ -612,7 +627,7 @@ async function runChildObservation(columns: number) {
             throw new Error(`direct placement failed: ${error instanceof Error ? error.message : error}\n${frame}`)
           })
           const closePlacementManagerStart = (await output()).length
-          process.stdin.write("\x1b")
+          process.stdin.write(escapeKey)
           await waitForMain(closePlacementManagerStart, `Main after ${placement} manager`)
         }
 
@@ -710,13 +725,13 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(200)
         expect((await output()).slice(permissionStart)).not.toContain("Permission required")
         const focusMainStart = (await output()).length
-        process.stdin.write("\x1b")
-        await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main").catch(
-          async (error) => {
-            const frame = (await output()).slice(focusMainStart).slice(-5000)
-            throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
-          },
-        )
+        try {
+          await focusMain(focusMainStart, "grandchild permission")
+          await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main")
+        } catch (error) {
+          const frame = (await output()).slice(focusMainStart).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        }
         process.stdin.write("\r")
         await shell
         await waitFor(async () => (await output()).slice(focusMainStart).includes(rootDraft), "focus Main with preserved draft")

@@ -1,3 +1,3 @@
-# 0.33.6
+# 0.33.7
 
-- Fixed Rust 1.97 clippy compatibility in flex layout.
+- Stabilized TypeScript TUI subagent workspace focus transitions in PTY tests.
