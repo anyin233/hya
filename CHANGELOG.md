@@ -1,3 +1,3 @@
-# 0.33.5
+# 0.33.6
 
-- Stabilized TypeScript TUI PTY verification under CI load.
+- Fixed Rust 1.97 clippy compatibility in flex layout.

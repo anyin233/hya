@@ -94,7 +94,7 @@ fn arrange(node: &RenderNode, rect: Rect) -> Vec<Rect> {
     let mut cursor = main_origin + main_offset;
     let mut out = Vec::with_capacity(child_count);
 
-    for (child, main_size) in node.children.iter().zip(main_sizes.into_iter()) {
+    for (child, main_size) in node.children.iter().zip(main_sizes) {
         let main_size = main_size.max(0);
         let cross_size = resolve_cross(
             cross_hint(dir, &child.flex),
