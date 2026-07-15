@@ -9,6 +9,7 @@ import {
   parseRunTree,
   reduceWorkspace,
   runTreeEventEffect,
+  terminalTreeSessionIDs,
   treeSessionIDs,
   workspaceLeaves,
 } from "../src/upstream/routes/session/subagent-workspace"
@@ -153,6 +154,33 @@ test("defers focused terminal closure until focus leaves", () => {
   state = reduceWorkspace(state, { type: "focusMain" })
   expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main"])
   expect(state.focusedPaneID).toBe("main")
+})
+
+test("defers an already-terminal observation until focus leaves", () => {
+  const tree = parseRunTree({
+    session: "root",
+    children: [
+      {
+        session: "child",
+        member: {
+          member: "member-1",
+          child: "child",
+          subagent_type: "explore",
+          description: "done",
+          depth: 1,
+          status: "done",
+          summary: "complete",
+        },
+      },
+    ],
+  })
+  let state = createWorkspaceState("root")
+  state = reduceWorkspace(state, { type: "openTab", sessionID: "child" })
+  state = reduceWorkspace(state, { type: "terminal", sessionIDs: [...terminalTreeSessionIDs(tree)] })
+
+  expect(workspaceLeaves(state).find((pane) => pane.id === "observation:child")).toMatchObject({ closeOnBlur: true })
+  state = reduceWorkspace(state, { type: "focusMain" })
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main"])
 })
 
 test("prunes sessions missing from a successful tree", () => {

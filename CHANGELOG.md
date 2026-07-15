@@ -1,4 +1,3 @@
-# 0.33.3
+# 0.33.4
 
-- Restored an explicit running indicator below the Prompt composer.
-- Added a recursive read-only TypeScript TUI subagent workspace with roster, tabs, splits, focus, and lifecycle controls.
+- Hardened TypeScript TUI subagent observations with terminal cleanup, focused scrolling, retained-tree recovery, complete pane labels, and child-route command isolation.

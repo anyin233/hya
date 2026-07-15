@@ -86,6 +86,7 @@ import {
   flattenRunTree,
   reduceWorkspace,
   runTreeEventEffect,
+  terminalTreeSessionIDs,
   treeSessionIDs,
   workspaceLeaves,
   type RunTreeResource,
@@ -139,6 +140,15 @@ const sessionGlobalBindingCommands = [
 
 const sessionGlobalUnfocusedBindingCommands = ["session.first", "session.last"] as const
 
+const childRouteBlockedCommands: ReadonlySet<string> = new Set([
+  "session.rename",
+  "session.fork",
+  "session.compact",
+  "session.undo",
+  "session.redo",
+  "session.background",
+])
+
 const context = createContext<{
   width: number
   sessionID: string
@@ -182,6 +192,7 @@ export function Session() {
   const { theme } = useTheme()
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const mainSessionInteractive = createMemo(() => !!session() && !session()?.parentID)
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -273,6 +284,7 @@ export function Session() {
     onState: setTreeResource,
     onTree: (tree) => {
       dispatchWorkspace({ type: "reconcileSessions", sessionIDs: [...treeSessionIDs(tree)] })
+      dispatchWorkspace({ type: "terminal", sessionIDs: [...terminalTreeSessionIDs(tree)] })
       if (tree.session && tree.session !== route.sessionID) {
         navigate({ type: "session", sessionID: tree.session })
       }
@@ -297,6 +309,9 @@ export function Session() {
         ? { type: "openTab", sessionID }
         : { type: "openSplit", axis: placement, sessionID },
     )
+    if (terminalTreeSessionIDs(tree).has(sessionID)) {
+      dispatchWorkspace({ type: "terminal", sessionIDs: [sessionID] })
+    }
   }
   const openSubagentDialog = (placement: SubagentPlacement) => {
     void treeLoader.refresh()
@@ -370,8 +385,16 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  const observationScrolls = new Map<string, ScrollBoxRenderable>()
   let prompt: PromptRef | undefined
   const mainFocused = createMemo(() => workspace().focusedPaneID === "main")
+  const focusedScroll = () =>
+    workspace().focusedPaneID === "main" ? scroll : observationScrolls.get(workspace().focusedPaneID)
+  const focusedMessages = () => {
+    const pane = workspaceLeaves(workspace()).find((candidate) => candidate.id === workspace().focusedPaneID)
+    const sessionID = pane?.type === "observation" ? pane.sessionID : route.sessionID
+    return sync.data.message[sessionID] ?? []
+  }
   const bind = (r: PromptRef | undefined) => {
     prompt = r
     promptRef.set(r)
@@ -404,9 +427,11 @@ export function Session() {
 
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
-    const children = scroll.getChildren()
-    const messagesList = messages()
-    const scrollTop = scroll.y
+    const target = focusedScroll()
+    if (!target) return null
+    const children = target.getChildren()
+    const messagesList = focusedMessages()
+    const scrollTop = target.y
 
     // Get visible messages sorted by position, filtering for valid non-synthetic, non-ignored content
     const visibleMessages = children
@@ -435,16 +460,18 @@ export function Session() {
 
   // Helper: Scroll to message in direction or fallback to page scroll
   const scrollToMessage = (direction: "next" | "prev", dialog: ReturnType<typeof useDialog>) => {
+    const target = focusedScroll()
+    if (!target) return
     const targetID = findNextVisibleMessage(direction)
 
     if (!targetID) {
-      scroll.scrollBy(direction === "next" ? scroll.height : -scroll.height)
+      target.scrollBy(direction === "next" ? target.height : -target.height)
       dialog.clear()
       return
     }
 
-    const child = scroll.getChildren().find((c) => c.id === targetID)
-    if (child) scroll.scrollBy(child.y - scroll.y - 1)
+    const child = target.getChildren().find((c) => c.id === targetID)
+    if (child) target.scrollBy(child.y - target.y - 1)
     dialog.clear()
   }
 
@@ -687,7 +714,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-scroll.height / 2)
+        const target = focusedScroll()
+        if (target) target.scrollBy(-target.height / 2)
         dialog.clear()
       },
     },
@@ -697,7 +725,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 2)
+        const target = focusedScroll()
+        if (target) target.scrollBy(target.height / 2)
         dialog.clear()
       },
     },
@@ -707,7 +736,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-1)
+        focusedScroll()?.scrollBy(-1)
         dialog.clear()
       },
     },
@@ -717,7 +746,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(1)
+        focusedScroll()?.scrollBy(1)
         dialog.clear()
       },
     },
@@ -727,7 +756,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-scroll.height / 4)
+        const target = focusedScroll()
+        if (target) target.scrollBy(-target.height / 4)
         dialog.clear()
       },
     },
@@ -737,7 +767,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 4)
+        const target = focusedScroll()
+        if (target) target.scrollBy(target.height / 4)
         dialog.clear()
       },
     },
@@ -747,7 +778,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(0)
+        focusedScroll()?.scrollTo(0)
         dialog.clear()
       },
     },
@@ -757,7 +788,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(scroll.scrollHeight)
+        const target = focusedScroll()
+        if (target) target.scrollTo(target.scrollHeight)
         dialog.clear()
       },
     },
@@ -767,12 +799,14 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        const messages = sync.data.message[route.sessionID]
-        if (!messages || !messages.length) return
+        const paneMessages = focusedMessages()
+        if (!paneMessages.length) return
+        const target = focusedScroll()
+        if (!target) return
 
         // Find the most recent user message with non-ignored, non-synthetic text parts
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const message = messages[i]
+        for (let i = paneMessages.length - 1; i >= 0; i--) {
+          const message = paneMessages[i]
           if (!message || message.role !== "user") continue
 
           const parts = sync.data.part[message.id]
@@ -783,10 +817,10 @@ export function Session() {
           )
 
           if (hasValidTextPart) {
-            const child = scroll.getChildren().find((child) => {
+            const child = target.getChildren().find((child) => {
               return child.id === message.id
             })
-            if (child) scroll.scrollBy(child.y - scroll.y - 1)
+            if (child) target.scrollBy(child.y - target.y - 1)
             break
           }
         }
@@ -1013,14 +1047,16 @@ export function Session() {
   ])
 
   const sessionCommands = createMemo(() =>
-    sessionCommandList().map((command) => ({
-      namespace: "palette",
-      name: command.value,
-      desc: "description" in command ? command.description : undefined,
-      slashName: "slash" in command ? command.slash?.name : undefined,
-      slashAliases: "slash" in command ? command.slash?.aliases : undefined,
-      ...command,
-    })),
+    sessionCommandList()
+      .filter((command) => mainSessionInteractive() || !childRouteBlockedCommands.has(command.value))
+      .map((command) => ({
+        namespace: "palette",
+        name: command.value,
+        desc: "description" in command ? command.description : undefined,
+        slashName: "slash" in command ? command.slash?.name : undefined,
+        slashAliases: "slash" in command ? command.slash?.aliases : undefined,
+        ...command,
+      })),
   )
 
   useBindings(() => ({
@@ -1038,12 +1074,17 @@ export function Session() {
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
-    bindings: tuiConfig.keybinds.gather("session", sessionBindingCommands),
+    bindings: tuiConfig.keybinds.gather(
+      "session",
+      sessionBindingCommands.filter(
+        (command) => mainSessionInteractive() || !childRouteBlockedCommands.has(command),
+      ),
+    ),
   }))
 
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
-    enabled: foregroundTasks().length > 0,
+    enabled: mainSessionInteractive() && foregroundTasks().length > 0,
     priority: 1,
     bindings: tuiConfig.keybinds.get("session.background"),
   }))
@@ -1086,14 +1127,22 @@ export function Session() {
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
-  const observationLabel = (sessionID: string) => {
+  const observationLabel = (sessionID: string, placement: SubagentPlacement, focused: boolean) => {
     const tree = treeResource().tree
     const node = tree && flattenRunTree(tree).find((row) => row.node.session === sessionID)?.node
-    return [node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent", node?.roster?.status ?? node?.member?.status, "read-only"]
+    return [
+      node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent",
+      node?.roster?.agent_type ?? node?.member?.subagent_type ?? node?.agent,
+      node?.roster?.status ?? node?.member?.status,
+      node?.roster?.current_task ?? node?.member?.description,
+      placement,
+      focused ? "focused" : "open",
+      "read-only",
+    ]
       .filter(Boolean)
       .join(" - ")
   }
-  function ObservationTranscript(props: { sessionID: string }) {
+  function ObservationTranscript(props: { paneID: string; sessionID: string; placement: SubagentPlacement }) {
     const paneMessages = createMemo(() => sync.data.message[props.sessionID] ?? [])
     const panePending = createMemo(() => {
       const completed = paneMessages().findLast((message) => message.role === "assistant" && message.time.completed)?.id
@@ -1102,12 +1151,19 @@ export function Session() {
       )?.id
     })
     const paneLastAssistant = createMemo(() => paneMessages().findLast((message) => message.role === "assistant")?.id)
+    onCleanup(() => observationScrolls.delete(props.paneID))
     return (
       <box flexGrow={1} minWidth={0} minHeight={0} gap={1}>
-        <text fg={theme.textMuted} wrapMode="none">
-          {observationLabel(props.sessionID)}
+        <text fg={theme.textMuted} wrapMode="word">
+          {observationLabel(props.sessionID, props.placement, props.paneID === workspace().focusedPaneID)}
         </text>
-        <scrollbox stickyScroll stickyStart="bottom" flexGrow={1} scrollAcceleration={scrollAcceleration()}>
+        <scrollbox
+          ref={(value) => observationScrolls.set(props.paneID, value)}
+          stickyScroll
+          stickyStart="bottom"
+          flexGrow={1}
+          scrollAcceleration={scrollAcceleration()}
+        >
           <box height={1} />
           <For each={paneMessages()}>
             {(message, index) => (
@@ -1135,7 +1191,11 @@ export function Session() {
       </box>
     )
   }
-  function WorkspacePaneView(props: { pane: () => WorkspacePane; renderMain: () => JSX.Element }) {
+  function WorkspacePaneView(props: {
+    pane: () => WorkspacePane
+    placement: SubagentPlacement
+    renderMain: () => JSX.Element
+  }) {
     const split = createMemo(() => {
       const pane = props.pane()
       return pane.type === "split" ? pane : undefined
@@ -1154,8 +1214,8 @@ export function Session() {
               minWidth={0}
               minHeight={0}
             >
-              <WorkspacePaneView pane={() => pane().first} renderMain={props.renderMain} />
-              <WorkspacePaneView pane={() => pane().second} renderMain={props.renderMain} />
+              <WorkspacePaneView pane={() => pane().first} placement={pane().axis} renderMain={props.renderMain} />
+              <WorkspacePaneView pane={() => pane().second} placement={pane().axis} renderMain={props.renderMain} />
             </box>
           )}
         </Match>
@@ -1167,10 +1227,9 @@ export function Session() {
               minHeight={0}
               paddingLeft={1}
               paddingRight={1}
-              border={["left"]}
-              borderColor={pane().id === workspace().focusedPaneID ? theme.borderActive : theme.border}
+              backgroundColor={pane().id === workspace().focusedPaneID ? theme.backgroundElement : theme.backgroundPanel}
             >
-              <ObservationTranscript sessionID={pane().sessionID} />
+              <ObservationTranscript paneID={pane().id} sessionID={pane().sessionID} placement={props.placement} />
             </box>
           )}
         </Match>
@@ -1210,6 +1269,7 @@ export function Session() {
               >
                 <WorkspacePaneView
                   pane={() => tab().root}
+                  placement="tab"
                   renderMain={() => (
                     <box
                       flexGrow={1}
