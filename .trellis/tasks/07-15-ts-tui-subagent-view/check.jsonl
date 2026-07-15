@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Audit semantic TUI coverage, 80/120-column behavior, readable status, and package gates."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Audit additive API compatibility, shared session IDs, event authority, and release alignment."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check that validation and projections have one owner across backend, HTTP, events, and rendering."}
+{"file":"DESIGN.md","reason":"Check borderless tonal layout, width-safe content, deterministic controls, and Prompt isolation."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Verify main uniqueness, auxiliary read-only behavior, command semantics, and ephemeral reset."}
+{"file":"docs/adr/0006-tui-session-reset-and-subagent-visibility.md","reason":"Verify lifecycle state remains event-derived and absent from stored transcript exports."}

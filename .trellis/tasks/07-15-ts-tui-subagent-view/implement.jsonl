@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply TUI RED/GREEN, narrow/wide geometry, status-label, and frontend verification requirements."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve event-sourced API contracts, session-ID compatibility, and release metadata rules for the additive tree response."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep the event-to-projection-to-HTTP-to-TUI contract typed and avoid duplicate frontend projections."}
+{"file":"DESIGN.md","reason":"Follow the terminal layout, width-safe text, immediate rendering, and Prompt visibility design system."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Preserve the unique main input, read-only observation, manager commands, and session-scoped layout contract."}
+{"file":"docs/adr/0006-tui-session-reset-and-subagent-visibility.md","reason":"Drive lifecycle visibility from member/team events while keeping transcripts and copy/export unchanged."}

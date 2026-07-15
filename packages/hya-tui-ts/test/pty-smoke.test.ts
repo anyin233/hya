@@ -112,7 +112,7 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
   }
 }, 45_000)
 
-test("Linux PTY child observation is visibly read-only and preserves the root draft", async () => {
+async function runChildObservation(columns: number) {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-child-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript")
@@ -160,8 +160,24 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
         { throwOnError: true },
       )
     ).data!
+    const secondChildSession = (
+      await client.session.create(
+        { title: "@reviewer subagent", parentID: rootSession.id },
+        { throwOnError: true },
+      )
+    ).data!
+    const grandchildSession = (
+      await client.session.create(
+        { title: "@researcher subagent", parentID: childSession.id },
+        { throwOnError: true },
+      )
+    ).data!
+    const resetRootSession = (await client.session.create({ title: "PTY reset root" }, { throwOnError: true })).data!
     const rootTranscript = "ROOT_TRANSCRIPT_7f32"
     const childTranscript = "CHILD_TRANSCRIPT_98ac"
+    const secondChildTranscript = "SECOND_CHILD_TRANSCRIPT_42de"
+    const grandchildTranscript = "GRANDCHILD_TRANSCRIPT_51bf"
+    const resetRootTranscript = "RESET_ROOT_TRANSCRIPT_4ae1"
     await client.session.promptAsync(
       { sessionID: rootSession.id, parts: [{ type: "text", text: rootTranscript }] },
       { throwOnError: true },
@@ -170,8 +186,20 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
       { sessionID: childSession.id, parts: [{ type: "text", text: childTranscript }] },
       { throwOnError: true },
     )
+    await client.session.promptAsync(
+      { sessionID: secondChildSession.id, parts: [{ type: "text", text: secondChildTranscript }] },
+      { throwOnError: true },
+    )
+    await client.session.promptAsync(
+      { sessionID: grandchildSession.id, parts: [{ type: "text", text: grandchildTranscript }] },
+      { throwOnError: true },
+    )
+    await client.session.promptAsync(
+      { sessionID: resetRootSession.id, parts: [{ type: "text", text: resetRootTranscript }] },
+      { throwOnError: true },
+    )
     const waitFor = async (check: () => boolean | Promise<boolean>, message: string) => {
-      const deadline = Date.now() + 10_000
+      const deadline = Date.now() + 20_000
       while (!(await check())) {
         if (Date.now() >= deadline) throw new Error(`timed out waiting for ${message}`)
         await Bun.sleep(50)
@@ -185,23 +213,141 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
       const messages = (await client.session.messages({ sessionID: childSession.id })).data
       return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${childTranscript}\\"`)
     }, "child transcript fixture")
+    for (const [sessionID, marker] of [
+      [secondChildSession.id, secondChildTranscript],
+      [grandchildSession.id, grandchildTranscript],
+      [resetRootSession.id, resetRootTranscript],
+    ]) {
+      await waitFor(async () => {
+        const messages = (await client.session.messages({ sessionID })).data
+        return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${marker}\\"`)
+      }, `${marker} fixture`)
+    }
 
     const requests: Array<{ method: string; path: string }> = []
     const proxy = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
+      idleTimeout: 30,
       async fetch(request) {
         const incoming = new URL(request.url)
         requests.push({ method: request.method, path: incoming.pathname })
+        if (request.method === "GET" && incoming.pathname === `/session/${resetRootSession.id}/tree`) {
+          return Response.json({ session: resetRootSession.id, agent: "build", children: [] })
+        }
+        if (
+          request.method === "GET" &&
+          incoming.pathname === `/session/${rootSession.id}/tree`
+        ) {
+          return Response.json({
+            session: rootSession.id,
+            agent: "build",
+            children: [
+              {
+                session: childSession.id,
+                member: {
+                  member: "member-worker",
+                  child: childSession.id,
+                  subagent_type: "explore",
+                  description: "Inspect worker path",
+                  depth: 1,
+                  status: "running",
+                  summary: "",
+                },
+                roster: {
+                  handle: "worker-1",
+                  session: childSession.id,
+                  agent_type: "explore",
+                  mode: "transient",
+                  status: "busy",
+                  current_task: "Inspect worker path",
+                },
+                children: [
+                  {
+                    session: grandchildSession.id,
+                    member: {
+                      member: "member-researcher",
+                      child: grandchildSession.id,
+                      subagent_type: "research",
+                      description: "Trace nested path",
+                      depth: 2,
+                      status: "running",
+                      summary: "",
+                    },
+                    roster: {
+                      handle: "researcher-1",
+                      session: grandchildSession.id,
+                      agent_type: "research",
+                      mode: "transient",
+                      status: "busy",
+                      current_task: "Trace nested path",
+                    },
+                  },
+                ],
+              },
+              {
+                member: {
+                  member: "member-pending",
+                  subagent_type: "plan",
+                  description: "Waiting for slot",
+                  depth: 1,
+                  status: "spawning",
+                  summary: "",
+                },
+              },
+              {
+                session: secondChildSession.id,
+                member: {
+                  member: "member-reviewer",
+                  child: secondChildSession.id,
+                  subagent_type: "review",
+                  description: "Review changes",
+                  depth: 1,
+                  status: "running",
+                  summary: "",
+                },
+                roster: {
+                  handle: "reviewer-1",
+                  session: secondChildSession.id,
+                  agent_type: "review",
+                  mode: "transient",
+                  status: "idle",
+                },
+              },
+            ],
+          })
+        }
         const headers = new Headers(request.headers)
         headers.delete("host")
         const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
-        return fetch(new URL(incoming.pathname + incoming.search, url), {
+        const response = await fetch(new URL(incoming.pathname + incoming.search, url), {
           method: request.method,
           headers,
           body,
           redirect: "manual",
         })
+        if (request.method === "GET" && incoming.pathname === `/session/${rootSession.id}/message` && response.ok) {
+          const messages = (await response.json()) as Array<{ info: { id: string; role: string }; parts: unknown[] }>
+          const assistant = messages.findLast((message) => message.info.role === "assistant")
+          assistant?.parts.push({
+            id: "pty-task-part",
+            sessionID: rootSession.id,
+            messageID: assistant.info.id,
+            type: "tool",
+            callID: "pty-task-call",
+            tool: "task",
+            state: {
+              status: "completed",
+              input: { description: "Inspect worker path", subagent_type: "explore" },
+              output: "",
+              title: "",
+              metadata: { sessionId: childSession.id },
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          return Response.json(messages)
+        }
+        return response
       },
     })
 
@@ -213,7 +359,7 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
           "-e",
           "-f",
           "-c",
-          'stty rows 30 cols 100; "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_ROOT_SESSION"',
+          `stty rows 30 cols ${columns}; "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_ROOT_SESSION"`,
           transcript,
         ],
         {
@@ -236,6 +382,7 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
       try {
         const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
         await waitFor(async () => (await output()).includes(rootTranscript), "root session frame")
+        expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
 
         const rootDraft = "ROOT_DRAFT_c281"
         const beforeDraft = (await output()).length
@@ -243,28 +390,274 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
         await waitFor(async () => (await output()).slice(beforeDraft).includes(rootDraft), "root draft")
         expect(await output()).toContain("commands")
 
+        const rootFrame = await output()
+        expect(rootFrame).toContain("ctrl+x o")
+        expect(rootFrame).toContain("subagent roster")
+        expect(rootFrame).not.toContain("view subagents")
+        const descendantRoutes = new Set([childSession.id, grandchildSession.id, secondChildSession.id])
+        const descendantGets = () =>
+          requests.filter(
+            (request) =>
+              request.method === "GET" &&
+              [...descendantRoutes].some((sessionID) => request.path === `/session/${sessionID}`),
+          ).length
+        const descendantGetsBefore = descendantGets()
+        for (const key of ["\x1b[B", "\x1b[C", "\x1b[D", "\x1b[A"]) {
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write(key)
+          await Bun.sleep(100)
+        }
+        const legacySafe = "_LEGACY_SAFE_0eb1"
+        const legacyStart = (await output()).length
+        process.stdin.write(legacySafe)
+        await waitFor(async () => (await output()).slice(legacyStart).includes(legacySafe), "legacy commands leave Main editable")
+        expect(descendantGets()).toBe(descendantGetsBefore)
+
         process.stdin.write("\x18")
         await Bun.sleep(100)
-        const childStart = (await output()).length
-        process.stdin.write("\x1b[B")
+        const managerStart = (await output()).length
+        process.stdin.write("o")
         await waitFor(async () => {
-          const child = (await output()).slice(childStart)
-          return child.includes(childTranscript) && child.includes("Worker") && child.includes("Parent")
-        }, "child observation frame")
+          const frame = (await output()).slice(managerStart)
+          return ["Subagent roster", "worker-1", "researcher-1", "pending", "reviewer-1", "Waiting for slot"].every((value) =>
+            frame.includes(value),
+          )
+        }, "recursive subagent manager").catch(async (error) => {
+          const frame = (await output()).slice(managerStart).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        })
+        const managerFrame = (await output()).slice(managerStart)
+        expect(managerFrame.indexOf("worker-1")).toBeLessThan(managerFrame.indexOf("researcher-1"))
+        expect(managerFrame.indexOf("researcher-1")).toBeLessThan(managerFrame.indexOf("pending"))
+        expect(managerFrame.indexOf("pending")).toBeLessThan(managerFrame.indexOf("reviewer-1"))
+        process.stdin.write("/")
+        await Bun.sleep(100)
+        process.stdin.write("researcher-1")
+        await waitFor(async () => (await output()).slice(managerStart).includes("researcher-1"), "filtered grandchild")
+        process.stdin.write("\x1b")
+        await Bun.sleep(100)
+        process.stdin.write("\x1b")
+        await Bun.sleep(500)
 
-        const childSentinel = "CHILD_INPUT_1da9"
-        const promptRequestsBefore = requests.filter(
+        for (const [command, placement] of [
+          ["Open subagent in tab", "Tab"],
+          ["Open subagent in vertical split", "Vertical"],
+          ["Open subagent in horizontal split", "Horizontal"],
+        ]) {
+          process.stdin.write("\x10")
+          await Bun.sleep(100)
+          process.stdin.write(command)
+          await Bun.sleep(100)
+          const directStart = (await output()).length
+          process.stdin.write("\r")
+          await waitFor(
+            async () => (await output()).slice(directStart).includes(`Subagent roster - ${placement}`),
+            `${placement} placement manager`,
+          ).catch(async (error) => {
+            const frame = (await output()).slice(directStart).slice(-5000)
+            throw new Error(`direct placement failed: ${error instanceof Error ? error.message : error}\n${frame}`)
+          })
+          process.stdin.write("\x1b")
+          await Bun.sleep(200)
+        }
+
+        const hydrationPaths = [
+          `/session/${grandchildSession.id}`,
+          `/session/${grandchildSession.id}/message`,
+          `/session/${grandchildSession.id}/todo`,
+          `/session/${grandchildSession.id}/diff`,
+        ]
+        const openGrandchild = async () => {
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write("o")
+          await Bun.sleep(100)
+          process.stdin.write("/")
+          await Bun.sleep(100)
+          process.stdin.write("researcher-1")
+          await Bun.sleep(100)
+          process.stdin.write("\r")
+        }
+        const observationStart = (await output()).length
+        await openGrandchild()
+        await waitFor(
+          () => hydrationPaths.every((path) => requests.filter((request) => request.method === "GET" && request.path === path).length === 1),
+          "grandchild hydration",
+        )
+        await waitFor(async () => {
+          const frame = (await output()).slice(observationStart)
+          return frame.includes(grandchildTranscript) && frame.includes("researcher-1") && frame.toLowerCase().includes("read-only")
+        }, "grandchild observation transcript")
+        await openGrandchild()
+        await Bun.sleep(300)
+        for (const path of hydrationPaths) {
+          expect(requests.filter((request) => request.method === "GET" && request.path === path)).toHaveLength(1)
+        }
+
+        const observationSentinel = "OBSERVATION_INPUT_639a"
+        const observationPromptRequests = requests.filter(
           (request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)$/.test(request.path),
         ).length
-        process.stdin.write(childSentinel)
+        process.stdin.write(observationSentinel)
         process.stdin.write("\r")
         await Bun.sleep(300)
-        const childFrame = (await output()).slice(childStart)
+        expect(
+          requests.filter((request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)$/.test(request.path)),
+        ).toHaveLength(observationPromptRequests)
+        const permissionCommand = "printf nested > nested-permission.txt"
+        const permissionStart = (await output()).length
+        const shell = client.session.shell(
+          { sessionID: grandchildSession.id, command: permissionCommand },
+          { throwOnError: true },
+        )
+        void shell.catch(() => {})
+        await waitFor(async () => (await client.permission.list({}, { throwOnError: true })).data?.length === 1, "grandchild permission")
+        await Bun.sleep(200)
+        expect((await output()).slice(permissionStart)).not.toContain("Permission required")
+        const focusMainStart = (await output()).length
+        process.stdin.write("\x1b")
+        await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main").catch(
+          async (error) => {
+            const frame = (await output()).slice(focusMainStart).slice(-5000)
+            throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+          },
+        )
+        process.stdin.write("\r")
+        await shell
+        await waitFor(async () => (await output()).slice(focusMainStart).includes(rootDraft), "focus Main with preserved draft")
+        const observationRootEvents = await (await fetch(`${url}/sessions/${rootSession.id}/events`)).text()
+        const observationChildEvents = await (await fetch(`${url}/sessions/${grandchildSession.id}/events`)).text()
+        expect(observationRootEvents).not.toContain(observationSentinel)
+        expect(observationChildEvents).not.toContain(observationSentinel)
 
-        const rootStart = (await output()).length
-        process.stdin.write("\x1b[A")
-        await waitFor(async () => (await output()).slice(rootStart).includes(rootDraft), "unchanged root draft")
-        const rootFrame = (await output()).slice(rootStart)
+        const splitStart = (await output()).length
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("o")
+        await Bun.sleep(200)
+        process.stdin.write("v")
+        await Bun.sleep(200)
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("o")
+        await Bun.sleep(200)
+        process.stdin.write("\x1b[B")
+        await Bun.sleep(100)
+        process.stdin.write("s")
+        await waitFor(async () => {
+          const frame = (await output()).slice(splitStart)
+          return (
+            frame.includes(childTranscript) &&
+            frame.includes("printf nested") &&
+            frame.includes("permission.txt") &&
+            frame.includes("worker-1") &&
+            frame.includes("researcher-1")
+          )
+        }, "live recursive split transcripts").catch(async (error) => {
+          const frame = (await output()).slice(splitStart).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        })
+        const workerLate = "WORKER_LATE_83bc"
+        const researcherLate = "RESEARCHER_LATE_27ad"
+        const redrawStart = (await output()).length
+        await client.session.promptAsync(
+          { sessionID: childSession.id, parts: [{ type: "text", text: workerLate }] },
+          { throwOnError: true },
+        )
+        await client.session.promptAsync(
+          { sessionID: grandchildSession.id, parts: [{ type: "text", text: researcherLate }] },
+          { throwOnError: true },
+        )
+        await waitFor(async () => {
+          const [worker, researcher] = await Promise.all([
+            client.session.messages({ sessionID: childSession.id }),
+            client.session.messages({ sessionID: grandchildSession.id }),
+          ])
+          return JSON.stringify(worker.data).includes(workerLate) && JSON.stringify(researcher.data).includes(researcherLate)
+        }, "late observation messages")
+        for (let index = 0; index < 2; index++) {
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write(".")
+          await Bun.sleep(100)
+        }
+        await waitFor(async () => {
+          const frame = (await output()).slice(redrawStart)
+          return frame.includes(workerLate) && frame.includes(researcherLate)
+        }, "late split redraw").catch(async (error) => {
+          const frame = (await output()).slice(redrawStart).slice(-5000)
+          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+        })
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("o")
+        await Bun.sleep(200)
+        process.stdin.write("\x1b[B")
+        await Bun.sleep(100)
+        process.stdin.write("\x1b[B")
+        await Bun.sleep(100)
+        process.stdin.write("\r")
+        await waitFor(async () => (await output()).slice(redrawStart).includes(secondChildTranscript), "auxiliary reviewer tab")
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("0")
+        await Bun.sleep(200)
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("w")
+        await Bun.sleep(200)
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write(".")
+        await Bun.sleep(200)
+        const collapseStart = (await output()).length
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("w")
+        await Bun.sleep(100)
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write(".")
+        await waitFor(async () => (await output()).slice(collapseStart).includes(researcherLate), "collapse closed split leaf")
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("0")
+        await Bun.sleep(200)
+        const focusMainCommandStart = (await output()).length
+        for (let index = 0; index < 2; index++) {
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write(".")
+          await Bun.sleep(200)
+        }
+        await waitFor(async () => (await output()).slice(focusMainCommandStart).includes(secondChildTranscript), "preserved auxiliary tab")
+        const closeTabStart = (await output()).length
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("w")
+        await waitFor(async () => (await output()).slice(closeTabStart).includes(rootTranscript), "close auxiliary tab")
+
+        process.stdin.write("\x18")
+        await Bun.sleep(100)
+        process.stdin.write("l")
+        await Bun.sleep(200)
+        process.stdin.write("PTY reset root")
+        await Bun.sleep(200)
+        const resetStart = (await output()).length
+        process.stdin.write("\r")
+        await waitFor(async () => (await output()).slice(resetStart).includes(resetRootTranscript), "fresh root workspace")
+        const resetFrame = (await output()).slice(resetStart)
+        expect(resetFrame).not.toContain("worker-1")
+        expect(resetFrame).not.toContain("researcher-1")
+        expect(resetFrame).not.toContain("reviewer-1")
+        const resetSentinel = "RESET_ROOT_INPUT_d3c7"
+        process.stdin.write(resetSentinel)
+        process.stdin.write("\r")
+        await waitFor(async () => {
+          const events = await (await fetch(`${url}/sessions/${resetRootSession.id}/events`)).text()
+          return events.includes(resetSentinel)
+        }, "root B submission")
 
         process.stdin.write("\x03")
         process.stdin.end()
@@ -275,24 +668,11 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
             throw new Error("PTY child observation timed out")
           }),
         ])
-        const promptRequestsAfter = requests.filter(
-          (request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)$/.test(request.path),
-        ).length
-        const childEvents = await (await fetch(`${url}/sessions/${childSession.id}/events`)).text()
         const rootEvents = await (await fetch(`${url}/sessions/${rootSession.id}/events`)).text()
 
         expect(status).toBe(0)
-        expect(childFrame).toContain(childTranscript)
-        expect(childFrame).toContain("Worker")
-        expect(childFrame).not.toContain(rootDraft)
-        expect(childFrame).not.toContain("commands")
-        expect(childFrame).not.toContain(childSentinel)
-        expect(promptRequestsAfter).toBe(promptRequestsBefore)
-        expect(childEvents).not.toContain(childSentinel)
-        expect(rootEvents).not.toContain(childSentinel)
         expect(rootEvents).not.toContain(rootDraft)
-        expect(rootFrame).not.toContain(childSentinel)
-        expect(childFrame.toLowerCase()).toContain("read-only")
+        expect(rootFrame).toContain(rootTranscript)
       } finally {
         process.kill()
         await Promise.race([process.exited, Bun.sleep(2_000).then(() => process.kill(9))])
@@ -305,4 +685,8 @@ test("Linux PTY child observation is visibly read-only and preserves the root dr
     await Promise.race([server.exited, Bun.sleep(2_000).then(() => server.kill(9))])
     await rm(temp, { recursive: true, force: true })
   }
-}, 60_000)
+}
+
+for (const columns of [80, 140]) {
+  test(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), 60_000)
+}

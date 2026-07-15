@@ -34,6 +34,8 @@ export interface DialogSelectProps<T> {
   onSelect?: (option: DialogSelectOption<T>) => void
   skipFilter?: boolean
   renderFilter?: boolean
+  retainDisabled?: boolean
+  filterActivation?: "immediate" | "slash"
   locked?: boolean
   actions?: {
     command: string
@@ -89,6 +91,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const [store, setStore] = createStore({
     selected: 0,
     filter: "",
+    filterActive: props.filterActivation !== "slash",
     input: "keyboard" as "keyboard" | "mouse",
   })
   const [focusedAction, setFocusedAction] = createSignal<number>()
@@ -108,7 +111,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     ),
   )
 
-  let input: InputRenderable
+  let input: InputRenderable | undefined
+  const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
 
   const actions = createMemo(() => props.actions ?? [])
   const shownActions = createMemo(() => actions().filter((item) => !item.hidden))
@@ -135,11 +139,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       .filter((item) => item.label),
     ...(props.footerHints ?? []),
   ])
-  const actionItems = createMemo(() =>
+  const actionItems = () =>
     visibleActions()
       .filter(isActionItem)
-      .filter((item) => !isActionDisabled(item)),
-  )
+      .filter((item) => !isActionDisabled(item))
 
   createEffect(() => {
     const index = focusedAction()
@@ -147,12 +150,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   const filtered = createMemo(() => {
-    if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
+    const options = props.retainDisabled ? props.options : props.options.filter((x) => x.disabled !== true)
+    if (props.skipFilter || props.renderFilter === false) return options
     const needle = store.filter.toLowerCase()
-    const options = pipe(
-      props.options,
-      filter((x) => x.disabled !== true),
-    )
     if (!needle) return options
 
     // prioritize title matches (weight: 2) over category matches (weight: 1).
@@ -209,6 +209,12 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   const selected = createMemo(() => flat()[store.selected])
 
+  createEffect(() => {
+    if (!selected()?.disabled) return
+    const index = flat().findIndex((option) => !option.disabled)
+    if (index >= 0) setStore("selected", index)
+  })
+
   createEffect(
     on([() => store.filter, () => props.current], ([filter, current]) => {
       setTimeout(() => {
@@ -228,8 +234,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     if (props.locked) return
     if (flat().length === 0) return
     let next = store.selected + direction
-    if (next < 0) next = flat().length - 1
-    if (next >= flat().length) next = 0
+    next = ((next % flat().length) + flat().length) % flat().length
+    const step = direction < 0 ? -1 : 1
+    for (let checked = 0; checked < flat().length && flat()[next]?.disabled; checked++) {
+      next = (next + step + flat().length) % flat().length
+    }
     moveTo(next, true)
   }
 
@@ -279,7 +288,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       return
     }
     const option = selected()
-    if (!option) return
+    if (!option || option.disabled) return
     option.onSelect?.(dialog)
     props.onSelect?.(option)
   }
@@ -403,13 +412,37 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               },
             ]
           : []),
-        ...(props.bindings ?? []).filter((binding) => {
+        ...(store.filterActive ? [] : (props.bindings ?? [])).filter((binding) => {
           if (typeof binding.cmd !== "string") return true
           return visible.some((item) => item.command === binding.cmd)
         }),
       ],
     }
   })
+
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: props.filterActivation === "slash",
+    priority: 2,
+    bindings: [
+      {
+        key: "escape",
+        desc: "Clear filter",
+        group: "Dialog",
+        cmd: () => {
+          if (!store.filterActive) {
+            dialog.clear()
+            return
+          }
+          batch(() => {
+            setStore("filter", "")
+            setStore("filterActive", false)
+          })
+          input?.setText("")
+        },
+      },
+    ],
+  }))
 
   let scroll: ScrollBoxRenderable | undefined
   const ref: DialogSelectRef<T> = {
@@ -501,6 +534,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             <input
               onInput={(e) => {
                 if (props.locked) return
+                if (props.filterActivation === "slash" && !store.filterActive) {
+                  if (e.includes("/")) setStore("filterActive", true)
+                  input?.setText("")
+                  return
+                }
                 batch(() => {
                   setStore("filter", e)
                   props.onFilter?.(e)
@@ -511,6 +549,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               focusedTextColor={theme.textMuted}
               ref={(r) => {
                 input = r
+                setInputTarget(r)
                 input.traits = { status: "FILTER" }
                 setTimeout(() => {
                   if (!input) return
@@ -562,7 +601,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                   </Show>
                   <For each={options}>
                     {(option) => {
-                      const active = createMemo(() => !props.locked && isDeepEqual(option.value, selected()?.value))
+                      const active = createMemo(() => !props.locked && !option.disabled && isDeepEqual(option.value, selected()?.value))
                       const current = createMemo(() => isDeepEqual(option.value, props.current))
                       return (
                         <box
@@ -574,19 +613,19 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                             setFocusedAction(undefined)
                           }}
                           onMouseUp={() => {
-                            if (props.locked) return
+                            if (props.locked || option.disabled) return
                             option.onSelect?.(dialog)
                             props.onSelect?.(option)
                           }}
                           onMouseOver={() => {
-                            if (props.locked) return
+                            if (props.locked || option.disabled) return
                             if (store.input !== "mouse") return
                             const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
                             if (index === -1) return
                             moveTo(index)
                           }}
                           onMouseDown={() => {
-                            if (props.locked) return
+                            if (props.locked || option.disabled) return
                             const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
                             if (index === -1) return
                             moveTo(index)

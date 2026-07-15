@@ -5,6 +5,7 @@ import {
   createMemo,
   createSignal,
   For,
+  Index,
   Match,
   on,
   onCleanup,
@@ -39,7 +40,7 @@ import type {
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
-import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
 import { useEditorContext } from "../../context/editor"
 import { openEditor } from "../../editor"
@@ -53,7 +54,6 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
-import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -79,6 +79,19 @@ import { usePluginRuntime } from "../../plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
+import { DialogSubagent, type SubagentPlacement } from "./dialog-subagent"
+import {
+  createRunTreeLoader,
+  createWorkspaceState,
+  flattenRunTree,
+  reduceWorkspace,
+  runTreeEventEffect,
+  treeSessionIDs,
+  workspaceLeaves,
+  type RunTreeResource,
+  type WorkspaceAction,
+  type WorkspacePane,
+} from "./subagent-workspace"
 
 addDefaultParsers(parsers.parsers)
 
@@ -106,10 +119,13 @@ const sessionBindingCommands = [
   "messages.copy",
   "session.copy",
   "session.export",
-  "session.child.first",
-  "session.parent",
-  "session.child.next",
-  "session.child.previous",
+  "pane.roster",
+  "pane.open.tab",
+  "pane.open.vertical",
+  "pane.open.horizontal",
+  "pane.close",
+  "pane.cycle",
+  "pane.focus.main",
 ] as const
 
 const sessionGlobalBindingCommands = [
@@ -134,6 +150,7 @@ const context = createContext<{
   showGenericToolOutput: () => boolean
   diffWrapMode: () => "word" | "none"
   providers: () => ReadonlyMap<string, Provider>
+  openSubagent: (sessionID: string) => void
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -156,6 +173,8 @@ export function Session() {
   const { navigate } = useRoute()
   const sync = useSync()
   const event = useEvent()
+  const [treeResource, setTreeResource] = createSignal<RunTreeResource>({ status: "loading" })
+  const [workspace, setWorkspace] = createSignal(createWorkspaceState(route.sessionID))
   const project = useProject()
   const paths = useTuiPaths()
   const tuiConfig = useTuiConfig()
@@ -191,11 +210,15 @@ export function Session() {
   )
   const permissions = createMemo(() => {
     if (session()?.parentID) return []
-    return children().flatMap((x) => sync.data.permission[x.id] ?? [])
+    const tree = treeResource().tree
+    const sessionIDs = tree ? treeSessionIDs(tree) : new Set(children().map((child) => child.id))
+    return [...sessionIDs].flatMap((sessionID) => sync.data.permission[sessionID] ?? [])
   })
   const questions = createMemo(() => {
     if (session()?.parentID) return []
-    return children().flatMap((x) => sync.data.question[x.id] ?? [])
+    const tree = treeResource().tree
+    const sessionIDs = tree ? treeSessionIDs(tree) : new Set(children().map((child) => child.id))
+    return [...sessionIDs].flatMap((sessionID) => sync.data.question[sessionID] ?? [])
   })
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
@@ -240,6 +263,65 @@ export function Session() {
   const toast = useToast()
   const sdk = useSDK()
   const editor = useEditorContext()
+  const dispatchWorkspace = (action: WorkspaceAction) => setWorkspace((state) => reduceWorkspace(state, action))
+  const treeLoader = createRunTreeLoader({
+    fetchTree: async (sessionID) => {
+      const response = await sdk.fetch(`${sdk.url}/session/${encodeURIComponent(sessionID)}/tree`)
+      if (!response.ok) throw new Error(`Failed to load subagent tree: ${response.status}`)
+      return response.json()
+    },
+    onState: setTreeResource,
+    onTree: (tree) => {
+      dispatchWorkspace({ type: "reconcileSessions", sessionIDs: [...treeSessionIDs(tree)] })
+      if (tree.session && tree.session !== route.sessionID) {
+        navigate({ type: "session", sessionID: tree.session })
+      }
+    },
+  })
+  treeLoader.setSession(route.sessionID)
+  onMount(() => void treeLoader.refresh())
+  onCleanup(
+    event.subscribe((raw) => {
+      const effect = runTreeEventEffect(raw, treeResource().tree)
+      if (effect.terminalSessionIDs.length) {
+        dispatchWorkspace({ type: "terminal", sessionIDs: effect.terminalSessionIDs })
+      }
+      if (effect.refresh) void treeLoader.refresh()
+    }),
+  )
+  const openSubagent = (sessionID: string, placement: SubagentPlacement) => {
+    const tree = treeResource().tree
+    if (!tree || sessionID === tree.session || !treeSessionIDs(tree).has(sessionID)) return
+    dispatchWorkspace(
+      placement === "tab"
+        ? { type: "openTab", sessionID }
+        : { type: "openSplit", axis: placement, sessionID },
+    )
+  }
+  const openSubagentDialog = (placement: SubagentPlacement) => {
+    void treeLoader.refresh()
+    dialog.replace(() => (
+      <DialogSubagent
+        resource={treeResource}
+        placement={placement}
+        retry={() => void treeLoader.refresh()}
+        open={(sessionID, nextPlacement) => {
+          openSubagent(sessionID, nextPlacement)
+          dialog.clear()
+          setTimeout(() => {
+            if (!mainFocused()) prompt?.blur()
+          }, 5)
+        }}
+        isOpen={(sessionID) => workspace().tabs.some((tab) => JSON.stringify(tab.root).includes(sessionID))}
+        isFocused={(sessionID) => workspace().focusedPaneID === `observation:${sessionID}`}
+      />
+    ))
+  }
+  createEffect(() => {
+    for (const pane of workspaceLeaves(workspace())) {
+      if (pane.type === "observation") void sync.session.sync(pane.sessionID)
+    }
+  })
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -289,9 +371,11 @@ export function Session() {
   let seeded = false
   let scroll: ScrollBoxRenderable
   let prompt: PromptRef | undefined
+  const mainFocused = createMemo(() => workspace().focusedPaneID === "main")
   const bind = (r: PromptRef | undefined) => {
     prompt = r
     promptRef.set(r)
+    if (r && !mainFocused()) r.blur()
     if (seeded || !route.prompt || !r) return
     seeded = true
     r.set(route.prompt)
@@ -299,6 +383,24 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
+  useKeyboard((key) => {
+    if (mainFocused() || dialog.stack.length > 0) return
+    if (key.name === "escape") {
+      dispatchWorkspace({ type: "focusMain" })
+      key.preventDefault()
+      key.stopPropagation()
+      return
+    }
+    if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
+      key.preventDefault()
+      key.stopPropagation()
+    }
+  })
+  createEffect(() => {
+    if (!prompt) return
+    if (mainFocused()) prompt.focus()
+    else prompt.blur()
+  })
 
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
@@ -354,39 +456,6 @@ export function Session() {
   }
 
   const local = useLocal()
-
-  function enterChild(sessionID: string) {
-    navigate({
-      type: "session",
-      sessionID,
-    })
-    const status = sync.data.session_status[sessionID]
-    if (status?.type === "retry") void DialogAlert.show(dialog, "Retry Error", status.message)
-  }
-
-  function moveFirstChild() {
-    if (children().length === 1) return
-    const next = children().find((x) => !!x.parentID)
-    if (next) enterChild(next.id)
-  }
-
-  function moveChild(direction: number) {
-    if (children().length === 1) return
-
-    const sessions = children().filter((x) => !!x.parentID)
-    let next = sessions.findIndex((x) => x.id === session()?.id) - direction
-
-    if (next >= sessions.length) next = 0
-    if (next < 0) next = sessions.length - 1
-    if (sessions[next]) enterChild(sessions[next].id)
-  }
-
-  function childSessionHandler(func: () => void) {
-    return () => {
-      if (!session()?.parentID || dialog.stack.length > 0) return
-      func()
-    }
-  }
 
   const sessionCommandList = createMemo(() => [
     {
@@ -900,53 +969,46 @@ export function Session() {
       },
     },
     {
-      title: "Go to child session",
-      value: "session.child.first",
-      category: "Session",
-      hidden: true,
-      run: () => {
-        dialog.clear()
-        moveFirstChild()
-      },
+      title: "Open subagent roster",
+      value: "pane.roster",
+      category: "Pane",
+      run: () => openSubagentDialog("tab"),
     },
     {
-      title: "Go to parent session",
-      value: "session.parent",
-      category: "Session",
-      hidden: true,
-      enabled: !!session()?.parentID,
-      run: childSessionHandler(() => {
-        const parentID = session()?.parentID
-        if (parentID) {
-          navigate({
-            type: "session",
-            sessionID: parentID,
-          })
-        }
-        dialog.clear()
-      }),
+      title: "Open subagent in tab",
+      value: "pane.open.tab",
+      category: "Pane",
+      run: () => openSubagentDialog("tab"),
     },
     {
-      title: "Next child session",
-      value: "session.child.next",
-      category: "Session",
-      hidden: true,
-      enabled: !!session()?.parentID,
-      run: childSessionHandler(() => {
-        dialog.clear()
-        moveChild(1)
-      }),
+      title: "Open subagent in vertical split",
+      value: "pane.open.vertical",
+      category: "Pane",
+      run: () => openSubagentDialog("vertical"),
     },
     {
-      title: "Previous child session",
-      value: "session.child.previous",
-      category: "Session",
-      hidden: true,
-      enabled: !!session()?.parentID,
-      run: childSessionHandler(() => {
-        dialog.clear()
-        moveChild(-1)
-      }),
+      title: "Open subagent in horizontal split",
+      value: "pane.open.horizontal",
+      category: "Pane",
+      run: () => openSubagentDialog("horizontal"),
+    },
+    {
+      title: "Close focused pane",
+      value: "pane.close",
+      category: "Pane",
+      run: () => dispatchWorkspace({ type: "close", paneID: workspace().focusedPaneID }),
+    },
+    {
+      title: "Cycle pane focus",
+      value: "pane.cycle",
+      category: "Pane",
+      run: () => dispatchWorkspace({ type: "cycleFocus" }),
+    },
+    {
+      title: "Focus Main pane",
+      value: "pane.focus.main",
+      category: "Pane",
+      run: () => dispatchWorkspace({ type: "focusMain" }),
     },
   ])
 
@@ -986,6 +1048,18 @@ export function Session() {
     bindings: tuiConfig.keybinds.get("session.background"),
   }))
 
+  useBindings(() => ({
+    enabled: !!session()?.parentID && treeResource().status === "error" && dialog.stack.length === 0,
+    bindings: [
+      {
+        key: "r",
+        desc: "Retry subagent tree",
+        group: "Pane",
+        cmd: () => void treeLoader.refresh(),
+      },
+    ],
+  }))
+
   const revertInfo = createMemo(() => session()?.revert)
   const revertMessageID = createMemo(() => revertInfo()?.messageID)
 
@@ -1012,6 +1086,98 @@ export function Session() {
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
+  const observationLabel = (sessionID: string) => {
+    const tree = treeResource().tree
+    const node = tree && flattenRunTree(tree).find((row) => row.node.session === sessionID)?.node
+    return [node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent", node?.roster?.status ?? node?.member?.status, "read-only"]
+      .filter(Boolean)
+      .join(" - ")
+  }
+  function ObservationTranscript(props: { sessionID: string }) {
+    const paneMessages = createMemo(() => sync.data.message[props.sessionID] ?? [])
+    const panePending = createMemo(() => {
+      const completed = paneMessages().findLast((message) => message.role === "assistant" && message.time.completed)?.id
+      return paneMessages().findLast(
+        (message) => message.role === "assistant" && !message.time.completed && (!completed || message.id > completed),
+      )?.id
+    })
+    const paneLastAssistant = createMemo(() => paneMessages().findLast((message) => message.role === "assistant")?.id)
+    return (
+      <box flexGrow={1} minWidth={0} minHeight={0} gap={1}>
+        <text fg={theme.textMuted} wrapMode="none">
+          {observationLabel(props.sessionID)}
+        </text>
+        <scrollbox stickyScroll stickyStart="bottom" flexGrow={1} scrollAcceleration={scrollAcceleration()}>
+          <box height={1} />
+          <For each={paneMessages()}>
+            {(message, index) => (
+              <Switch>
+                <Match when={message.role === "user"}>
+                  <UserMessage
+                    index={index()}
+                    onMouseUp={() => {}}
+                    message={message as UserMessage}
+                    parts={sync.data.part[message.id] ?? []}
+                    pending={panePending()}
+                  />
+                </Match>
+                <Match when={message.role === "assistant"}>
+                  <AssistantMessage
+                    last={paneLastAssistant() === message.id}
+                    message={message as AssistantMessage}
+                    parts={sync.data.part[message.id] ?? []}
+                  />
+                </Match>
+              </Switch>
+            )}
+          </For>
+        </scrollbox>
+      </box>
+    )
+  }
+  function WorkspacePaneView(props: { pane: () => WorkspacePane; renderMain: () => JSX.Element }) {
+    const split = createMemo(() => {
+      const pane = props.pane()
+      return pane.type === "split" ? pane : undefined
+    })
+    const observation = createMemo(() => {
+      const pane = props.pane()
+      return pane.type === "observation" ? pane : undefined
+    })
+    return (
+      <Switch fallback={props.renderMain()}>
+        <Match when={split()}>
+          {(pane) => (
+            <box
+              flexDirection={pane().axis === "vertical" ? "row" : "column"}
+              flexGrow={1}
+              minWidth={0}
+              minHeight={0}
+            >
+              <WorkspacePaneView pane={() => pane().first} renderMain={props.renderMain} />
+              <WorkspacePaneView pane={() => pane().second} renderMain={props.renderMain} />
+            </box>
+          )}
+        </Match>
+        <Match when={observation()}>
+          {(pane) => (
+            <box
+              flexGrow={1}
+              minWidth={0}
+              minHeight={0}
+              paddingLeft={1}
+              paddingRight={1}
+              border={["left"]}
+              borderColor={pane().id === workspace().focusedPaneID ? theme.borderActive : theme.border}
+            >
+              <ObservationTranscript sessionID={pane().sessionID} />
+            </box>
+          )}
+        </Match>
+      </Switch>
+    )
+  }
+
   return (
     <PathFormatterProvider path={session()?.directory}>
       <context.Provider
@@ -1028,12 +1194,32 @@ export function Session() {
           showGenericToolOutput,
           diffWrapMode,
           providers,
+          openSubagent: (sessionID) => openSubagent(sessionID, "tab"),
           sync,
           tui: tuiConfig,
         }}
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
-          <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+          <Index each={workspace().tabs}>
+            {(tab) => (
+              <box
+                visible={workspace().activeTabID === tab().id}
+                flexGrow={1}
+                minWidth={0}
+                minHeight={0}
+              >
+                <WorkspacePaneView
+                  pane={() => tab().root}
+                  renderMain={() => (
+                    <box
+                      flexGrow={1}
+                      minWidth={0}
+                      minHeight={0}
+                      paddingBottom={1}
+                      paddingLeft={2}
+                      paddingRight={2}
+                      gap={1}
+                    >
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -1150,33 +1336,33 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
-                <Show when={permissions().length > 0}>
+                <Show when={mainFocused() && permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
                     directory={sync.session.get(permissions()[0].sessionID)?.directory}
                   />
                 </Show>
-                <Show when={permissions().length === 0 && questions().length > 0}>
+                <Show when={mainFocused() && permissions().length === 0 && questions().length > 0}>
                   <QuestionPrompt
                     request={questions()[0]}
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
                   />
                 </Show>
-                <Show when={session()?.parentID}>
-                  <SubagentFooter />
+                <Show when={session()?.parentID && treeResource().status === "error"}>
+                  <text fg={theme.textMuted}>Subagent tree unavailable - press r to retry</text>
                 </Show>
                 <Show when={visible()}>
                   <pluginRuntime.Slot
                     name="session_prompt"
                     mode="replace"
                     session_id={route.sessionID}
-                    visible={visible()}
+                    visible={visible() && mainFocused()}
                     disabled={disabled()}
                     on_submit={toBottom}
                     ref={bind}
                   >
                     <Prompt
-                      visible={visible()}
+                      visible={visible() && mainFocused()}
                       ref={bind}
                       disabled={disabled()}
                       onSubmit={() => {
@@ -1189,8 +1375,13 @@ export function Session() {
                 </Show>
               </box>
             </Show>
-            <Toast />
-          </box>
+                      <Toast />
+                    </box>
+                  )}
+                />
+              </box>
+            )}
+          </Index>
           <Show when={sidebarVisible()}>
             <Switch>
               <Match when={wide()}>
@@ -1354,7 +1545,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     return props.message.time.completed - user.time.created
   })
 
-  const childShortcut = useCommandShortcut("session.child.first")
+  const rosterShortcut = useCommandShortcut("pane.roster")
   const backgroundShortcut = useCommandShortcut("session.background")
 
   return (
@@ -1377,8 +1568,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
-            {childShortcut()}
-            <span style={{ fg: theme.textMuted }}> view subagents</span>
+            {rosterShortcut()}
+            <span style={{ fg: theme.textMuted }}> subagent roster</span>
             <Show
               when={
                 sync.data.capabilities.experimentalBackgroundSubagents &&
@@ -2085,8 +2276,8 @@ function WebSearch(props: ToolProps) {
 }
 
 function Task(props: ToolProps) {
+  const ctx = use()
   const { theme } = useTheme()
-  const { navigate } = useRoute()
   const sync = useSync()
   const dialog = useDialog()
 
@@ -2170,9 +2361,7 @@ function Task(props: ToolProps) {
       pending="Delegating..."
       part={props.part}
       onClick={() => {
-        if (sessionID()) {
-          navigate({ type: "session", sessionID: sessionID()! })
-        }
+        if (sessionID()) ctx.openSubagent(sessionID()!)
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)
       }}

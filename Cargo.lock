@@ -952,6 +952,7 @@ version = "0.33.3"
 dependencies = [
  "anyhow",
  "axum",
+ "http-body-util",
  "hya-core",
  "hya-mcp",
  "hya-plugin",
@@ -965,6 +966,7 @@ dependencies = [
  "serde_norway",
  "time",
  "tokio",
+ "tower",
 ]
 
 [[package]]
