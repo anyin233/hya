@@ -68,6 +68,29 @@ test("validates recursive run tree payloads", () => {
   )
 })
 
+test("normalizes an omitted live member summary", () => {
+  const member = {
+    member: "member-1",
+    child: "child",
+    subagent_type: "build",
+    description: "RUST-RUNTIME",
+    depth: 1,
+    status: "running",
+  }
+  const tree = parseRunTree({
+    session: "root",
+    children: [{ session: "child", member }],
+  })
+
+  expect(tree.children[0]?.member?.summary).toBe("")
+  expect(() =>
+    parseRunTree({
+      session: "root",
+      children: [{ session: "child", member: { ...member, summary: 1 } }],
+    }),
+  ).toThrow(RunTreeParseError)
+})
+
 test("keeps one uncloseable main leaf", () => {
   const state = createWorkspaceState("root")
   expect(workspaceLeaves(state)).toEqual([{ type: "main", id: "main" }])
