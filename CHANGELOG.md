@@ -1,6 +1,5 @@
-# 0.33.12
+# 0.33.13
 
-- Added Compat import support for local stdio MCP servers, including command, environment, enabled state, and timeout mapping.
-- Preserved hya-only MCP and non-model configuration while skipping and reporting unsupported remote/OAuth MCP entries.
-- Added CLI and config coverage for mixed provider/MCP imports and MCP-only imports.
-- Quoted imported MCP and environment keys and escaped control characters so YAML-reserved names and multiline values round-trip safely.
+- Added `/theme` and `/themes` client commands for opening the built-in theme picker.
+- Marked and preselected the active theme so keyboard selection starts from the current choice.
+- Added runtime and harness coverage for command discovery, picker rendering, and immediate theme application.

@@ -171,6 +171,11 @@ impl AppHarness {
         self.runtime.prompt_text()
     }
 
+    /// The selected built-in theme name after client-side theme changes.
+    pub(crate) fn active_theme_name(&self) -> &str {
+        self.runtime.active_theme_name()
+    }
+
     /// Apply a server-sent event through the real `handle_event` path.
     pub(crate) async fn push_sse(&mut self, kind: &str, properties: serde_json::Value) {
         self.dispatch(AppEvent::Sse(global_event(kind, properties)))
@@ -593,6 +598,35 @@ mod tests {
         assert!(
             !harness.buffer_contains("sessions"),
             "filtered dropdown should drop non-matching commands; frame:\n{}",
+            harness.buffer_text()
+        );
+    }
+
+    #[tokio::test]
+    async fn slash_themes_opens_picker_marks_current_and_applies_selection() {
+        let mut harness = AppHarness::new(80, 40).await;
+
+        harness.type_text("/themes").await;
+        harness.press(Key::Enter).await;
+
+        assert!(
+            harness.buffer_contains("Themes"),
+            "/themes should open the built-in theme picker; frame:\n{}",
+            harness.buffer_text()
+        );
+        assert!(
+            harness.buffer_contains("hya") && harness.buffer_contains("current"),
+            "theme picker should mark the active theme; frame:\n{}",
+            harness.buffer_text()
+        );
+
+        harness.press(Key::Down).await;
+        harness.press(Key::Enter).await;
+
+        assert_ne!(harness.active_theme_name(), "hya");
+        assert!(
+            !harness.buffer_contains("Themes"),
+            "selecting a theme should close the picker; frame:\n{}",
             harness.buffer_text()
         );
     }
