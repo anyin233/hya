@@ -4,9 +4,9 @@
 
 Branch: `feat/opencode-compat-mcp-import`
 
-Worktree: `.worktrees/opencode-compat-mcp-import`
+Base: `feat/opencode-version-release-hygiene`
 
-Assigned version: `0.29.4`
+Assigned version: `0.33.10`
 
 Primary files:
 
