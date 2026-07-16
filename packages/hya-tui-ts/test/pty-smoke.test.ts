@@ -496,18 +496,10 @@ async function runChildObservation(columns: number) {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
         const focusMain = async (start: number, label: string) => {
-          process.stdin.write("\x10")
-          await waitFor(async () => {
-            const frame = (await output()).slice(start)
-            return frame.includes("Commands") && frame.includes("Search")
-          }, `${label} command palette`)
-          const filterStart = (await output()).length
-          process.stdin.write("Focus Main pane")
-          await waitFor(
-            async () => (await output()).slice(filterStart).includes("Focus Main pane"),
-            `${label} filtered command`,
-          )
-          process.stdin.write("\x1b[B\r")
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write("0")
+          await waitForMain(start, `${label} Main focus`)
         }
         const confirmMainInput = async (start: number, marker: string) => {
           try {
