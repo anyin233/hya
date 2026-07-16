@@ -7,4 +7,4 @@
 - [x] Reject absolute, parent-traversal, and symlink-escape restore paths.
 - [x] Update parity documentation and sequential version metadata to `0.33.12`.
 - [x] Run targeted tests, the full Rust CI-equivalent gate, and local executable builds.
-- [x] Commit as `ab162cd9` and safely push stacked PR #10 after fetching its target branches.
+- [x] Commit as `b2669312` and safely push stacked PR #10 after fetching its target branches.

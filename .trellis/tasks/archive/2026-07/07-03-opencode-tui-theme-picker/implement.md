@@ -6,4 +6,4 @@
 - [x] Add a TUI harness test covering open, current selection, navigation, and application.
 - [x] Update sequential version metadata to `0.33.11` and archive `0.33.10` changelog notes.
 - [x] Run targeted tests, the full Rust CI-equivalent gate, and local executable builds.
-- [x] Commit as `562a8f90` and safely push stacked PR #8 after fetching its target branches.
+- [x] Commit as `a55ecae9` and safely push stacked PR #8 after fetching its target branches.

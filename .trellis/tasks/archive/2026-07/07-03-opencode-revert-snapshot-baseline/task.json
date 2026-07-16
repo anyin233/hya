@@ -15,7 +15,7 @@
   "branch": "feat/opencode-revert-snapshot-baseline",
   "base_branch": "feat/opencode-tui-theme-picker",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "ab162cd9",
+  "commit": "b2669312",
   "pr_url": "https://github.com/anyin233/hya/pull/10",
   "subtasks": [],
   "children": [],
