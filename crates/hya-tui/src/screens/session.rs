@@ -144,7 +144,10 @@ fn push_member_activity_rows(
     _width: usize,
     theme: &ResolvedTheme,
 ) {
-    for member in members {
+    for member in members
+        .iter()
+        .filter(|member| matches!(member.status.as_str(), "failed" | "cancelled"))
+    {
         lines.push(member_activity_line(member, theme));
     }
 }
@@ -1828,7 +1831,7 @@ mod tests {
     }
 
     #[test]
-    fn issue21_timeline_renders_subagent_spawn_row_and_keeps_task_tool_row_visible() {
+    fn timeline_shows_only_task_tool_entry_for_successful_subagent() {
         let mut store = MessageStore::default();
         store.apply_event(&event(
             "message.updated",
@@ -1850,8 +1853,8 @@ mod tests {
                 "state": {
                     "status": "completed",
                     "input": {
-                        "subagent_type": "general",
-                        "description": "delegate tool call"
+                        "subagent_type": "oracle",
+                        "description": "review the plan"
                     }
                 }
             } }),
@@ -1864,6 +1867,14 @@ mod tests {
             "subagent_type": "oracle",
             "description": "review the plan",
             "depth": 1
+        })));
+        store.apply_event(&team_event(serde_json::json!({
+            "type": "member_finished",
+            "session": "ses_1",
+            "member": "mem_1",
+            "status": "done",
+            "summary": "looks good",
+            "child": "ses_child"
         })));
 
         let theme = theme();
@@ -1883,25 +1894,20 @@ mod tests {
             .text,
         );
 
-        assert!(
-            rendered.contains("General Task"),
-            "task tool row missing: {rendered}"
+        assert_eq!(
+            rendered.matches("Oracle Task").count(),
+            1,
+            "expected one task entry: {rendered}"
         );
-        assert!(
-            rendered.contains("delegate tool call"),
-            "task tool description missing: {rendered}"
+        assert_eq!(
+            rendered.matches("review the plan").count(),
+            1,
+            "task description should appear only in the task entry: {rendered}"
         );
+        assert!(!rendered.contains("spawned"), "extra spawn row: {rendered}");
         assert!(
-            rendered.contains("spawned"),
-            "spawn activity row missing: {rendered}"
-        );
-        assert!(
-            rendered.contains("Oracle"),
-            "subagent type missing: {rendered}"
-        );
-        assert!(
-            rendered.contains("review the plan"),
-            "spawn description missing: {rendered}"
+            !rendered.contains("looks good"),
+            "extra outcome row: {rendered}"
         );
     }
 
@@ -1948,7 +1954,7 @@ mod tests {
     }
 
     #[test]
-    fn issue21_agent_activity_changed_does_not_add_extra_timeline_row_or_copy_task_text() {
+    fn successful_member_activity_does_not_add_timeline_rows_or_copy_task_text() {
         let mut store = MessageStore::default();
         store.apply_event(&event(
             "message.updated",
@@ -2028,13 +2034,17 @@ mod tests {
 
         assert_eq!(
             after_spawn.text.0.len(),
-            baseline + 1,
-            "member_spawned should add one compact Subagent activity row"
+            baseline,
+            "member_spawned should not add a separate transcript row"
         );
         assert_eq!(
             after_running.text.0.len(),
             after_spawn.text.0.len(),
             "running/current-task roster updates should not add another transcript row"
+        );
+        assert!(
+            !after_running_text.contains("review the plan"),
+            "member_spawned description should stay out of transcript copy: {after_running_text}"
         );
         assert!(
             !after_running_text.contains("triaging"),
@@ -2043,7 +2053,7 @@ mod tests {
     }
 
     #[test]
-    fn issue21_transcript_export_stays_message_only() {
+    fn successful_member_activity_stays_out_of_live_and_exported_transcripts() {
         let mut store = MessageStore::default();
         store.apply_event(&event(
             "session.updated",
@@ -2095,12 +2105,12 @@ mod tests {
             .expect("stored transcript");
 
         assert!(
-            live.contains("spawned"),
-            "live timeline should include derived activity rows: {live}"
+            !live.contains("review the plan"),
+            "live timeline should omit successful spawn activity: {live}"
         );
         assert!(
-            live.contains("looks good"),
-            "live terminal activity should show the summary: {live}"
+            !live.contains("looks good"),
+            "live timeline should omit successful outcome activity: {live}"
         );
         assert!(
             transcript.contains("ship it"),
