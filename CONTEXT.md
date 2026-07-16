@@ -6,6 +6,104 @@ consistent across `hya-proto`, `hya-core`, the tools, and the TUI.
 
 ## Language
 
+### Compatibility baselines
+
+**Feature inventory**:
+A human-readable compatibility baseline captured from OpenCode capabilities, with each capability prioritized and mapped to hya-native verification coverage.
+_Avoid_: copy OpenCode, clone OpenCode, parity port, machine-readable coverage registry
+
+**Must-have capability**:
+A Feature inventory item that blocks the Real coding agent maturity target until implemented and covered by verification.
+_Avoid_: P0, required feature
+
+**Should-have capability**:
+A Feature inventory item needed for OpenCode competitiveness but not required to prove the initial verification architecture.
+_Avoid_: P1, follow-up feature
+
+**Nice-to-have capability**:
+A Feature inventory item that can wait until the core maturity target is stable.
+_Avoid_: polish, someday feature
+
+**Out-of-scope capability**:
+A Feature inventory item intentionally excluded from hya's roadmap so it does not create parity churn.
+_Avoid_: unsupported gap, missing feature
+
+**Verification bootstrap**:
+The initial ordered sequence of boundary-owned suites that establishes the Verification design. It starts with the tool plane before broader product flows.
+_Avoid_: test order, test plan, coverage roadmap
+
+**Registered tool contract**:
+A boundary-owned behavior contract asserting that a canonical tool in the Tool plane exposes the right schema name, handles valid and invalid inputs, enforces PermissionPlane where required, and returns stable output for the model and TUI.
+_Avoid_: tool unit test, tool implementation test
+
+**Real coding agent**:
+A product maturity target where feature-inventory coverage, verified toolchain behavior, interactive UX reliability, and extensibility are all required quality dimensions.
+_Avoid_: prototype agent, MVP agent, clone parity
+
+**Verification design**:
+The product-level test taxonomy and run strategy that defines hya's public behavior before additional feature work is considered complete.
+_Avoid_: test retrofit, ad hoc test suite, crate-only coverage
+
+**Golden path**:
+The minimal representative end-to-end flow that exercises prompt admission, a built-in tool, event persistence, projection, and TUI rendering in a single verification test.
+_Avoid_: full smoke test, end-to-end demo, manual run-through
+
+**TUI rendering contract**:
+Deterministic tests over terminal frames, widgets, screens, and visible text, independent of pixel-level or platform-level rendering.
+_Avoid_: visual snapshot, screenshot test, pixel test
+
+**TUI snapshot**:
+A persisted golden terminal buffer used to detect unintended changes in layout or visible output; the narrowest pixel-independent comparison layer.
+_Avoid_: screenshot, image diff
+
+**TUI interaction test**:
+A test that simulates keypress flows and asserts resulting focus, mode, viewport, or overlay state changes.
+_Avoid_: UI automation, manual TUI exercise
+
+**TUI verification suite**:
+The union of TUI rendering contracts, snapshots, and interaction tests covering all user-facing terminal surfaces.
+_Avoid_: TUI outlook testing, TUI smoke test, TUI unit test
+
+**Behavior contract test**:
+A test asserting user-visible behavior at a stable boundary, such as a tool call, session engine rule, provider routing, store/projection, plugin host interface, or TUI surface. Distinct from a unit test per function.
+_Avoid_: all function testing, unit coverage, crate integration test
+
+**Boundary-owned suite**:
+A behavior contract test suite owned by the crate that defines the stable boundary under test, with cross-crate tests reserved for product-level flows such as the Golden path.
+_Avoid_: central test dump, per-function suite, global harness by default
+
+**Provider test spectrum**:
+A verification split where scripted stub providers define required CI contracts and live provider smoke tests are optional evidence outside the required gate.
+_Avoid_: provider integration test, live-provider gate, recorded-only provider test
+
+**Rust plugin binary**:
+A hya plugin packaged as a Rust executable. Distinct from a Compat plugin and from in-process dynamic libraries.
+_Avoid_: Rust plugin library, Rust dynamic module, cdylib plugin
+
+**Runtime plugin registration**:
+Adding a plugin to an already-running hya runtime so its declared capabilities become available without restarting the runtime.
+_Avoid_: dynamic plugin load, hot load
+
+**Hot plugin reload**:
+Replacing a previously registered plugin with a new plugin instance while preserving the surrounding runtime; the new tool set is visible to the next admitted Turn and to new Sessions.
+_Avoid_: runtime registration, lazy discovery
+
+**Lazy plugin discovery**:
+Deferring configured plugin startup until the plugin's capabilities are first needed.
+_Avoid_: runtime registration, hot reload
+
+**Runtime skill registration**:
+Adding a skill definition to an already-running hya runtime so it becomes selectable for subsequent Turns or new Sessions.
+_Avoid_: dynamic skill load
+
+**Hot skill reload**:
+Refreshing a registered skill's definition from its source without restarting the runtime; the new definition is visible to the next admitted Turn and to new Sessions.
+_Avoid_: skill restart, skill recompile
+
+**Lazy skill discovery**:
+Deferring skill catalog expansion until a skill name is requested or a search is performed.
+_Avoid_: eager skill load
+
 ### Agents & sessions
 
 **Session**:
@@ -111,6 +209,11 @@ The TUI surface for inspecting the current Team's Roster and choosing subagent S
 It is scoped to the active main agent's Team, not to global Session history.
 _Avoid_: global subagent browser, session browser
 
+**Roster sidebar**:
+An always-visible Session-screen sidebar block that summarizes live Roster entries for the current
+Team. It complements the Subagent manager.
+_Avoid_: subagent transcript sidebar, global agent list
+
 **Subagent selector**:
 The choice point inside the Subagent manager for binding one live Roster entry to a Subagent
 observation view.
@@ -121,6 +224,12 @@ A read-only TUI surface for observing one subagent Session without addressing it
 composer.
 _Avoid_: subagent prompt, subagent terminal
 
+
+**Subagent activity row**:
+A compact Transcript viewport row on the main agent's Session that surfaces subagent lifecycle
+activity for a Member in the current Team. It is distinct from a child Session transcript.
+_Avoid_: subagent message, child transcript inline
+
 **Transcript viewport**:
 The TUI region that renders the active Session's transcript for reading. Distinct from the prompt composer, which accepts new user input.
 _Avoid_: display area, output pane
@@ -128,6 +237,11 @@ _Avoid_: display area, output pane
 **Prompt composer**:
 The TUI input surface where the user composes a prompt for the main agent. Distinct from the transcript viewport and from a stored prompt Event.
 _Avoid_: input area, command box
+
+**Queued prompt**:
+A prompt temporarily held by a client surface because it cannot yet be admitted to a Session. It is
+distinct from a stored Message or transcript content.
+_Avoid_: queued message, submitted message
 
 **Legacy TUI**:
 An older terminal user interface surface. Use this term only when contrasting that older surface
