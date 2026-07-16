@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/07-14-close-gpt56-subagent-e2e-gaps/research/parallel-plan-merge.md","reason":"Follow the merged request cap, execution order, evidence matrix, and defect classification rules."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve event-sourced runtime, async title, permission, persistence, verification, and release contracts if a source defect is confirmed."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply focused RED/GREEN and package verification requirements to any TUI source change."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace provider requests, tools, canonical events, projection, and PTY rendering without relying on model prose."}
+{"file":"docs/adr/0001-event-sourced-mailbox-and-channels.md","reason":"Use team-root events and replayed projection as mailbox/channel evidence."}
+{"file":"docs/adr/0002-resident-actor-model-and-autonomous-main-agent.md","reason":"Verify separate wakes, idle transitions, quiescence, and runaway budgets."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Verify the read-only child observation and single-input invariant."}

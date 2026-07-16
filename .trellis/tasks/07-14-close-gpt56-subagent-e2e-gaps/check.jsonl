@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/07-14-close-gpt56-subagent-e2e-gaps/research/parallel-plan-merge.md","reason":"Audit implementation and evidence against the merged bounds and classification rules."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check provider-call accounting, canonical event evidence, permission handling, persistence, and required source-fix gates."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check focused TUI behavior coverage and TypeScript package gates."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check complete provider-to-tool-to-event-to-projection-to-TUI flow."}
+{"file":"docs/adr/0001-event-sourced-mailbox-and-channels.md","reason":"Require replayable team-root mailbox and channel evidence."}
+{"file":"docs/adr/0002-resident-actor-model-and-autonomous-main-agent.md","reason":"Require separate resident wakes, budget safety, and one-shot quiescence."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Require visible read-only observation and unchanged main input state."}
