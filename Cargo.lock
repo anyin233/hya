@@ -934,7 +934,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "hya-app",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "anyhow",
  "axum",
@@ -971,25 +971,36 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
+ "crossterm",
+ "futures",
  "hya-app",
  "hya-core",
+ "hya-mcp",
+ "hya-plugin",
  "hya-proto",
+ "hya-provider",
  "hya-server",
  "hya-store",
+ "hya-tool",
+ "ratatui 0.28.1",
  "serde",
  "serde_json",
+ "serde_norway",
+ "time",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]
 name = "hya-client"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "hya-proto",
  "reqwest",
@@ -998,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "futures",
@@ -1016,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -1031,15 +1042,17 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "axum",
+ "bytes",
  "eventsource-stream",
  "futures-util",
  "http-body-util",
  "hya-app",
  "hya-sdk",
+ "hya-server",
  "serde_json",
  "tokio",
  "tower",
@@ -1047,16 +1060,17 @@ dependencies = [
 
 [[package]]
 name = "hya-parity"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "hya-sdk",
  "hya-tui",
+ "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "hya-plugin"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -1075,15 +1089,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.33.13"
+version = "0.33.14"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.33.13"
+version = "0.33.14"
 
 [[package]]
 name = "hya-proto"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -1093,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "base64",
@@ -1102,6 +1116,7 @@ dependencies = [
  "hya-proto",
  "reqwest",
  "secrecy",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
@@ -1110,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1125,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "axum",
@@ -1155,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "hya-proto",
  "serde_json",
@@ -1167,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "base64",
@@ -1187,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "hya-ts"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "clap",
  "hya-sdk",
@@ -1198,7 +1213,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tui"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "async-trait",
  "crossterm",
@@ -1207,7 +1222,7 @@ dependencies = [
  "hya-sdk",
  "hya-tui-lib",
  "pulldown-cmark",
- "ratatui",
+ "ratatui 0.29.0",
  "reqwest",
  "serde",
  "serde_json",
@@ -1221,9 +1236,9 @@ dependencies = [
 
 [[package]]
 name = "hya-tui-lib"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
- "ratatui",
+ "ratatui 0.29.0",
 ]
 
 [[package]]
@@ -2016,6 +2031,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
+]
+
+[[package]]
+name = "ratatui"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdef7f9be5c0122f890d58bdf4d964349ba6a6161f705907526d891efabba57d"
+dependencies = [
+ "bitflags",
+ "cassowary",
+ "compact_str",
+ "crossterm",
+ "instability",
+ "itertools",
+ "lru",
+ "paste",
+ "strum",
+ "strum_macros",
+ "unicode-segmentation",
+ "unicode-truncate",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -3659,7 +3695,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.33.13"
+version = "0.33.14"
 dependencies = [
  "anyhow",
  "serde",

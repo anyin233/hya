@@ -148,6 +148,8 @@ fn success_result(
             "filediff": {
                 "file": filepath,
                 "patch": patch,
+                "beforeContent": content_old,
+                "afterContent": content_new,
                 "additions": diff.additions,
                 "deletions": diff.deletions,
             },

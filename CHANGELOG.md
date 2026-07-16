@@ -1,6 +1,5 @@
-# 0.33.13
+# 0.33.14
 
-- Added `/theme` and `/themes` client commands for opening the built-in theme picker.
-- Marked and preselected the active theme so keyboard selection starts from the current choice.
-- Added runtime and harness coverage for command discovery, picker rendering, and immediate theme application.
-- Stabilized narrow-terminal permission coverage by using the observation pane's direct Main-focus shortcut.
+- Added before/after content snapshots to edit-tool result events.
+- Made Compat session revert and unrevert restore edit snapshots on disk with workspace path and symlink containment checks.
+- Preserved the earliest before and latest after content across repeated edits to the same file, with integration and unit coverage.

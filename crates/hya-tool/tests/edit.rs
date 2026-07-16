@@ -229,6 +229,8 @@ async fn edit_returns_open_code_success_metadata_with_diff() {
         out["metadata"]["filediff"]["file"],
         target.to_string_lossy().as_ref()
     );
+    assert_eq!(out["metadata"]["filediff"]["beforeContent"], "one\ntwo\n");
+    assert_eq!(out["metadata"]["filediff"]["afterContent"], "one\nthree\n");
     assert_eq!(out["metadata"]["filediff"]["additions"], 1);
     assert_eq!(out["metadata"]["filediff"]["deletions"], 1);
     let diff = out["metadata"]["diff"].as_str().unwrap();

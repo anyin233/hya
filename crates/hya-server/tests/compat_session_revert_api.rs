@@ -178,9 +178,11 @@ async fn prompt_message(app: axum::Router, session: &str) -> String {
 #[tokio::test]
 async fn compat_session_revert_records_and_clears_reverted_message() {
     let target_file = "records-revert-target.txt";
+    let target_path = format!("{WORKDIR}/{target_file}");
     let app = router(state(target_file).await);
     let session = create_session(app.clone()).await;
     let message = prompt_message(app.clone(), &session).await;
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new\n");
 
     let reverted = request(
         app.clone(),
@@ -201,6 +203,7 @@ async fn compat_session_revert_records_and_clears_reverted_message() {
     assert!(revert_diff.contains("-old"));
     assert!(revert_diff.contains("+new"));
     assert!(reverted.get("metadata").is_none());
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "old\n");
 
     let diff = request(
         app.clone(),
@@ -216,10 +219,16 @@ async fn compat_session_revert_records_and_clears_reverted_message() {
     assert_eq!(diff[0]["status"], "modified");
 
     let unreverted = request(app, "POST", &format!("/session/{session}/unrevert"), None).await;
-    assert_eq!(unreverted.status(), StatusCode::OK);
+    let unreverted_status = unreverted.status();
     let unreverted = body_json(unreverted).await;
+    assert_eq!(
+        unreverted_status,
+        StatusCode::OK,
+        "unrevert response: {unreverted}"
+    );
     assert_eq!(unreverted["id"], session);
     assert!(unreverted.get("revert").is_none());
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new\n");
 }
 
 #[tokio::test]
