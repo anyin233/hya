@@ -4,9 +4,9 @@
 
 Branch: `feat/opencode-revert-snapshot-baseline`
 
-Worktree: `.worktrees/opencode-revert-snapshot-baseline`
+Base: `feat/opencode-tui-theme-picker`
 
-Assigned version: `0.29.6`
+Assigned version: `0.33.12`
 
 Primary files:
 
@@ -32,9 +32,9 @@ The server should treat these as optional. Existing event logs without snapshots
 
 ## Restore behavior
 
-On `revert`, replay target tool results, collect the latest snapshot per normalized relative file, and write `beforeContent` back under the session workdir. On `unrevert`, write `afterContent`.
+On `revert`, replay target tool results, retain the earliest before snapshot and latest after snapshot per normalized relative file, and write `beforeContent` back under the session workdir. On `unrevert`, write `afterContent`.
 
-Path safety must reuse the existing workdir-relative normalization pattern and reject absolute paths that escape the workdir. Restoration should be best-effort per file but surface I/O errors as API errors rather than silently claiming success.
+Path safety rejects absolute and parent-traversal paths and canonicalizes the nearest existing ancestor to prevent symlink escapes from the session workdir. Restoration surfaces I/O errors as API errors rather than silently claiming success.
 
 ## Non-goals
 

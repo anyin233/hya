@@ -13,11 +13,11 @@ Introduce a first durable snapshot/revert baseline for session file changes so h
 
 ## Acceptance Criteria
 
-- [ ] A red server integration test proves `/session/:id/revert` currently records revert metadata but leaves the changed file content in place.
-- [ ] New `edit` tool events include before/after content snapshots for the changed file.
-- [ ] `/session/:id/revert` restores the before snapshot for matching target files and `/unrevert` restores the after snapshot.
-- [ ] Existing diff, summary, part-scoped revert, missing-session, and busy-session tests keep passing.
-- [ ] Assigned version `0.29.6` release metadata is updated.
+- [x] A red server integration test proved `/session/:id/revert` recorded metadata while leaving changed file content in place.
+- [x] New `edit` tool events include before/after content snapshots for the changed file.
+- [x] `/session/:id/revert` restores before snapshots and `/unrevert` restores after snapshots, including repeated edits to one file.
+- [x] Restore paths reject absolute, parent-traversal, and symlink-escape paths; old events without snapshots retain metadata-only behavior.
+- [x] Existing revert API tests, the full Rust CI-equivalent gate, local binary builds, and version `0.33.12` metadata all pass.
 
 ## Notes
 
