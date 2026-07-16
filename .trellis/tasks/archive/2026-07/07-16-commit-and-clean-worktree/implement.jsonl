@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/07-16-commit-and-clean-worktree/prd.md","reason":"Preserve the clean-worktree, atomicity, privacy, verification, and push requirements."}
+{"file":".trellis/tasks/07-16-commit-and-clean-worktree/design.md","reason":"Follow the resolved ownership groups, mixed-Cargo staging boundary, and recovery controls."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Apply workspace verification and release metadata rules to Rust commits."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply rendered-frame TDD and TUI verification requirements to the indicator correction."}
+{"file":".trellis/workflow.md","reason":"Follow task activation, validation, archive, journal, and commit boundaries."}

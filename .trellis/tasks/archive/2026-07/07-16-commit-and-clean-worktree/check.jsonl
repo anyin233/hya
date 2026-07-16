@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/07-16-commit-and-clean-worktree/prd.md","reason":"Audit final commits, push, preservation, and clean-status acceptance criteria."}
+{"file":".trellis/tasks/07-16-commit-and-clean-worktree/design.md","reason":"Check atomic group membership, mixed-file staging, privacy controls, and no-force recovery."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check Rust verification and version/changelog alignment."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check authoritative running-state behavior and rendered-frame regression coverage."}
+{"file":".trellis/workflow.md","reason":"Check Trellis closeout and explicit scoped commits."}
