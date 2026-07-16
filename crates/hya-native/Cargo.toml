@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 hya-sdk = { path = "../hya-sdk" }
-hya-app = { workspace = true }
-hya-server = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 http-body-util = { workspace = true }
@@ -16,4 +14,6 @@ futures-util = "0.3"
 tokio = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
-bytes = { workspace = true }
+
+[dev-dependencies]
+hya-app = { workspace = true }
