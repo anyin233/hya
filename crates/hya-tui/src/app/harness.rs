@@ -524,6 +524,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn main_agent_session_status_renders_opencode_indicator_at_bottom_left() {
+        let mut harness = AppHarness::new(80, 24).await;
+        harness
+            .push_sse("session.created", json!({ "info": { "id": "ses_main" } }))
+            .await;
+        harness.navigate("ses_main").await;
+
+        harness
+            .push_sse(
+                "session.status",
+                json!({ "sessionID": "ses_main", "status": { "type": "busy" } }),
+            )
+            .await;
+
+        let frame = harness.buffer_text();
+        let bottom = frame.lines().last().expect("bottom row");
+        assert!(
+            bottom.contains("esc interrupt"),
+            "a busy main agent should show the OpenCode interrupt indicator; frame:\n{frame}"
+        );
+        assert_eq!(
+            bottom.chars().position(|cell| !cell.is_whitespace()),
+            Some(1),
+            "the running spinner should be the bottom-left indicator; row: {bottom}"
+        );
+        assert!(
+            !bottom.contains("Running"),
+            "the OpenCode indicator should not add a Running label; row: {bottom}"
+        );
+
+        harness
+            .push_sse(
+                "session.status",
+                json!({ "sessionID": "ses_main", "status": { "type": "idle" } }),
+            )
+            .await;
+
+        assert!(
+            !harness.buffer_contains("esc interrupt"),
+            "the running indicator should clear when the main agent becomes idle; frame:\n{}",
+            harness.buffer_text()
+        );
+    }
+
+    #[tokio::test]
     async fn slash_autocomplete_opens_and_filters() {
         let mut harness = AppHarness::new(80, 24).await;
         harness.type_text("/").await;

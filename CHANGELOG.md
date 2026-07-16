@@ -1,3 +1,3 @@
-# 0.33.9
+# 0.33.10
 
-- Kept successful subagent lifecycle updates out of the main TUI transcript so each spawn has one `XXX Task` entry.
+- Restored the OpenCode-style main-agent running indicator from authoritative session status.

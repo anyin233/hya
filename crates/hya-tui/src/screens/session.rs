@@ -1628,8 +1628,65 @@ mod tests {
 
         let status = row_text(terminal.backend().buffer(), height - 1, width);
         assert!(
-            status.contains("⠋ Running"),
+            status.contains("⠋ esc interrupt"),
             "working session should show a running indicator below the prompt; row: {status}"
+        );
+    }
+
+    #[test]
+    fn authoritative_idle_suppresses_interrupt_indicator_with_pending_prompt_history() {
+        let mut store = MessageStore::default();
+        store.apply_event(&event(
+            "session.status",
+            serde_json::json!({ "sessionID": "ses_1", "status": { "type": "idle" } }),
+        ));
+        let theme = theme();
+        let prompt = PromptDoc::default();
+        let pending = vec!["submitted prompt".to_owned()];
+        let width = 60;
+        let height = 12;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut scroll = ScrollState::default();
+
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &SessionView {
+                        store: &store,
+                        session_id: "ses_1",
+                        pending: &pending,
+                        prompt: &prompt,
+                        agents: &[],
+                        model_names: &[],
+                        active_agent: None,
+                        model_label: None,
+                        provider_label: None,
+                        context_limit: None,
+                        spinner: "⠋",
+                        show_timestamps: false,
+                        sidebar_visible: false,
+                        subagent: None,
+                        show_cursor: true,
+                        yolo: false,
+                    },
+                    &mut scroll,
+                    &theme,
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let frame = rows_text(buffer, 0, height, width);
+        assert!(
+            frame.contains("submitted prompt"),
+            "pending prompt history should remain visible; frame:\n{frame}"
+        );
+        let status = row_text(buffer, height - 1, width);
+        assert!(
+            !status.contains("esc interrupt"),
+            "authoritative idle status should suppress the interrupt indicator; row: {status}"
         );
     }
 

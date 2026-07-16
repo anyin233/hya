@@ -381,7 +381,7 @@ fn status_line<'a>(view: &PromptBoxView<'a>, theme: &ResolvedTheme) -> RtLine<'a
             view.spinner.to_owned(),
             Style::default().fg(rgba_to_color(view.agent_color, bg)),
         ),
-        RtSpan::raw(" Running  "),
+        RtSpan::raw(" "),
         RtSpan::styled("esc", Style::default().fg(rgba_to_color(theme.text, bg))),
         RtSpan::raw(" "),
         RtSpan::styled(

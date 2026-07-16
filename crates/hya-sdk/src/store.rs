@@ -63,6 +63,7 @@ pub struct MessageStore {
     pub messages: HashMap<String, Vec<Message>>,
     pub parts: HashMap<String, Vec<StoredPart>>,
     pub sessions: HashMap<String, Session>,
+    session_working: HashMap<String, bool>,
     pub todos: HashMap<String, Vec<Value>>,
     pub diffs: HashMap<String, Vec<Value>>,
     pub permissions: HashMap<String, Vec<Value>>,
@@ -137,6 +138,19 @@ impl MessageStore {
                     Err(_) => false,
                 },
                 None => false,
+            },
+            "session.status" => match (
+                str_field(props, "sessionID"),
+                props
+                    .get("status")
+                    .and_then(|status| str_field(status, "type")),
+            ) {
+                (Some(session_id), Some(status)) => {
+                    self.session_working
+                        .insert(session_id.to_owned(), status != "idle");
+                    true
+                }
+                _ => false,
             },
             "todo.updated" => match (str_field(props, "sessionID"), props.get("todos")) {
                 (Some(session_id), Some(Value::Array(todos))) => {
@@ -412,6 +426,9 @@ impl MessageStore {
 
     #[must_use]
     pub fn is_working(&self, session_id: &str) -> bool {
+        if let Some(working) = self.session_working.get(session_id) {
+            return *working;
+        }
         let Some(last) = self.messages.get(session_id).and_then(|list| list.last()) else {
             return false;
         };
