@@ -35,7 +35,7 @@ _KNOWN_PLATFORMS = {
     "claude",
     "codex",
     "cursor",
-    "compat",
+    "opencode",
     "gemini",
     "droid",
     "qoder",
@@ -43,13 +43,14 @@ _KNOWN_PLATFORMS = {
     "kiro",
     "copilot",
     "pi",
+    "trae",
 }
 
 _ENV_SESSION_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("claude", ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")),
     ("codex", ("CODEX_SESSION_ID", "CODEX_THREAD_ID")),
     ("cursor", ("CURSOR_SESSION_ID",)),
-    ("compat", ("COMPAT_SESSION_ID", "COMPAT_SESSIONID", "COMPAT_RUN_ID")),
+    ("opencode", ("OPENCODE_SESSION_ID", "OPENCODE_SESSIONID", "OPENCODE_RUN_ID")),
     ("gemini", ("GEMINI_SESSION_ID",)),
     ("droid", ("FACTORY_SESSION_ID", "DROID_SESSION_ID")),
     ("qoder", ("QODER_SESSION_ID",)),
@@ -57,6 +58,7 @@ _ENV_SESSION_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("kiro", ("KIRO_SESSION_ID",)),
     ("copilot", ("COPILOT_SESSION_ID", "COPILOT_SESSIONID")),
     ("pi", ("PI_SESSION_ID", "PI_SESSIONID")),
+    ("trae", ("TRAE_SESSION_ID",)),
 )
 _ENV_CONVERSATION_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cursor", ("CURSOR_CONVERSATION_ID", "CURSOR_CONVERSATIONID")),
