@@ -1,3 +1,4 @@
-# 0.33.10
+# 0.33.11
 
-- Restored the OpenCode-style main-agent running indicator from authoritative session status.
+- Added a release-metadata regression test that keeps the workspace manifest, lockfile, README, and root changelog on one version.
+- Made the global event compatibility test compare canonical work directories portably on macOS and Linux.
