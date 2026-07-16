@@ -726,7 +726,9 @@ async function runChildObservation(columns: number) {
         expect((await output()).slice(permissionStart)).not.toContain("Permission required")
         const focusMainStart = (await output()).length
         try {
-          await focusMain(focusMainStart, "grandchild permission")
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write("0")
           await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main")
         } catch (error) {
           const frame = (await output()).slice(focusMainStart).slice(-5000)
