@@ -224,3 +224,64 @@ bun install --frozen-lockfile --production
 bun packages/hya-tui-ts/scripts/prune-sdk-server.ts "$runtime"
 mv "$runtime" "$install_dir"
 ```
+
+---
+
+## Scenario: TypeScript run-tree decoding of omitted projection fields
+
+### 1. Scope / Trigger
+
+- Trigger: changes to Rust run-tree projection serialization or the TypeScript
+  `parseRunTree` boundary used by the subagent roster.
+
+### 2. Signatures
+
+- `GET /session/{session_id}/tree` returns recursive nodes with an optional
+  `member` object.
+- `parseRunTree(value: unknown): RunTreeNode` owns validation and normalization.
+- `member.summary` is omitted while its Rust projection value is empty;
+  otherwise it is a string.
+
+### 3. Contracts
+
+- An omitted `member.summary` normalizes to `""` at `parseRunTree`.
+- A present `member.summary` must remain a string; do not coerce malformed
+  values or weaken validation for other member fields.
+- Consumers use the parsed `RunTreeNode`; roster rendering must not maintain a
+  second decoder for the same response.
+
+### 4. Validation & Error Matrix
+
+- Missing `member.summary` -> parsed `summary: ""`.
+- String `member.summary` -> preserve the string.
+- `null`, number, boolean, array, or object `member.summary` ->
+  `RunTreeParseError` at the `.member.summary` path.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a running child omits `summary` and appears in the live roster.
+- Base: a completed child supplies a string summary unchanged.
+- Bad: requiring `summary` unconditionally rejects valid active projections;
+  accepting `String(value)` hides malformed server responses.
+
+### 6. Tests Required
+
+- Parser test: an active member with omitted `summary` yields `""`.
+- Parser test: the same member with a present non-string `summary` throws
+  `RunTreeParseError`.
+- Integration test: the real-backend subagent tree remains consumable through
+  the pinned SDK workflow.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+summary: string(input.summary, `${path}.summary`),
+```
+
+#### Correct
+
+```typescript
+summary: optionalString(input.summary, `${path}.summary`) ?? "",
+```

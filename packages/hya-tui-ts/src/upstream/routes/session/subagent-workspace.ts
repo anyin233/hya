@@ -421,7 +421,7 @@ function parseMember(value: unknown, path: string): RunTreeMember {
     description: string(input.description, `${path}.description`),
     depth: number(input.depth, `${path}.depth`),
     status: oneOf(input.status, ["spawning", "running", "done", "failed", "cancelled"], `${path}.status`),
-    summary: string(input.summary, `${path}.summary`),
+    summary: optionalString(input.summary, `${path}.summary`) ?? "",
   }
 }
 
