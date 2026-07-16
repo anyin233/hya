@@ -180,3 +180,37 @@ Repaired the client-only prepared Bun runtime, added staged-runtime and installe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Fix hya-ts subagent tree live view
+
+**Date**: 2026-07-16
+**Task**: Fix hya-ts subagent tree live view
+**Branch**: `main`
+
+### Summary
+
+Fixed omitted live subagent summary parsing, aligned permission integration tests, pushed 0.33.8, and installed the verified local release.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87bc1bea` | (see git log) |
+| `3c815452` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
