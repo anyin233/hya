@@ -6,4 +6,4 @@
 - [x] Archive the previous root changelog as `docs/changes/CHANGELOG_0.33.8.md`.
 - [x] Align pinned TypeScript real-backend fixtures with exact permission patterns and isolate question lifecycle coverage from tool authorization.
 - [x] Run Bun 1.3.14 typecheck/build and non-Linux-PTY tests, the full Rust gate, and local executable builds.
-- [x] Complete the PR at `3cc7d384` and safely push #7 after fetching its target branch.
+- [x] Complete the PR at `50574964` and safely push #7 after fetching its target branch.
