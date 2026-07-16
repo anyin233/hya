@@ -800,8 +800,13 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(100)
         process.stdin.write("\x1b[B")
         await Bun.sleep(100)
+        const reviewerTabStart = (await output()).length
         process.stdin.write("\r")
-        await waitFor(async () => (await output()).slice(redrawStart).includes(secondChildTranscript), "auxiliary reviewer tab")
+        await waitForFocusedHeader(reviewerTabStart, "reviewer-1")
+        await waitFor(
+          async () => (await output()).slice(reviewerTabStart).includes(secondChildTranscript),
+          "auxiliary reviewer tab",
+        )
         const reviewerMainStart = (await output()).length
         await confirmMainInput(reviewerMainStart, "m81ea")
         process.stdin.write("\x18")
