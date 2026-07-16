@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-07-14
+- **Total Sessions**: 6
+- **Last Active**: 2026-07-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~182 | Active |
+| `journal-1.md` | ~216 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-07-16 | Fix hya-ts subagent tree live view | `87bc1bea`, `3c815452` | `main` |
 | 5 | 2026-07-14 | Fix hya-ts prepared runtime | `71e23bdc` | `main` |
 | 4 | 2026-07-13 | Migrate OpenCode TUI to hya-ts | `44dd829e5b22eede322b918a867fb4057f9dde41` | `main` |
 | 3 | 2026-06-26 | TUI model fallback safe rejection | `46e144e`, `3232a44`, `4c15c0d`, `f5f8b27`, `a54cf6e` | `main` |
