@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check canonical persistence, route behavior, focused RED/GREEN evidence, and release metadata only when source changes."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check semantic TUI behavior, focused tests, typecheck, build, and workspace gates for any frontend change."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify the complete spawn-to-projection-to-HTTP-to-parser-to-roster flow and reject wrong-layer patches."}
+{"file":".trellis/tasks/07-15-fix-hya-ts-subagent-tree-live/research/live-tree-evidence.md","reason":"Compare final evidence with the pre-edit installed-runtime baseline."}
+{"file":"DESIGN.md","reason":"Check visible terminal behavior against the project design system if hya-ts changes."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Check that child observation remains read-only and root prompt ownership is unchanged."}
