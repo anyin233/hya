@@ -15,7 +15,7 @@
   "branch": "feat/opencode-version-release-hygiene",
   "base_branch": "main",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "50574964",
+  "commit": "868526c5",
   "pr_url": "https://github.com/anyin233/hya/pull/7",
   "subtasks": [],
   "children": [],

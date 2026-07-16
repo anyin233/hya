@@ -15,7 +15,7 @@
   "branch": "feat/opencode-compat-mcp-import",
   "base_branch": "feat/opencode-version-release-hygiene",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "691e3936",
+  "commit": "1bbdb245",
   "pr_url": "https://github.com/anyin233/hya/pull/9",
   "subtasks": [],
   "children": [],
