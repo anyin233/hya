@@ -119,7 +119,7 @@ test("pinned SDK resolves real shell permissions exactly once", async () => {
   await client.permission.reply({ requestID: listed[0].id, reply: "once" }, { throwOnError: true })
   await allowed
   expect(asked.directory).toBe(project)
-  expect(asked.payload.properties.always).toEqual(["*"])
+  expect(asked.payload.properties.always).toEqual([allowCommand])
   expect(listed).toHaveLength(1)
   expect(listed[0]).toMatchObject({
     id: asked.payload.properties.id,
@@ -127,7 +127,7 @@ test("pinned SDK resolves real shell permissions exactly once", async () => {
     permission: "bash",
     patterns: [allowCommand],
     metadata: {},
-    always: ["*"],
+    always: [allowCommand],
   })
   await waitFor(
     () =>
@@ -267,10 +267,23 @@ test("pinned SDK resolves real question replies and rejections exactly once", as
 
   const created = await client.session.create({ title: "Question lifecycle" }, { throwOnError: true })
   const sessionID = created.data!.id
+  const approveQuestionTool = async () => {
+    await waitFor(
+      async () => (await client.permission.list({}, { throwOnError: true })).data!.length === 1,
+      "question tool permission",
+    )
+    const [asked] = (await client.permission.list({}, { throwOnError: true })).data!
+    expect(asked).toMatchObject({ sessionID, permission: "tool", patterns: ["question"] })
+    await client.permission.reply(
+      { requestID: asked.id, reply: "once" },
+      { throwOnError: true },
+    )
+  }
   await client.session.promptAsync(
     { sessionID, parts: [{ type: "text", text: "reply lifecycle" }] },
     { throwOnError: true },
   )
+  await approveQuestionTool()
   await waitFor(
     () =>
       events.some(
@@ -332,6 +345,7 @@ test("pinned SDK resolves real question replies and rejections exactly once", as
     { sessionID, parts: [{ type: "text", text: "reject lifecycle" }] },
     { throwOnError: true },
   )
+  await approveQuestionTool()
   await waitFor(
     () =>
       events.some(
