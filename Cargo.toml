@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.33.11"
+version = "0.33.12"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
