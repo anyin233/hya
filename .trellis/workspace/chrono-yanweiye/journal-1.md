@@ -214,3 +214,43 @@ Fixed omitted live subagent summary parsing, aligned permission integration test
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Commit and clean shared worktree
+
+**Date**: 2026-07-16
+**Task**: Commit and clean shared worktree
+**Branch**: `main`
+
+### Summary
+
+Committed Trellis and project records, removed unused workspace dependencies, restored the authoritative main-agent indicator at 0.33.10, and verified the full Rust workspace.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8a3865c` | (see git log) |
+| `c95f572a` | (see git log) |
+| `580227b4` | (see git log) |
+| `68a130f8` | (see git log) |
+| `6a645760` | (see git log) |
+| `ab01e22f` | (see git log) |
+| `01b0f4fd` | (see git log) |
+| `e72b1842` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
