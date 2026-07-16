@@ -1,0 +1,7 @@
+{"file":".trellis/tasks/07-14-e2e-gpt56-sol-subagents/prd.md","reason":"Check every requested supported subagent capability and hygiene criterion."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check canonical event evidence, provider routing, and any required source-fix gates."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check installed hya-ts runtime and real PTY evidence."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check model-to-tool-to-event-to-TUI data flow rather than model self-report."}
+{"file":"docs/adr/0001-event-sourced-mailbox-and-channels.md","reason":"Require event-sourced mailbox/channel evidence."}
+{"file":"docs/adr/0002-resident-actor-model-and-autonomous-main-agent.md","reason":"Check resident lifecycle, budgets, wake behavior, and quiescence."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Check real PTY observation and single-input behavior."}

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve provider, event-sourced, verification, and version rules if E2E exposes a source defect."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Preserve installed hya-ts runtime and real PTY verification contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace model, tool, event, persistence, and TUI evidence across every layer."}
+{"file":"docs/adr/0001-event-sourced-mailbox-and-channels.md","reason":"Use canonical team-root events as mailbox/channel evidence."}
+{"file":"docs/adr/0002-resident-actor-model-and-autonomous-main-agent.md","reason":"Bound and verify resident wake, quiescence, and runaway protections."}
+{"file":"docs/adr/0003-tmux-tui-single-input-readonly-panes.md","reason":"Verify the hya-ts read-only subagent observation invariant."}
