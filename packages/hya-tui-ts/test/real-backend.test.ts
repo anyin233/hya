@@ -251,7 +251,7 @@ test("pinned SDK resolves real question replies and rejections exactly once", as
   })
   cleanups.push(async () => provider.stop(true))
 
-  const { project, url } = await startBackend({ yolo: false, providerUrl: `http://127.0.0.1:${provider.port}` })
+  const { project, url } = await startBackend({ yolo: true, providerUrl: `http://127.0.0.1:${provider.port}` })
   const client = createOpencodeClient({ baseUrl: url, directory: project })
   const events: GlobalEvent[] = []
   const eventAbort = new AbortController()
