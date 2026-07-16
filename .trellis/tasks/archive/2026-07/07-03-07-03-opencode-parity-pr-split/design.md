@@ -2,12 +2,12 @@
 
 ## Stack map
 
-| Order | Child task | Branch | Base | Version | PR | Implementation commit |
+| Order | Child task | Branch | Base | Version | PR | PR head commit |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `07-03-opencode-version-release-hygiene` | `feat/opencode-version-release-hygiene` | `main` | `0.33.9` | `#7` | `afd27c7b` |
-| 2 | `07-03-opencode-compat-mcp-import` | `feat/opencode-compat-mcp-import` | version hygiene | `0.33.10` | `#9` | `53794501` |
-| 3 | `07-03-opencode-tui-theme-picker` | `feat/opencode-tui-theme-picker` | Compat MCP import | `0.33.11` | `#8` | `48b3f1fc` |
-| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.12` | `#10` | `353de771` |
+| 1 | `07-03-opencode-version-release-hygiene` | `feat/opencode-version-release-hygiene` | `main` | `0.33.9` | `#7` | `3cc7d384` |
+| 2 | `07-03-opencode-compat-mcp-import` | `feat/opencode-compat-mcp-import` | version hygiene | `0.33.10` | `#9` | `717c8db6` |
+| 3 | `07-03-opencode-tui-theme-picker` | `feat/opencode-tui-theme-picker` | Compat MCP import | `0.33.11` | `#8` | `276ecba9` |
+| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.12` | `#10` | `97fbcdc0` |
 | 5 | control record | `chore/opencode-parity-task-plan` | revert snapshot baseline | docs only | `#11` | this PR |
 
 ## Dependency model

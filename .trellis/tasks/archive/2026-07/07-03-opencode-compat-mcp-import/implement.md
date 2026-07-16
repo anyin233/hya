@@ -6,4 +6,4 @@
 - [x] Preserve unrelated config and hya-only MCP entries, including MCP-only import input.
 - [x] Update configuration documentation and sequential version metadata to `0.33.10`.
 - [x] Run targeted tests, the full Rust CI-equivalent gate, and local executable builds.
-- [x] Commit as `53794501` and safely push stacked PR #9 after fetching its target branches.
+- [x] Commit as `717c8db6` and safely push stacked PR #9 after fetching its target branches.
