@@ -166,7 +166,7 @@ for name in hya hya-backend hya-ts; do
   [[ -x "$install_root/bin/$name" ]] || fail "missing installed binary: $name"
 done
 runtime="$install_root/lib/hya/hya-tui-ts"
-for path in package.json bun.lock bunfig.toml tsconfig.json src/main.tsx LICENSE UPSTREAM.md node_modules/runtime-dependency/package.json; do
+for path in package.json bun.lock bunfig.toml tsconfig.json src/main.tsx LICENSE UPSTREAM.md NOTICE node_modules/runtime-dependency/package.json; do
   [[ -e "$runtime/$path" ]] || fail "missing installed runtime path: $path"
 done
 sdk="$runtime/node_modules/@opencode-ai/sdk"
