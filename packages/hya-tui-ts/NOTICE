@@ -1,0 +1,13 @@
+NOTICE
+
+This package is derived from opencode (https://github.com/anomalyco/opencode),
+which is distributed under the MIT License.
+
+Upstream copyright: Copyright (c) 2025 opencode
+
+The upstream copyright and permission notices are retained in the LICENSE file
+accompanying this package.
+
+Product branding and artwork in this package have been replaced with hya
+project branding. The hya branding and artwork are not covered by the upstream
+license grant.
