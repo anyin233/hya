@@ -195,7 +195,8 @@ run install -m 0755 "$target_dir/hya-backend" "$tmp_backend"
 run install -m 0755 "$target_dir/hya-ts" "$tmp_ts"
 run cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
   packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
-  packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$tmp_runtime/"
+  packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md \
+  packages/hya-tui-ts/NOTICE "$tmp_runtime/"
 run cp -R packages/hya-tui-ts/src/. "$tmp_runtime/src/"
 say "+ (cd $tmp_runtime && bun install --frozen-lockfile --production)"
 if [[ "$dry_run" -eq 0 ]]; then
@@ -237,6 +238,7 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/hya-tui-ts/tsconfig.json"
   test -f "$lib_dir/hya-tui-ts/LICENSE"
   test -f "$lib_dir/hya-tui-ts/UPSTREAM.md"
+  test -f "$lib_dir/hya-tui-ts/NOTICE"
   test -d "$lib_dir/hya-tui-ts/node_modules"
   resolved=$(command -v hya 2>/dev/null || true)
   if [[ "$resolved" != "$bin_dir/hya" ]]; then
@@ -257,6 +259,7 @@ else
   say "+ test -f $lib_dir/hya-tui-ts/tsconfig.json"
   say "+ test -f $lib_dir/hya-tui-ts/LICENSE"
   say "+ test -f $lib_dir/hya-tui-ts/UPSTREAM.md"
+  say "+ test -f $lib_dir/hya-tui-ts/NOTICE"
   say "+ test -d $lib_dir/hya-tui-ts/node_modules"
   say "+ PATH check: command -v hya must resolve to $bin_dir/hya"
 fi
