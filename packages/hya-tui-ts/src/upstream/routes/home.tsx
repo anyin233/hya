@@ -1,6 +1,6 @@
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
-import { Logo } from "../component/logo"
+import { LogoArt } from "../component/logo-art"
 import { useSync } from "../context/sync"
 import { Toast } from "../ui/toast"
 import { useArgs } from "../context/args"
@@ -10,6 +10,7 @@ import { useLocal } from "../context/local"
 import { usePluginRuntime } from "../plugin/runtime"
 import { useEditorContext } from "../context/editor"
 import { useTerminalDimensions } from "@opentui/solid"
+import { useTheme } from "../context/theme"
 import { useTuiConfig } from "../config"
 import { HomeSessionDestinationProvider } from "./home/session-destination"
 
@@ -30,6 +31,7 @@ export function Home() {
   const editor = useEditorContext()
   const dimensions = useTerminalDimensions()
   const tuiConfig = useTuiConfig()
+  const { theme } = useTheme()
   const promptMaxWidth = createMemo(() => {
     const configured = tuiConfig.prompt?.max_width
     if (configured === "auto") return Math.max(75, Math.floor(dimensions().width * 0.7))
@@ -74,9 +76,12 @@ export function Home() {
         <box height={4} minHeight={0} flexShrink={1} />
         <box flexShrink={0}>
           <pluginRuntime.Slot name="home_logo" mode="replace">
-            <Logo />
+            <LogoArt />
           </pluginRuntime.Slot>
         </box>
+        <text fg={theme.textMuted} flexShrink={0}>
+          The 100 Agents Who Really ×∞ Want to Help You
+        </text>
         <box height={1} minHeight={0} flexShrink={1} />
         <box width="100%" maxWidth={promptMaxWidth()} zIndex={1000} paddingTop={1} flexShrink={0}>
           <pluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
