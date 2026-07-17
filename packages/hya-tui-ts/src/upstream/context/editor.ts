@@ -225,7 +225,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
         request("initialize", {
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: {},
-          clientInfo: { name: "opencode", version: "0.0.0" },
+          // MCP servers must not gate on clientInfo.name; no coupling to the old name was found here.
+          clientInfo: { name: "hya", version: "0.0.0" },
         })
       })
 
