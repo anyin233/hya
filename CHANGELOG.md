@@ -2,4 +2,4 @@
 
 - Added a release-metadata regression test that keeps the workspace manifest, lockfile, README, and root changelog on one version.
 - Made the global event compatibility test compare canonical work directories portably on macOS and Linux.
-- Updated the pinned TypeScript TUI fixtures for exact permission patterns, yolo-isolated question lifecycle coverage, and deterministic Main-pane focus during nested PTY permissions.
+- Updated the pinned TypeScript TUI fixtures for exact permission patterns, permission lifecycle coverage, and deterministic Main-pane focus during nested PTY permissions.
