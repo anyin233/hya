@@ -27,6 +27,13 @@ fn release_metadata_matches_hya_package_version() -> Result<(), Box<dyn std::err
         "Cargo.toml [workspace.package] version should match the hya package version"
     );
 
+    let tui_manifest =
+        std::fs::read_to_string(workspace_root.join("packages/hya-tui-ts/package.json"))?;
+    assert!(
+        tui_manifest.contains(&format!("\"version\": \"{VERSION}\"")),
+        "packaged TypeScript TUI version should match the hya package version"
+    );
+
     let lockfile = std::fs::read_to_string(workspace_root.join("Cargo.lock"))?;
     let mismatched = hya_lockfile_version_mismatches(&lockfile);
     assert!(
