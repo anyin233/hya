@@ -7,7 +7,7 @@
 | 1 | `07-03-opencode-version-release-hygiene` | `feat/opencode-version-release-hygiene` | `main` | `0.33.11` | `#7` | `a8c657bd` |
 | 2 | `07-03-opencode-compat-mcp-import` | `feat/opencode-compat-mcp-import` | version hygiene | `0.33.12` | `#9` | `4de8cb0f` |
 | 3 | `07-03-opencode-tui-theme-picker` | `feat/opencode-tui-theme-picker` | Compat MCP import | `0.33.13` | `#8` | `c4f70026` |
-| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.14` | `#10` | `5cd95dec` |
+| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.14` | `#10` | `b81c81d5` |
 | 5 | control record | `chore/opencode-parity-task-plan` | revert snapshot baseline | docs only | `#11` | this PR |
 
 ## Dependency model
