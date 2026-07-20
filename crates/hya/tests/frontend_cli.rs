@@ -29,6 +29,20 @@ fn frontend_without_tty_creates_config_and_exits_cleanly() -> Result<(), Box<dyn
 fn import_compat_imports_model_config_without_tty() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-frontend-import-compat")?;
     let compat_config = env.root.join("opencode.json");
+    let hya_config = env.xdg_config.join("hya/config.yaml");
+    std::fs::create_dir_all(hya_config.parent().ok_or("hya config should have parent")?)?;
+    std::fs::write(
+        &hya_config,
+        r#"
+default_agent: build
+mcp:
+  existing_hya_only:
+    command: ["python3", "server.py"]
+plugins:
+  memory:
+    command: ["python3", "memory.py"]
+"#,
+    )?;
     std::fs::write(
         &compat_config,
         r#"{
@@ -44,6 +58,22 @@ fn import_compat_imports_model_config_without_tty() -> Result<(), Box<dyn std::e
         "gpt-5.5": {},
         "gpt-5.4": {}
       }
+    }
+  },
+  "mcp": {
+    "local_tools": {
+      "type": "local",
+      "command": ["npx", "-y", "@example/mcp"],
+      "environment": {
+        "TOKEN": "{env:MCP_TOKEN}"
+      },
+      "enabled": true,
+      "timeout": 5000
+    },
+    "remote_search": {
+      "type": "remote",
+      "url": "https://mcp.example/sse",
+      "enabled": true
     }
   }
 }"#,
@@ -65,15 +95,42 @@ fn import_compat_imports_model_config_without_tty() -> Result<(), Box<dyn std::e
         "import command should expose the planned skills placeholder:\n{stdout}"
     );
     assert!(
-        stdout.contains("mcp import: TODO"),
-        "import command should expose the planned MCP placeholder:\n{stdout}"
+        !stdout.contains("mcp import: TODO"),
+        "MCP import should no longer be reported as TODO:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("imported 1 local MCP servers and skipped 1 unsupported MCP entries"),
+        "import summary should report local and skipped MCP entries:\n{stdout}"
     );
 
-    let config = std::fs::read_to_string(env.xdg_config.join("hya/config.yaml"))?;
-    assert!(config.contains("default_model: \"gateway/gpt-5.5\""));
-    assert!(config.contains("base_url: \"https://gateway.example/v1\""));
-    assert!(config.contains("api_key: \"{env:GATEWAY_KEY}\""));
-    assert!(config.contains("models: [\"gpt-5.4\", \"gpt-5.5\"]"));
+    let config = std::fs::read_to_string(hya_config)?;
+    for expected in [
+        "default_model: gateway/gpt-5.5",
+        "https://gateway.example/v1",
+        "{env:GATEWAY_KEY}",
+        "gpt-5.4",
+        "gpt-5.5",
+        "default_agent: build",
+        "existing_hya_only:",
+        "memory:",
+        "local_tools:",
+        "npx",
+        "-y",
+        "@example/mcp",
+        "env:",
+        "{env:MCP_TOKEN}",
+        "enabled: true",
+        "timeout_ms: 5000",
+    ] {
+        assert!(
+            config.contains(expected),
+            "written config should contain {expected:?}:\n{config}"
+        );
+    }
+    assert!(
+        !config.contains("remote_search") && !config.contains("https://mcp.example/sse"),
+        "remote MCP entries should be skipped:\n{config}"
+    );
     Ok(())
 }
 

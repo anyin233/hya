@@ -107,8 +107,10 @@ fn import_compat_model_config() -> Result<(), Box<dyn Error>> {
     );
     // TODO(import): import Compat skills after ownership and merge semantics are defined.
     println!("hya: skills import: TODO");
-    // TODO(import): import Compat MCP entries after model-only import settles.
-    println!("hya: mcp import: TODO");
+    println!(
+        "hya: imported {} local MCP servers and skipped {} unsupported MCP entries",
+        summary.mcp_servers, summary.mcp_skipped
+    );
     Ok(())
 }
 
