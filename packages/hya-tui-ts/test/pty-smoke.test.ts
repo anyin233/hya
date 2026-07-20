@@ -496,18 +496,10 @@ async function runChildObservation(columns: number) {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
         const focusMain = async (start: number, label: string) => {
-          process.stdin.write("\x10")
-          await waitFor(async () => {
-            const frame = (await output()).slice(start)
-            return frame.includes("Commands") && frame.includes("Search")
-          }, `${label} command palette`)
-          const filterStart = (await output()).length
-          process.stdin.write("Focus Main pane")
-          await waitFor(
-            async () => (await output()).slice(filterStart).includes("Focus Main pane"),
-            `${label} filtered command`,
-          )
-          process.stdin.write("\x1b[B\r")
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write("0")
+          await waitForMain(start, `${label} Main focus`)
         }
         const confirmMainInput = async (start: number, marker: string) => {
           try {
@@ -726,7 +718,9 @@ async function runChildObservation(columns: number) {
         expect((await output()).slice(permissionStart)).not.toContain("Permission required")
         const focusMainStart = (await output()).length
         try {
-          await focusMain(focusMainStart, "grandchild permission")
+          process.stdin.write("\x18")
+          await Bun.sleep(100)
+          process.stdin.write("0")
           await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main")
         } catch (error) {
           const frame = (await output()).slice(focusMainStart).slice(-5000)
@@ -806,8 +800,13 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(100)
         process.stdin.write("\x1b[B")
         await Bun.sleep(100)
+        const reviewerTabStart = (await output()).length
         process.stdin.write("\r")
-        await waitFor(async () => (await output()).slice(redrawStart).includes(secondChildTranscript), "auxiliary reviewer tab")
+        await waitForFocusedHeader(reviewerTabStart, "reviewer-1")
+        await waitFor(
+          async () => (await output()).slice(reviewerTabStart).includes(secondChildTranscript),
+          "auxiliary reviewer tab",
+        )
         const reviewerMainStart = (await output()).length
         await confirmMainInput(reviewerMainStart, "m81ea")
         process.stdin.write("\x18")
