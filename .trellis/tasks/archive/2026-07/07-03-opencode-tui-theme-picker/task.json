@@ -15,7 +15,7 @@
   "branch": "feat/opencode-tui-theme-picker",
   "base_branch": "feat/opencode-compat-mcp-import",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "5a3d0cd9",
+  "commit": "1bf4aa8b",
   "pr_url": "https://github.com/anyin233/hya/pull/8",
   "subtasks": [],
   "children": [],

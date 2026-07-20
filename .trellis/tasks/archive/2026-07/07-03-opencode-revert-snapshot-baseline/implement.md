@@ -8,4 +8,4 @@
 - [x] Reject outside-workdir, parent-traversal, and symlink-escape restore paths while supporting relative and canonical workdir prefixes.
 - [x] Update parity documentation and sequential version metadata to `0.33.14`.
 - [x] Run targeted tests, the full Rust CI-equivalent gate, and local executable builds.
-- [x] Complete the reviewed PR at `5b2c28a2` and safely push stacked PR #10 after fetching its target branches.
+- [x] Complete the reviewed PR at `42ebbd9d` and safely push stacked PR #10 after fetching its target branches.
