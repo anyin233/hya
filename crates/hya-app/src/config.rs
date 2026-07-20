@@ -776,18 +776,19 @@ fn render_imported_mcp_config(lines: &mut Vec<String>, mcp: &BTreeMap<String, Mc
 }
 
 fn quote_yaml_key(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        value.to_string()
-    } else {
-        quote_yaml_scalar(value)
-    }
+    quote_yaml_scalar(value)
 }
 
 fn quote_yaml_scalar(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ if ch.is_control() => escaped.push_str(&format!("\\u{:04X}", u32::from(ch))),
+            _ => escaped.push(ch),
+        }
+    }
     format!("\"{escaped}\"")
 }
 
@@ -1608,10 +1609,16 @@ plugins:
             &compat,
             r#"{
   "mcp": {
-    "local": {
+    "true": {
       "type": "local",
       "command": ["node", "server.js"],
-      "environment": { "TOKEN": "{env:TOKEN}" },
+      "environment": {
+        "TOKEN": "{env:TOKEN}",
+        "null": "reserved-null",
+        "123": "numeric-key",
+        "": "empty-key",
+        "MULTILINE": "line\nbreak"
+      },
       "enabled": false,
       "timeout": 2500
     },
@@ -1634,7 +1641,7 @@ plugins:
         let file = parse_config(&text).unwrap();
         assert_eq!(file.default_model.as_deref(), Some("offline"));
         assert!(file.providers.is_empty());
-        let local = file.mcp.get("local").unwrap();
+        let local = file.mcp.get("true").unwrap();
         assert_eq!(local.command, vec!["node", "server.js"]);
         assert_eq!(
             local
@@ -1643,6 +1650,38 @@ plugins:
                 .and_then(|env| env.get("TOKEN"))
                 .map(String::as_str),
             Some("{env:TOKEN}")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("null"))
+                .map(String::as_str),
+            Some("reserved-null")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("123"))
+                .map(String::as_str),
+            Some("numeric-key")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get(""))
+                .map(String::as_str),
+            Some("empty-key")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("MULTILINE"))
+                .map(String::as_str),
+            Some("line\nbreak")
         );
         assert_eq!(local.enabled, Some(false));
         assert_eq!(local.timeout_ms, Some(2500));
