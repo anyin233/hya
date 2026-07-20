@@ -6,12 +6,11 @@ Branch: `feat/opencode-tui-theme-picker`
 
 Base: `feat/opencode-compat-mcp-import`
 
-Assigned version: `0.33.11`
+Assigned version: `0.33.13`
 
 Primary files:
 
-- `crates/hya-tui/src/app/command.rs`
-- `crates/hya-tui/src/app/dialog.rs`
+- `crates/hya-tui/src/app/runtime.rs`
 - `crates/hya-tui/src/app/harness.rs`
 - Release metadata files required by AGENTS.
 

@@ -17,6 +17,7 @@ Deliver the remaining OpenCode parity slices as independently reviewable, verifi
 - [x] Each child task records its branch, base, version, red test, implementation, verification gate, commit, and PR.
 - [x] Each feature PR has an atomic implementation commit and passed the full Rust CI-equivalent gate plus local binary builds.
 - [x] The PRs form the mergeable stack `#7 -> #9 -> #8 -> #10 -> #11`, so version and changelog history remain linear.
+- [x] The merge procedure requires retargeting each successor to `main`, inspecting the reduced diff, and waiting for fresh checks after its dependency merges.
 
 ## Notes
 

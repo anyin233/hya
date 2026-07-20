@@ -15,12 +15,12 @@
   "branch": "feat/opencode-tui-theme-picker",
   "base_branch": "feat/opencode-compat-mcp-import",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "a55ecae9",
+  "commit": "c4f70026",
   "pr_url": "https://github.com/anyin233/hya/pull/8",
   "subtasks": [],
   "children": [],
   "parent": "07-03-07-03-opencode-parity-pr-split",
   "relatedFiles": [],
-  "notes": "Version 0.33.11. Full Rust CI-equivalent gate and local hya/hya-backend build passed.",
+  "notes": "Version 0.33.13. Full Rust CI-equivalent gate and local hya/hya-backend build passed.",
   "meta": {}
 }

@@ -15,12 +15,12 @@
   "branch": "feat/opencode-version-release-hygiene",
   "base_branch": "main",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "beb0b296",
+  "commit": "a8c657bd",
   "pr_url": "https://github.com/anyin233/hya/pull/7",
   "subtasks": [],
   "children": [],
   "parent": "07-03-07-03-opencode-parity-pr-split",
   "relatedFiles": [],
-  "notes": "Version 0.33.9. Rust gates, local binaries, Bun 1.3.14 typecheck/build, and non-Linux-PTY tests passed; Linux PTY coverage runs in CI.",
+  "notes": "Version 0.33.11. Full Rust gates and local binaries passed; the pinned Bun runtime suite is validated by PR CI.",
   "meta": {}
 }

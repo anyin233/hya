@@ -6,7 +6,7 @@ Branch: `feat/opencode-compat-mcp-import`
 
 Base: `feat/opencode-version-release-hygiene`
 
-Assigned version: `0.33.10`
+Assigned version: `0.33.12`
 
 Primary files:
 

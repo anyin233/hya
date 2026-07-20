@@ -4,15 +4,17 @@
 
 | Order | Child task | Branch | Base | Version | PR | PR head commit |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `07-03-opencode-version-release-hygiene` | `feat/opencode-version-release-hygiene` | `main` | `0.33.9` | `#7` | `beb0b296` |
-| 2 | `07-03-opencode-compat-mcp-import` | `feat/opencode-compat-mcp-import` | version hygiene | `0.33.10` | `#9` | `877f9b2a` |
-| 3 | `07-03-opencode-tui-theme-picker` | `feat/opencode-tui-theme-picker` | Compat MCP import | `0.33.11` | `#8` | `a55ecae9` |
-| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.12` | `#10` | `b2669312` |
+| 1 | `07-03-opencode-version-release-hygiene` | `feat/opencode-version-release-hygiene` | `main` | `0.33.11` | `#7` | `a8c657bd` |
+| 2 | `07-03-opencode-compat-mcp-import` | `feat/opencode-compat-mcp-import` | version hygiene | `0.33.12` | `#9` | `4de8cb0f` |
+| 3 | `07-03-opencode-tui-theme-picker` | `feat/opencode-tui-theme-picker` | Compat MCP import | `0.33.13` | `#8` | `c4f70026` |
+| 4 | `07-03-opencode-revert-snapshot-baseline` | `feat/opencode-revert-snapshot-baseline` | TUI theme picker | `0.33.14` | `#10` | `5cd95dec` |
 | 5 | control record | `chore/opencode-parity-task-plan` | revert snapshot baseline | docs only | `#11` | this PR |
 
 ## Dependency model
 
-The business-code write sets remain separated by feature. Release metadata is shared by project rule, so the PR bases encode a linear stack rather than leaving version/changelog conflicts for merge time. Merge bottom-up in the table order.
+The business-code write sets remain separated by feature. Release metadata is shared by project rule, so the PR bases encode a linear stack rather than leaving version/changelog conflicts for merge time.
+
+Merge bottom-up in the table order. After each PR merges, fetch `origin/main`, retarget the immediate successor PR to `main`, verify that its diff now contains only its own slice, and wait for the retarget-triggered checks to pass before merging it. Repeat through #11; an ordering note alone is not sufficient because leaving the successor based on the merged feature branch can keep it blocked or produce a stale comparison.
 
 Each feature slice follows the same contract:
 

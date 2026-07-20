@@ -6,7 +6,7 @@ Branch: `feat/opencode-revert-snapshot-baseline`
 
 Base: `feat/opencode-tui-theme-picker`
 
-Assigned version: `0.33.12`
+Assigned version: `0.33.14`
 
 Primary files:
 
@@ -28,13 +28,13 @@ For new edit tool results, add metadata fields under the existing `metadata.file
 }
 ```
 
-The server should treat these as optional. Existing event logs without snapshots must still return the current revert metadata and diff response without writing files.
+The snapshot strings include the UTF-8 BOM when present and reflect the actual file after formatter execution. The tool-result `created` flag distinguishes a new file from an emptied existing file. The server treats these fields as optional; existing event logs without snapshots retain metadata-only behavior.
 
 ## Restore behavior
 
-On `revert`, replay target tool results, retain the earliest before snapshot and latest after snapshot per normalized relative file, and write `beforeContent` back under the session workdir. On `unrevert`, write `afterContent`.
+On `revert`, replay target tool results, retain the earliest before snapshot and latest after snapshot per normalized relative file, and write `beforeContent` back under the session workdir. A file created by the earliest matching edit is removed instead. On `unrevert`, write or recreate `afterContent`.
 
-Path safety rejects absolute and parent-traversal paths and canonicalizes the nearest existing ancestor to prevent symlink escapes from the session workdir. Restoration surfaces I/O errors as API errors rather than silently claiming success.
+Path safety accepts both raw and canonical workdir prefixes, rejects parent traversal, and canonicalizes the nearest existing ancestor to prevent symlink escapes from the session workdir. This supports relative workdirs and macOS `/tmp` canonicalization without weakening containment. Restoration surfaces I/O errors as API errors rather than silently claiming success.
 
 ## Non-goals
 

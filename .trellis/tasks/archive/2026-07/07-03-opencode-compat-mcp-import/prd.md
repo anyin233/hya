@@ -17,7 +17,8 @@ Extend hya Compat import so local stdio MCP server entries migrate into hya conf
 - [x] Local MCP config with `type: "local"`, `command`, `environment`, `enabled`, and `timeout` becomes hya `mcp.<name>.command/env/enabled/timeout_ms`.
 - [x] Remote/OAuth MCP entries are skipped and counted without being serialized as fake local configs.
 - [x] Existing hya-only MCP entries and unrelated config sections survive import, including MCP-only imports.
-- [x] Version `0.33.10` metadata, full Rust CI-equivalent checks, and local binary builds are complete.
+- [x] Imported YAML safely round-trips reserved, numeric, empty, and control-character-bearing names and values.
+- [x] Version `0.33.12` metadata, full Rust CI-equivalent checks, and local binary builds are complete.
 
 ## Notes
 

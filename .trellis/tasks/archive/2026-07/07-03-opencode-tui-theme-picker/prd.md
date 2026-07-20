@@ -17,7 +17,7 @@ Add a bounded /themes TUI flow with named built-in themes and controller/render 
 - [x] `/themes` opens a dialog listing named themes, marks the current theme, and preselects it.
 - [x] Selecting a theme updates `AppState` immediately and subsequent draw calls use it.
 - [x] Built-in command help/completion include `/theme` and `/themes`.
-- [x] Version `0.33.11` metadata, full Rust CI-equivalent checks, and local binary builds are complete.
+- [x] Version `0.33.13` metadata, full Rust CI-equivalent checks, and local binary builds are complete.
 
 ## Notes
 

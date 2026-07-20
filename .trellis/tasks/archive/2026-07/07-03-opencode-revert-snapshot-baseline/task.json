@@ -15,12 +15,12 @@
   "branch": "feat/opencode-revert-snapshot-baseline",
   "base_branch": "feat/opencode-tui-theme-picker",
   "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
-  "commit": "b2669312",
+  "commit": "5cd95dec",
   "pr_url": "https://github.com/anyin233/hya/pull/10",
   "subtasks": [],
   "children": [],
   "parent": "07-03-07-03-opencode-parity-pr-split",
   "relatedFiles": [],
-  "notes": "Version 0.33.12. Full Rust CI-equivalent gate and local hya/hya-backend build passed.",
+  "notes": "Version 0.33.14. Full Rust CI-equivalent gate and local hya/hya-backend build passed after lossless snapshot review fixes.",
   "meta": {}
 }
