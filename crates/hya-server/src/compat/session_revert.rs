@@ -211,6 +211,7 @@ struct FileSnapshot {
     relative: PathBuf,
     before: String,
     after: String,
+    created: bool,
 }
 
 async fn restore_snapshots(
@@ -228,19 +229,29 @@ async fn restore_snapshots(
     let canonical_workdir = tokio::fs::canonicalize(workdir)
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let snapshots = collect_snapshots(&envs, workdir, target)?;
+    let snapshots = collect_snapshots(&envs, workdir, &canonical_workdir, target)?;
     for snapshot in snapshots.into_values() {
+        let path = checked_restore_path(&canonical_workdir, &canonical_workdir, &snapshot.relative)
+            .await?;
+        if matches!(direction, SnapshotDirection::Before) && snapshot.created {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(ApiError::internal(error.to_string())),
+            }
+            continue;
+        }
         let content = match direction {
             SnapshotDirection::Before => snapshot.before,
             SnapshotDirection::After => snapshot.after,
         };
-        let path = checked_restore_path(workdir, &canonical_workdir, &snapshot.relative).await?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| ApiError::internal(error.to_string()))?;
-            ensure_existing_path_within(&canonical_workdir, parent).await?;
-        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| ApiError::bad_request("cannot restore file without parent"))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        ensure_existing_path_within(&canonical_workdir, parent).await?;
         tokio::fs::write(path, content)
             .await
             .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -251,6 +262,7 @@ async fn restore_snapshots(
 fn collect_snapshots(
     envs: &[Envelope],
     workdir: &FsPath,
+    canonical_workdir: &FsPath,
     target: super::session_diff::DiffTarget,
 ) -> Result<BTreeMap<String, FileSnapshot>, ApiError> {
     let mut snapshots = BTreeMap::new();
@@ -267,7 +279,7 @@ fn collect_snapshots(
         if !matches_target(*message, *part, target) {
             continue;
         }
-        if let Some(snapshot) = output_snapshot(output, workdir)? {
+        if let Some(snapshot) = output_snapshot(output, workdir, canonical_workdir)? {
             merge_snapshot(&mut snapshots, snapshot);
         }
     }
@@ -298,7 +310,11 @@ fn matches_target(
     true
 }
 
-fn output_snapshot(output: &Value, workdir: &FsPath) -> Result<Option<FileSnapshot>, ApiError> {
+fn output_snapshot(
+    output: &Value,
+    workdir: &FsPath,
+    canonical_workdir: &FsPath,
+) -> Result<Option<FileSnapshot>, ApiError> {
     let Some(object) = output
         .pointer("/metadata/filediff")
         .and_then(Value::as_object)
@@ -314,11 +330,16 @@ fn output_snapshot(output: &Value, workdir: &FsPath) -> Result<Option<FileSnapsh
     let Some(after) = object.get("afterContent").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let relative = safe_relative_path(workdir, file)?;
+    let created = output
+        .get("created")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let relative = safe_relative_path(workdir, canonical_workdir, file)?;
     Ok(Some(FileSnapshot {
         relative,
         before: before.to_string(),
         after: after.to_string(),
+        created,
     }))
 }
 
@@ -328,10 +349,15 @@ fn snapshot_file_name(object: &Map<String, Value>) -> Option<&str> {
         .find_map(|key| object.get(key).and_then(Value::as_str))
 }
 
-fn safe_relative_path(workdir: &FsPath, raw: &str) -> Result<PathBuf, ApiError> {
+fn safe_relative_path(
+    workdir: &FsPath,
+    canonical_workdir: &FsPath,
+    raw: &str,
+) -> Result<PathBuf, ApiError> {
     let path = FsPath::new(raw);
     let relative = if path.is_absolute() {
         path.strip_prefix(workdir)
+            .or_else(|_| path.strip_prefix(canonical_workdir))
             .map_err(|_| ApiError::bad_request("cannot restore file outside session workdir"))?
     } else {
         path
@@ -422,6 +448,7 @@ mod tests {
                 relative: PathBuf::from("same.txt"),
                 before: "old".to_string(),
                 after: "middle".to_string(),
+                created: true,
             },
         );
         merge_snapshot(
@@ -430,6 +457,7 @@ mod tests {
                 relative: PathBuf::from("same.txt"),
                 before: "middle".to_string(),
                 after: "new".to_string(),
+                created: false,
             },
         );
 
@@ -439,6 +467,7 @@ mod tests {
                 relative: PathBuf::from("same.txt"),
                 before: "old".to_string(),
                 after: "new".to_string(),
+                created: true,
             })
         );
     }
@@ -451,5 +480,27 @@ mod tests {
         );
         assert_eq!(clean_relative_path(FsPath::new("../escape.txt")), None);
         assert_eq!(clean_relative_path(FsPath::new("/absolute.txt")), None);
+    }
+
+    #[test]
+    fn safe_relative_path_accepts_raw_or_canonical_workdir_prefix() {
+        assert_eq!(
+            safe_relative_path(
+                FsPath::new("/tmp/work"),
+                FsPath::new("/private/tmp/work"),
+                "/tmp/work/file.txt",
+            )
+            .ok(),
+            Some(PathBuf::from("file.txt"))
+        );
+        assert_eq!(
+            safe_relative_path(
+                FsPath::new("relative/work"),
+                FsPath::new("/repo/relative/work"),
+                "/repo/relative/work/file.txt",
+            )
+            .ok(),
+            Some(PathBuf::from("file.txt"))
+        );
     }
 }

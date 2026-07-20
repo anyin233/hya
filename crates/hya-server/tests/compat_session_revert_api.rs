@@ -18,16 +18,24 @@ use tower::ServiceExt;
 
 const WORKDIR: &str = "/tmp/hya-compat-session-revert-api";
 
-async fn state(target_file: &str) -> AppState {
-    std::fs::create_dir_all(WORKDIR).unwrap();
-    std::fs::write(format!("{WORKDIR}/{target_file}"), "old\n").unwrap();
+async fn state_at(workdir: &str, target_file: &str, initial: Option<&str>) -> AppState {
+    std::fs::create_dir_all(workdir).unwrap();
+    let target_path = format!("{workdir}/{target_file}");
+    match initial {
+        Some(content) => std::fs::write(&target_path, content).unwrap(),
+        None => match std::fs::remove_file(&target_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove stale target: {error}"),
+        },
+    }
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
                     "filePath": target_file,
-                    "oldString": "old\n",
+                    "oldString": initial.unwrap_or_default(),
                     "newString": "new\n",
                 }),
             },
@@ -52,10 +60,14 @@ async fn state(target_file: &str) -> AppState {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
-            workdir: WORKDIR.into(),
+            workdir: workdir.into(),
             reasoning: None,
         }),
     )
+}
+
+async fn state(target_file: &str) -> AppState {
+    state_at(WORKDIR, target_file, Some("old\n")).await
 }
 
 async fn two_edit_state() -> AppState {
@@ -136,16 +148,68 @@ async fn body_json(resp: axum::response::Response) -> Value {
 }
 
 async fn create_session(app: axum::Router) -> String {
+    create_session_at(app, WORKDIR).await
+}
+
+async fn create_session_at(app: axum::Router, workdir: &str) -> String {
     let response = request(
         app,
         "POST",
         "/sessions",
-        Some(json!({"agent": "build", "model": "fake", "workdir": WORKDIR})),
+        Some(json!({"agent": "build", "model": "fake", "workdir": workdir})),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let created: CreateSessionResponse = serde_json::from_value(body_json(response).await).unwrap();
     created.session.to_string()
+}
+
+#[tokio::test]
+async fn compat_session_revert_removes_created_file_and_unrevert_recreates_it() {
+    let target_file = "created-revert-target.txt";
+    let target_path = format!("{WORKDIR}/{target_file}");
+    let app = router(state_at(WORKDIR, target_file, None).await);
+    let session = create_session(app.clone()).await;
+    let message = prompt_message(app.clone(), &session).await;
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new\n");
+
+    let reverted = request(
+        app.clone(),
+        "POST",
+        &format!("/session/{session}/revert"),
+        Some(json!({"messageID": message})),
+    )
+    .await;
+    assert_eq!(reverted.status(), StatusCode::OK);
+    assert!(!std::path::Path::new(&target_path).exists());
+
+    let unreverted = request(app, "POST", &format!("/session/{session}/unrevert"), None).await;
+    assert_eq!(unreverted.status(), StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new\n");
+}
+
+#[tokio::test]
+async fn compat_session_revert_restores_snapshots_for_relative_workdir() {
+    let workdir = format!(
+        "../../target/hya-compat-relative-revert-{}",
+        std::process::id()
+    );
+    let target_file = "relative-revert-target.txt";
+    let target_path = format!("{workdir}/{target_file}");
+    let app = router(state_at(&workdir, target_file, Some("old\n")).await);
+    let session = create_session_at(app.clone(), &workdir).await;
+    let message = prompt_message(app.clone(), &session).await;
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "new\n");
+
+    let reverted = request(
+        app,
+        "POST",
+        &format!("/session/{session}/revert"),
+        Some(json!({"messageID": message})),
+    )
+    .await;
+    assert_eq!(reverted.status(), StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "old\n");
 }
 
 async fn wait_until_busy(app: axum::Router, session: &str) {
