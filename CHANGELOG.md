@@ -1,5 +1,6 @@
-# 0.33.11
+# 0.33.12
 
-- Added a release-metadata regression test that keeps the workspace manifest, lockfile, packaged TypeScript TUI manifest, README, and root changelog on one version.
-- Made the global event compatibility test compare canonical work directories portably on macOS and Linux.
-- Updated the pinned TypeScript TUI fixtures for exact permission patterns, permission lifecycle coverage, and deterministic Main-pane focus during nested PTY permissions.
+- Added Compat import support for local stdio MCP servers, including command, environment, enabled state, and timeout mapping.
+- Preserved hya-only MCP and non-model configuration while skipping and reporting unsupported remote/OAuth MCP entries.
+- Added CLI and config coverage for mixed provider/MCP imports and MCP-only imports.
+- Quoted imported MCP and environment keys and escaped control characters so YAML-reserved names and multiline values round-trip safely.

@@ -192,6 +192,8 @@ pub struct CompatImportSummary {
     pub config_path: PathBuf,
     pub providers: usize,
     pub models: usize,
+    pub mcp_servers: usize,
+    pub mcp_skipped: usize,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -266,19 +268,21 @@ pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     };
     eprintln!("hya: found Compat config at {}", compat_path.display());
     eprintln!(
-        "hya: import copies provider base URLs, model IDs, and API key values/templates into hya config"
+        "hya: import copies provider base URLs, model IDs, API key values/templates, and local MCP entries into hya config"
     );
-    if !prompt_yes_no("hya: import Compat model config now?")? {
+    if !prompt_yes_no("hya: import Compat model and local MCP config now?")? {
         eprintln!("hya: keeping the starter config; edit it later to add live providers");
         return Ok(());
     }
 
     match import_compat_models_into_config(&compat_path, &created.path) {
         Ok(summary) => eprintln!(
-            "hya: imported {} providers and {} models into {}",
+            "hya: imported {} providers, {} models, and {} local MCP servers into {} (skipped {} unsupported MCP entries)",
             summary.providers,
             summary.models,
-            summary.config_path.display()
+            summary.mcp_servers,
+            summary.config_path.display(),
+            summary.mcp_skipped,
         ),
         Err(error) => eprintln!("hya: Compat import skipped ({error:#})"),
     }
@@ -383,6 +387,8 @@ struct CompatModelConfig {
     provider: BTreeMap<String, CompatProviderConfig>,
     #[serde(default)]
     disabled_providers: Vec<String>,
+    #[serde(default)]
+    mcp: BTreeMap<String, CompatMcpConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -405,6 +411,22 @@ struct CompatProviderOptions {
     api_key: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct CompatMcpConfig {
+    #[serde(default, rename = "type")]
+    server_type: Option<String>,
+    #[serde(default)]
+    command: Vec<String>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    timeout: Option<u64>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
 #[derive(Debug)]
 struct ImportedProvider {
     id: String,
@@ -412,6 +434,11 @@ struct ImportedProvider {
     base_url: String,
     api_key: Option<String>,
     models: Vec<String>,
+}
+
+struct ImportedMcpServers {
+    servers: BTreeMap<String, McpServerConfig>,
+    skipped: usize,
 }
 
 pub fn import_compat_models_into_config(
@@ -423,12 +450,18 @@ pub fn import_compat_models_into_config(
     let config = parse_compat_model_config(&raw)
         .with_context(|| format!("parse Compat config {}", compat_config_path.display()))?;
     let providers = imported_compat_providers(&config);
-    if providers.is_empty() {
-        anyhow::bail!("Compat config has no importable provider models");
+    let mcp = imported_compat_mcp_servers(&config);
+    if providers.is_empty() && mcp.servers.is_empty() {
+        anyhow::bail!("Compat config has no importable provider models or local MCP servers");
     }
-    let default_model = imported_default_model(&config, &providers);
-    let rendered =
-        render_model_only_imported_hya_config(hya_config_path, &default_model, &providers)?;
+    let default_model =
+        (!providers.is_empty()).then(|| imported_default_model(&config, &providers));
+    let rendered = render_imported_hya_config_for_path(
+        hya_config_path,
+        default_model.as_deref(),
+        &providers,
+        &mcp.servers,
+    )?;
     let parent = hya_config_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -442,25 +475,29 @@ pub fn import_compat_models_into_config(
         config_path: hya_config_path.to_path_buf(),
         providers: providers.len(),
         models: providers.iter().map(|provider| provider.models.len()).sum(),
+        mcp_servers: mcp.servers.len(),
+        mcp_skipped: mcp.skipped,
     })
 }
 
-fn render_model_only_imported_hya_config(
+fn render_imported_hya_config_for_path(
     hya_config_path: &Path,
-    default_model: &str,
+    default_model: Option<&str>,
     providers: &[ImportedProvider],
+    mcp: &BTreeMap<String, McpServerConfig>,
 ) -> anyhow::Result<String> {
-    let imported = render_imported_hya_config(default_model, providers);
+    let imported = render_imported_hya_config(default_model, providers, mcp);
     if hya_config_path.exists() {
-        merge_model_import_into_existing_config(hya_config_path, &imported)
+        merge_import_into_existing_config(hya_config_path, &imported, !providers.is_empty())
     } else {
         Ok(imported)
     }
 }
 
-fn merge_model_import_into_existing_config(
+fn merge_import_into_existing_config(
     hya_config_path: &Path,
     imported_yaml: &str,
+    replace_models: bool,
 ) -> anyhow::Result<String> {
     let existing_raw = std::fs::read_to_string(hya_config_path)
         .with_context(|| format!("read existing hya config {}", hya_config_path.display()))?;
@@ -480,12 +517,37 @@ fn merge_model_import_into_existing_config(
         Value::Mapping(map) => map,
         _ => anyhow::bail!("rendered hya model import root must be a mapping"),
     };
-    for key in ["default_model", "providers"] {
-        if let Some(value) = imported_map.get(key).cloned() {
-            existing_map.insert(Value::String(key.to_string()), value);
+    if replace_models {
+        for key in ["default_model", "providers"] {
+            if let Some(value) = imported_map.get(key).cloned() {
+                existing_map.insert(Value::String(key.to_string()), value);
+            }
         }
     }
+    if let Some(imported_mcp) = imported_map.get("mcp") {
+        merge_imported_mcp(&mut existing_map, imported_mcp)?;
+    }
     serde_norway::to_string(&Value::Mapping(existing_map)).context("render merged hya config")
+}
+
+fn merge_imported_mcp(existing_map: &mut Mapping, imported_mcp: &Value) -> anyhow::Result<()> {
+    let Value::Mapping(imported_mcp_map) = imported_mcp else {
+        anyhow::bail!("rendered hya MCP import must be a mapping");
+    };
+    if imported_mcp_map.is_empty() {
+        return Ok(());
+    }
+    let mcp_key = Value::String("mcp".to_string());
+    let mut merged_mcp = match existing_map.remove(&mcp_key) {
+        Some(Value::Mapping(existing_mcp)) => existing_mcp,
+        Some(Value::Null) | None => Mapping::new(),
+        Some(_) => anyhow::bail!("existing hya config mcp must be a mapping for Compat import"),
+    };
+    for (key, value) in imported_mcp_map {
+        merged_mcp.insert(key.clone(), value.clone());
+    }
+    existing_map.insert(mcp_key, Value::Mapping(merged_mcp));
+    Ok(())
 }
 
 fn parse_compat_model_config(raw: &str) -> anyhow::Result<CompatModelConfig> {
@@ -547,6 +609,44 @@ fn imported_compat_providers(config: &CompatModelConfig) -> Vec<ImportedProvider
     providers
 }
 
+fn imported_compat_mcp_servers(config: &CompatModelConfig) -> ImportedMcpServers {
+    let mut servers = BTreeMap::new();
+    let mut skipped = 0;
+    for (name, server) in &config.mcp {
+        if !is_importable_local_mcp(server) {
+            skipped += 1;
+            continue;
+        }
+        let env = (!server.environment.is_empty()).then(|| server.environment.clone());
+        servers.insert(
+            name.clone(),
+            McpServerConfig {
+                command: server.command.clone(),
+                env,
+                enabled: server.enabled,
+                timeout_ms: server.timeout,
+            },
+        );
+    }
+    ImportedMcpServers { servers, skipped }
+}
+
+fn is_importable_local_mcp(server: &CompatMcpConfig) -> bool {
+    server
+        .server_type
+        .as_deref()
+        .is_some_and(|server_type| server_type.eq_ignore_ascii_case("local"))
+        && server
+            .url
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        && server
+            .command
+            .first()
+            .is_some_and(|part| !part.trim().is_empty())
+}
+
 fn compat_provider_kind(id: &str, provider: &CompatProviderConfig) -> &'static str {
     let text = format!(
         "{} {} {}",
@@ -592,36 +692,46 @@ fn served_imported_model(model: &str, providers: &[ImportedProvider]) -> Option<
     None
 }
 
-fn render_imported_hya_config(default_model: &str, providers: &[ImportedProvider]) -> String {
-    let mut lines = vec![
-        "# Generated by hya first-run Compat import.".to_string(),
-        format!("default_model: {}", quote_yaml_scalar(default_model)),
-        "providers:".to_string(),
-    ];
-    for provider in providers {
-        lines.push(format!("  {}:", quote_yaml_scalar(&provider.id)));
-        lines.push(format!("    kind: {}", provider.kind));
+fn render_imported_hya_config(
+    default_model: Option<&str>,
+    providers: &[ImportedProvider],
+    mcp: &BTreeMap<String, McpServerConfig>,
+) -> String {
+    let mut lines = vec!["# Generated by hya first-run Compat import.".to_string()];
+    if let Some(default_model) = default_model {
         lines.push(format!(
-            "    base_url: {}",
-            quote_yaml_scalar(&provider.base_url)
+            "default_model: {}",
+            quote_yaml_scalar(default_model)
         ));
-        if let Some(api_key) = provider
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            lines.push(format!("    api_key: {}", quote_yaml_scalar(api_key)));
+        lines.push("providers:".to_string());
+        for provider in providers {
+            lines.push(format!("  {}:", quote_yaml_scalar(&provider.id)));
+            lines.push(format!("    kind: {}", provider.kind));
+            lines.push(format!(
+                "    base_url: {}",
+                quote_yaml_scalar(&provider.base_url)
+            ));
+            if let Some(api_key) = provider
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                lines.push(format!("    api_key: {}", quote_yaml_scalar(api_key)));
+            }
+            let models = provider
+                .models
+                .iter()
+                .map(|model| quote_yaml_scalar(model))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("    models: [{models}]"));
         }
-        let models = provider
-            .models
-            .iter()
-            .map(|model| quote_yaml_scalar(model))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("    models: [{models}]"));
+    } else {
+        lines.push("default_model: offline".to_string());
+        lines.push("providers: {}".to_string());
     }
-    lines.push("mcp: {}".to_string());
+    render_imported_mcp_config(&mut lines, mcp);
     lines.push("plugins: {}".to_string());
     lines.push("permission:".to_string());
     lines.push("  model: default".to_string());
@@ -631,8 +741,54 @@ fn render_imported_hya_config(default_model: &str, providers: &[ImportedProvider
     out
 }
 
+fn render_imported_mcp_config(lines: &mut Vec<String>, mcp: &BTreeMap<String, McpServerConfig>) {
+    if mcp.is_empty() {
+        lines.push("mcp: {}".to_string());
+        return;
+    }
+    lines.push("mcp:".to_string());
+    for (name, server) in mcp {
+        lines.push(format!("  {}:", quote_yaml_key(name)));
+        let command = server
+            .command
+            .iter()
+            .map(|part| quote_yaml_scalar(part))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("    command: [{command}]"));
+        if let Some(env) = server.env.as_ref().filter(|env| !env.is_empty()) {
+            lines.push("    env:".to_string());
+            for (key, value) in env {
+                lines.push(format!(
+                    "      {}: {}",
+                    quote_yaml_key(key),
+                    quote_yaml_scalar(value)
+                ));
+            }
+        }
+        if let Some(enabled) = server.enabled {
+            lines.push(format!("    enabled: {enabled}"));
+        }
+        if let Some(timeout_ms) = server.timeout_ms {
+            lines.push(format!("    timeout_ms: {timeout_ms}"));
+        }
+    }
+}
+
+fn quote_yaml_key(value: &str) -> String {
+    quote_yaml_scalar(value)
+}
+
 fn quote_yaml_scalar(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            _ if ch.is_control() => escaped.push_str(&format!("\\u{:04X}", u32::from(ch))),
+            _ => escaped.push(ch),
+        }
+    }
     format!("\"{escaped}\"")
 }
 
@@ -1436,6 +1592,100 @@ plugins:
         assert!(text.contains("memory:"));
         assert!(text.contains("gateway:"));
         assert!(!text.contains("old-model"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_compat_accepts_local_mcp_without_provider_models() {
+        let dir =
+            std::env::temp_dir().join(format!("hya-compat-mcp-only-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let compat = dir.join("opencode.json");
+        let hya_config = dir.join("hya/config.yaml");
+
+        std::fs::write(
+            &compat,
+            r#"{
+  "mcp": {
+    "true": {
+      "type": "local",
+      "command": ["node", "server.js"],
+      "environment": {
+        "TOKEN": "{env:TOKEN}",
+        "null": "reserved-null",
+        "123": "numeric-key",
+        "": "empty-key",
+        "MULTILINE": "line\nbreak"
+      },
+      "enabled": false,
+      "timeout": 2500
+    },
+    "remote": {
+      "type": "remote",
+      "url": "https://example.invalid/mcp"
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let summary = import_compat_models_into_config(&compat, &hya_config).unwrap();
+
+        assert_eq!(summary.providers, 0);
+        assert_eq!(summary.models, 0);
+        assert_eq!(summary.mcp_servers, 1);
+        assert_eq!(summary.mcp_skipped, 1);
+        let text = std::fs::read_to_string(&hya_config).unwrap();
+        let file = parse_config(&text).unwrap();
+        assert_eq!(file.default_model.as_deref(), Some("offline"));
+        assert!(file.providers.is_empty());
+        let local = file.mcp.get("true").unwrap();
+        assert_eq!(local.command, vec!["node", "server.js"]);
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("TOKEN"))
+                .map(String::as_str),
+            Some("{env:TOKEN}")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("null"))
+                .map(String::as_str),
+            Some("reserved-null")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("123"))
+                .map(String::as_str),
+            Some("numeric-key")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get(""))
+                .map(String::as_str),
+            Some("empty-key")
+        );
+        assert_eq!(
+            local
+                .env
+                .as_ref()
+                .and_then(|env| env.get("MULTILINE"))
+                .map(String::as_str),
+            Some("line\nbreak")
+        );
+        assert_eq!(local.enabled, Some(false));
+        assert_eq!(local.timeout_ms, Some(2500));
+        assert!(!file.mcp.contains_key("remote"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

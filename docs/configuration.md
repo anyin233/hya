@@ -311,19 +311,22 @@ new tools into an already running engine.
 
 ### Compat migration into hya
 
-Interactive first-run startup can import Compat provider/model config into
-`config.yaml`. You can also run the model import explicitly without starting a
-TUI:
+Interactive first-run startup can import Compat provider/model and local MCP
+config into `config.yaml`. You can also run the import explicitly without
+starting a TUI:
 
 ```sh
 hya --import compat
 ```
 
-The explicit import currently supports only Compat and only model/provider
-config. It replaces `default_model` and `providers` in `config.yaml`, while
-preserving existing non-model sections such as `mcp`, `plugins`, and
-`default_agent`. The command prints TODO placeholders for skills and MCP import;
-future sources such as Codex and Claude are reserved but not implemented yet.
+The explicit import currently supports Compat provider/model config and local
+stdio MCP entries. It replaces `default_model` and `providers` in `config.yaml`,
+merges imported MCP servers by name, and preserves existing hya-only MCP entries
+plus non-model sections such as `plugins` and `default_agent`. Compat
+`type: "local"`, `command`, `environment`, `enabled`, and `timeout` map to hya
+`command`, `env`, `enabled`, and `timeout_ms`. Remote/OAuth MCP entries are
+skipped and counted in the command summary. Skills remain a TODO; future import
+sources such as Codex and Claude are reserved but not implemented yet.
 
 To mirror Compat-owned MCP and skill surfaces into the default hya runtime,
 use the workspace xtask migration entrypoint:
