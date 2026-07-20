@@ -84,7 +84,7 @@ const CONNECTING_TIP: &str =
 const CONNECTING_PLACEHOLDER: &str = "Starting backend\u{2026} type to queue a prompt";
 const BUILTIN_SLASH_COMMANDS: &[&str] = &[
     "help", "model", "models", "new", "clear", "agent", "agents", "sessions", "resume", "compact",
-    "tools", "mcp", "think", "export", "quit", "exit", "q", "?",
+    "tools", "mcp", "think", "theme", "themes", "export", "quit", "exit", "q", "?",
 ];
 
 const PALETTE_TUI_COMMANDS: &[(&str, &str, &str, &str, bool)] = &[
@@ -490,6 +490,7 @@ fn builtin_client_command(text: &str) -> Option<&'static str> {
         "compact" => Some(COMMAND_SESSION_COMPACT),
         "tools" | "mcp" => Some(COMMAND_HYA_STATUS),
         "think" => Some(COMMAND_VARIANT_LIST),
+        "theme" | "themes" => Some(COMMAND_THEME_LIST),
         "export" => Some(COMMAND_SESSION_EXPORT),
         "?" => Some(COMMAND_HELP),
         _ => None,
@@ -969,6 +970,12 @@ impl Runtime {
                 .map(|item| item.value.clone())
                 .collect(),
         })
+    }
+
+    /// Test seam: the selected built-in theme name after dialog selection.
+    #[cfg(test)]
+    pub(crate) fn active_theme_name(&self) -> &str {
+        &self.theme_name
     }
 
     pub(crate) async fn draw(&mut self) -> Result<(), AppRunError> {
@@ -2307,7 +2314,14 @@ impl Runtime {
             DialogKind::ThemeList => self
                 .theme_names
                 .iter()
-                .map(|name| DialogSelectItem::new(name.clone(), name.clone()))
+                .map(|name| {
+                    let item = DialogSelectItem::new(name.clone(), name.clone());
+                    if name == &self.theme_name {
+                        item.with_description("current")
+                    } else {
+                        item
+                    }
+                })
                 .collect(),
             DialogKind::Help => {
                 let mut items: Vec<DialogSelectItem<String>> =
@@ -2330,7 +2344,17 @@ impl Runtime {
             DialogKind::Roster => self.roster_dialog_items(),
             DialogKind::Channels => self.channels_dialog_items(),
         };
-        self.dialog = Some(ActiveDialog::new(DialogSelect::new(items), kind));
+        let mut active = ActiveDialog::new(DialogSelect::new(items), kind);
+        if matches!(kind, DialogKind::ThemeList) {
+            if let Some(index) = self
+                .theme_names
+                .iter()
+                .position(|name| name == &self.theme_name)
+            {
+                active.select.set_selected(index);
+            }
+        }
+        self.dialog = Some(active);
     }
 
     fn open_roster_dialog(&mut self, placement: Option<PaneLayoutKind>) {
@@ -4171,6 +4195,8 @@ mod tests {
         assert_eq!(builtin_client_command("/tools"), Some("hya.status"));
         assert_eq!(builtin_client_command("/mcp"), Some("hya.status"));
         assert_eq!(builtin_client_command("/think"), Some("variant.list"));
+        assert_eq!(builtin_client_command("/theme"), Some("theme.switch"));
+        assert_eq!(builtin_client_command("/themes"), Some("theme.switch"));
         assert_eq!(builtin_client_command("/export"), Some("session.export"));
         assert_eq!(builtin_client_command("/?"), Some("app.help"));
         // Arguments are ignored: the action is still invoked.
@@ -4207,6 +4233,8 @@ mod tests {
         assert!(names.iter().any(|name| name == "help"));
         assert!(names.iter().any(|name| name == "model"));
         assert!(names.iter().any(|name| name == "new"));
+        assert!(names.iter().any(|name| name == "theme"));
+        assert!(names.iter().any(|name| name == "themes"));
         assert!(names.iter().any(|name| name == "?"));
         assert!(names.iter().any(|name| name == "quit"));
         assert!(names.iter().any(|name| name == "exit"));
