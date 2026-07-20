@@ -496,9 +496,7 @@ async function runChildObservation(columns: number) {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
         const focusMain = async (start: number, label: string) => {
-          process.stdin.write("\x18")
-          await Bun.sleep(100)
-          process.stdin.write("0")
+          process.stdin.write(escapeKey)
           await waitForMain(start, `${label} Main focus`)
         }
         const confirmMainInput = async (start: number, marker: string) => {
