@@ -1,6 +1,6 @@
-# 0.33.13
+# 0.33.14
 
-- Added `/theme` and `/themes` client commands for opening the built-in theme picker.
-- Marked and preselected the active theme so keyboard selection starts from the current choice.
-- Added runtime and harness coverage for command discovery, picker rendering, and immediate theme application.
-- Stabilized narrow-terminal permission coverage by using the observation pane's direct Main-focus shortcut.
+- Added `openai-response` providers with Responses API streaming for text, reasoning summaries, parallel function calls, usage, and errors.
+- Added validated per-model reasoning variants and startup defaults, including all seven reasoning effort levels supported by `gpt-5.6-sol`.
+- Preserved completed opaque reasoning items through event replay so stateless tool continuations can send them back unchanged.
+- Kept `openai`, `openai-compatible`, and `openai-completion` on Chat Completions with request, stream, replay, and startup regression coverage.
