@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify Rust error handling, event-source ownership, regression coverage, and repository quality gates."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify reasoning defaults and opaque provider data survive every config/runtime/event/protocol boundary without a second projection."}
+{"file": ".trellis/tasks/07-21-openai-responses-reasoning-effort/findings.md", "reason": "Check implemented field names, effort labels, stream event mapping, and tool continuation against official and live gateway evidence."}
