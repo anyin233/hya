@@ -158,3 +158,12 @@
   pruned SDK server exports, expected archive entries, and SHA-256 verification.
 - Captured the OpenAI protocol-selection and reasoning-replay contract in the
   backend Trellis quality spec.
+- Committed and pushed the final documentation, task record, and release
+  metadata as `5cbf78dd`, `b2ed7889`, and `d2f2f147`.
+- Published annotated tag `v0.33.14` at `d2f2f147`.
+- GREEN: GitHub release run `29835486017` passed tag/changelog validation,
+  release builds, packaging, packaged-binary smoke, provenance attestation,
+  asset upload, and release publication.
+- Verified the published non-draft release contains
+  `hya-0.33.14-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`:
+  `https://github.com/anyin233/hya/releases/tag/v0.33.14`.
