@@ -322,3 +322,39 @@ Updated the installed hya 0.33.14 user config so all eight configured models exp
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Clean repository and verify outstanding work
+
+**Date**: 2026-07-21
+**Task**: Clean repository and verify outstanding work
+**Branch**: `main`
+
+### Summary
+
+Preserved the completed reasoning-default records, removed foreign task residue, and verified the repository cleanup scope.
+
+### Main Changes
+
+- Preserved the completed reasoning-default task archive and Session 9 record.
+- Removed the user-confirmed foreign IR task residue without publishing it.
+- Archived the repository-cleanup task and recorded this session.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2c1670d2` | (see git log) |
+
+### Testing
+
+- Passed task JSON/JSONL validation, exact-path staged-diff review, whitespace
+  checks, foreign-path history checks, and credential-silent scans.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
