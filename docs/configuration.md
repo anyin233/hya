@@ -110,7 +110,7 @@ permission:
 # name used by `hya-backend login <id>` and shown as the provider in model refs.
 providers:
   anthropic:
-    kind: anthropic                      # openai | openai-compatible | anthropic | google
+    kind: anthropic                      # openai-completion | openai-response | anthropic | google
     base_url: https://api.anthropic.com/v1
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
     # A token saved via `hya-backend login anthropic <token>` takes precedence.
@@ -150,10 +150,14 @@ providers:
     api_key: "{env:ANTHROPIC_API_KEY}"
     models: [claude-sonnet-4-6]
   gateway:
-    kind: openai-compatible
+    kind: openai-response
     base_url: https://gateway.example/v1
     api_key: "{file:/run/secrets/gateway-key}"
-    models: [gpt-5.5, gpt-5.4]
+    models:
+      - id: gpt-5.6-sol
+        reasoning:
+          default: medium
+          variants: [none, minimal, low, medium, high, xhigh, max]
   google:
     kind: google
     base_url: https://generativelanguage.googleapis.com
@@ -165,12 +169,31 @@ Supported `kind` values:
 
 | `kind` | Route |
 | --- | --- |
-| `openai` or `openai-compatible` | OpenAI Chat Completions compatible route. |
+| `openai`, `openai-compatible`, or `openai-completion` | OpenAI Chat Completions compatible route (`/chat/completions`). |
+| `openai-response` | OpenAI Responses route (`/responses`). |
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
 
 Providers without models are skipped. Providers without an inline `api_key` are
 still valid if a saved token exists for that provider id.
+
+Models may use the existing string form or a detailed entry with per-model
+reasoning metadata:
+
+```yaml
+models:
+  - gpt-5.5
+  - id: gpt-5.6-sol
+    reasoning:
+      default: medium
+      variants: [none, minimal, low, medium, high, xhigh, max]
+```
+
+Reasoning values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
+`max`. An explicit non-`none` default must appear in `variants`. When reasoning
+metadata is omitted, hya uses the provider's variants and selects their highest
+supported effort as the startup default. Responses sends every configured label
+unchanged; Chat Completions omits `none` and sends `max` as `xhigh`.
 
 ## Auth Tokens
 
