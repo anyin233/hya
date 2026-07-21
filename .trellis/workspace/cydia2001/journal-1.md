@@ -254,3 +254,40 @@ Committed Trellis and project records, removed unused workspace dependencies, re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Add OpenAI Responses and reasoning defaults
+
+**Date**: 2026-07-21
+**Task**: Add OpenAI Responses and reasoning defaults
+**Branch**: `main`
+
+### Summary
+
+Added configurable OpenAI Responses routing and reasoning defaults, preserved opaque reasoning through replay and tool continuation, documented and verified the cross-layer contract, and published v0.33.14.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1dd48f6d` | (see git log) |
+| `56a5a297` | (see git log) |
+| `5cbf78dd` | (see git log) |
+| `b2ed7889` | (see git log) |
+| `d2f2f147` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
