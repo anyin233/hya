@@ -70,10 +70,16 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         match part {
             PartProjection::Text { text, .. } => {
-                self.copy_text_part(session, message, text, false).await
+                self.copy_text_part(session, message, text, false, None)
+                    .await
             }
-            PartProjection::Reasoning { text, .. } => {
-                self.copy_text_part(session, message, text, true).await
+            PartProjection::Reasoning {
+                text,
+                provider_data,
+                ..
+            } => {
+                self.copy_text_part(session, message, text, true, provider_data.as_ref())
+                    .await
             }
             PartProjection::Tool {
                 call, name, state, ..
@@ -110,6 +116,7 @@ impl SessionEngine {
         message: MessageId,
         text: &str,
         reasoning: bool,
+        provider_data: Option<&serde_json::Value>,
     ) -> Result<(), CoreError> {
         let part = PartId::new();
         let start = if reasoning {
@@ -147,6 +154,7 @@ impl SessionEngine {
                 session,
                 message,
                 part,
+                provider_data: provider_data.cloned(),
             }
         } else {
             Event::TextEnd {

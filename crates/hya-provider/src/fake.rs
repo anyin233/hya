@@ -87,6 +87,7 @@ impl FakeProvider {
                         session,
                         message,
                         part,
+                        provider_data: None,
                     });
                 }
                 FakeStep::ToolCall { name, input } => {

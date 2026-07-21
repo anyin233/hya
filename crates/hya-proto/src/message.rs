@@ -158,6 +158,8 @@ pub enum Part {
     Reasoning {
         id: PartId,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
     Media {
         id: PartId,

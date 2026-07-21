@@ -118,7 +118,7 @@ pub(super) fn compat_part(
             }
             value
         }
-        PartProjection::Reasoning { id, text } => json!({
+        PartProjection::Reasoning { id, text, .. } => json!({
             "id": id.to_string(),
             "sessionID": session.to_string(),
             "messageID": message.to_string(),

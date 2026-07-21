@@ -154,6 +154,8 @@ pub enum Event {
         session: SessionId,
         message: MessageId,
         part: PartId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
     ReasoningReplace {
         session: SessionId,
