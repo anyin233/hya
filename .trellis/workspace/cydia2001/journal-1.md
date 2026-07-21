@@ -358,3 +358,36 @@ Preserved the completed reasoning-default records, removed foreign task residue,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Restore synchronous prompt working lifecycle
+
+**Date**: 2026-07-21
+**Task**: Restore synchronous prompt working lifecycle
+**Branch**: `main`
+
+### Summary
+
+Published busy and idle lifecycle events for synchronous Compat prompts, added a pinned-SDK regression, prepared and installed hya 0.33.16, and passed full repository verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dac61e8d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
