@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Checks route selection, accepted reasoning metadata shape, and configuration failure conditions."}
+{"file":".trellis/tasks/07-21-configure-highest-reasoning-effort-defaults/research/reasoning-effort-matrix.md","reason":"Supplies the expected model order, variants, defaults, and successful boundary probes for verification."}

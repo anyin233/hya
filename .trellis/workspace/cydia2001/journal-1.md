@@ -291,3 +291,34 @@ Added configurable OpenAI Responses routing and reasoning defaults, preserved op
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Configure highest reasoning effort defaults
+
+**Date**: 2026-07-21
+**Task**: Configure highest reasoning effort defaults
+**Branch**: `main`
+
+### Summary
+
+Updated the installed hya 0.33.14 user config so all eight configured models expose explicit reasoning variants and default to their verified maximum; switched 12th-oai to the Responses route and completed config/runtime validation.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
