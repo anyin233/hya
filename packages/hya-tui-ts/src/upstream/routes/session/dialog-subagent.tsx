@@ -1,6 +1,7 @@
 import { createMemo, Show } from "solid-js"
+import { Spinner } from "../../component/spinner"
 import { DialogSelect } from "../../ui/dialog-select"
-import { flattenRunTree, type RunTreeResource } from "./subagent-workspace"
+import { flattenRunTree, resolveLifecyclePresentation, type RunTreeResource } from "./subagent-workspace"
 
 export type SubagentPlacement = "tab" | "vertical" | "horizontal"
 
@@ -19,13 +20,14 @@ export function DialogSubagent(props: {
     const options = rows.map((row) => {
       const node = row.node
       const sessionID = node.session
+      const lifecycle = resolveLifecyclePresentation(node)
       const label =
         row.depth === 0
           ? `Main · ${node.agent ?? "agent"} · ${sessionID ?? "pending"}`
           : [
               "  ".repeat(row.depth) + (node.roster?.handle ?? (sessionID ? "subagent" : "pending")),
               node.roster?.agent_type ?? node.member?.subagent_type,
-              node.roster?.status ?? node.member?.status,
+              lifecycle.label,
               node.roster?.current_task ?? node.member?.description,
             ]
               .filter(Boolean)
@@ -34,6 +36,7 @@ export function DialogSubagent(props: {
         title: label,
         value: sessionID ?? node.member?.member ?? `pending:${row.depth}`,
         disabled: !row.selectable,
+        gutter: lifecycle.working ? () => <Spinner /> : undefined,
         footer: sessionID ? (props.isFocused(sessionID) ? "focused" : props.isOpen(sessionID) ? "open" : undefined) : undefined,
       }
     })

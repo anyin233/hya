@@ -85,8 +85,8 @@ import {
   createWorkspaceState,
   flattenRunTree,
   reduceWorkspace,
+  resolveLifecyclePresentation,
   runTreeEventEffect,
-  terminalTreeSessionIDs,
   treeSessionIDs,
   workspaceLeaves,
   type RunTreeResource,
@@ -284,7 +284,6 @@ export function Session() {
     onState: setTreeResource,
     onTree: (tree) => {
       dispatchWorkspace({ type: "reconcileSessions", sessionIDs: [...treeSessionIDs(tree)] })
-      dispatchWorkspace({ type: "terminal", sessionIDs: [...terminalTreeSessionIDs(tree)] })
       if (tree.session && tree.session !== route.sessionID) {
         navigate({ type: "session", sessionID: tree.session })
       }
@@ -294,10 +293,7 @@ export function Session() {
   onMount(() => void treeLoader.refresh())
   onCleanup(
     event.subscribe((raw) => {
-      const effect = runTreeEventEffect(raw, treeResource().tree)
-      if (effect.terminalSessionIDs.length) {
-        dispatchWorkspace({ type: "terminal", sessionIDs: effect.terminalSessionIDs })
-      }
+      const effect = runTreeEventEffect(raw)
       if (effect.refresh) void treeLoader.refresh()
     }),
   )
@@ -309,9 +305,6 @@ export function Session() {
         ? { type: "openTab", sessionID }
         : { type: "openSplit", axis: placement, sessionID },
     )
-    if (terminalTreeSessionIDs(tree).has(sessionID)) {
-      dispatchWorkspace({ type: "terminal", sessionIDs: [sessionID] })
-    }
   }
   const openSubagentDialog = (placement: SubagentPlacement) => {
     void treeLoader.refresh()
@@ -1127,20 +1120,24 @@ export function Session() {
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
-  const observationLabel = (sessionID: string, placement: SubagentPlacement, focused: boolean) => {
+  const observationPresentation = (sessionID: string, placement: SubagentPlacement, focused: boolean) => {
     const tree = treeResource().tree
     const node = tree && flattenRunTree(tree).find((row) => row.node.session === sessionID)?.node
-    return [
-      node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent",
-      node?.roster?.agent_type ?? node?.member?.subagent_type ?? node?.agent,
-      node?.roster?.status ?? node?.member?.status,
-      node?.roster?.current_task ?? node?.member?.description,
-      placement,
-      focused ? "focused" : "open",
-      "read-only",
-    ]
-      .filter(Boolean)
-      .join(" - ")
+    const lifecycle = resolveLifecyclePresentation(node ?? {})
+    return {
+      label: [
+        node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent",
+        node?.roster?.agent_type ?? node?.member?.subagent_type ?? node?.agent,
+        lifecycle.label,
+        node?.roster?.current_task ?? node?.member?.description,
+        placement,
+        focused ? "focused" : "open",
+        "read-only",
+      ]
+        .filter(Boolean)
+        .join(" - "),
+      working: lifecycle.working,
+    }
   }
   function ObservationTranscript(props: { paneID: string; sessionID: string; placement: SubagentPlacement }) {
     const paneMessages = createMemo(() => sync.data.message[props.sessionID] ?? [])
@@ -1151,12 +1148,20 @@ export function Session() {
       )?.id
     })
     const paneLastAssistant = createMemo(() => paneMessages().findLast((message) => message.role === "assistant")?.id)
+    const presentation = createMemo(() =>
+      observationPresentation(props.sessionID, props.placement, props.paneID === workspace().focusedPaneID),
+    )
     onCleanup(() => observationScrolls.delete(props.paneID))
     return (
       <box flexGrow={1} minWidth={0} minHeight={0} gap={1}>
-        <text fg={theme.textMuted} wrapMode="word">
-          {observationLabel(props.sessionID, props.placement, props.paneID === workspace().focusedPaneID)}
-        </text>
+        <box flexDirection="row" gap={1} minWidth={0}>
+          <Show when={presentation().working}>
+            <Spinner color={theme.textMuted} />
+          </Show>
+          <text fg={theme.textMuted} wrapMode="word" flexGrow={1} minWidth={0}>
+            {presentation().label}
+          </text>
+        </box>
         <scrollbox
           ref={(value) => observationScrolls.set(props.paneID, value)}
           stickyScroll

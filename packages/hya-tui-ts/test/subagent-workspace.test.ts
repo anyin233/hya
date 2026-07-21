@@ -8,8 +8,8 @@ import {
   flattenRunTree,
   parseRunTree,
   reduceWorkspace,
+  resolveLifecyclePresentation,
   runTreeEventEffect,
-  terminalTreeSessionIDs,
   treeSessionIDs,
   workspaceLeaves,
 } from "../src/upstream/routes/session/subagent-workspace"
@@ -91,6 +91,26 @@ test("normalizes an omitted live member summary", () => {
   ).toThrow(RunTreeParseError)
 })
 
+test("resolves member-first lifecycle presentation", () => {
+  expect(resolveLifecyclePresentation({ member: { status: "running" }, roster: { status: "idle" } })).toEqual({
+    label: "Working",
+    working: true,
+  })
+  expect(resolveLifecyclePresentation({ member: { status: "spawning" } })).toEqual({
+    label: "Working",
+    working: true,
+  })
+  expect(resolveLifecyclePresentation({ roster: { status: "busy" } })).toEqual({ label: "Working", working: true })
+  expect(resolveLifecyclePresentation({ member: { status: "done" } })).toEqual({ label: "Finished", working: false })
+  expect(resolveLifecyclePresentation({ member: { status: "failed" } })).toEqual({ label: "Failed", working: false })
+  expect(resolveLifecyclePresentation({ member: { status: "cancelled" } })).toEqual({
+    label: "Cancelled",
+    working: false,
+  })
+  expect(resolveLifecyclePresentation({ roster: { status: "idle" } })).toEqual({ label: "Idle", working: false })
+  expect(resolveLifecyclePresentation({})).toEqual({ label: "Idle", working: false })
+})
+
 test("keeps one uncloseable main leaf", () => {
   const state = createWorkspaceState("root")
   expect(workspaceLeaves(state)).toEqual([{ type: "main", id: "main" }])
@@ -166,20 +186,40 @@ test("cycles focus in tab and visual leaf order", () => {
   expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
 })
 
-test("defers focused terminal closure until focus leaves", () => {
+test("retains focused and unfocused terminal observations after focus leaves", () => {
+  const tree = parseRunTree({
+    session: "root",
+    children: [
+      {
+        session: "child-a",
+        member: { member: "a", child: "child-a", subagent_type: "build", description: "done", depth: 1, status: "done" },
+      },
+      {
+        session: "child-b",
+        member: { member: "b", child: "child-b", subagent_type: "build", description: "failed", depth: 1, status: "failed" },
+      },
+    ],
+  })
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child-b" })
-  state = reduceWorkspace(state, { type: "terminal", sessionIDs: ["child-a", "child-b"] })
+  state = reduceWorkspace(state, { type: "reconcileSessions", sessionIDs: [...treeSessionIDs(tree)] })
 
-  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child-b"])
-  expect(workspaceLeaves(state).find((pane) => pane.id === "observation:child-b")).toMatchObject({ closeOnBlur: true })
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual([
+    "main",
+    "observation:child-a",
+    "observation:child-b",
+  ])
   state = reduceWorkspace(state, { type: "focusMain" })
-  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main"])
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual([
+    "main",
+    "observation:child-a",
+    "observation:child-b",
+  ])
   expect(state.focusedPaneID).toBe("main")
 })
 
-test("defers an already-terminal observation until focus leaves", () => {
+test("retains an already-terminal observation after focus leaves", () => {
   const tree = parseRunTree({
     session: "root",
     children: [
@@ -199,11 +239,11 @@ test("defers an already-terminal observation until focus leaves", () => {
   })
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child" })
-  state = reduceWorkspace(state, { type: "terminal", sessionIDs: [...terminalTreeSessionIDs(tree)] })
+  state = reduceWorkspace(state, { type: "reconcileSessions", sessionIDs: [...treeSessionIDs(tree)] })
 
-  expect(workspaceLeaves(state).find((pane) => pane.id === "observation:child")).toMatchObject({ closeOnBlur: true })
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child"])
   state = reduceWorkspace(state, { type: "focusMain" })
-  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main"])
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child"])
 })
 
 test("prunes sessions missing from a successful tree", () => {
@@ -313,17 +353,7 @@ test("ignores stale generation responses", async () => {
   expect(loader.state.tree?.session).toBe("root-b")
 })
 
-test("recognizes only tree and terminal event variants", () => {
-  const tree = parseRunTree({
-    session: "root",
-    children: [
-      {
-        session: "child",
-        member: { member: "member-1", child: "child", subagent_type: "explore", description: "inspect", depth: 1, status: "running", summary: "" },
-        roster: { handle: "explore-1", session: "child", agent_type: "explore", mode: "transient", status: "busy" },
-      },
-    ],
-  })
+test("recognizes only run-tree invalidation events", () => {
   const native = (event: Record<string, unknown>) => ({
     type: "hya.envelope",
     properties: { event: { session: "root", ...event } },
@@ -338,27 +368,25 @@ test("recognizes only tree and terminal event variants", () => {
     native({ type: "agent_registered", agent_session: "child", handle: "explore-1", agent_type: "explore", mode: "transient" }),
     native({ type: "agent_activity_changed", handle: "explore-1", status: "busy" }),
   ]
-  expect(invalidators.filter((event) => runTreeEventEffect(event, tree).refresh)).toHaveLength(8)
+  expect(invalidators.filter((event) => runTreeEventEffect(event).refresh)).toHaveLength(8)
 
   for (const status of ["done", "failed", "cancelled"]) {
-    expect(
-      runTreeEventEffect(native({ type: "member_status_changed", member: "member-1", status }), tree)
-        .terminalSessionIDs,
-    ).toEqual(["child"])
+    expect(runTreeEventEffect(native({ type: "member_status_changed", member: "member-1", status }))).toEqual({
+      refresh: true,
+    })
   }
-  expect(
-    runTreeEventEffect(native({ type: "member_finished", member: "missing", child: "child", status: "done" }), tree)
-      .terminalSessionIDs,
-  ).toEqual(["child"])
+  expect(runTreeEventEffect(native({ type: "member_finished", member: "missing", child: "child", status: "done" }))).toEqual({
+    refresh: true,
+  })
   for (const status of ["done", "failed"]) {
-    expect(runTreeEventEffect(native({ type: "agent_activity_changed", handle: "explore-1", status }), tree).terminalSessionIDs).toEqual([
-      "child",
-    ])
+    expect(runTreeEventEffect(native({ type: "agent_activity_changed", handle: "explore-1", status }))).toEqual({
+      refresh: true,
+    })
   }
   for (const status of ["idle", "busy"]) {
-    const effect = runTreeEventEffect(native({ type: "agent_activity_changed", handle: "explore-1", status }), tree)
-    expect(effect.refresh).toBe(true)
-    expect(effect.terminalSessionIDs).toEqual([])
+    expect(runTreeEventEffect(native({ type: "agent_activity_changed", handle: "explore-1", status }))).toEqual({
+      refresh: true,
+    })
   }
 
   for (const event of [
@@ -368,9 +396,7 @@ test("recognizes only tree and terminal event variants", () => {
     native({ type: "unrelated" }),
     { type: "other", properties: { type: "session.created" } },
   ]) {
-    const effect = runTreeEventEffect(event, tree)
-    expect(effect.refresh).toBe(false)
-    expect(effect.terminalSessionIDs).toEqual([])
+    expect(runTreeEventEffect(event)).toEqual({ refresh: false })
   }
 })
 

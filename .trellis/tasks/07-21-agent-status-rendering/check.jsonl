@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/07-21-agent-status-rendering/research/root-cause.md","reason":"Verify the diff addresses each evidenced root cause without unrelated mechanisms."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check variant round-trip, validation ownership, and projection-driven consumers."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated status mapping or model parsing."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check semantic status coverage and required TypeScript and workspace gates."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check compatibility behavior and server regression coverage."}
