@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines the released OpenAI protocol-selection and per-model reasoning configuration contracts."}
+{"file":".trellis/tasks/07-21-configure-highest-reasoning-effort-defaults/research/reasoning-effort-matrix.md","reason":"Records the exact eight-model target matrix and credential-free live probe evidence."}
