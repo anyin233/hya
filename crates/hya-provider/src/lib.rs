@@ -22,7 +22,9 @@ pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
 pub use http::{HttpProvider, ProviderKind};
-pub use openai::{OpenAiChatDecoder, OpenAiChatProtocol};
+pub use openai::{
+    OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder, OpenAiResponsesProtocol,
+};
 pub use router::ProviderRouter;
 
 /// Reject a request a route cannot serve before a turn starts (risk #12):

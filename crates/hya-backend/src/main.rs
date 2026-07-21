@@ -52,17 +52,17 @@ async fn cmd_exec(
     first_run_config_bootstrap(false)?;
     let store = open_store(db).await?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
-        &runtime.model,
+        &agent,
         runtime.mcp,
         runtime.plugins,
         runtime.permission,
         true,
     )
     .await;
-    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -105,17 +105,17 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .await
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
-        &runtime.model,
+        &agent,
         runtime.mcp,
         runtime.plugins,
         runtime.permission,
         true,
     )
     .await;
-    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -169,17 +169,17 @@ async fn cmd_goal(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let evaluator_router = runtime.router.clone();
+    let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         runtime.router,
-        &runtime.model,
+        &agent,
         runtime.mcp,
         runtime.plugins,
         runtime.permission,
         true,
     )
     .await;
-    let agent = agent_with_model(&runtime.model);
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -217,10 +217,11 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
     let (router, model) = offline_router(None);
+    let agent = agent_with_model(&model, None);
     let (engine, _asks, _, _mcp_manager, _plugin_host) = build_session_engine(
         store,
         router,
-        &model,
+        &agent,
         BTreeMap::new(),
         Vec::new(),
         InvocationPolicy::default(),

@@ -13,7 +13,7 @@ use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, MemberId, ModelRef, SessionId};
-use hya_provider::{DevProvider, ProviderRouter};
+use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
@@ -91,7 +91,7 @@ pub fn compaction_config() -> CompactionConfig {
     }
 }
 
-pub fn agent_with_model(model: &str) -> AgentSpec {
+pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     let workdir = PathBuf::from(".");
     let env = PromptEnv {
         cwd: std::env::current_dir()
@@ -107,7 +107,7 @@ pub fn agent_with_model(model: &str) -> AgentSpec {
         model: ModelRef::new(model),
         system_prompt,
         workdir,
-        reasoning: None,
+        reasoning,
     }
 }
 
@@ -147,6 +147,7 @@ impl OfflineNotice {
 pub struct RuntimeConfig {
     pub router: ProviderRouter,
     pub model: String,
+    pub reasoning: Option<ReasoningEffort>,
     pub models: Vec<config::ModelEntry>,
     pub mcp: BTreeMap<String, McpServerConfig>,
     pub plugins: Vec<PluginSpec>,
@@ -184,6 +185,11 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             let model = model_override
                 .or_else(|| std::env::var("HYA_MODEL").ok())
                 .unwrap_or(default_model);
+            let reasoning = cfg
+                .models
+                .iter()
+                .find(|entry| entry.matches_model_ref(&model))
+                .and_then(|entry| entry.reasoning_default);
             RuntimeConfig {
                 router: if cfg.has_providers {
                     cfg.router
@@ -191,6 +197,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                     fallback_router
                 },
                 model,
+                reasoning,
                 models: cfg.models,
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
@@ -205,6 +212,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             RuntimeConfig {
                 router,
                 model,
+                reasoning: None,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
@@ -222,6 +230,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             RuntimeConfig {
                 router,
                 model,
+                reasoning: None,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
@@ -437,7 +446,7 @@ pub fn spawn_team_supervisor(
 pub async fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
-    model: &str,
+    agent: &AgentSpec,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
     invocation_policy: InvocationPolicy,
@@ -481,7 +490,7 @@ pub async fn build_session_engine(
     let (spawner, spawn_rx) = SpawnerPlane::new();
     let (mailbox, mailbox_rx) = MailboxPlane::new();
     let summarizer: Arc<dyn Summarizer> =
-        Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new(model)));
+        Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
     let governor = SubagentGovernor::new(crate::config::load_subagent_limits());
     // Clone the router before it is moved into the engine so the team supervisor
@@ -521,7 +530,7 @@ pub async fn build_session_engine(
     spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
-        agent_with_model(model),
+        agent.clone(),
         include_global_agents,
         spawn_router,
         categories,
@@ -557,6 +566,7 @@ impl HyaRuntime {
             RuntimeConfig {
                 router,
                 model,
+                reasoning: None,
                 models: Vec::new(),
                 mcp: BTreeMap::new(),
                 plugins: Vec::new(),
@@ -576,23 +586,23 @@ impl HyaRuntime {
         if opts.yolo {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
+        let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
         let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
             store,
             runtime.router,
-            &runtime.model,
+            agent.as_ref(),
             runtime.mcp,
             runtime.plugins,
             runtime.permission,
             opts.include_global_agents,
         )
         .await;
-        let mut state =
-            hya_server::AppState::new(engine.clone(), Arc::new(agent_with_model(&runtime.model)))
-                .with_question_requests(questions)
-                .with_mcp_manager(mcp_manager)
-                .with_workspace_adapters(plugin_host.workspace_adapters())
-                .with_default_agent(runtime.default_agent.clone())
-                .with_global_agents(opts.include_global_agents);
+        let mut state = hya_server::AppState::new(engine.clone(), agent)
+            .with_question_requests(questions)
+            .with_mcp_manager(mcp_manager)
+            .with_workspace_adapters(plugin_host.workspace_adapters())
+            .with_default_agent(runtime.default_agent.clone())
+            .with_global_agents(opts.include_global_agents);
         state = state.with_permission_requests(asks);
         let app_state = state.clone();
         let router = hya_server::router(state);
@@ -761,6 +771,32 @@ mod tests {
     }
 
     #[test]
+    fn selected_model_reasoning_default_reaches_first_agent() {
+        let dir = tempdir();
+        let _env = EnvGuard::set(&dir, &dir);
+        let config_path = dir.join("hya/config.yaml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            "default_model: gateway/gpt-5.6-sol\nproviders:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: medium\n          variants: [low, medium]\n",
+        )
+        .unwrap();
+
+        let runtime = resolve_runtime(None);
+
+        assert_eq!(
+            runtime.reasoning,
+            Some(hya_provider::ReasoningEffort::Medium)
+        );
+        assert_eq!(
+            runtime.router.catalog()[0].reasoning_variants,
+            ["low", "medium"]
+        );
+        let agent = agent_with_model(&runtime.model, runtime.reasoning);
+        assert_eq!(agent.reasoning, Some(hya_provider::ReasoningEffort::Medium));
+    }
+
+    #[test]
     fn agent_with_model_omits_process_cwd_skill_index() {
         let home = tempdir();
         let workdir = tempdir();
@@ -772,7 +808,7 @@ mod tests {
             "baseline body",
         );
 
-        let agent = agent_with_model("fake");
+        let agent = agent_with_model("fake", None);
 
         assert!(!agent.system_prompt.contains("Available skills"));
         assert!(
