@@ -30,6 +30,31 @@ export type RunTreeNode = {
   children: RunTreeNode[]
 }
 
+type LifecyclePresentation = {
+  label: "Working" | "Finished" | "Failed" | "Cancelled" | "Idle"
+  working: boolean
+}
+
+export function resolveLifecyclePresentation(node: {
+  member?: Pick<RunTreeMember, "status">
+  roster?: Pick<RosterEntry, "status">
+}): LifecyclePresentation {
+  switch (node.member?.status ?? node.roster?.status) {
+    case "spawning":
+    case "running":
+    case "busy":
+      return { label: "Working", working: true }
+    case "done":
+      return { label: "Finished", working: false }
+    case "failed":
+      return { label: "Failed", working: false }
+    case "cancelled":
+      return { label: "Cancelled", working: false }
+    default:
+      return { label: "Idle", working: false }
+  }
+}
+
 export class RunTreeParseError extends Error {
   constructor(path: string, message: string) {
     super(`${path}: ${message}`)
@@ -144,53 +169,32 @@ export function treeSessionIDs(tree: RunTreeNode): Set<string> {
   return new Set(flattenRunTree(tree).flatMap((row) => (row.node.session ? [row.node.session] : [])))
 }
 
-export function terminalTreeSessionIDs(tree: RunTreeNode): Set<string> {
-  return new Set(
-    flattenRunTree(tree).flatMap(({ node }) =>
-      node.session &&
-      (["done", "failed", "cancelled"].includes(node.member?.status ?? "") ||
-        ["done", "failed"].includes(node.roster?.status ?? ""))
-        ? [node.session]
-        : [],
-    ),
-  )
-}
+export type RunTreeEventEffect = { refresh: boolean }
 
-export type RunTreeEventEffect = { refresh: boolean; terminalSessionIDs: string[] }
-
-export function runTreeEventEffect(value: unknown, tree?: RunTreeNode): RunTreeEventEffect {
-  const none = { refresh: false, terminalSessionIDs: [] }
+export function runTreeEventEffect(value: unknown): RunTreeEventEffect {
+  const none = { refresh: false }
   if (!isRecord(value) || !isRecord(value.properties) || typeof value.type !== "string") return none
   if (["session.created", "session.updated", "session.deleted"].includes(value.type)) {
-    return { refresh: true, terminalSessionIDs: [] }
+    return { refresh: true }
   }
   if (value.type !== "hya.envelope" || !isRecord(value.properties.event)) return none
   const event = value.properties.event
   if (typeof event.type !== "string" || typeof event.session !== "string") return none
-  const rows = tree ? flattenRunTree(tree) : []
-  const byMember = (member: string) => rows.find((row) => row.node.member?.member === member)?.node.session
-  const bySession = (session: string) => rows.find((row) => row.node.session === session)?.node.session
-  const byHandle = (handle: string) => rows.find((row) => row.node.roster?.handle === handle)?.node.session
 
   switch (event.type) {
     case "member_spawned":
-      return { refresh: true, terminalSessionIDs: [] }
-    case "member_status_changed": {
+      return { refresh: true }
+    case "member_status_changed":
       if (typeof event.member !== "string" || !isMemberStatus(event.status)) return none
-      const session = ["done", "failed", "cancelled"].includes(event.status) ? byMember(event.member) : undefined
-      return { refresh: true, terminalSessionIDs: session ? [session] : [] }
-    }
-    case "member_finished": {
+      return { refresh: true }
+    case "member_finished":
       if (
         typeof event.member !== "string" ||
         !isMemberStatus(event.status) ||
         (event.child !== undefined && typeof event.child !== "string")
       )
         return none
-      const terminal = ["done", "failed", "cancelled"].includes(event.status)
-      const session = terminal ? (typeof event.child === "string" ? bySession(event.child) : byMember(event.member)) : undefined
-      return { refresh: true, terminalSessionIDs: session ? [session] : [] }
-    }
+      return { refresh: true }
     case "agent_registered":
       if (
         typeof event.agent_session !== "string" ||
@@ -199,17 +203,15 @@ export function runTreeEventEffect(value: unknown, tree?: RunTreeNode): RunTreeE
         !isOneOf(event.mode, ["transient", "resident"])
       )
         return none
-      return { refresh: true, terminalSessionIDs: [] }
-    case "agent_activity_changed": {
+      return { refresh: true }
+    case "agent_activity_changed":
       if (
         typeof event.handle !== "string" ||
         !isRosterStatus(event.status) ||
         (event.current_task !== undefined && typeof event.current_task !== "string")
       )
         return none
-      const session = ["done", "failed"].includes(event.status) ? byHandle(event.handle) : undefined
-      return { refresh: true, terminalSessionIDs: session ? [session] : [] }
-    }
+      return { refresh: true }
     default:
       return none
   }
@@ -232,7 +234,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export type MainPane = { type: "main"; id: "main" }
-export type ObservationPane = { type: "observation"; id: string; sessionID: string; closeOnBlur: boolean }
+export type ObservationPane = { type: "observation"; id: string; sessionID: string }
 export type WorkspacePane = MainPane | ObservationPane | SplitPane
 export type SplitPane = {
   type: "split"
@@ -254,7 +256,6 @@ export type WorkspaceAction =
   | { type: "focus"; paneID: string }
   | { type: "focusMain" }
   | { type: "cycleFocus" }
-  | { type: "terminal"; sessionIDs: string[] }
   | { type: "reconcileSessions"; sessionIDs: string[] }
 
 export function createWorkspaceState(mainSessionID: string): WorkspaceState {
@@ -283,26 +284,6 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
       const current = leaves.findIndex((pane) => pane.id === state.focusedPaneID)
       return focusPane(state, leaves[(current + 1) % leaves.length]?.id ?? "main")
     }
-    case "terminal": {
-      const terminal = new Set(action.sessionIDs)
-      let next = state
-      for (const pane of workspaceLeaves(state)) {
-        if (pane.type === "observation" && terminal.has(pane.sessionID) && pane.id !== state.focusedPaneID) {
-          next = removeFromWorkspace(next, pane.id)
-        }
-      }
-      const focused = workspaceLeaves(next).find((pane) => pane.id === next.focusedPaneID)
-      if (focused?.type !== "observation" || !terminal.has(focused.sessionID)) return next
-      return {
-        ...next,
-        tabs: next.tabs.map((tab) => ({
-          ...tab,
-          root: replacePane(tab.root, focused.id, (pane) =>
-            pane.type === "observation" ? { ...pane, closeOnBlur: true } : pane,
-          ),
-        })),
-      }
-    }
     case "reconcileSessions": {
       const valid = new Set(action.sessionIDs)
       let next = state
@@ -322,7 +303,6 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
         type: "observation",
         id: `observation:${action.sessionID}`,
         sessionID: action.sessionID,
-        closeOnBlur: false,
       }
       const tab = { id: `tab:${action.sessionID}`, root: pane }
       return { ...state, tabs: [...state.tabs, tab], activeTabID: tab.id, focusedPaneID: pane.id }
@@ -336,7 +316,6 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
         type: "observation",
         id: `observation:${action.sessionID}`,
         sessionID: action.sessionID,
-        closeOnBlur: false,
       }
       let replaced = false
       const tabs = state.tabs.map((tab) => {
@@ -360,10 +339,8 @@ function paneLeaves(pane: WorkspacePane): Array<MainPane | ObservationPane> {
 
 function focusPane(state: WorkspaceState, paneID: string): WorkspaceState {
   if (paneID === state.focusedPaneID) return state
-  const focused = workspaceLeaves(state).find((pane) => pane.id === state.focusedPaneID)
-  const next = focused?.type === "observation" && focused.closeOnBlur ? removeFromWorkspace(state, focused.id) : state
-  const tab = next.tabs.find((candidate) => paneLeaves(candidate.root).some((pane) => pane.id === paneID))
-  return tab ? { ...next, activeTabID: tab.id, focusedPaneID: paneID } : next
+  const tab = state.tabs.find((candidate) => paneLeaves(candidate.root).some((pane) => pane.id === paneID))
+  return tab ? { ...state, activeTabID: tab.id, focusedPaneID: paneID } : state
 }
 
 function replacePane(pane: WorkspacePane, paneID: string, replace: (pane: WorkspacePane) => WorkspacePane): WorkspacePane {

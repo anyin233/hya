@@ -22,6 +22,8 @@ pub(super) struct PromptPayload {
     parts: Vec<Value>,
     #[serde(default)]
     model: Option<Value>,
+    #[serde(default)]
+    variant: Option<String>,
 }
 
 async fn prompt(
@@ -46,8 +48,17 @@ async fn prompt(
     st.engine
         .record_user_prompt_context(session, message, files, agents)
         .await?;
-    if let Some(model) = req
-        .model
+    let mut model = req.model;
+    if let Some(variant) = req
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        && let Some(Value::Object(model)) = model.as_mut()
+    {
+        model.insert("variant".to_string(), Value::String(variant.to_string()));
+    }
+    if let Some(model) = model
         .as_ref()
         .and_then(super::model_ref::model_ref_from_value)
     {

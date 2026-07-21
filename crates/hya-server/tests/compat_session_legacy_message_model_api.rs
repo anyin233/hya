@@ -60,18 +60,20 @@ async fn create_session(app: axum::Router) -> String {
     created.session.to_string()
 }
 
-async fn post_json(app: axum::Router, uri: String, body: Value) -> StatusCode {
-    app.oneshot(
-        Request::builder()
-            .method("POST")
-            .uri(uri)
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap(),
-    )
-    .await
-    .unwrap()
-    .status()
+async fn post_json(app: axum::Router, uri: String, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
 }
 
 async fn session_model(app: axum::Router, session: &str) -> Value {
@@ -93,23 +95,81 @@ async fn session_model(app: axum::Router, session: &str) -> Value {
 // `model` field a client attaches to a prompt, so a model picked in the TUI was
 // shown but never used. The route must switch the session's working model.
 #[tokio::test]
-async fn legacy_message_route_applies_prompt_model_field() {
+async fn legacy_message_route_applies_prompt_model_and_top_level_variant() {
     let app = router(state().await);
     let session = create_session(app.clone()).await;
 
-    let status = post_json(
+    let (status, message) = post_json(
         app.clone(),
         format!("/session/{session}/message"),
         json!({
             "noReply": true,
             "parts": [{"type": "text", "text": "hi"}],
-            "model": {"providerID": "anthropic", "modelID": "claude-opus-4-8"},
+            "model": {"providerID": "anthropic", "modelID": "claude-opus-4-8", "variant": "low"},
+            "variant": "high",
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(message["info"]["model"]["providerID"], "anthropic");
+    assert_eq!(message["info"]["model"]["modelID"], "claude-opus-4-8");
+    assert_eq!(message["info"]["model"]["variant"], "high");
 
     let model = session_model(app, &session).await;
     assert_eq!(model["providerID"], "anthropic");
     assert_eq!(model["id"], "claude-opus-4-8");
+    assert_eq!(model["variant"], "high");
+}
+
+#[tokio::test]
+async fn legacy_message_route_preserves_variant_compatibility() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/session/{session}/message"),
+        json!({
+            "noReply": true,
+            "parts": [{"type": "text", "text": "nested"}],
+            "model": {"providerID": "anthropic", "modelID": "claude-opus-4-8", "variant": "low"},
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session_model(app.clone(), &session).await["variant"], "low");
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/session/{session}/message"),
+        json!({
+            "noReply": true,
+            "parts": [{"type": "text", "text": "empty"}],
+            "model": {"providerID": "anthropic", "modelID": "claude-opus-4-8", "variant": "medium"},
+            "variant": "  ",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        session_model(app.clone(), &session).await["variant"],
+        "medium"
+    );
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/session/{session}/message"),
+        json!({
+            "noReply": true,
+            "parts": [{"type": "text", "text": "string"}],
+            "model": "anthropic/claude-opus-4-8",
+            "variant": "high",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let model = session_model(app, &session).await;
+    assert_eq!(model["providerID"], "anthropic");
+    assert_eq!(model["id"], "claude-opus-4-8");
+    assert!(model.get("variant").is_none());
 }

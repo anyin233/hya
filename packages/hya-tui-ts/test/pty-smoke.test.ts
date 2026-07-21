@@ -630,7 +630,7 @@ async function runChildObservation(columns: number) {
         const waitForFocusedHeader = async (start: number, handle: string) => {
           await waitFor(async () => {
             const frame = (await output()).slice(start)
-            return frame.includes(handle) && frame.includes("focused") && frame.includes("read-only")
+            return frame.includes(handle) && frame.includes("focused") && /read-\s*only/.test(frame)
           }, `${handle} focused header`)
         }
         const openSubagentByHandle = async (handle: string) => {
@@ -687,7 +687,7 @@ async function runChildObservation(columns: number) {
         )
         await waitFor(async () => {
           const frame = (await output()).slice(observationStart)
-          return frame.includes(grandchildTranscript) && frame.includes("researcher-1") && frame.toLowerCase().includes("read-only")
+          return frame.includes(grandchildTranscript) && frame.includes("researcher-1") && /read-\s*only/i.test(frame)
         }, "grandchild observation transcript")
         await openGrandchild()
         for (const path of hydrationPaths) {
@@ -823,9 +823,11 @@ async function runChildObservation(columns: number) {
           async () => {
             const frame = (await output()).slice(researcherFocusStart)
             return (
-              ["researcher-1", "research", "busy", "Trace nested path", "focused", "read-only"].every((value) =>
+              ["researcher-1", "research", "Working", "Trace nested path", "focused"].every((value) =>
                 frame.includes(value),
-              ) && ["tab", "vertical", "horizontal"].some((placement) => frame.includes(placement))
+              ) &&
+              /read-\s*only/.test(frame) &&
+              ["tab", "vertical", "horizontal"].some((placement) => frame.includes(placement))
             )
           },
           "focused observation header",

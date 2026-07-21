@@ -486,3 +486,79 @@ let body = protocol.encode(&request)?;
 - Dispatch tests cover lookup-before-ask, post-hook command matching, call correlation, and one prompt per invocation.
 - Permission-plane tests cover exact native grants, legacy action grants, deny precedence, and the external-directory exception.
 - Config/runtime tests cover omission, permission-only offline config, strict malformed-config fallback, yolo override, and fail-closed headless asks.
+
+---
+
+## Scenario: Legacy Prompt Variants And Agent Lifecycle Presentation
+
+### 1. Scope / Trigger
+
+- Trigger: changes to the legacy Compat message route, projected model variant,
+  TypeScript subagent observation lifetime, or lifecycle status rendering.
+
+### 2. Signatures
+
+- `POST /session/{session_id}/message` accepts object-form `model` plus optional
+  top-level `variant: string`.
+- `resolveLifecyclePresentation(node)` returns a visible lifecycle `label` and
+  a `working` flag from the existing member/roster projection.
+- Observation panes close only through the workspace `close` action or
+  `reconcileSessions` when the child session is absent.
+
+### 3. Contracts
+
+- A trimmed, non-empty top-level variant overrides an object model's nested
+  variant before the existing model decoder and session switch run.
+- Missing or empty top-level variants preserve nested variants. String-form
+  models retain their existing behavior and ignore the separate variant.
+- Lifecycle presentation prefers transient member status over roster status.
+  `spawning`, `running`, and `busy` map to `Working`; `done` maps to `Finished`;
+  `failed`, `cancelled`, and true idle remain distinct.
+- Working rows show both visible text and the existing spinner. Terminal events
+  update presentation but do not discard synchronized transcript content.
+- Reasoning remains projection-backed; do not synthesize reasoning parts or add
+  another lifecycle/message store.
+
+### 4. Validation & Error Matrix
+
+- Non-string top-level variant -> request deserialization error before prompt admission.
+- Whitespace-only top-level variant -> preserve the nested object variant.
+- Top-level variant with string-form model -> keep string-form compatibility;
+  do not attach the separate variant.
+- Member status present with stale roster `idle` -> render the member state.
+- Session absent from successful reconciliation -> remove its observation pane.
+
+### 5. Good/Base/Bad Cases
+
+- Good: nested `low` plus top-level `high` records `high` on both the response
+  user message and session model, then the TUI preserves and labels the finished
+  observation.
+- Base: nested-only and string-form models behave as before; an idle roster-only
+  row displays `Idle` without a spinner.
+- Bad: letting a missing response variant clear effort, preferring roster `idle`
+  over member `running`, or removing a pane solely because a child completed.
+
+### 6. Tests Required
+
+- Route integration tests assert top-level precedence, nested/empty compatibility,
+  string-form behavior, response projection, and session model state.
+- Workspace tests assert terminal observations survive completion and focus
+  changes while explicit close and stale-session reconciliation still remove them.
+- Lifecycle tests assert member precedence, every label, and each working flag;
+  PTY coverage asserts visible `Working` text in the observation header.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+const status = node.roster?.status ?? node.member?.status
+dispatchWorkspace({ type: "terminal", sessionIDs: [node.session] })
+```
+
+#### Correct
+
+```typescript
+const lifecycle = resolveLifecyclePresentation(node)
+// Completion changes lifecycle presentation; pane removal stays user- or reconciliation-owned.
+```

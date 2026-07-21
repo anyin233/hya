@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/07-21-agent-status-rendering/research/root-cause.md","reason":"Confirmed root causes, existing contracts, focused fixtures, and verification commands."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Preserve the variant contract at the API boundary and keep projection data authoritative."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the existing model parser, reducer, lifecycle types, and one shared presentation resolver."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Keep lifecycle state text-visible and presentation based on typed derived state."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply the repository's TUI test and full verification requirements."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve prompt admission and explicit reasoning variant contracts at the server boundary."}
