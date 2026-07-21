@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-07-16
+- **Total Sessions**: 8
+- **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~256 | Active |
+| `journal-1.md` | ~293 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-21 | Add OpenAI Responses and reasoning defaults | `1dd48f6d`, `56a5a297`, `5cbf78dd`, `b2ed7889`, `d2f2f147` | `main` |
 | 7 | 2026-07-16 | Commit and clean shared worktree | `d8a3865c`, `c95f572a`, `580227b4`, `68a130f8`, `6a645760`, `ab01e22f`, `01b0f4fd`, `e72b1842` | `main` |
 | 6 | 2026-07-16 | Fix hya-ts subagent tree live view | `87bc1bea`, `3c815452` | `main` |
 | 5 | 2026-07-14 | Fix hya-ts prepared runtime | `71e23bdc` | `main` |
