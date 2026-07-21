@@ -16,7 +16,7 @@ effort propagation while retaining Chat Completions compatibility.
   request/stream/continuation behavior test-first with the smallest shared
   changes.
 - [completed] Update documentation, version, and release notes.
-- [in_progress] Run required full verification, commit, push, publish the
+- [completed] Run required full verification, commit, push, publish the
   release, and complete the Trellis finish workflow.
 
 ## Errors
