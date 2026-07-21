@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "The change carries config metadata through runtime, event replay, provider messages, and two wire protocols; preserve one source of truth at each boundary."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse the existing Protocol/Decoder transport, ReasoningEffort parser/default resolver, projection reducer, and HTTP fixture instead of adding parallel mechanisms."}
+{"file": ".trellis/tasks/07-21-openai-responses-reasoning-effort/findings.md", "reason": "Source-backed and live-probed Responses request/SSE/continuation contracts, supported effort matrix, and identified startup/replay gaps."}
