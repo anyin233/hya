@@ -16,7 +16,7 @@ mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
 use crate::google::GoogleProtocol;
-use crate::openai::OpenAiChatProtocol;
+use crate::openai::{OpenAiChatProtocol, OpenAiResponsesProtocol};
 use crate::{
     Capabilities, CompletionRequest, EventStream, Protocol, Provider, ProviderError, ProviderModel,
 };
@@ -24,6 +24,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderKind {
     OpenAiCompatible,
+    OpenAiResponse,
     Anthropic,
     Google,
 }
@@ -34,6 +35,9 @@ impl ProviderKind {
         let levels: &[&str] = match self {
             ProviderKind::Anthropic => &["low", "medium", "high", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
+            ProviderKind::OpenAiResponse => {
+                &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+            }
             ProviderKind::Google => &["high", "max"],
         };
         levels.iter().map(|level| (*level).to_string()).collect()
@@ -54,6 +58,7 @@ pub struct HttpProvider {
     google_base: Option<String>,
     auth: AuthStyle,
     models: HashSet<String>,
+    model_reasoning_variants: BTreeMap<String, Vec<String>>,
     caps: Capabilities,
     kind: ProviderKind,
 }
@@ -96,6 +101,11 @@ impl HttpProvider {
                 format!("{base}/chat/completions"),
                 AuthStyle::Bearer(key),
             ),
+            ProviderKind::OpenAiResponse => (
+                Box::new(OpenAiResponsesProtocol),
+                format!("{base}/responses"),
+                AuthStyle::Bearer(key),
+            ),
             ProviderKind::Anthropic => (
                 Box::new(AnthropicMessagesProtocol),
                 format!("{base}/messages"),
@@ -123,6 +133,7 @@ impl HttpProvider {
             google_base,
             auth,
             models: models.into_iter().collect(),
+            model_reasoning_variants: BTreeMap::new(),
             kind,
             caps: Capabilities {
                 streaming_tool_calls: true,
@@ -133,6 +144,15 @@ impl HttpProvider {
                 ..Capabilities::default()
             },
         })
+    }
+
+    #[must_use]
+    pub fn with_model_reasoning_variants(
+        mut self,
+        variants: impl IntoIterator<Item = (String, Vec<String>)>,
+    ) -> Self {
+        self.model_reasoning_variants = variants.into_iter().collect();
+        self
     }
 
     fn auth_headers(&self) -> Result<HeaderMap, ProviderError> {
@@ -220,7 +240,11 @@ impl Provider for HttpProvider {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
                 capabilities: self.caps.clone(),
-                reasoning_variants: variants.clone(),
+                reasoning_variants: self
+                    .model_reasoning_variants
+                    .get(model)
+                    .cloned()
+                    .unwrap_or_else(|| variants.clone()),
             })
             .collect()
     }

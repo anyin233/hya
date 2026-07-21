@@ -4,9 +4,12 @@ use std::{collections::BTreeMap, time::Duration};
 
 use futures::StreamExt as _;
 use hya_proto::{
-    Event, Message, MessageId, ModelRef, Part, PartId, SessionId, ToolName, ToolSchema,
+    AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, SessionId,
+    TokenUsage, ToolCallId, ToolName, ToolPartState, ToolSchema,
 };
-use hya_provider::{CompletionRequest, HttpProvider, Provider as _, ProviderKind};
+use hya_provider::{
+    CompletionRequest, HttpProvider, Provider as _, ProviderError, ProviderKind, ReasoningEffort,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
@@ -151,6 +154,361 @@ async fn http_provider_posts_openai_compatible_body_to_mock_endpoint() {
     );
     assert_eq!(body["stream_options"], json!({"include_usage": true}));
     assert!(text_deltas.iter().any(|delta| delta == mock_text));
+}
+
+#[tokio::test]
+async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
+    for effort in [
+        ReasoningEffort::Off,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+    ] {
+        let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
+        let provider = HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiResponse,
+            &base_url,
+            "test-token".to_string(),
+            ["gpt-5.6-sol".to_string()],
+        )
+        .unwrap();
+        let req = CompletionRequest {
+            model: ModelRef::new("openai/gpt-5.6-sol"),
+            system: Some("be terse".to_string()),
+            messages: vec![Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "hello provider".to_string(),
+                }],
+            }],
+            tools: vec![ToolSchema {
+                name: ToolName::new("read"),
+                description: "read a file".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"]
+                }),
+                output_schema: None,
+            }],
+            temperature: None,
+            max_output_tokens: None,
+            reasoning: Some(effort),
+            headers: Default::default(),
+        };
+
+        let events: Vec<_> = provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect()
+            .await;
+        let request = captured_request(request_rx).await;
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+
+        assert!(events.iter().all(Result::is_ok));
+        assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
+        assert_eq!(body["model"], "gpt-5.6-sol");
+        assert_eq!(body["instructions"], "be terse");
+        assert_eq!(
+            body["input"],
+            json!([{"role": "user", "content": "hello provider"}])
+        );
+        assert_eq!(
+            body["tools"],
+            json!([{
+                "type": "function",
+                "name": "read",
+                "description": "read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"]
+                }
+            }])
+        );
+        assert_eq!(
+            body["reasoning"],
+            json!({"effort": effort.as_str(), "summary": "auto"})
+        );
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+    }
+}
+
+#[tokio::test]
+async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
+    let sse = [
+        r#"data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"Need a file."}"#,
+        r#"data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_123","type":"reasoning","summary":[{"type":"summary_text","text":"Need a file."}],"encrypted_content":"opaque"}}"#,
+        r#"data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_123","type":"function_call","call_id":"call_provider","name":"read","arguments":"","status":"in_progress"}}"#,
+        r#"data: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc_456","type":"function_call","call_id":"call_provider_2","name":"search","arguments":"","status":"in_progress"}}"#,
+        r#"data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"path\":\"a.txt\"}"}"#,
+        r#"data: {"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"query\":\"needle\"}"}"#,
+        r#"data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_123","type":"function_call","call_id":"call_provider","name":"read","arguments":"{\"path\":\"a.txt\"}","status":"completed"}}"#,
+        r#"data: {"type":"response.output_item.done","output_index":2,"item":{"id":"fc_456","type":"function_call","call_id":"call_provider_2","name":"search","arguments":"{\"query\":\"needle\"}","status":"completed"}}"#,
+        r#"data: {"type":"response.output_text.delta","output_index":3,"content_index":0,"delta":"Reading"}"#,
+        r#"data: {"type":"response.output_text.done","output_index":3,"content_index":0,"text":"Reading"}"#,
+        r#"data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":11,"input_tokens_details":{"cached_tokens":3},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":2}}}}"#,
+        r#"data: {"type":"response.completed","response":{"status":"completed"}}"#,
+    ]
+    .join("\n\n")
+        + "\n\n";
+    let (base_url, _request_rx) = start_sse_server(sse).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5.6-sol".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-5.6-sol"),
+        system: None,
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "read a.txt".to_string(),
+            }],
+        }],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Medium),
+        headers: Default::default(),
+    };
+
+    let events: Vec<Event> = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert_eq!(events.len(), 13);
+    let reasoning_part = match &events[0] {
+        Event::ReasoningStart { part, .. } => *part,
+        event => panic!("expected reasoning start, got {event:?}"),
+    };
+    assert!(matches!(
+        &events[1],
+        Event::ReasoningDelta { part, delta, .. }
+            if *part == reasoning_part && delta == "Need a file."
+    ));
+    assert!(matches!(
+        &events[2],
+        Event::ReasoningEnd { part, provider_data: Some(data), .. }
+            if *part == reasoning_part
+                && data == &json!({
+                    "id": "rs_123",
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Need a file."}],
+                    "encrypted_content": "opaque"
+                })
+    ));
+    let (tool_part, tool_call) = match &events[3] {
+        Event::ToolInputStart {
+            part, call, name, ..
+        } if name.as_str() == "read" => (*part, *call),
+        event => panic!("expected tool input start, got {event:?}"),
+    };
+    let (second_tool_part, second_tool_call) = match &events[4] {
+        Event::ToolInputStart {
+            part, call, name, ..
+        } if name.as_str() == "search" => (*part, *call),
+        event => panic!("expected second tool input start, got {event:?}"),
+    };
+    assert_ne!(tool_call, second_tool_call);
+    assert!(matches!(
+        &events[5],
+        Event::ToolInputDelta { part, call, name, delta, .. }
+            if *part == tool_part && *call == tool_call && name.as_str() == "read"
+                && delta == "{\"path\":\"a.txt\"}"
+    ));
+    assert!(matches!(
+        &events[6],
+        Event::ToolInputDelta { part, call, name, delta, .. }
+            if *part == second_tool_part && *call == second_tool_call
+                && name.as_str() == "search" && delta == "{\"query\":\"needle\"}"
+    ));
+    assert!(matches!(
+        &events[7],
+        Event::ToolCallRequested { part, call, name, input, .. }
+            if *part == tool_part && *call == tool_call && name.as_str() == "read"
+                && input == &json!({"path": "a.txt"})
+    ));
+    assert!(matches!(
+        &events[8],
+        Event::ToolCallRequested { part, call, name, input, .. }
+            if *part == second_tool_part && *call == second_tool_call
+                && name.as_str() == "search" && input == &json!({"query": "needle"})
+    ));
+    let text_part = match &events[9] {
+        Event::TextStart { part, .. } => *part,
+        event => panic!("expected text start, got {event:?}"),
+    };
+    assert!(matches!(
+        &events[10],
+        Event::TextDelta { part, delta, .. } if *part == text_part && delta == "Reading"
+    ));
+    assert!(matches!(
+        &events[11],
+        Event::TextEnd { part, .. } if *part == text_part
+    ));
+    assert!(matches!(
+        &events[12],
+        Event::MessageFinished {
+            finish: FinishReason::ToolCalls,
+            tokens: Some(TokenUsage {
+                input: 11,
+                output: 7,
+                reasoning: 2,
+                cache_read: 3,
+                cache_write: 0,
+            }),
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn http_provider_reports_nested_responses_failure() {
+    let (base_url, _request_rx) = start_sse_server(
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n"
+            .to_string(),
+    )
+    .await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5.6-sol".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-5.6-sol"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.as_slice(),
+        [Err(ProviderError::Http(message))] if message == "quota exhausted"
+    ));
+}
+
+#[tokio::test]
+async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
+    let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5.6-sol".to_string()],
+    )
+    .unwrap();
+    let call_id = ToolCallId::new();
+    let provider_data = json!({
+        "id": "rs_123",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Need a file."}],
+        "encrypted_content": "opaque"
+    });
+    let req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-5.6-sol"),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read a.txt".to_string(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("openai/gpt-5.6-sol"),
+                parts: vec![
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "Need a file.".to_string(),
+                        provider_data: Some(provider_data.clone()),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id,
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({"path": "a.txt"}),
+                            output: json!("contents"),
+                            time_ms: 3,
+                        },
+                    },
+                ],
+                finish: Some(FinishReason::ToolCalls),
+                tokens: None,
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::Medium),
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let request = captured_request(request_rx).await;
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+
+    assert!(events.iter().all(Result::is_ok));
+    assert_eq!(body["input"][1], provider_data);
+    assert_eq!(
+        body["input"][2],
+        json!({
+            "type": "function_call",
+            "call_id": call_id.to_string(),
+            "name": "read",
+            "arguments": "{\"path\":\"a.txt\"}"
+        })
+    );
+    assert_eq!(
+        body["input"][3],
+        json!({
+            "type": "function_call_output",
+            "call_id": call_id.to_string(),
+            "output": "contents"
+        })
+    );
 }
 
 #[tokio::test]

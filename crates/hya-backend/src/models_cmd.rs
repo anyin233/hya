@@ -67,11 +67,13 @@ mod tests {
                 provider: "openai".to_string(),
                 id: "gpt-5.5".to_string(),
                 reasoning_variants: Vec::new(),
+                reasoning_default: None,
             },
             ModelEntry {
                 provider: "anthropic".to_string(),
                 id: "claude-sonnet-4-6".to_string(),
                 reasoning_variants: Vec::new(),
+                reasoning_default: None,
             },
         ];
 

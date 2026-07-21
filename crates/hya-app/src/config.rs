@@ -14,7 +14,9 @@ use anyhow::Context as _;
 use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
-use hya_provider::{HttpProvider, ProviderKind, ProviderRouter};
+use hya_provider::{
+    HttpProvider, ProviderKind, ProviderRouter, ReasoningEffort, resolve_default_reasoning,
+};
 use hya_tool::{InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget};
 use serde::Deserialize;
 use serde_norway::{Mapping, Value};
@@ -38,6 +40,7 @@ pub struct ModelEntry {
     pub id: String,
     pub provider: String,
     pub reasoning_variants: Vec<String>,
+    pub reasoning_default: Option<ReasoningEffort>,
 }
 
 impl ModelEntry {
@@ -149,14 +152,42 @@ struct ProviderConfig {
     #[serde(default)]
     api_key: Option<String>,
     #[serde(default)]
-    models: Vec<String>,
+    models: Vec<ModelConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ModelConfig {
+    Id(String),
+    Detailed(DetailedModelConfig),
+}
+
+#[derive(Debug, Deserialize)]
+struct DetailedModelConfig {
+    id: String,
+    #[serde(default)]
+    reasoning: Option<ModelReasoningConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelReasoningConfig {
+    #[serde(default)]
+    default: Option<String>,
+    #[serde(default)]
+    variants: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ProviderKindConfig {
-    #[serde(alias = "openai-compatible")]
+    #[serde(
+        rename = "openai",
+        alias = "openai-compatible",
+        alias = "openai-completion"
+    )]
     Openai,
+    #[serde(rename = "openai-response")]
+    OpenaiResponse,
     Anthropic,
     Google,
 }
@@ -165,10 +196,18 @@ impl From<ProviderKindConfig> for ProviderKind {
     fn from(kind: ProviderKindConfig) -> Self {
         match kind {
             ProviderKindConfig::Openai => Self::OpenAiCompatible,
+            ProviderKindConfig::OpenaiResponse => Self::OpenAiResponse,
             ProviderKindConfig::Anthropic => Self::Anthropic,
             ProviderKindConfig::Google => Self::Google,
         }
     }
+}
+
+#[derive(Debug)]
+struct ParsedModel {
+    id: String,
+    reasoning_variants: Vec<String>,
+    reasoning_default: Option<ReasoningEffort>,
 }
 
 struct ParsedProvider {
@@ -176,7 +215,7 @@ struct ParsedProvider {
     kind: ProviderKind,
     base_url: String,
     api_key: Option<String>,
-    models: Vec<String>,
+    models: Vec<ParsedModel>,
 }
 
 const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
@@ -900,6 +939,63 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
         if provider.models.is_empty() {
             continue;
         }
+        let kind: ProviderKind = provider.kind.into();
+        let models = provider
+            .models
+            .iter()
+            .map(|model| {
+                let (model_id, reasoning) = match model {
+                    ModelConfig::Id(id) => (id, None),
+                    ModelConfig::Detailed(model) => (&model.id, model.reasoning.as_ref()),
+                };
+                let fallback_variants = kind.reasoning_variants();
+                let configured_variants = reasoning
+                    .and_then(|config| config.variants.as_ref())
+                    .unwrap_or(&fallback_variants);
+                let efforts = configured_variants
+                    .iter()
+                    .map(|variant| {
+                        ReasoningEffort::parse(variant).with_context(|| {
+                            format!(
+                                "provider {id} model {model_id} has unknown reasoning variant {variant}"
+                            )
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                let variants = efforts
+                    .iter()
+                    .map(|effort| effort.as_str().to_string())
+                    .collect::<Vec<_>>();
+                let explicit_default = reasoning
+                    .and_then(|config| config.default.as_deref())
+                    .map(|value| {
+                        ReasoningEffort::parse(value).with_context(|| {
+                            format!(
+                                "provider {id} model {model_id} has unknown reasoning default {value}"
+                            )
+                        })
+                    })
+                    .transpose()?;
+                if let Some(default) = explicit_default
+                    && default != ReasoningEffort::Off
+                    && !efforts.contains(&default)
+                {
+                    anyhow::bail!(
+                        "provider {id} model {model_id} reasoning default {} is not advertised",
+                        default.as_str()
+                    );
+                }
+                Ok(ParsedModel {
+                    id: model_id.clone(),
+                    reasoning_default: resolve_default_reasoning(
+                        explicit_default,
+                        None,
+                        &variants,
+                    ),
+                    reasoning_variants: variants,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let api_key = provider
             .api_key
             .as_deref()
@@ -907,10 +1003,10 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
             .transpose()?;
         out.push(ParsedProvider {
             id: id.clone(),
-            kind: provider.kind.into(),
+            kind,
             base_url: provider.base_url.clone(),
             api_key,
-            models: provider.models.clone(),
+            models,
         });
     }
     Ok(out)
@@ -950,11 +1046,11 @@ fn model_entries(providers: &[ParsedProvider]) -> Vec<ModelEntry> {
     providers
         .iter()
         .flat_map(|provider| {
-            let variants = provider.kind.reasoning_variants();
             provider.models.iter().map(move |model| ModelEntry {
-                id: model.clone(),
+                id: model.id.clone(),
                 provider: provider.id.clone(),
-                reasoning_variants: variants.clone(),
+                reasoning_variants: model.reasoning_variants.clone(),
+                reasoning_default: model.reasoning_default,
             })
         })
         .collect()
@@ -1103,8 +1199,18 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         if api_key.trim().is_empty() {
             continue;
         }
-        let provider =
-            HttpProvider::new(p.id.clone(), p.kind, &p.base_url, api_key, p.models.clone())?;
+        let provider = HttpProvider::new(
+            p.id.clone(),
+            p.kind,
+            &p.base_url,
+            api_key,
+            p.models.iter().map(|model| model.id.clone()),
+        )?
+        .with_model_reasoning_variants(
+            p.models
+                .iter()
+                .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
+        );
         router = router.with(Arc::new(provider));
         authorized.push(p);
     }
@@ -1297,7 +1403,7 @@ providers:
         assert_eq!(oai.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(oai.base_url, "https://gw.example/v1");
         assert_eq!(oai.api_key.as_deref(), Some("sk-test-literal"));
-        assert!(oai.models.contains(&"gpt-5.5".to_string()));
+        assert!(oai.models.iter().any(|model| model.id == "gpt-5.5"));
         let anth = parsed.iter().find(|p| p.id == "gw-anth").unwrap();
         assert_eq!(anth.kind, ProviderKind::Anthropic);
         let goog = parsed.iter().find(|p| p.id == "gw-google").unwrap();
@@ -1339,17 +1445,79 @@ providers:
     }
 
     #[test]
-    fn openai_compatible_alias_is_accepted() {
-        let yaml = "
+    fn response_model_config_resolves_default_and_all_variants() {
+        let parsed = parse_providers(
+            r#"
 providers:
-  gw:
-    kind: openai-compatible
-    base_url: https://gw.example/v1
-    models: [m1]
-";
-        let parsed = parse_providers(yaml).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].kind, ProviderKind::OpenAiCompatible);
+  gateway:
+    kind: openai-response
+    base_url: https://gateway.example/v1
+    models:
+      - id: gpt-5.6-sol
+        reasoning:
+          default: medium
+          variants: [none, minimal, low, medium, high, xhigh, max]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed[0].kind, ProviderKind::OpenAiResponse);
+        let entries = model_entries(&parsed);
+        assert_eq!(
+            entries[0].reasoning_variants,
+            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            entries[0].reasoning_default,
+            Some(hya_provider::ReasoningEffort::Medium)
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_provider_kind_and_reasoning_efforts() {
+        let unknown_kind = parse_config(
+            "providers:\n  gateway:\n    kind: openai-responses\n    base_url: https://example.test/v1\n    api_key: test\n    models: [gpt-5.6-sol]\n",
+        )
+        .unwrap_err();
+        assert!(format!("{unknown_kind:#}").contains("unknown variant"));
+
+        let unknown_variant = parse_providers(
+            "providers:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          variants: [medium, extreme]\n",
+        )
+        .err()
+        .unwrap();
+        assert!(
+            unknown_variant
+                .to_string()
+                .contains("unknown reasoning variant extreme")
+        );
+
+        let unsupported_default = parse_providers(
+            "providers:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: high\n          variants: [low, medium]\n",
+        )
+        .err()
+        .unwrap();
+        assert!(
+            unsupported_default
+                .to_string()
+                .contains("reasoning default high is not advertised")
+        );
+    }
+
+    #[test]
+    fn legacy_string_models_keep_chat_aliases_and_highest_default() {
+        for kind in ["openai", "openai-compatible", "openai-completion"] {
+            let yaml = format!(
+                "providers:\n  gw:\n    kind: {kind}\n    base_url: https://gw.example/v1\n    models: [m1]\n"
+            );
+            let parsed = parse_providers(&yaml).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].kind, ProviderKind::OpenAiCompatible);
+            assert_eq!(
+                parsed[0].models[0].reasoning_default,
+                Some(ReasoningEffort::XHigh)
+            );
+        }
     }
 
     #[test]
@@ -1528,7 +1696,15 @@ plugins:
         assert!(matches!(gateway.kind, ProviderKindConfig::Openai));
         assert_eq!(gateway.base_url, "https://gateway.example/v1");
         assert_eq!(gateway.api_key.as_deref(), Some("{env:GATEWAY_KEY}"));
-        assert_eq!(gateway.models, vec!["gpt-5.4", "gpt-5.5"]);
+        let model_ids = gateway
+            .models
+            .iter()
+            .map(|model| match model {
+                ModelConfig::Id(id) => id.as_str(),
+                ModelConfig::Detailed(model) => model.id.as_str(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(model_ids, vec!["gpt-5.4", "gpt-5.5"]);
         let anthropic = file.providers.get("anthropic").unwrap();
         assert!(matches!(anthropic.kind, ProviderKindConfig::Anthropic));
         assert!(!text.contains("disabled-model"));

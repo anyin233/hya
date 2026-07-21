@@ -5,8 +5,12 @@ use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
 mod decoder;
+mod response_decoder;
+mod responses;
 
 pub use decoder::OpenAiChatDecoder;
+pub use response_decoder::OpenAiResponsesDecoder;
+pub use responses::OpenAiResponsesProtocol;
 
 pub struct OpenAiChatProtocol;
 
