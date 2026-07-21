@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check route semantics, idle-on-error ordering, compatibility, and required Rust gates."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check that the pinned-SDK test fails on old behavior and all TypeScript gates pass."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check the complete status flow uses the existing event contract without a parallel state path."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check the diff reuses the established publisher and adds no speculative abstraction."}

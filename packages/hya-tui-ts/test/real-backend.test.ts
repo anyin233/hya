@@ -399,6 +399,40 @@ async function waitFor(check: () => boolean | Promise<boolean>, message: string)
   }
 }
 
+test("pinned SDK synchronous prompt publishes busy then idle status", async () => {
+  const { project, url } = await startBackend()
+  const client = createOpencodeClient({ baseUrl: url, directory: project })
+  const events: GlobalEvent[] = []
+  const eventAbort = new AbortController()
+  const stream = await client.global.event({ signal: eventAbort.signal, sseMaxRetryAttempts: 0 })
+  const eventTask = (async () => {
+    for await (const event of stream.stream) events.push(event)
+  })()
+  cleanups.push(async () => {
+    eventAbort.abort()
+    await eventTask.catch(() => {})
+  })
+  await waitFor(() => events.some((event) => event.payload.type === "server.connected"), "SDK-decoded server.connected")
+
+  const created = await client.session.create({ title: "Synchronous prompt status" }, { throwOnError: true })
+  const sessionID = created.data!.id
+  const statuses = () =>
+    events.flatMap((event) =>
+      event.payload.type === "session.status" && event.payload.properties.sessionID === sessionID
+        ? [event.payload.properties.status.type]
+        : [],
+    )
+
+  const prompt = client.session.prompt(
+    { sessionID, parts: [{ type: "text", text: "synchronous status lifecycle" }] },
+    { throwOnError: true },
+  )
+  await waitFor(() => statuses().includes("busy"), "busy session event")
+  await prompt
+  await waitFor(() => statuses().includes("idle"), "idle session event")
+  expect(statuses()).toEqual(["busy", "idle"])
+}, 30_000)
+
 test("pinned SDK drives the retained TUI workflow against a real hya backend", async () => {
   const { project, url } = await startBackend()
   const client = createOpencodeClient({ baseUrl: url, directory: project })

@@ -51,7 +51,7 @@ pub(super) async fn prompt_async(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-async fn publish_session_status(
+pub(super) async fn publish_session_status(
     engine: &hya_core::SessionEngine,
     session: SessionId,
     status_type: &'static str,

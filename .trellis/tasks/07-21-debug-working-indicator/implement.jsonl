@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Preserve synchronous Compat prompt contracts, error ordering, and route-level regression coverage."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Require a failing current-TUI regression and the package's TypeScript verification gates."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify the existing session.status event survives server publication, SDK decoding, sync reduction, and display."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse the existing status publisher and avoid a second lifecycle mechanism."}
