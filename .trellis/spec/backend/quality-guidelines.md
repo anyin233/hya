@@ -388,6 +388,84 @@ jobs:
 
 ---
 
+## Scenario: OpenAI Protocol Selection And Reasoning Replay
+
+### 1. Scope / Trigger
+
+- Trigger: changes to OpenAI-compatible provider configuration, model reasoning
+  metadata, request encoding, stream decoding, or event replay.
+
+### 2. Signatures
+
+- Provider kinds: `openai-completion` and `openai-response`; `openai` and
+  `openai-compatible` remain Chat Completions aliases.
+- Model entries accept a string ID or
+  `{ id, reasoning: { default?, variants? } }`.
+- Provider behavior stays behind `Protocol::encode(CompletionRequest)` and a
+  protocol-specific `Decoder` selected by `HttpProvider` construction.
+
+### 3. Contracts
+
+- Chat Completions posts to `/chat/completions`; Responses posts to `/responses`.
+  The shared HTTP/SSE transport must not branch on API-specific payloads.
+- Responses emits `instructions`, ordered `input` items, flat function tools,
+  `store: false`, and `reasoning: { effort, summary: "auto" }`.
+- Responses preserves `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
+  `max` on the wire. Chat omits `none` and maps `max` to `xhigh`.
+- The selected model's configured default reaches the initial `AgentSpec`.
+  Explicit Compat variants/options may override it per turn.
+- Completed opaque Responses reasoning is stored in
+  `ReasoningEnd.provider_data`, survives projection and fork replay, and is sent
+  unchanged before the matching `function_call` and `function_call_output`.
+
+### 4. Validation & Error Matrix
+
+- Unknown provider kind -> configuration error.
+- Unknown reasoning effort -> configuration error.
+- Default effort absent from configured variants -> configuration error.
+- Legacy string model or Chat alias -> preserve existing Chat behavior.
+- `response.failed` or top-level Responses `error` -> `ProviderError`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a configured Responses model defaults to `max`, performs a stateless
+  tool round, and replays its opaque reasoning item before the tool result.
+- Base: `kind: openai` with string models still uses Chat Completions and its
+  existing supported fallback.
+- Bad: decoding Responses with the Chat decoder or retaining opaque reasoning
+  only in process memory.
+
+### 6. Tests Required
+
+- Config tests assert string/object parsing, all effort labels, defaults,
+  variants, aliases, and rejection cases.
+- Runtime tests assert the selected default reaches the first agent and provider
+  catalog metadata retains per-model variants.
+- Local HTTP/SSE tests assert endpoint and JSON shape, ordered canonical events,
+  parallel tool assembly, usage, failures, and stateless continuation.
+- Event/projection/core tests assert opaque reasoning survives serde, replay,
+  request reconstruction, and session forks.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// API-specific behavior leaks into the shared transport and replay drops state.
+if endpoint.ends_with("/responses") {
+    encode_responses_in_stream(&request)?;
+}
+```
+
+#### Correct
+
+```rust
+let protocol: Arc<dyn Protocol> = Arc::new(OpenAiResponsesProtocol::new());
+let body = protocol.encode(&request)?;
+```
+
+---
+
 ## Scenario: Tool Invocation And Resource Permissions
 
 ### 1. Scope / Trigger
