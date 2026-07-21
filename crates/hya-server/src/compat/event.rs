@@ -346,6 +346,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
+            ..
         } => part_snapshot_payload(st, &envelope, *session, *message, *part, "reasoning")
             .await
             .unwrap_or_else(|| fallback_payload(&envelope)),

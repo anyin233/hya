@@ -257,7 +257,7 @@ fn part_json(
             "id": id.to_string(),
             "text": text,
         }),
-        PartProjection::Reasoning { id, text } => match session {
+        PartProjection::Reasoning { id, text, .. } => match session {
             Some(session) => json!({
                 "id": id.to_string(),
                 "sessionID": session.to_string(),

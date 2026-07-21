@@ -133,23 +133,31 @@ fn media_part(file: &Value) -> Option<Part> {
 fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
     parts
         .iter()
-        .filter_map(|p| match p {
-            PartProjection::Text { id, text } => Some(Part::Text {
+        .map(|p| match p {
+            PartProjection::Text { id, text } => Part::Text {
                 id: *id,
                 text: text.clone(),
-            }),
+            },
+            PartProjection::Reasoning {
+                id,
+                text,
+                provider_data,
+            } => Part::Reasoning {
+                id: *id,
+                text: text.clone(),
+                provider_data: provider_data.clone(),
+            },
             PartProjection::Tool {
                 id,
                 call,
                 name,
                 state,
-            } => Some(Part::Tool {
+            } => Part::Tool {
                 id: *id,
                 call_id: *call,
                 name: name.clone(),
                 state: state.clone(),
-            }),
-            PartProjection::Reasoning { .. } => None,
+            },
         })
         .collect()
 }

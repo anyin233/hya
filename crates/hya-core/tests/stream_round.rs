@@ -1,14 +1,15 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures::stream;
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{
-    AgentName, Event, FinishReason, MessageId, ModelRef, PartId, PartProjection, Role, SessionId,
+    AgentName, Event, FinishReason, Message, MessageId, MessageProjection, ModelRef, Part, PartId,
+    PartProjection, Projection, Role, SessionId, SessionProjection,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
@@ -18,7 +19,9 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-struct DelayedDeltaProvider;
+struct DelayedDeltaProvider {
+    request: Arc<Mutex<Option<CompletionRequest>>>,
+}
 
 #[async_trait]
 impl Provider for DelayedDeltaProvider {
@@ -35,10 +38,11 @@ impl Provider for DelayedDeltaProvider {
 
     async fn stream(
         &self,
-        _req: CompletionRequest,
+        req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        *self.request.lock().expect("request capture") = Some(req);
         let part = PartId::new();
         let events = vec![
             Event::TextStart {
@@ -128,7 +132,9 @@ async fn next_text_delta(
 #[tokio::test]
 async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
     let workdir = tempdir();
-    let router = ProviderRouter::new().with(Arc::new(DelayedDeltaProvider));
+    let router = ProviderRouter::new().with(Arc::new(DelayedDeltaProvider {
+        request: Arc::new(Mutex::new(None)),
+    }));
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
     let bus = EventBus::default();
@@ -203,4 +209,91 @@ async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
         durable_assistant_deltas.len() <= 1,
         "durable replay must not commit every streamed token delta: {durable_assistant_deltas:?}"
     );
+}
+
+#[tokio::test]
+async fn forked_reasoning_provider_data_reaches_next_request() {
+    let workdir = tempdir();
+    let request = Arc::new(Mutex::new(None));
+    let router = ProviderRouter::new().with(Arc::new(DelayedDeltaProvider {
+        request: request.clone(),
+    }));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.expect("store"),
+        Arc::new(router),
+        tools,
+        permission,
+        EventBus::default(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .expect("create session");
+    let provider_data = serde_json::json!({
+        "type": "reasoning",
+        "id": "rs_123",
+        "encrypted_content": "opaque",
+    });
+    let source = Projection {
+        session: SessionProjection {
+            messages: vec![MessageProjection {
+                id: MessageId::new(),
+                role: Role::Assistant,
+                finish: Some(FinishReason::Stop),
+                tokens: None,
+                files: Vec::new(),
+                agents: Vec::new(),
+                parts: vec![PartProjection::Reasoning {
+                    id: PartId::new(),
+                    text: "visible summary".to_string(),
+                    provider_data: Some(provider_data.clone()),
+                }],
+            }],
+            ..SessionProjection::default()
+        },
+        ..Projection::default()
+    };
+
+    engine
+        .copy_messages_to_session(session, &source, None)
+        .await
+        .expect("copy messages");
+    let replay = engine.store().replay(session).await.expect("replay");
+    let forked = Projection::from_events(&replay);
+    let PartProjection::Reasoning {
+        text,
+        provider_data: forked_data,
+        ..
+    } = &forked.session.messages[0].parts[0]
+    else {
+        panic!("forked reasoning part");
+    };
+    assert_eq!(text, "visible summary");
+    assert_eq!(forked_data.as_ref(), Some(&provider_data));
+
+    engine
+        .admit_user_prompt(session, "continue".to_string())
+        .await
+        .expect("admit prompt");
+    engine
+        .run_turn(session, &agent(&workdir), CancellationToken::new())
+        .await
+        .expect("run turn");
+    let request = request.lock().expect("request capture");
+    let request = request.as_ref().expect("completion request");
+    let sent = request.messages.iter().find_map(|message| match message {
+        Message::Assistant { parts, .. } => parts.iter().find_map(|part| match part {
+            Part::Reasoning { provider_data, .. } => provider_data.as_ref(),
+            _ => None,
+        }),
+        _ => None,
+    });
+    assert_eq!(sent, Some(&provider_data));
 }

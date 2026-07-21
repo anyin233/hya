@@ -71,3 +71,79 @@ fn live_zero_seq_events_apply_without_advancing_durable_cursor() {
     ));
     assert_eq!(projection.last_seq, 2);
 }
+
+#[test]
+fn reasoning_provider_data_survives_serde_and_projection_replay() {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let part = PartId::new();
+    let provider_data = serde_json::json!({
+        "type": "reasoning",
+        "id": "rs_123",
+        "encrypted_content": "opaque",
+    });
+    let legacy: Event = serde_json::from_value(serde_json::json!({
+        "type": "reasoning_end",
+        "session": session,
+        "message": message,
+        "part": part,
+    }))
+    .expect("legacy reasoning event");
+    assert!(matches!(
+        legacy,
+        Event::ReasoningEnd {
+            provider_data: None,
+            ..
+        }
+    ));
+
+    let log = vec![
+        env(
+            1,
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::Assistant,
+            },
+        ),
+        env(
+            2,
+            Event::ReasoningStart {
+                session,
+                message,
+                part,
+            },
+        ),
+        env(
+            3,
+            Event::ReasoningDelta {
+                session,
+                message,
+                part,
+                delta: "visible summary".to_string(),
+            },
+        ),
+        env(
+            4,
+            Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data: Some(provider_data.clone()),
+            },
+        ),
+    ];
+    let bytes = serde_json::to_vec(&log).expect("serialize reasoning log");
+    let decoded: Vec<Envelope> = serde_json::from_slice(&bytes).expect("deserialize reasoning log");
+    let projection = Projection::from_events(&decoded);
+    let stored = projection.session.messages[0].parts[0].clone();
+
+    assert_eq!(
+        stored,
+        PartProjection::Reasoning {
+            id: part,
+            text: "visible summary".to_string(),
+            provider_data: Some(provider_data),
+        }
+    );
+}

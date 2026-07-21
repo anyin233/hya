@@ -231,6 +231,7 @@ impl Decoder for AnthropicDecoder {
                             session,
                             message,
                             part: block.part,
+                            provider_data: None,
                         }),
                         BlockKind::Tool => {}
                     }

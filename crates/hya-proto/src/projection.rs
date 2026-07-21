@@ -76,6 +76,8 @@ pub enum PartProjection {
     Reasoning {
         id: PartId,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_data: Option<serde_json::Value>,
     },
     Tool {
         id: PartId,
@@ -323,6 +325,7 @@ impl Projection {
                 PartProjection::Reasoning {
                     id: *part,
                     text: String::new(),
+                    provider_data: None,
                 },
             ),
             Event::ReasoningDelta {
@@ -347,6 +350,20 @@ impl Projection {
                     find_part(self, *message, *part)
                 {
                     *text = replacement.clone();
+                }
+            }
+            Event::ReasoningEnd {
+                message,
+                part,
+                provider_data,
+                ..
+            } => {
+                if let Some(PartProjection::Reasoning {
+                    provider_data: stored,
+                    ..
+                }) = find_part(self, *message, *part)
+                {
+                    *stored = provider_data.clone();
                 }
             }
             Event::ToolInputStart {
@@ -552,7 +569,6 @@ impl Projection {
                 }
             }
             Event::TextEnd { .. }
-            | Event::ReasoningEnd { .. }
             | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
             | Event::CommandExecuted { .. }
