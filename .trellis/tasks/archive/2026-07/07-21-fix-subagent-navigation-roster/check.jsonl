@@ -1,0 +1,4 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review app-specific component placement, semantic theme use, layout ownership, accessibility text, and semantic test style."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review TDD evidence, narrow/wide rendering, saturating geometry, prompt preservation, and all required Rust checks."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check that shortcut keys, Team data, wrapping, and navigation reuse their existing single sources of truth."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check that unique roster ownership is resolved once in MessageStore and consumed consistently by status, navigation, dialogs, and rendering."}
