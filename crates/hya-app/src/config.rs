@@ -1272,7 +1272,8 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
         );
         if credential.use_grok_session {
-            provider = provider.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "hya");
+            // Match Grok Build CLI identity so cli-chat-proxy accepts the session.
+            provider = provider.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
         }
         router = router.with(Arc::new(provider));
         authorized.push(p);

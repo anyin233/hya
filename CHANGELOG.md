@@ -1,3 +1,3 @@
-# 0.33.21
+# 0.33.22
 
-- Grok Build auth is self-contained: credentials come from config `api_key` or `hya login` only (no `~/.grok/auth.json` reads); `grok-build` always sends CLI chat-proxy session headers.
+- Use `grok-cli` as `x-grok-client-identifier` to match Grok Build.
