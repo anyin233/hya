@@ -15,7 +15,7 @@ use crate::render::text::{Attrs, Line, Span, Text};
 use crate::theme::{selected_foreground, ResolvedTheme};
 
 use super::prompt_box;
-use super::session::timeline_text;
+use super::session::{roster_shortcut_dock, subagent_status, timeline_text};
 
 /// Everything an aux pane needs to render a read-only transcript.
 pub struct AuxPaneView<'a> {
@@ -100,12 +100,32 @@ pub fn draw(
         return;
     }
 
+    let dock = roster_shortcut_dock(
+        view.store,
+        view.session_id,
+        subagent_status(view.store, view.session_id),
+        true,
+        body_area.width as usize,
+        theme,
+    );
+    let dock_rows = (dock.0.len().min(u16::MAX as usize) as u16).min(body_area.height);
+    let timeline_area = Rect {
+        height: body_area.height.saturating_sub(dock_rows),
+        ..body_area
+    };
+    let dock_area = Rect {
+        x: body_area.x,
+        y: body_area.y.saturating_add(timeline_area.height),
+        width: body_area.width,
+        height: dock_rows,
+    };
+
     let agent_color = prompt_box::agent_color(theme, view.agents, Some(view.handle));
     let timeline = timeline_text(
         view.store,
         view.session_id,
         &[],
-        body_area.width as usize,
+        timeline_area.width as usize,
         agent_color,
         view.agents,
         view.model_names,
@@ -114,7 +134,7 @@ pub fn draw(
         theme,
     );
     let old_height = scroll.content_height;
-    scroll.viewport_height = body_area.height as usize;
+    scroll.viewport_height = timeline_area.height as usize;
     scroll.sticky_bottom(old_height, timeline.text.0.len());
     if scroll.new_output {
         let header_line = Line(vec![
@@ -143,7 +163,13 @@ pub fn draw(
         .scroll((scroll.offset as u16, 0))
         .wrap(Wrap { trim: false })
         .style(ratatui::style::Style::default().fg(draw::rgba_to_color(theme.text, background)));
-    frame.render_widget(messages, body_area);
+    frame.render_widget(messages, timeline_area);
+    frame.render_widget(
+        Paragraph::new(draw::text_to_ratatui(&dock, background)).style(
+            ratatui::style::Style::default().bg(draw::rgba_to_color(background, background)),
+        ),
+        dock_area,
+    );
 }
 
 /// Draw the one-row tab bar advertising every open pane and which is focused.
@@ -195,4 +221,146 @@ pub fn draw_tab_bar(
         ),
         bar_area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screens::session::{roster_shortcut_dock, subagent_status};
+    use crate::theme::{builtin_theme, resolve, Mode, DEFAULT_THEME};
+    use hya_sdk::GlobalEvent;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn event(kind: &str, properties: serde_json::Value) -> GlobalEvent {
+        serde_json::from_value(serde_json::json!({
+            "payload": { "type": kind, "properties": properties }
+        }))
+        .unwrap()
+    }
+
+    fn team_event(event: serde_json::Value) -> GlobalEvent {
+        serde_json::from_value(serde_json::json!({
+            "payload": {
+                "type": "hya.envelope",
+                "properties": { "seq": 1, "event": event }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn theme() -> ResolvedTheme {
+        resolve(&builtin_theme(DEFAULT_THEME).unwrap().unwrap(), Mode::Dark).unwrap()
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        (0..width).map(|col| buffer[(col, row)].symbol()).collect()
+    }
+
+    #[test]
+    fn draw_bottom_docks_shared_roster_shortcuts_without_composer() {
+        let mut store = MessageStore::default();
+        assert!(store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_child" } }),
+        )));
+        assert!(store.apply_event(&event(
+            "message.updated",
+            serde_json::json!({ "info": {
+                "id": "msg_child", "sessionID": "ses_child", "role": "assistant",
+                "time": { "created": 1 }
+            } }),
+        )));
+        assert!(store.apply_event(&event(
+            "message.part.updated",
+            serde_json::json!({ "part": {
+                "id": "prt_child", "messageID": "msg_child", "sessionID": "ses_child",
+                "type": "text", "text": "child transcript"
+            } }),
+        )));
+        assert!(store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_main",
+            "agent_session": "ses_child",
+            "handle": "reviewer-1",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        }))));
+
+        let theme = theme();
+        let expected_bindings = [
+            "ctrl+b",
+            "<leader>down",
+            "right",
+            "left",
+            "up",
+            "<leader>o",
+            "<leader>T",
+            "<leader>V",
+            "<leader>S",
+            "<leader>i",
+            "<leader>w",
+            "<leader>.",
+            "<leader>0",
+        ];
+
+        for width in [80, 120] {
+            let height = 24;
+            let dock = roster_shortcut_dock(
+                &store,
+                "ses_child",
+                subagent_status(&store, "ses_child"),
+                true,
+                width as usize,
+                &theme,
+            );
+            assert!(dock.0.iter().all(|line| line.width() <= width as usize));
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut scroll = ScrollState::default();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        frame.area(),
+                        &AuxPaneView {
+                            store: &store,
+                            session_id: "ses_child",
+                            handle: "reviewer-1",
+                            agent_type: Some("reviewer"),
+                            status: Some("busy"),
+                            agents: &[],
+                            model_names: &[],
+                            spinner: "",
+                            focused: true,
+                        },
+                        &mut scroll,
+                        &theme,
+                    );
+                })
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let rendered = (0..height)
+                .map(|row| row_text(buffer, row, width))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.contains("child transcript"));
+            assert!(rendered.contains("reviewer-1"));
+            assert!(rendered.contains("esc main"));
+            for binding in expected_bindings {
+                assert!(
+                    rendered.contains(binding),
+                    "{binding:?} missing at width {width}; frame:\n{rendered}"
+                );
+            }
+            assert!(!rendered.contains("Ask anything"));
+            assert!(!rendered.contains("ctrl+p commands"));
+            assert_eq!(
+                scroll.viewport_height,
+                height.saturating_sub(1 + dock.0.len() as u16) as usize
+            );
+            assert!(row_text(buffer, height - 1, width).contains("<leader>0"));
+        }
+    }
 }

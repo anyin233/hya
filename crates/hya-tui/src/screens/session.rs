@@ -2,6 +2,7 @@ use hya_sdk::{MemberProjection, MessageStore, Part, RosterEntry, StoredPart};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 
 use crate::contracts::{PromptDoc, Rgba};
+use crate::keymap::default_binding_specs;
 use crate::render::text::{Attrs, Line, Span, Text};
 use crate::render::{draw, markdown, scroll::ScrollState};
 use crate::theme::{selected_foreground, ResolvedTheme};
@@ -314,18 +315,27 @@ pub(crate) fn subagent_status(store: &MessageStore, session_id: &str) -> Option<
         });
     }
     let team_root = store.team_root_for(session_id);
-    let mut roster_sessions = store
+    let mut roster_sessions = Vec::new();
+    for entry in store
         .team_for(team_root)
         .into_iter()
         .flat_map(|team| team.roster.values())
-        .filter_map(|entry| {
-            let session = entry.session.as_str();
-            (!session.is_empty() && session != session_id && session != team_root)
-                .then_some(session)
-        })
-        .collect::<Vec<_>>();
-    roster_sessions.sort_unstable();
-    roster_sessions.dedup();
+    {
+        let session = entry.session.as_str();
+        if !session.is_empty() && session != team_root && !roster_sessions.contains(&session) {
+            roster_sessions.push(session);
+        }
+    }
+
+    if team_root != session_id {
+        return roster_sessions
+            .iter()
+            .position(|session| *session == session_id)
+            .map(|position| SubagentStatus::Child {
+                index: position + 1,
+                total: roster_sessions.len(),
+            });
+    }
 
     let count = roster_sessions.len();
     if count > 0 {
@@ -378,6 +388,141 @@ fn subagent_status_line(status: SubagentStatus, theme: &ResolvedTheme) -> Line {
         Span::styled(marker, Some(marker_color), None, Attrs::default()),
         Span::styled(text, Some(theme.text_muted), None, Attrs::default()),
     ])
+}
+
+const NAVIGATE_SHORTCUTS: &[(&str, &str)] = &[
+    ("session_background", "background"),
+    ("session_child_first", "first"),
+    ("session_child_cycle", "next"),
+    ("session_child_cycle_reverse", "previous"),
+    ("session_parent", "parent"),
+];
+const OPEN_SHORTCUTS: &[(&str, &str)] = &[
+    ("pane_roster", "manager"),
+    ("pane_open_tab", "tab"),
+    ("pane_open_vertical", "vertical"),
+    ("pane_open_horizontal", "horizontal"),
+];
+const PANE_SHORTCUTS: &[(&str, &str)] = &[
+    ("pane_channels", "channels"),
+    ("pane_close", "close"),
+    ("pane_cycle", "cycle"),
+    ("pane_focus_main", "main"),
+];
+
+pub(crate) fn roster_shortcut_dock(
+    store: &MessageStore,
+    session_id: &str,
+    subagent: Option<SubagentStatus>,
+    return_to_main: bool,
+    width: usize,
+    theme: &ResolvedTheme,
+) -> Text {
+    if subagent.is_none() && !return_to_main {
+        return Text::default();
+    }
+    let mut lines = Vec::new();
+    if let Some(status) = subagent {
+        lines.push(subagent_status_line(status, theme));
+    }
+    if return_to_main {
+        let escape = Span::styled(
+            " · esc main",
+            Some(theme.text_muted),
+            None,
+            Attrs::default(),
+        );
+        if let Some(line) = lines.last_mut() {
+            line.0.push(escape);
+        } else {
+            lines.push(Line(vec![escape]));
+        }
+    }
+
+    let team_root = store.team_root_for(session_id);
+    for entry in store
+        .team_for(team_root)
+        .into_iter()
+        .flat_map(|team| team.roster.values())
+        .filter(|entry| !entry.session.is_empty() && entry.session != team_root)
+    {
+        let mut spans = vec![
+            Span::styled(
+                "● ",
+                Some(status_color(&entry.status, theme)),
+                None,
+                Attrs::default(),
+            ),
+            Span::styled(
+                entry.handle.as_str(),
+                Some(theme.text),
+                None,
+                Attrs {
+                    bold: true,
+                    ..Attrs::default()
+                },
+            ),
+        ];
+        for value in [
+            entry.agent_type.as_str(),
+            entry.mode.as_str(),
+            entry.status.as_str(),
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .chain(
+            entry
+                .current_task
+                .as_deref()
+                .filter(|value| !value.is_empty()),
+        ) {
+            spans.push(Span::styled(
+                format!(" · {value}"),
+                Some(theme.text_muted),
+                None,
+                Attrs::default(),
+            ));
+        }
+        lines.push(Line(spans));
+    }
+
+    lines.push(shortcut_line("Navigate", NAVIGATE_SHORTCUTS, theme));
+    lines.push(shortcut_line("Open", OPEN_SHORTCUTS, theme));
+    lines.push(shortcut_line("Pane", PANE_SHORTCUTS, theme));
+    Text(lines).wrap(width)
+}
+
+fn shortcut_line(title: &str, shortcuts: &[(&str, &str)], theme: &ResolvedTheme) -> Line {
+    let mut spans = vec![Span::styled(
+        title,
+        Some(theme.text),
+        None,
+        Attrs {
+            bold: true,
+            ..Attrs::default()
+        },
+    )];
+    for (config_key, label) in shortcuts {
+        let Some((_, binding, _)) = default_binding_specs()
+            .iter()
+            .find(|(candidate, _, _)| candidate == config_key)
+        else {
+            continue;
+        };
+        spans.push(Span::styled(
+            format!("  {binding}"),
+            Some(theme.accent),
+            None,
+            Attrs::default(),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Some(theme.text_muted),
+            None,
+            Attrs::default(),
+        ));
+    }
+    Line(spans)
 }
 
 pub struct SessionView<'a> {
@@ -457,30 +602,38 @@ pub fn draw_in_area(
     let prompt_rows = desired_prompt_rows
         .min(main_area.height)
         .max(min_prompt_rows);
-    let subagent_rows =
-        u16::from(subagent.is_some()).min(main_area.height.saturating_sub(prompt_rows));
+    let dock = roster_shortcut_dock(
+        store,
+        session_id,
+        subagent,
+        matches!(subagent, Some(SubagentStatus::Child { .. })),
+        main_area.width as usize,
+        theme,
+    );
+    let dock_rows = (dock.0.len().min(u16::MAX as usize) as u16)
+        .min(main_area.height.saturating_sub(prompt_rows));
     let timeline_rows = main_area
         .height
         .saturating_sub(prompt_rows)
-        .saturating_sub(subagent_rows);
+        .saturating_sub(dock_rows);
     let timeline_area = ratatui::layout::Rect {
         x: main_area.x,
         y: main_area.y,
         width: main_area.width,
         height: timeline_rows,
     };
-    let subagent_area = ratatui::layout::Rect {
+    let dock_area = ratatui::layout::Rect {
         x: main_area.x,
         y: main_area.y.saturating_add(timeline_rows),
         width: main_area.width,
-        height: subagent_rows,
+        height: dock_rows,
     };
     let prompt_chunk = ratatui::layout::Rect {
         x: main_area.x,
         y: main_area
             .y
             .saturating_add(timeline_rows)
-            .saturating_add(subagent_rows),
+            .saturating_add(dock_rows),
         width: main_area.width,
         height: prompt_rows,
     };
@@ -526,16 +679,13 @@ pub fn draw_in_area(
         show_cursor,
         yolo,
     };
-    if let Some(status) = subagent {
-        let line = subagent_status_line(status, theme);
-        let rendered = draw::text_to_ratatui(&Text(vec![line]), background);
-        frame.render_widget(
-            Paragraph::new(rendered).style(
-                ratatui::style::Style::default().bg(draw::rgba_to_color(background, background)),
-            ),
-            subagent_area,
-        );
-    }
+    let rendered = draw::text_to_ratatui(&dock, background);
+    frame.render_widget(
+        Paragraph::new(rendered).style(
+            ratatui::style::Style::default().bg(draw::rgba_to_color(background, background)),
+        ),
+        dock_area,
+    );
 
     let prompt_area = crate::contracts::Rect {
         x: prompt_chunk.x,
@@ -1292,6 +1442,147 @@ mod tests {
             .map(|row| row_text(buffer, row, width))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn subagent_status_classifies_parentless_roster_member_as_child() {
+        let mut store = MessageStore::default();
+        assert!(store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_child" } }),
+        )));
+        assert!(store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_main",
+            "agent_session": "ses_child",
+            "handle": "reviewer-1",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        }))));
+
+        assert!(matches!(
+            subagent_status(&store, "ses_child"),
+            Some(SubagentStatus::Child { index: 1, total: 1 })
+        ));
+    }
+
+    #[test]
+    fn draw_renders_shared_roster_shortcut_dock_at_80_and_120_columns() {
+        let mut store = MessageStore::default();
+        assert!(store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_main" } }),
+        )));
+        assert!(store.apply_event(&event(
+            "session.updated",
+            serde_json::json!({ "info": { "id": "ses_child" } }),
+        )));
+        assert!(store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_registered",
+            "session": "ses_main",
+            "agent_session": "ses_child",
+            "handle": "reviewer-1",
+            "agent_type": "reviewer",
+            "mode": "resident"
+        }))));
+        assert!(store.apply_event(&team_event(serde_json::json!({
+            "type": "agent_activity_changed",
+            "session": "ses_main",
+            "handle": "reviewer-1",
+            "status": "busy",
+            "current_task": "reviewing"
+        }))));
+
+        let theme = theme();
+        let prompt = PromptDoc::default();
+        let expected = [
+            "1 subagent",
+            "reviewer-1",
+            "reviewer",
+            "resident",
+            "busy",
+            "reviewing",
+            "ctrl+b",
+            "<leader>down",
+            "right",
+            "left",
+            "up",
+            "<leader>o",
+            "<leader>T",
+            "<leader>V",
+            "<leader>S",
+            "<leader>i",
+            "<leader>w",
+            "<leader>.",
+            "<leader>0",
+        ];
+
+        for width in [80, 120] {
+            let height = 30;
+            let dock = roster_shortcut_dock(
+                &store,
+                "ses_main",
+                subagent_status(&store, "ses_main"),
+                false,
+                width as usize,
+                &theme,
+            );
+            assert!(
+                dock.0.iter().all(|line| line.width() <= width as usize),
+                "dock lines must fit width {width}"
+            );
+            let backend = TestBackend::new(width, height);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut scroll = ScrollState::default();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        &SessionView {
+                            store: &store,
+                            session_id: "ses_main",
+                            pending: &[],
+                            prompt: &prompt,
+                            agents: &[],
+                            model_names: &[],
+                            active_agent: None,
+                            model_label: None,
+                            provider_label: None,
+                            context_limit: None,
+                            spinner: "",
+                            show_timestamps: false,
+                            sidebar_visible: false,
+                            subagent: subagent_status(&store, "ses_main"),
+                            show_cursor: true,
+                            yolo: false,
+                        },
+                        &mut scroll,
+                        &theme,
+                    );
+                })
+                .unwrap();
+
+            let buffer = terminal.backend().buffer();
+            let rendered = rows_text(buffer, 0, height, width);
+            for value in expected {
+                assert!(
+                    rendered.contains(value),
+                    "{value:?} missing at width {width}; frame:\n{rendered}"
+                );
+            }
+            assert!(
+                !rendered.contains("esc main"),
+                "root sessions must retain Esc interrupt semantics"
+            );
+            let prompt_rows = prompt_box::box_height(&prompt.text, width)
+                .min(height)
+                .max(6.min(height));
+            let prompt_top = height - prompt_rows;
+            assert!(
+                row_text(buffer, prompt_top - 1, width).contains("<leader>0"),
+                "dock should end directly above the prompt at width {width}"
+            );
+        }
     }
 
     #[test]
