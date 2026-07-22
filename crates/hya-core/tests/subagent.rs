@@ -415,6 +415,118 @@ async fn run_team_can_resume_existing_member_session() {
     assert_eq!(evidence[0].status, MemberStatus::Done);
 }
 
+/// Restarting a failed/finished subagent via the same child session must not
+/// grow the lead's member list or team roster. Duplicate members share one
+/// session id and make the TUI roster multi-highlight on select.
+#[tokio::test]
+async fn run_team_resume_reuses_member_and_roster_handle() {
+    let (engine, agent) = engine().await;
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let child = engine
+        .create(CreateSession {
+            parent: Some(lead),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let first = run_team(
+        engine.clone(),
+        lead,
+        vec![MemberSpec {
+            id: MemberId::new(),
+            agent: agent.clone(),
+            directive: "first attempt".to_string(),
+            session: Some(child),
+        }],
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].status, MemberStatus::Done);
+
+    let after_first = engine.read_projection(lead).await.unwrap();
+    let first_members: Vec<_> = after_first
+        .session
+        .members
+        .iter()
+        .filter(|m| m.child == Some(child))
+        .collect();
+    assert_eq!(first_members.len(), 1, "first spawn creates one member");
+    let first_member_id = first_members[0].member;
+    let first_handles: Vec<_> = after_first
+        .team
+        .roster
+        .values()
+        .filter(|e| e.session == child)
+        .map(|e| e.handle.clone())
+        .collect();
+    assert_eq!(
+        first_handles.len(),
+        1,
+        "first spawn creates one roster handle"
+    );
+    let first_handle = first_handles[0].clone();
+
+    // Resume with a fresh MemberId (what the task tool does via task_id).
+    let second = run_team(
+        engine.clone(),
+        lead,
+        vec![MemberSpec {
+            id: MemberId::new(),
+            agent,
+            directive: "restart after failure".to_string(),
+            session: Some(child),
+        }],
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].status, MemberStatus::Done);
+    assert_eq!(second[0].session, child.to_string());
+
+    let after_resume = engine.read_projection(lead).await.unwrap();
+    let resume_members: Vec<_> = after_resume
+        .session
+        .members
+        .iter()
+        .filter(|m| m.child == Some(child))
+        .collect();
+    assert_eq!(
+        resume_members.len(),
+        1,
+        "resume must not add a second member row for the same child session"
+    );
+    assert_eq!(
+        resume_members[0].member, first_member_id,
+        "resume should upsert the original member id"
+    );
+
+    let resume_handles: Vec<_> = after_resume
+        .team
+        .roster
+        .values()
+        .filter(|e| e.session == child)
+        .map(|e| e.handle.clone())
+        .collect();
+    assert_eq!(
+        resume_handles.len(),
+        1,
+        "resume must not allocate a second roster handle for the same session"
+    );
+    assert_eq!(resume_handles[0], first_handle);
+}
+
 #[tokio::test]
 async fn panic_in_one_member_is_isolated() {
     let panicker = tokio::spawn(async { panic!("member exploded") });

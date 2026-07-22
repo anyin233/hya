@@ -70,8 +70,20 @@ fn build_node(
         for m in &proj.members {
             match m.child {
                 Some(child) => {
-                    node.children
-                        .push(build_node(child, Some(m), lookup, roster, visited))
+                    // Collapse historical duplicates: a resume used to emit a
+                    // second MemberSpawned for the same child session, which made
+                    // the TUI roster show (and multi-select) two rows for one agent.
+                    // Later member state wins.
+                    let child_node = build_node(child, Some(m), lookup, roster, visited);
+                    if let Some(idx) = node
+                        .children
+                        .iter()
+                        .position(|existing| existing.session == Some(child))
+                    {
+                        node.children[idx] = child_node;
+                    } else {
+                        node.children.push(child_node);
+                    }
                 }
                 None => node.children.push(RunTreeNode {
                     session: None,
@@ -210,5 +222,44 @@ mod tests {
         assert!(root_json.get("roster").is_none());
         assert!(child_json.get("roster").is_some());
         assert!(pending_json.get("roster").is_none());
+    }
+
+    /// Historical logs may contain two MemberSpawned rows for the same child
+    /// (pre-fix resume path). The tree must surface one observation node so the
+    /// roster cannot multi-highlight two rows that share a session id.
+    #[test]
+    fn collapses_duplicate_members_for_same_child_session() {
+        let root = SessionId::new();
+        let child = SessionId::new();
+        let mut first = member(child, "explore");
+        first.status = MemberRunStatus::Failed;
+        first.summary = "first attempt".to_string();
+        let mut second = member(child, "explore");
+        second.status = MemberRunStatus::Running;
+        second.summary = "restarted".to_string();
+
+        let mut lookup = HashMap::new();
+        lookup.insert(
+            root,
+            proj_with_members(root, "build", vec![first, second.clone()]),
+        );
+        lookup.insert(child, proj_with_members(child, "explore", vec![]));
+
+        let tree = build_run_tree(root, &lookup, &HashMap::new());
+        assert_eq!(
+            tree.children.len(),
+            1,
+            "same child session must appear once in the run tree"
+        );
+        assert_eq!(tree.children[0].session, Some(child));
+        assert_eq!(
+            tree.children[0].member.as_ref().map(|m| m.status),
+            Some(MemberRunStatus::Running),
+            "later member state wins when collapsing duplicates"
+        );
+        assert_eq!(
+            tree.children[0].member.as_ref().map(|m| m.member),
+            Some(second.member)
+        );
     }
 }
