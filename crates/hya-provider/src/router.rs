@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use hya_proto::{MessageId, ModelRef, SessionId};
+use hya_proto::{Message, MessageId, ModelRef, SessionId};
 
-use crate::{CompletionRequest, EventStream, Provider, ProviderError, ProviderModel};
+use crate::{
+    CompactedWindow, CompletionRequest, EventStream, Provider, ProviderError, ProviderModel,
+};
 
 #[derive(Default, Clone)]
 pub struct ProviderRouter {
@@ -57,5 +59,20 @@ impl ProviderRouter {
             }
         }
         provider.stream(req, session, message).await
+    }
+
+    /// Compact via the resolved provider's `/responses/compact` when available.
+    ///
+    /// Returns `Ok(None)` when the route has no compact support (caller falls back).
+    pub async fn compact_if_supported(
+        &self,
+        model: &ModelRef,
+        messages: &[Message],
+        system: Option<&str>,
+    ) -> Result<Option<CompactedWindow>, ProviderError> {
+        let provider = self
+            .resolve(model)
+            .ok_or_else(|| ProviderError::UnknownModel(model.to_string()))?;
+        provider.compact_responses(model, messages, system).await
     }
 }

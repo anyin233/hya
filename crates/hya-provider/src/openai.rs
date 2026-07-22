@@ -11,7 +11,10 @@ mod responses;
 pub use decoder::OpenAiChatDecoder;
 pub use response_decoder::OpenAiResponsesDecoder;
 pub(crate) use responses::GrokBuildProtocol;
-pub use responses::OpenAiResponsesProtocol;
+pub use responses::{
+    COMPACT_CONTEXT_MARKER, OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER,
+    encode_input_items, format_responses_compact_system, parse_responses_compact_items,
+};
 
 pub struct OpenAiChatProtocol;
 

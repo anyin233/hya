@@ -165,6 +165,73 @@ async fn task_foreground_result_uses_open_code_output_shape() {
 }
 
 #[tokio::test]
+async fn task_empty_or_sentinel_task_id_creates_fresh_spawn() {
+    let parent = SessionId::new();
+    for task_id in ["", "   ", "new", "NULL", "none"] {
+        let (spawner, mut rx) = SpawnerPlane::new();
+        let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+        let tool = ToolRegistry::builtins().get("task").unwrap();
+        let task_id = task_id.to_string();
+        let handle = tokio::spawn(async move {
+            tool.execute(
+                &ctx,
+                json!({
+                    "description": "Fresh explore",
+                    "prompt": "start clean",
+                    "subagent_type": "explore",
+                    "task_id": task_id,
+                }),
+            )
+            .await
+        });
+        let req = rx.recv().await.unwrap();
+        assert!(
+            req.members[0].task_id.is_none(),
+            "sentinel/empty task_id must not resume"
+        );
+        req.reply
+            .send(vec![MemberOutcome {
+                member: "mbr_1".to_string(),
+                session: "ses_child".to_string(),
+                status: "done".to_string(),
+                summary: "ok".to_string(),
+            }])
+            .unwrap();
+        handle.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn task_invalid_task_id_errors_with_create_hint() {
+    let parent = SessionId::new();
+    let (spawner, _rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let err = tool
+        .execute(
+            &ctx,
+            json!({
+                "description": "Bad resume",
+                "prompt": "nope",
+                "subagent_type": "explore",
+                "task_id": "not-a-session-id",
+            }),
+        )
+        .await
+        .expect_err("garbage task_id must fail input validation");
+    match err {
+        ToolError::Input(message) => {
+            assert!(message.contains("invalid task_id"), "{message}");
+            assert!(
+                message.contains("omit task_id"),
+                "error should hint how to create fresh: {message}"
+            );
+        }
+        other => panic!("expected ToolError::Input, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn task_forwards_task_id_to_spawner_for_resume() {
     let parent = SessionId::new();
     let child = SessionId::new().to_string();

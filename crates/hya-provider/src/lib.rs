@@ -23,7 +23,9 @@ pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
 pub use http::{BearerResolver, HttpProvider, ProviderKind};
 pub use openai::{
-    OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder, OpenAiResponsesProtocol,
+    COMPACT_CONTEXT_MARKER, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder,
+    OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER, encode_input_items,
+    format_responses_compact_system, parse_responses_compact_items,
 };
 pub use router::ProviderRouter;
 
@@ -285,6 +287,13 @@ pub struct CompletionRequest {
     pub headers: BTreeMap<String, String>,
 }
 
+/// Result of a standalone Responses `/responses/compact` call.
+#[derive(Clone, Debug)]
+pub struct CompactedWindow {
+    /// Canonical next input items (pass as-is into the following `/responses` call).
+    pub items: Vec<serde_json::Value>,
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn id(&self) -> &str;
@@ -298,6 +307,18 @@ pub trait Provider: Send + Sync {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError>;
+
+    /// When supported (OpenAI Responses / Codex / Grok Build), compact `messages`
+    /// via `POST /responses/compact`. Returns `Ok(None)` when the route has no
+    /// compact endpoint so callers can fall back to a local summarizer.
+    async fn compact_responses(
+        &self,
+        _model: &ModelRef,
+        _messages: &[Message],
+        _system: Option<&str>,
+    ) -> Result<Option<CompactedWindow>, ProviderError> {
+        Ok(None)
+    }
 }
 
 pub trait Protocol: Send + Sync {

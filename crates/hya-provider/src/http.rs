@@ -7,9 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hya_proto::{Event, MessageId, ModelRef, SessionId};
+use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret as _, SecretString};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -17,9 +18,12 @@ mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
 use crate::google::GoogleProtocol;
-use crate::openai::{GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol};
+use crate::openai::{
+    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
+};
 use crate::{
-    Capabilities, CompletionRequest, EventStream, Protocol, Provider, ProviderError, ProviderModel,
+    Capabilities, CompactedWindow, CompletionRequest, EventStream, Protocol, Provider,
+    ProviderError, ProviderModel,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,6 +324,26 @@ impl HttpProvider {
         Ok(headers)
     }
 
+    /// Whether this route speaks the Responses wire and has `/responses/compact`.
+    fn supports_responses_compact(&self) -> bool {
+        matches!(
+            self.kind,
+            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild
+        )
+    }
+
+    fn compact_endpoint(&self) -> Option<String> {
+        if !self.supports_responses_compact() {
+            return None;
+        }
+        // endpoint is `{base}/responses` for create; compact sits alongside it.
+        Some(if self.endpoint.ends_with("/responses") {
+            format!("{}/compact", self.endpoint)
+        } else {
+            format!("{}/responses/compact", self.endpoint.trim_end_matches('/'))
+        })
+    }
+
     // Compat addresses models as `providerID/modelID` (+ optional `#variant`);
     // the upstream route wants the bare `modelID`. Maps a served ref to that id.
     fn served_model_id(&self, model: &ModelRef) -> Option<String> {
@@ -408,6 +432,59 @@ impl Provider for HttpProvider {
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
         tokio::spawn(stream::pump(resp, decoder, tx));
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    async fn compact_responses(
+        &self,
+        model: &ModelRef,
+        messages: &[Message],
+        system: Option<&str>,
+    ) -> Result<Option<CompactedWindow>, ProviderError> {
+        let Some(url) = self.compact_endpoint() else {
+            return Ok(None);
+        };
+        let model_id = self
+            .served_model_id(model)
+            .unwrap_or_else(|| model.as_str().to_string());
+        // Encode the same input window the create path would send.
+        let mut input = encode_input_items(messages)?;
+        if let Some(system) = system.filter(|s| !s.is_empty()) {
+            // Prefer instructions-equivalent as a system item at the front when
+            // the compact endpoint is given an explicit system prompt.
+            input.insert(0, json!({"role": "system", "content": system}));
+        }
+        let body = json!({
+            "model": model_id,
+            "input": input,
+        });
+        let model_override =
+            matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
+        let resp = self
+            .client
+            .post(&url)
+            .headers(self.request_headers(&BTreeMap::new(), model_override)?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let snippet = text.get(..500).unwrap_or(text.as_str());
+            return Err(ProviderError::Http(format!("compact {status}: {snippet}")));
+        }
+        let payload: Value = resp
+            .json()
+            .await
+            .map_err(|e| ProviderError::Http(e.to_string()))?;
+        let items = payload
+            .get("output")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::Decode("responses compact reply missing output array".to_string())
+            })?;
+        Ok(Some(CompactedWindow { items }))
     }
 }
 

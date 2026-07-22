@@ -25,14 +25,59 @@ impl Default for CompactionConfig {
 
 fn message_text_len(m: &Message) -> usize {
     match m {
-        Message::User { parts, .. } | Message::Assistant { parts, .. } => parts
-            .iter()
-            .map(|p| match p {
-                Part::Text { text, .. } => text.len(),
-                _ => 0,
-            })
-            .sum(),
+        Message::User { parts, .. } | Message::Assistant { parts, .. } => {
+            parts.iter().map(part_len).sum()
+        }
         Message::System { content, .. } => content.len(),
+    }
+}
+
+/// Approximate serialized size of a part for compaction thresholds.
+///
+/// Tool-heavy turns historically never tripped compaction because only text
+/// was counted; include reasoning + tool I/O so subagent explore loops compact.
+fn part_len(part: &Part) -> usize {
+    match part {
+        Part::Text { text, .. } => text.len(),
+        Part::Reasoning {
+            text,
+            provider_data,
+            ..
+        } => {
+            text.len()
+                + provider_data
+                    .as_ref()
+                    .map(|v| v.to_string().len())
+                    .unwrap_or(0)
+        }
+        Part::Media { data, .. } => data.len(),
+        Part::Tool { name, state, .. } => {
+            name.as_str().len()
+                + match state {
+                    hya_proto::ToolPartState::Pending { input }
+                    | hya_proto::ToolPartState::Running { input } => input.to_string().len(),
+                    hya_proto::ToolPartState::Completed { input, output, .. } => {
+                        input.to_string().len() + value_text_len(output)
+                    }
+                    hya_proto::ToolPartState::Error {
+                        input,
+                        message,
+                        value,
+                        ..
+                    } => {
+                        input.to_string().len()
+                            + message.len()
+                            + value.as_ref().map(value_text_len).unwrap_or(0)
+                    }
+                }
+        }
+    }
+}
+
+fn value_text_len(value: &serde_json::Value) -> usize {
+    match value.as_str() {
+        Some(s) => s.len(),
+        None => value.to_string().len(),
     }
 }
 
@@ -176,6 +221,36 @@ mod tests {
         assert_eq!(estimate_tokens(&msgs), 10);
         let cfg = CompactionConfig {
             token_threshold: 5,
+            keep_recent: 0,
+        };
+        assert!(needs_compaction(&msgs, &cfg));
+    }
+
+    #[test]
+    fn estimate_tokens_counts_tool_output() {
+        use hya_proto::{PartId, ToolCallId, ToolName, ToolPartState};
+        let tool_body = "t".repeat(400);
+        let msgs = vec![Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts: vec![Part::Tool {
+                id: PartId::new(),
+                call_id: ToolCallId::new(),
+                name: ToolName::new("find"),
+                state: ToolPartState::Completed {
+                    input: serde_json::json!({"pattern": "*"}),
+                    output: serde_json::Value::String(tool_body.clone()),
+                    time_ms: 1,
+                },
+            }],
+            finish: None,
+            tokens: None,
+        }];
+        // Text-only estimator would be ~0; tool body alone is 100 tokens.
+        assert!(estimate_tokens(&msgs) >= tool_body.len() / 4);
+        let cfg = CompactionConfig {
+            token_threshold: 50,
             keep_recent: 0,
         };
         assert!(needs_compaction(&msgs, &cfg));
