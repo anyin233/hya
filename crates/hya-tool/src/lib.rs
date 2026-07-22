@@ -61,4 +61,4 @@ pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{
     DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
 };
-pub use websearch::{WebSearchPlane, WebSearchProvider};
+pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

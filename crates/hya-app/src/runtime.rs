@@ -18,7 +18,7 @@ use hya_store::SessionStore;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnMember,
-    SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry,
+    SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry, WebSearchConfig, WebSearchPlane,
 };
 use std::collections::BTreeMap;
 
@@ -158,6 +158,7 @@ pub struct RuntimeConfig {
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
     pub permission: InvocationPolicy,
+    pub websearch: WebSearchConfig,
 }
 
 impl RuntimeConfig {
@@ -205,6 +206,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 categories: cfg.categories,
                 offline_notice: None,
                 permission: cfg.permission,
+                websearch: cfg.websearch,
             }
         }
         Ok(None) => {
@@ -222,6 +224,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                     config_path: config::expected_config_path(),
                 }),
                 permission: InvocationPolicy::default(),
+                websearch: WebSearchConfig::default(),
             }
         }
         Err(e) => {
@@ -238,6 +241,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 categories: CategoryRegistry::default(),
                 offline_notice: None,
                 permission: InvocationPolicy::default().with_model(PermissionModel::Strict),
+                websearch: WebSearchConfig::default(),
             }
         }
     }
@@ -449,7 +453,7 @@ pub async fn build_session_engine(
     agent: &AgentSpec,
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
-    invocation_policy: InvocationPolicy,
+    tool_config: (WebSearchConfig, InvocationPolicy),
     include_global_agents: bool,
 ) -> (
     Arc<SessionEngine>,
@@ -458,8 +462,12 @@ pub async fn build_session_engine(
     hya_mcp::McpManager,
     Arc<hya_plugin::PluginHost>,
 ) {
+    let (websearch, invocation_policy) = tool_config;
     let router = Arc::new(router);
     let mut registry = ToolRegistry::builtins();
+    if !websearch.enabled {
+        registry.remove("websearch");
+    }
     let mcp_manager = hya_mcp::McpManager::connect_all(mcp).await;
     for tool in mcp_manager.tools() {
         if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
@@ -515,6 +523,7 @@ pub async fn build_session_engine(
     let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
+        .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
         .with_spawner(spawner)
         .with_mailbox(mailbox)
@@ -574,6 +583,7 @@ impl HyaRuntime {
                 categories: CategoryRegistry::default(),
                 offline_notice: None,
                 permission: InvocationPolicy::default(),
+                websearch: WebSearchConfig::default(),
             }
         } else {
             let mut runtime = resolve_runtime(opts.model);
@@ -593,7 +603,7 @@ impl HyaRuntime {
             agent.as_ref(),
             runtime.mcp,
             runtime.plugins,
-            runtime.permission,
+            (runtime.websearch, runtime.permission),
             opts.include_global_agents,
         )
         .await;
@@ -768,6 +778,63 @@ mod tests {
         .unwrap();
         let fallback = resolve_runtime(None);
         assert_eq!(fallback.permission.model(), PermissionModel::Strict);
+    }
+
+    #[test]
+    fn websearch_only_config_reaches_runtime() {
+        let dir = tempdir();
+        let _env = EnvGuard::set(&dir, &dir);
+        let config_path = dir.join("hya/config.yaml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            "tools:\n  websearch:\n    provider: parallel\n    endpoint: https://search.example.test/mcp\n    key: secret\n    enabled: false\n",
+        )
+        .unwrap();
+
+        let runtime = resolve_runtime(None);
+
+        assert_eq!(
+            runtime.websearch.provider,
+            hya_tool::WebSearchProvider::Parallel
+        );
+        assert_eq!(
+            runtime.websearch.endpoint.as_deref(),
+            Some("https://search.example.test/mcp")
+        );
+        assert_eq!(runtime.websearch.key.as_deref(), Some("secret"));
+        assert!(!runtime.websearch.enabled);
+        assert!(runtime.offline_notice.is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_websearch_is_not_exposed_by_engine() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let (engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+            store,
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (
+                WebSearchConfig {
+                    enabled: false,
+                    ..WebSearchConfig::default()
+                },
+                InvocationPolicy::default(),
+            ),
+            false,
+        )
+        .await;
+
+        assert!(
+            engine
+                .tool_schemas()
+                .iter()
+                .all(|schema| schema.name.as_str() != "websearch")
+        );
     }
 
     #[test]

@@ -1,3 +1,4 @@
-# 0.33.16
+# 0.33.17
 
-- Restored the main-agent working indicator for synchronous prompt turns by publishing busy and idle session lifecycle events.
+- Added `tools.websearch` configuration for selecting Exa or Parallel, overriding the endpoint and key, or disabling the built-in tool.
+- Enabled unauthenticated Exa web search by default and exposed enabled web search to every model provider.

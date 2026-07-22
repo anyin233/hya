@@ -213,6 +213,12 @@ impl ToolRegistry {
             .cloned()
     }
 
+    pub fn remove(&mut self, name: &str) {
+        self.tools.remove(name);
+        self.aliases
+            .retain(|alias, resolved| alias != name && resolved.tool.name() != name);
+    }
+
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.tools

@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane, WebSearchProvider,
+    SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchConfig, WebSearchPlane,
+    WebSearchProvider,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -73,7 +74,17 @@ fn websearch_schema_includes_open_code_guidance() {
     );
 }
 
-async fn serve_once(body: &'static str) -> (String, tokio::task::JoinHandle<Value>) {
+#[test]
+fn websearch_config_defaults_to_unauthenticated_exa() {
+    let config = WebSearchConfig::default();
+
+    assert_eq!(config.provider, WebSearchProvider::Exa);
+    assert_eq!(config.endpoint, None);
+    assert_eq!(config.key, None);
+    assert!(config.enabled);
+}
+
+async fn serve_once(body: &'static str) -> (String, tokio::task::JoinHandle<(Value, String)>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
@@ -88,7 +99,7 @@ async fn serve_once(body: &'static str) -> (String, tokio::task::JoinHandle<Valu
             body.len()
         );
         socket.write_all(response.as_bytes()).await.unwrap();
-        payload
+        (payload, request)
     });
     (format!("http://{addr}/mcp"), handle)
 }
@@ -118,7 +129,7 @@ async fn websearch_calls_mcp_provider_and_returns_open_code_shape() {
         )
         .await
         .unwrap();
-    let sent = request.await.unwrap();
+    let (sent, _raw) = request.await.unwrap();
 
     // Then
     assert_eq!(out["title"], "Exa Web Search: rust news 2026");
@@ -150,7 +161,7 @@ async fn websearch_parallel_includes_session_metadata() {
         .execute(&ctx, json!({ "query": "rust" }))
         .await
         .unwrap();
-    let sent = request.await.unwrap();
+    let (sent, _raw) = request.await.unwrap();
 
     // Then
     assert_eq!(sent["params"]["name"], "web_search");
@@ -161,50 +172,47 @@ async fn websearch_parallel_includes_session_metadata() {
 }
 
 #[tokio::test]
-async fn websearch_default_auto_splits_provider_by_session_id() {
-    // Given
+async fn websearch_exa_sends_configured_key_as_query_parameter() {
+    let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"E"}]}}"#).await;
     let tool = ToolRegistry::builtins().get("websearch").unwrap();
-    let exa_session: SessionId = "ses_00000000000000000000000000000001".parse().unwrap();
-    let parallel_session: SessionId = "ses_00000000000000000000000000000000".parse().unwrap();
-
-    let (url, exa_request) =
-        serve_once(r#"{"result":{"content":[{"type":"text","text":"E"}]}}"#).await;
-    let exa_ctx = ctx_with_session(
-        exa_session,
+    let ctx = ctx_with(
         vec![allow(Action::WebSearch, "rust")],
-        WebSearchPlane::auto(url.clone(), url),
+        WebSearchPlane::configured(WebSearchConfig {
+            provider: WebSearchProvider::Exa,
+            endpoint: Some(url),
+            key: Some("secret".to_string()),
+            enabled: true,
+        }),
     );
 
-    // When
-    let exa_out = tool
-        .execute(&exa_ctx, json!({ "query": "rust" }))
+    tool.execute(&ctx, json!({ "query": "rust" }))
         .await
         .unwrap();
-    let exa_sent = exa_request.await.unwrap();
+    let (_sent, raw) = request.await.unwrap();
 
-    // Then
-    assert_eq!(exa_out["metadata"]["provider"], "exa");
-    assert_eq!(exa_sent["params"]["name"], "web_search_exa");
+    assert!(raw.starts_with("POST /mcp?exaApiKey=secret HTTP/1.1\r\n"));
+}
 
-    // Given
-    let (url, parallel_request) =
-        serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
-    let parallel_ctx = ctx_with_session(
-        parallel_session,
+#[tokio::test]
+async fn websearch_parallel_sends_configured_key_as_bearer_token() {
+    let (url, request) = serve_once(r#"{"result":{"content":[{"type":"text","text":"P"}]}}"#).await;
+    let tool = ToolRegistry::builtins().get("websearch").unwrap();
+    let ctx = ctx_with(
         vec![allow(Action::WebSearch, "rust")],
-        WebSearchPlane::auto(url.clone(), url),
+        WebSearchPlane::configured(WebSearchConfig {
+            provider: WebSearchProvider::Parallel,
+            endpoint: Some(url),
+            key: Some("secret".to_string()),
+            enabled: true,
+        }),
     );
 
-    // When
-    let parallel_out = tool
-        .execute(&parallel_ctx, json!({ "query": "rust" }))
+    tool.execute(&ctx, json!({ "query": "rust" }))
         .await
         .unwrap();
-    let parallel_sent = parallel_request.await.unwrap();
+    let (_sent, raw) = request.await.unwrap();
 
-    // Then
-    assert_eq!(parallel_out["metadata"]["provider"], "parallel");
-    assert_eq!(parallel_sent["params"]["name"], "web_search");
+    assert!(raw.contains("\r\nauthorization: Bearer secret\r\n"));
 }
 
 #[tokio::test]

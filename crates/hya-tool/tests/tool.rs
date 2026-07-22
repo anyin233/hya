@@ -146,6 +146,16 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
 }
 
 #[test]
+fn removing_a_builtin_also_removes_its_alias() {
+    let mut registry = ToolRegistry::builtins();
+
+    registry.remove("websearch");
+
+    assert!(registry.get("websearch").is_none());
+    assert!(registry.get("search").is_none());
+}
+
+#[test]
 fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
     let mut registry = ToolRegistry::builtins();
 

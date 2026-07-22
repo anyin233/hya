@@ -189,6 +189,12 @@ impl SessionEngine {
     }
 
     #[must_use]
+    pub fn with_websearch(mut self, websearch: WebSearchPlane) -> Self {
+        self.websearch = websearch;
+        self
+    }
+
+    #[must_use]
     pub fn with_compaction(
         mut self,
         summarizer: Arc<dyn Summarizer>,

@@ -79,7 +79,7 @@ async fn compat_experimental_tool_list_filters_patch_tools_by_model() {
 }
 
 #[tokio::test]
-async fn compat_experimental_tool_list_filters_websearch_by_provider() {
+async fn compat_experimental_tool_list_exposes_websearch_for_every_provider() {
     let app = router(state().await);
 
     let (status, compat_body) =
@@ -95,5 +95,5 @@ async fn compat_experimental_tool_list_filters_websearch_by_provider() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let anthropic_ids = tool_ids(&anthropic_body);
-    assert!(!anthropic_ids.contains(&"websearch"));
+    assert!(anthropic_ids.contains(&"websearch"));
 }

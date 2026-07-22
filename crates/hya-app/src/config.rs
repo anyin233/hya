@@ -17,7 +17,9 @@ use hya_plugin::config::PluginEntry;
 use hya_provider::{
     HttpProvider, ProviderKind, ProviderRouter, ReasoningEffort, resolve_default_reasoning,
 };
-use hya_tool::{InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget};
+use hya_tool::{
+    InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget, WebSearchConfig,
+};
 use serde::Deserialize;
 use serde_norway::{Mapping, Value};
 
@@ -33,6 +35,7 @@ pub struct ResolvedConfig {
     /// Logical model categories → ordered concrete `provider/model` candidates.
     pub categories: CategoryRegistry,
     pub permission: InvocationPolicy,
+    pub websearch: WebSearchConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +83,8 @@ struct FileConfig {
     mcp: BTreeMap<String, McpServerConfig>,
     #[serde(default)]
     plugins: BTreeMap<String, PluginEntry>,
+    #[serde(default)]
+    tools: Option<ToolsConfig>,
     /// Bounded nested/parallel subagent caps. Absent → defaults; per-field env
     /// overrides (`HYA_SUBAGENT_*`) win over file values.
     #[serde(default)]
@@ -91,6 +96,12 @@ struct FileConfig {
     categories: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     permission: Option<PermissionConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolsConfig {
+    #[serde(default)]
+    websearch: WebSearchConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1183,11 +1194,17 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
     let file = parse_config(&yaml)?;
+    let has_tools = file.tools.is_some();
     let permission = resolve_permission(&file)?;
     let has_permission = has_meaningful_permission(&file);
     let mcp = resolve_mcp(&file)?;
     let parsed = resolve_providers(&file)?;
-    if parsed.is_empty() && mcp.is_empty() && file.plugins.is_empty() && !has_permission {
+    if parsed.is_empty()
+        && mcp.is_empty()
+        && file.plugins.is_empty()
+        && !has_permission
+        && !has_tools
+    {
         return Ok(None);
     }
     let mut router = ProviderRouter::new();
@@ -1215,12 +1232,20 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         authorized.push(p);
     }
     let models = model_entries(&authorized);
-    if models.is_empty() && mcp.is_empty() && file.plugins.is_empty() && !has_permission {
+    if models.is_empty()
+        && mcp.is_empty()
+        && file.plugins.is_empty()
+        && !has_permission
+        && !has_tools
+    {
         return Ok(None);
     }
     let categories = resolve_categories(&file);
     let default_model = choose_default(file.default_model, &models);
     let subagents = resolve_subagent_limits(file.subagents.as_ref());
+    let websearch = file
+        .tools
+        .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
     Ok(Some(ResolvedConfig {
         router,
         default_model,
@@ -1232,6 +1257,7 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         subagents,
         categories,
         permission,
+        websearch,
     }))
 }
 
@@ -1371,6 +1397,23 @@ providers:
 
     fn parse_providers(yaml: &str) -> anyhow::Result<Vec<ParsedProvider>> {
         resolve_providers(&parse_config(yaml)?)
+    }
+
+    #[test]
+    fn parses_websearch_tool_config() {
+        let file = parse_config(
+            "tools:\n  websearch:\n    provider: parallel\n    endpoint: https://search.example.test/mcp\n    key: secret\n    enabled: false\n",
+        )
+        .unwrap();
+        let websearch = file.tools.unwrap().websearch;
+
+        assert_eq!(websearch.provider, hya_tool::WebSearchProvider::Parallel);
+        assert_eq!(
+            websearch.endpoint.as_deref(),
+            Some("https://search.example.test/mcp")
+        );
+        assert_eq!(websearch.key.as_deref(), Some("secret"));
+        assert!(!websearch.enabled);
     }
 
     #[test]

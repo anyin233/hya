@@ -33,9 +33,9 @@ use crate::permission::spawn_reject_responder;
 use cli_args::{Cli, Command};
 
 pub use hya_app::{
-    InvocationPolicy, RuntimeConfig, agent_with_model, build_session_engine, compaction_config,
-    discover_context_files, host_info, offline_router, open_store, resolve_runtime,
-    spawn_team_supervisor, today,
+    InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_with_model, build_session_engine,
+    compaction_config, discover_context_files, host_info, offline_router, open_store,
+    resolve_runtime, spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -59,7 +59,7 @@ async fn cmd_exec(
         &agent,
         runtime.mcp,
         runtime.plugins,
-        runtime.permission,
+        (runtime.websearch, runtime.permission),
         true,
     )
     .await;
@@ -112,7 +112,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         &agent,
         runtime.mcp,
         runtime.plugins,
-        runtime.permission,
+        (runtime.websearch, runtime.permission),
         true,
     )
     .await;
@@ -176,7 +176,7 @@ async fn cmd_goal(
         &agent,
         runtime.mcp,
         runtime.plugins,
-        runtime.permission,
+        (runtime.websearch, runtime.permission),
         true,
     )
     .await;
@@ -224,7 +224,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
         &agent,
         BTreeMap::new(),
         Vec::new(),
-        InvocationPolicy::default(),
+        (WebSearchConfig::default(), InvocationPolicy::default()),
         true,
     )
     .await;
