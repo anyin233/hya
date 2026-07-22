@@ -1,13 +1,18 @@
 # Troubleshooting
 
-## The TUI Says It Needs a Terminal
+## The TUI Does Not Start
 
-Bare `hya` starts the interactive TUI. If stdout is not a terminal, the binary
-prints a short message and exits. Use a real terminal, or run a headless command:
+Bare `hya` starts the TypeScript/OpenTUI frontend. Use a real terminal for the
+interactive UI, or run a headless command:
 
 ```sh
 hya-backend exec "summarize this repo"
 ```
+
+If startup reports that adjacent `hya-ts` is missing or the TUI runtime cannot
+be located, reinstall with `./install.sh`; installing only the `hya` Cargo
+package is unsupported. If it reports `failed to launch Bun`, install Bun or
+pass its path with `hya --bun <PATH>`.
 
 ## hya Uses the Offline Provider
 

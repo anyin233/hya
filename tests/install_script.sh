@@ -34,6 +34,9 @@ contains "$release_workflow" "packages/hya-tui-ts/bunfig.toml"
 contains "$release_workflow" "packages/hya-tui-ts/tsconfig.json"
 contains "$release_workflow" "for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts"
 contains "$release_workflow" "! grep -F '\".\"'"
+contains "$release_workflow" "HYA_RELEASE_BUN_INVOCATION"
+contains "$release_workflow" '"$packaged_binary" "$project" --server http://127.0.0.1:54321 --bun "$mock_bun"'
+contains "$ci_workflow" "cargo build --locked -p hya -p hya-backend -p hya-ts --bins"
 
 for workflow in "$ci_workflow" "$release_workflow"; do
   while IFS= read -r line; do
@@ -74,6 +77,7 @@ contains "$dry_run" "/tmp/hya-install-test/bin/hya-ts"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/hya-tui-ts"
 contains "$dry_run" "PATH check: command -v hya must resolve to /tmp/hya-install-test/bin/hya"
 repo=$(pwd -P)
+contains "$dry_run" "/tmp/hya-install-test/bin/hya $repo --server http://127.0.0.1:1 --bun /bin/true"
 relative_dry_run=$(bash ./install.sh --dry-run --bin-dir bin --profile debug)
 contains "$relative_dry_run" "PATH check: command -v hya must resolve to $repo/bin/hya"
 contains "$relative_dry_run" "$repo/lib/hya/hya-tui-ts"
@@ -100,19 +104,42 @@ profile=debug
 [[ " $* " == *" --profile release "* ]] && profile=release
 out="${CARGO_TARGET_DIR:?}/$profile"
 mkdir -p "$out"
-for name in hya hya-backend hya-ts; do
-  cat >"$out/$name" <<'FAKE_BINARY'
+cat >"$out/hya" <<'FAKE_HYA'
 #!/usr/bin/env bash
 set -euo pipefail
-name=$(basename "$0")
-[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != "$name" ]] || exit 91
-case "$name:$1" in
-  hya:--version|hya-backend:--help|hya-ts:--help) exit 0 ;;
-  *) exit 2 ;;
+[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != hya ]] || exit 91
+exec "$(dirname "$0")/hya-ts" "$@"
+FAKE_HYA
+cat >"$out/hya-backend" <<'FAKE_BACKEND'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != hya-backend ]] || exit 91
+[[ "${1:-}" == --help ]] || exit 2
+FAKE_BACKEND
+cat >"$out/hya-ts" <<'FAKE_TS'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != hya-ts ]] || exit 91
+case "${1:-}" in
+  --help|--version) exit 0 ;;
 esac
-FAKE_BINARY
-  chmod +x "$out/$name"
+project=$1
+shift
+server=
+bun=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server) server=$2; shift 2 ;;
+    --bun) bun=$2; shift 2 ;;
+    *) shift ;;
+  esac
 done
+runtime="$(cd "$(dirname "$0")/../lib/hya/hya-tui-ts" && pwd -P)"
+project="$(cd "$project" && pwd -P)"
+cd "$runtime"
+exec "$bun" src/main.tsx --url "$server" --project "$project"
+FAKE_TS
+chmod +x "$out/hya" "$out/hya-backend" "$out/hya-ts"
 FAKE_CARGO
 chmod +x "$fake_bin/cargo"
 
@@ -181,6 +208,32 @@ not_contains "$sdk_package" '"."'
 for path in test dist; do
   [[ ! -e "$runtime/$path" ]] || fail "installed runtime contains build/test-only path: $path"
 done
+
+project="$fixture/project"
+mock_bun="$fixture/mock-bun"
+bun_invocation="$fixture/bun-invocation"
+mkdir -p "$project"
+cat >"$mock_bun" <<'MOCK_BUN'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'cwd=%s\n' "$PWD" >"${HYA_INSTALL_BUN_INVOCATION:?}"
+printf 'arg=%s\n' "$@" >>"$HYA_INSTALL_BUN_INVOCATION"
+exit 23
+MOCK_BUN
+chmod +x "$mock_bun"
+set +e
+HYA_INSTALL_BUN_INVOCATION="$bun_invocation" "$install_root/bin/hya" "$project" \
+  --server http://127.0.0.1:54321 --bun "$mock_bun" >/dev/null 2>&1
+status=$?
+set -e
+[[ "$status" -eq 23 ]] || fail "installed hya did not propagate mock Bun status: $status"
+invocation=$(<"$bun_invocation")
+contains "$invocation" "cwd=$runtime"
+contains "$invocation" "arg=src/main.tsx"
+contains "$invocation" "arg=--url"
+contains "$invocation" "arg=http://127.0.0.1:54321"
+contains "$invocation" "arg=--project"
+contains "$invocation" "arg=$(cd "$project" && pwd -P)"
 
 rollback_root="$fixture/rollback"
 mkdir -p "$rollback_root/bin" "$rollback_root/lib/hya/hya-tui-ts"

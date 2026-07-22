@@ -1,26 +1,135 @@
 use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
-fn frontend_without_tty_creates_config_and_exits_cleanly() -> Result<(), Box<dyn std::error::Error>>
-{
-    let env = IsolatedEnv::new("hya-frontend-non-tty")?;
-    let path = env.xdg_config.join("hya/config.yaml");
-    assert!(!path.exists(), "test should start without hya config");
-
-    let output = hya_command(&env).output()?;
-
-    assert_success("hya frontend", &output);
-    let config = std::fs::read_to_string(&path)?;
+fn default_frontend_execs_adjacent_typescript_launcher() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-delegation")?;
+    let project = env.root.join("project");
+    let runtime = env.root.join("runtime");
+    let bun = env.root.join("bun");
+    let bun_args = env.root.join("bun-args");
+    let bun_parent = env.root.join("bun-parent");
+    std::fs::create_dir(&project)?;
+    std::fs::create_dir_all(runtime.join("src"))?;
+    std::fs::write(runtime.join("src/main.tsx"), "")?;
+    executable(
+        &bun,
+        "#!/bin/sh\nprintf '%s\n' \"$PPID\" > \"$HYA_TEST_BUN_PARENT\"\nprintf '%s\n' \"$@\" > \"$HYA_TEST_BUN_ARGS\"\nexit 23\n",
+    )?;
     assert!(
-        config.contains("default_model: offline"),
-        "created config should contain the offline starter model:\n{config}"
+        PathBuf::from(env!("CARGO_BIN_EXE_hya"))
+            .with_file_name("hya-ts")
+            .is_file(),
+        "build hya-ts before running the hya frontend contract"
     );
+
+    let mut child = hya_command(&env)
+        .env("HYA_TUI_TS_DIR", &runtime)
+        .env("HYA_TEST_BUN_ARGS", &bun_args)
+        .env("HYA_TEST_BUN_PARENT", &bun_parent)
+        .arg(&project)
+        .arg("--server")
+        .arg("http://127.0.0.1:54321")
+        .arg("--bun")
+        .arg(&bun)
+        .arg("--prompt")
+        .arg("hello")
+        .spawn()?;
+    let original_pid = child.id();
+    let status = child.wait()?;
+
+    assert_eq!(status.code(), Some(23));
+    assert_eq!(
+        std::fs::read_to_string(bun_parent)?.trim(),
+        original_pid.to_string()
+    );
+    let args = std::fs::read_to_string(bun_args)?;
+    assert_eq!(
+        args.lines().collect::<Vec<_>>(),
+        [
+            "src/main.tsx",
+            "--url",
+            "http://127.0.0.1:54321",
+            "--project",
+            project
+                .canonicalize()?
+                .to_str()
+                .ok_or("project is not UTF-8")?,
+            "--prompt",
+            "hello",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn canonical_help_uses_hya_branding() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-help")?;
+    let output = hya_command(&env).arg("--help").output()?;
+
+    assert_success("hya --help", &output);
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("Usage: hya "), "{stdout}");
+    assert!(!stdout.contains("Usage: hya-ts "), "{stdout}");
+    Ok(())
+}
+
+#[test]
+fn canonical_version_uses_hya_branding() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-version")?;
+    let output = hya_command(&env).arg("--version").output()?;
+
+    assert_success("hya --version", &output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("hya {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+    Ok(())
+}
+
+#[test]
+fn canonical_missing_bun_error_uses_hya_branding() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-missing-bun")?;
+    let runtime = env.root.join("runtime");
+    let missing_bun = env.root.join("missing-bun");
+    std::fs::create_dir_all(runtime.join("src"))?;
+    std::fs::write(runtime.join("src/main.tsx"), "")?;
+
+    let output = hya_command(&env)
+        .env("HYA_TUI_TS_DIR", runtime)
+        .args(["--server", "http://127.0.0.1:54321", "--bun"])
+        .arg(&missing_bun)
+        .output()?;
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.starts_with("hya: failed to launch Bun"), "{stderr}");
     assert!(
-        String::from_utf8(output.stdout)?.contains("needs a terminal"),
-        "non-tty frontend run should explain the terminal requirement"
+        stderr.contains(&missing_bun.display().to_string()),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_adjacent_launcher_reports_its_path() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-frontend-missing-launcher")?;
+    let relocated = env.root.join("hya");
+    std::fs::write(&relocated, std::fs::read(env!("CARGO_BIN_EXE_hya"))?)?;
+    std::fs::set_permissions(&relocated, std::fs::Permissions::from_mode(0o755))?;
+
+    let output = Command::new(&relocated).output()?;
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.starts_with("hya: failed to launch"), "{stderr}");
+    assert!(
+        stderr.contains(&relocated.with_file_name("hya-ts").display().to_string()),
+        "{stderr}"
     );
     Ok(())
 }
@@ -185,6 +294,13 @@ fn assert_success(label: &str, output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn executable(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)?;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions)
 }
 
 fn temp_dir(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {

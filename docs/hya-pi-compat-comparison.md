@@ -14,7 +14,7 @@ archived `compat-ai/compat` repository as the Compat baseline.
 | Tool calling, MCP, skills | Unified Rust tool registry for built-ins, MCP, plugins, skills, subagents, todo, web, LSP, and formatter planes. MCP tools are `mcp__<server>__<tool>` and run through the normal permission/event path. | Minimal default tool core (`read`, `write`, `edit`, `bash`) with optional built-ins and extension-registered tools. Skills are first-class progressive-disclosure resources. MCP is not a documented stock-core headline feature. | Broad unified tool surface for built-ins, JS/TS custom tools, plugin tools, skills, and MCP tools. MCP is first-class, including local/remote servers and remote OAuth/DCR flows. |
 | Multi-provider support | Configured routes for OpenAI-compatible, Anthropic, and Google/Gemini protocols, with capability preflight and an offline `DevProvider`. | Broad provider abstraction via `@earendil-works/pi-ai`, subscription auth, API-key providers, custom compatible models, and extension-provided providers. | Catalog-scale provider UX: docs claim 75+ providers plus local models, with many bundled provider adapters and provider-specific routing/auth behavior. |
 | Multi-agent support | Native runtime primitives: `task` tool, child sessions, team evidence projection, mailbox/task board, and optional worktree allocation. | Stock runtime is intentionally single-agent/minimal-core; subagents and plan mode are documented as extension/SDK patterns, not baseline features. | Native primary agents and subagents, custom agent configs, per-agent permissions, and TUI child-session navigation. |
-| TUI features | Terminal-first UI with current `hya-tui` command palette/status surfaces plus legacy slash-command flows and Compat-compatible routes. Permission/question overlays, session/model/status views, and backend-ready prompt queuing are implemented in current code. | Rich interactive TUI with file references, inline shell, model/settings/session/tree flows, queued steering/follow-up, external editor, images, themes, and extensionable UI components. | Rich TUI with file/reference autocomplete, slash commands, session sharing, Git-backed undo/redo, child-session navigation, remote attach, and configurable keybind/theme behavior. |
+| TUI features | Terminal-first SolidJS/OpenTUI frontend with command palette, themes, prompt/transcript rendering, session/model/agent dialogs, permission/question flows, status surfaces, and subagent views. | Rich interactive TUI with file references, inline shell, model/settings/session/tree flows, queued steering/follow-up, external editor, images, themes, and extensionable UI components. | Rich TUI with file/reference autocomplete, slash commands, session sharing, Git-backed undo/redo, child-session navigation, remote attach, and configurable keybind/theme behavior. |
 | Plugin/extensibility system | Native stdio plugin host plus Compat adapter. Plugins can add tools, hooks, permission interceptors, workspace adapters, and Compat-compatible plugin behavior. | TypeScript extensions and Pi packages are the main extension system: add tools, commands, providers, UI, hooks, prompts, skills, and themes. | Layered extensibility: standalone custom tools, plugins, commands, skills, references, provider/auth hooks, and MCP config. |
 
 ## Baseline and Caveats
@@ -47,10 +47,9 @@ archived `compat-ai/compat` repository as the Compat baseline.
   reviewed `packages/compat/src/agent/agent.ts` source confirmed `build`,
   `plan`, `general`, `explore`, plus hidden system agents. Treat `scout` as a
   docs/source drift note unless the upstream source changes.
-- **hya TUI transition:** hya's current UI surface is `crates/hya` plus
-  `crates/hya-tui`; the prior `hya-backend` + `hya-legacy-tui` renderer split
-  has been removed. Compare hya's UI as the current frontend, not the deleted
-  legacy renderer.
+- **hya TUI transition:** the canonical `hya` entrypoint delegates through
+  `hya-ts` to `packages/hya-tui-ts`. The Rust `crates/hya-tui` renderer remains
+  only as a compatibility crate and has no shipped executable entrypoint.
 
 ## 1. Tool Calling, MCP, and Skills
 
@@ -274,25 +273,20 @@ Evidence: Compat [agents](https://compat.ai/docs/agents),
 
 ### hya
 
-hya is terminal-first. The current frontend has the `hya` binary call
-`hya_tui::app::run_tui`, create a pending SDK client, connect the backend off
-the render path, fetch agents/MCP status, and queue prompts while the backend
-starts. Current `hya-tui` runtime includes command palette entries for
-session/model/agent/theme/status/editor/export/copy flows, session/home routing,
-permission and question modals, model/provider status, MCP/LSP/formatter/plugin
-status display, subagent status, toasts, slash commands, model switching,
-session picking, transcript rendering, `/tools`, `/mcp`, `/export`, and
-`/compact`.
+hya is terminal-first. The canonical `hya` entrypoint delegates to the `hya-ts`
+supervisor, which starts the SolidJS/OpenTUI frontend under
+`packages/hya-tui-ts` and connects it to `hya-backend` through
+`@opencode-ai/sdk/v2`. The frontend retains the upstream command palette,
+leader-key actions, themes, prompt and transcript rendering, session/model/agent
+dialogs, permission and question flows, status surfaces, and subagent views.
 
-Compat parity tracking shows hya implements some Compat-compatible TUI HTTP
-control routes, but still lacks full Compat TUI parity such as command palette
-depth, full theme picker/library, prompt stash, rich markdown/diff/code
-rendering, usage/cost display wiring, and full leader-key UX.
+Compat parity tracking now focuses on hya backend behavior exposed through the
+shared SDK contract rather than a separate Rust renderer.
 
 Evidence: [TUI](architecture/tui.md),
 [Compat Parity Matrix](compat-parity.md),
 [`crates/hya/src/main.rs`](../crates/hya/src/main.rs), and
-[`crates/hya-tui/src/app/runtime.rs`](../crates/hya-tui/src/app/runtime.rs).
+[`packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx).
 
 ### Pi coding agent
 

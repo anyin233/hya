@@ -49,7 +49,7 @@ If you want to understand the codebase:
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, Compat-compatible route groups, and the typed client crate. |
-| [TUI](architecture/tui.md) | Explain the split between terminal event loop and pure ratatui rendering. |
+| [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, and backend SDK boundary. |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
@@ -67,5 +67,6 @@ If you want to understand the codebase:
 - Compat adapter: [`../crates/hya-plugin-compat/README.md`](../crates/hya-plugin-compat/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
 - Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
-- TUI frontend: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
-- TUI renderer (new): [`../crates/hya-tui/src/lib.rs`](../crates/hya-tui/src/lib.rs)
+- Canonical frontend entrypoint: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
+- Frontend supervisor: [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs)
+- TUI application: [`../packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx)

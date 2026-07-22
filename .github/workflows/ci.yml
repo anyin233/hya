@@ -33,7 +33,7 @@ jobs:
           "$HOME/.bun/bin/bun" run typecheck
           "$HOME/.bun/bin/bun" run build
       - name: Build TypeScript TUI test binaries
-        run: cargo build --locked -p hya-backend -p hya-ts --bins
+        run: cargo build --locked -p hya -p hya-backend -p hya-ts --bins
       - name: Test TypeScript TUI
         working-directory: packages/hya-tui-ts
         run: |

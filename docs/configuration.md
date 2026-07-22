@@ -39,20 +39,19 @@ hya runs offline when any of these hold:
 - A provider has models but no resolvable key (no inline `api_key` and no saved
   `hya-backend login` token), so it is dropped.
 
-When an interactive TUI startup creates the starter file for the first time, it
-prompts before doing anything else:
+Canonical `hya` imports Compat configuration only when requested explicitly:
 
-```text
-hya: import Compat model config now? [y/N]
+```sh
+hya --import compat
 ```
 
-Answering yes imports provider base URLs, model IDs, and API key values or
-templates from the first discovered Compat config (`$COMPAT_CONFIG`,
-`$XDG_CONFIG_HOME/compat/{opencode.json,config.json,opencode.jsonc}`,
+The command imports provider base URLs, model IDs, API key values or templates,
+and supported local MCP servers from the first discovered Compat config
+(`$COMPAT_CONFIG`, `$XDG_CONFIG_HOME/compat/{opencode.json,config.json,opencode.jsonc}`,
 `$HOME/.config/opencode/{...}`, then `$HOME/.opencode/{...}`). The import is
-local and does not print secret values. If no importable Compat provider has
-both a base URL and at least one model, hya keeps the starter config and
-continues offline.
+local and does not print secret values. Skills import is not implemented yet.
+Bare interactive `hya-backend` retains its first-run import prompt when it
+creates the starter config.
 
 How to tell you are offline:
 
@@ -207,17 +206,17 @@ Interactive OAuth is implemented entirely in Rust:
 # ChatGPT / Codex subscription (Codex default: device-code, print URL, no auto-open browser)
 hya-backend oauth login --provider codex --type openai-codex
 # same commands on the TypeScript launcher:
-hya-ts oauth login --provider codex --type openai-codex
+hya oauth login --provider codex --type openai-codex
 # optional: open the verification URL, or use localhost PKCE instead of device-code
 #   --browser
 #   --loopback --browser
 
 # xAI SuperGrok / Grok CLI (device-code flow)
 hya-backend oauth login --provider grok --type grok-build --no-browser
-hya-ts oauth login --provider grok --type grok-build --no-browser
+hya oauth login --provider grok --type grok-build --no-browser
 
 hya-backend oauth status
-hya-ts oauth status
+hya oauth status
 ```
 
 On success hya:
@@ -491,7 +490,7 @@ The first-pass migration contract is intentionally narrow:
 - The migration writes a managed-state lock file at
   `~/.config/hya/compat-sync-lock.json` so rerun and prune operations can be
   safe and idempotent.
-- Compat provider/model sections are handled by the first-run import prompt,
+- Compat provider/model sections are handled by explicit `hya --import compat`,
   not this xtask. The xtask focuses on MCP and skills.
 
 Typical workflow:

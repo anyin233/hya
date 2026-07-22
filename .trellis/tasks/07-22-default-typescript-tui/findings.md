@@ -1,0 +1,57 @@
+# Findings
+
+- `crates/hya/src/main.rs` is the current `hya` binary and directly starts `hya_tui::app::run_tui`.
+- `crates/hya-ts/src/main.rs` already starts the TypeScript/Bun TUI, resolves its packaged runtime, and starts `hya-backend` when no server URL is supplied.
+- Bare `hya-backend` dispatches to `serve::cmd_tui_hya`, so its no-subcommand path must be included in the migration.
+- The launchers expose different CLI contracts: `hya-ts` supports project/session/model startup plus auth forwarding; current `hya` owns Rust-frontend transport/import options.
+- `hya-ts` process tests already cover attached/owned backend lifecycle, status propagation, signals, and terminal restoration.
+- The workspace version advanced concurrently to `0.33.28`; this feature must use `0.33.29` unless the baseline advances again before implementation.
+- `serve::cmd_tui_hya` starts an ephemeral HTTP backend and launches `hya --server <url> [--resume <id>]` through `HYA_FRONTEND_BIN` or PATH.
+- `install.sh`, `tests/install_script.sh`, and the release workflow already build/install/package `hya`, `hya-backend`, `hya-ts`, and `lib/hya/hya-tui-ts` atomically.
+- Existing docs still describe `hya` as the Rust/current frontend and `HYA_FRONTEND_BIN` as resolving that binary.
+- A prior `07-03-drop-legacy-tui` task removed an older backend-owned renderer but intentionally kept the current Rust frontend; this request is the next migration boundary.
+- The original `07-13-hya-ts-opencode-tui` contract explicitly kept Rust `hya` as the rollback baseline and shipped `hya-ts` as a public executable; both existing behaviors now have concrete compatibility value.
+- The TypeScript launcher invokes external `bun`; the source installer already preflights Bun, but current `cargo install --path crates/hya` documentation cannot install the prepared runtime or satisfy the new default by itself.
+- No automatic Rust fallback should be introduced: it would make startup behavior environment-dependent and undermine deprecation; Bun absence should produce the launcher's existing explicit error.
+- Bare `hya-backend --resume <id>` currently forwards `--resume`; the TypeScript launcher contract uses `--session <id>`, so this compatibility path needs an explicit argument translation and regression test.
+- Installer and release automation copy binaries by target filename, so renaming the default and deprecated executables must be reflected in their atomic rollback/archive assertions rather than adding a new packaging mechanism.
+- `packages/hya-tui-ts/package.json` now matches workspace version `0.33.28`, as required by `crates/hya/tests/version_metadata.rs`; the eventual feature bump must update both together.
+- Product decision: ship no Rust TUI executable or `hya --rust` escape hatch; retain `hya-ts` as a compatibility alias and do not silently fall back from `hya`.
+- `hya-tui` has independent crate tests and a parity dev-dependency, but `crates/hya` is its only product executable consumer; the library can remain deprecated/tested after the `hya` package is repurposed.
+- `crates/hya` contains five Rust-frontend modules and three integration tests; launcher replacement should delete or replace only code/tests made unreachable by the new executable rather than alter `hya-tui` internals.
+- The current worktree also contains unrelated untracked Trellis tasks (`07-21-grok-build-provider` and `07-22-review-and-merge-open-prs`); they must remain untouched.
+- Trellis continuation confirms this remains a complex planning task at step 1.1; `design.md` and `implement.md` are required before context configuration and activation review.
+- `crates/hya` is currently a binary-only package whose dependency set exists for the Rust frontend; `crates/hya-ts` already exposes both a library and the tested TypeScript launcher binary.
+- `hya-backend::serve::hya_launch_args` has a focused unit test that currently pins `--resume`; this is the smallest executable contract to turn red before translating bare-backend resume startup to the TypeScript launcher's `--session` flag.
+- The complete process lifecycle lives privately in `crates/hya-ts/src/main.rs`; its library owns only CLI parsing, validation, command construction, and path resolution.
+- A Unix `exec` shim in `hya` can replace itself with the sibling `hya-ts` process while forwarding argv unchanged, preserving the already-tested PID/signal/exit/terminal semantics without extracting or duplicating launcher internals. It needs deterministic sibling resolution and an integration test proving default `hya` reaches the Bun command.
+- Shared-library extraction remains a fallback, but it would move roughly 274 lines of private lifecycle code and broaden the diff without adding behavior if `exec` satisfies installed, release, and development paths.
+- The old `frontend_cli.rs` assertions and `main.rs` unit tests pin Rust-frontend behavior and become obsolete with that executable path; `native_round_trip.rs` validates the independent native transport and should retain coverage, using dev-dependencies if the `hya` runtime dependency set is reduced.
+- The frontend/backend Trellis spec indexes are mostly placeholders; the task must rely on repository contracts and project-level instructions. Both context manifests still contain only their seed row and require curation in step 1.3.
+- `hya --import compat` is the only inspected shipped `hya` behavior without a TypeScript-launcher or backend equivalent. Its underlying `hya_app::config::import_compat_models_into_config` logic has independent tests, but retaining the user command requires an explicit CLI migration decision.
+- Product decision: migrate `hya --import compat` into the shared launcher CLI so the command remains available while the Rust TUI path is removed.
+- Installer and release smoke checks already colocate and execute `hya`, `hya-ts`, and the prepared runtime; the design should strengthen their default-`hya` assertion rather than add a packaging mechanism.
+- The current root changelog is `0.33.28`; implementation must archive it as `docs/changes/CHANGELOG_0.33.28.md` before writing the `0.33.29` root changelog, unless the baseline advances again.
+- All four required planners independently recommend the Unix `exec` shim and reject shared-lifecycle extraction as unnecessary; the shim remains the merged architecture unless executable-layout tests fail.
+- Planner conflict resolution: retain `--backend-bin` because the PRD explicitly preserves existing TypeScript launcher capabilities; do not change automatic config/bootstrap behavior because it is outside this task and unsupported by the supplied evidence.
+- Planner conflict resolution: keep direct `hya-ts` branding compatible while canonical `hya` reports `hya`; use one shared Clap parser with invocation-specific metadata if the installed Clap API supports it, verified by focused tests.
+- Planner conflict resolution: prefer retaining `native_round_trip.rs` with dev-dependencies for the smallest diff; move it only if dependency cleanup or target compilation proves that placement invalid.
+- Concurrent metadata movement from `0.33.27` to `0.33.28` was confirmed and left untouched; re-read the live version and changelog immediately before implementation to avoid colliding with another atomic change.
+- The pre-implementation recheck still finds workspace, TypeScript package, and root changelog aligned at `0.33.28`; no task research files or additional package-specific Trellis rules apply.
+- The release workflow now exercises packaged `hya` through the adjacent `hya-ts` launcher with a mock Bun process, while the installer suite exercises the same installed chain.
+- `crates/hya` no longer has production dependencies or Rust-frontend modules; its native transport and version checks remain as dev-only integration coverage.
+- Active docs still contain Rust-default, `--resume`, and standalone `cargo install --path crates/hya` claims; archived changelogs and task records are historical and must not be rewritten.
+- The active frontend Trellis specs still describe `crates/hya` as the Rust terminal application, and `install.sh --help` still labels `hya` as a native in-process frontend; both are current contracts and need the same migration update.
+- Active `--resume` references are concentrated in the canonical CLI, TUI architecture, project structure, and follow-up docs; backend `--resume` remains valid, but frontend forwarding and direct startup must be documented as `--session`.
+- README and getting-started source installation currently use `cargo install --path crates/hya`, which cannot install the adjacent launcher/runtime; the existing transactional `install.sh` is the supported replacement and requires Bun.
+- `docs/architecture/tui.md`, `docs/project-structure.md`, and the project component map describe deleted `crates/hya` modules and the deprecated ratatui runtime as current; the new current path is `hya` exec shim -> `hya-ts` supervisor -> Bun `packages/hya-tui-ts` -> attached or owned `hya-backend`.
+- Current canonical help exposes `[PROJECT]`, `--server`, `--backend-bin`, `--bun`, `--import`, `--continue`, `--session`, `--fork`, `--prompt`, `--agent`, and `--model`; old frontend `--db`, `--yolo`, `--http`, `--compat`, and `--resume` flags are not part of `hya` anymore.
+- Workspace, TypeScript package, README, Cargo lock entries, and root changelog still agree on `0.33.28`, so the required next patch remains `0.33.29` and the root changelog must be archived as `docs/changes/CHANGELOG_0.33.28.md`.
+- The active comparison page still names `crates/hya-tui` and direct `hya_tui::app::run_tui` as current; troubleshooting still describes the removed Rust non-TTY help behavior.
+- The final active-doc audit found stale current-frontend claims only in `docs/hya-pi-compat-comparison.md`, `docs/opencode-feature-inventory.md`, and `docs/development.md`; all three now assign shipped rendering to `packages/hya-tui-ts` and launcher supervision to `hya`/`hya-ts`.
+- The live baseline remained `0.33.28`. Workspace, lockfile, TypeScript package, README, and root changelog metadata now agree on `0.33.29`; the prior root changelog is preserved verbatim at `docs/changes/CHANGELOG_0.33.28.md`.
+- The active-only stale-reference scan found no standalone `cargo install --path crates/hya`, canonical `hya --resume`, or direct `hya_tui::app::run_tui` claim. Remaining Rust-TUI references explicitly describe retained compatibility crates or removed behavior.
+- `cargo test -p hya --test version_metadata` passed (1 test), and `git diff --check` reported no whitespace errors for the current worktree.
+- Clap did not expose `--version` without explicit version metadata, and its configured command name would brand canonical output as `hya-ts`; the existing exec shim's `argv[0]` is the single source of invoked identity for help, version, and launch errors.
+- Copying the built `hya` executable into a missing-sibling fixture can return Linux `ETXTBSY` while parallel tests execute that inode; reading its bytes before writing the isolated executable avoids that race.
+- Returning `std::io::Result` from the shim left adjacent-launcher failures under Rust's generic `Error:` prefix. Printing the unavoidable `exec` error directly preserves canonical `hya:` branding with less wrapping.

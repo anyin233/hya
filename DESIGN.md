@@ -31,7 +31,7 @@ surface shifts and restrained status colors instead of decorative boxes.
 
 ### Rules
 
-- Use only semantic theme fields from `Theme`; no raw `Color::Rgb` in render code.
+- Use only semantic theme fields from `Theme`; no raw color literals in render code.
 - Accent colors carry meaning and must not be decorative filler.
 - Overlays keep `background_panel`; input keeps `background_element`.
 

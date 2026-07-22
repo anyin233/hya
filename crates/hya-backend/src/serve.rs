@@ -132,7 +132,7 @@ async fn launch_hya(base_url: &str, resume: Option<&str>) -> anyhow::Result<()> 
 fn hya_launch_args(base_url: &str, resume: Option<&str>) -> Vec<String> {
     let mut args = vec!["--server".to_string(), base_url.to_string()];
     if let Some(session) = resume {
-        args.push("--resume".to_string());
+        args.push("--session".to_string());
         args.push(session.to_string());
     }
     args
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn hya_launch_args_forwards_resume_session() {
+    fn hya_launch_args_translates_resume_to_frontend_session() {
         let args = hya_launch_args("http://127.0.0.1:1234", Some("hysec_abcdefghijklmnopqrst"));
 
         assert_eq!(
@@ -193,7 +193,7 @@ mod tests {
             [
                 "--server",
                 "http://127.0.0.1:1234",
-                "--resume",
+                "--session",
                 "hysec_abcdefghijklmnopqrst",
             ]
             .into_iter()

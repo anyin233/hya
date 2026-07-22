@@ -18,7 +18,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.33.28`,
+hya is under active development (workspace version `0.33.29`,
 `MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
 crates.io — build it from source as described below. APIs, config, and command
 surface may still change between versions.
@@ -26,29 +26,20 @@ surface may still change between versions.
 ## Build From Source
 
 Requires a Rust toolchain matching the workspace manifest
-([`Cargo.toml`](Cargo.toml); currently edition 2024, Rust `1.91`).
+([`Cargo.toml`](Cargo.toml); currently edition 2024, Rust `1.91`), Git, and Bun
+(pinned at 1.3.14 for development).
 
 ```sh
 git clone <this-repo> hya
 cd hya
-cargo build --workspace
+./install.sh --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+hya
 ```
 
-The shipped frontend binary is `hya` (crate [`crates/hya`](crates/hya)); the
-backend CLI/API binary is `hya-backend` (crate [`crates/hya-backend`](crates/hya-backend)).
-Run them directly from the workspace:
-
-```sh
-cargo run -p hya --                    # interactive frontend
-cargo run -p hya-backend -- exec "summarize this repository"
-```
-
-Or install it onto your `PATH`:
-
-```sh
-cargo install --path crates/hya
-hya                                # interactive TUI
-```
+The installer places adjacent `hya`, `hya-ts`, and `hya-backend` binaries plus
+the prepared TypeScript TUI runtime. Installing `crates/hya` alone is
+unsupported because `hya` delegates to those adjacent files.
 
 ## Configure a Provider and Log In
 

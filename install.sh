@@ -20,7 +20,7 @@ Options:
   -h, --help                   Show this help
 
 Installs three binaries and the Bun runtime:
-  hya          user-facing TUI/frontend with native in-process hya backend
+  hya          user-facing shim that delegates to the adjacent hya-ts launcher
   hya-backend  backend CLI/API for login, exec, serve, and models
   hya-ts       TypeScript terminal frontend launcher
   lib/hya/hya-tui-ts  prepared TypeScript runtime
@@ -229,6 +229,7 @@ run mv -f "$tmp_ts" "$bin_dir/hya-ts"
 placed_runtime=1
 run mv "$tmp_runtime" "$lib_dir/hya-tui-ts"
 
+run "$bin_dir/hya" "$(pwd -P)" --server http://127.0.0.1:1 --bun /bin/true
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya-backend" --help >/dev/null

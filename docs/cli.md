@@ -20,7 +20,9 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--resume <SESSION>` | Resume a session in the interactive TUI. Accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID. |
 | `--print-logs`, `--log-level`, `--pure` | Accepted Compat-compatible global flags. |
 
-`--resume` is interactive-only and cannot be combined with `--prompt` or a subcommand. When `--prompt` is present, it takes precedence over subcommand dispatch.
+`--resume` is interactive-only and cannot be combined with `--prompt` or a
+subcommand. Bare `hya-backend --resume <ID>` launches `hya --session <ID>`.
+When `--prompt` is present, it takes precedence over subcommand dispatch.
 
 When `--db <PATH>` is supplied, hya persists the canonical event log, not just
 the rendered transcript. The SQLite file can contain prompts, tool arguments,
@@ -32,55 +34,40 @@ private directory.
 ## `hya` frontend
 
 ```sh
-hya
+hya [PROJECT] [OPTIONS]
 ```
 
-Starts the interactive terminal UI. If stdout is not a terminal, hya prints a
-short help message and exits successfully.
+`hya` is the canonical Unix entrypoint. It delegates to the adjacent `hya-ts`
+launcher, which starts the TypeScript/OpenTUI frontend and an owned local
+`hya-backend`. Use `--server` to attach to an existing backend instead.
 
-The TUI uses the same `SessionEngine` as the rest of the binary. It uses an
-in-memory store unless `--db <PATH>` is supplied. Read-only tools are
-auto-allowed; mutating tools ask through the permission panel unless `--yolo` is
-set. In the `hya` frontend, use the command palette's **Switch YOLO** action to
-toggle auto-approval interactively.
-
-TUI slash commands include:
-
-| Command | Meaning |
+| Option | Meaning |
 | --- | --- |
-| `/model`, `/models` | Open the model selector. |
-| `/resume`, `/sessions` | Resume a prior persisted TUI session from the active store. |
-| `/new`, `/clear` | Start a fresh session. |
-| `/compact` | Compact older transcript context for future provider requests. |
-| `/init` | Create a starter `AGENTS.md` if one does not already exist. |
-| `/agent`, `/agents` | Select a built-in agent profile. |
-| `/tools`, `/mcp` | Show builtin tools and MCP status. |
-| `/think` | Set reasoning effort for future turns. |
-| `/export` | Write the current transcript as Markdown. |
-| `/quit`, `/exit`, `/q` | Exit the TUI. |
-| `/help`, `/?` | Show command help. |
+| `PROJECT` | Project directory. Defaults to the current directory. |
+| `--server <URL>` | Attach to an existing backend. |
+| `--backend-bin <PATH>` | Override the backend executable. |
+| `--bun <PATH>` | Override the Bun executable. |
+| `--import <SOURCE>` | Import configuration. The supported source is `compat`. |
+| `--continue` | Continue the latest session. |
+| `--session <ID>` | Resume an exact session id. |
+| `--fork` | Fork the continued or selected session. |
+| `--prompt <TEXT>` | Submit an initial prompt. |
+| `--agent <NAME>` | Select the initial agent. |
+| `--model <PROVIDER/MODEL>` | Select the initial model. |
 
-Custom markdown commands are loaded from compat-style command directories and
-hya prompt directories in the project and user config:
+Examples:
 
-```text
-~/.config/opencode/commands/*.md
-~/.config/opencode/command/*.md
-~/.config/hya/prompts/*.md
-<workdir>/.opencode/commands/*.md
-<workdir>/.opencode/command/*.md
-<workdir>/.hya/prompts/*.md
+```sh
+hya .
+hya --continue
+hya --session hysec_...
+hya --server http://127.0.0.1:8787
+hya --import compat
 ```
 
-Their bodies support `$ARGUMENTS` and positional `$1`...`$9` replacement;
-optional `description`, `agent`, and `model` frontmatter is applied when the
-command is submitted.
-
-`@path` mentions in TUI prompts are expanded into bounded context blocks before
-submission. `@file#Lx-y` includes only the requested line range; `@directory`
-includes a short listing. A leading built-in agent mention, for example
-`@explore trace this path`, switches that submitted turn to the matching
-profile.
+`hya-ts` exposes the same launcher surface for diagnostics. Normal use should
+invoke `hya` so help and errors retain canonical branding. In the TUI, press
+`Ctrl-P` for the authoritative command list and `Ctrl-X` for leader-key actions.
 
 ## `hya-backend exec`
 
@@ -163,15 +150,15 @@ Saved credentials take precedence over inline `api_key` values. `providers` is
 an alias for `auth`. `models --refresh` is accepted for Compat compatibility
 but does not fetch a remote catalog.
 
-The same auth/oauth commands are available on `hya-ts` (forwarded to
-`hya-backend`, same credential store):
+The same auth/oauth commands are available on canonical `hya` (forwarded to
+`hya-backend`, using the same credential store):
 
 ```sh
-hya-ts oauth login --provider codex --type openai-codex
-hya-ts oauth login --provider grok --type grok-build --no-browser
-hya-ts oauth status
-hya-ts login anthropic "$ANTHROPIC_API_KEY"
-hya-ts auth list
+hya oauth login --provider codex --type openai-codex
+hya oauth login --provider grok --type grok-build --no-browser
+hya oauth status
+hya login anthropic "$ANTHROPIC_API_KEY"
+hya auth list
 ```
 
 ## Session and RPC Commands
