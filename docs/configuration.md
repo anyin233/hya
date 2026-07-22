@@ -379,27 +379,27 @@ permission:
       permission: Deny
 ```
 
-`model` accepts lowercase `allow`, `default`, `strict`, or `danger`. Rule
-`target` accepts lowercase `tool`, `mcp`, or `command`; `permission` accepts
-`Allow`, `Ask`, or `Deny`. Selectors use Rust regular-expression search
-semantics, so `read` also matches `read_file`; use `^read$` for an exact match.
-Invalid values or regular expressions produce a config error and a strict
-permission fallback.
+`model` (alias: `mode`) accepts lowercase `allow`, `default`, `strict`, or
+`danger`. Rule `target` accepts lowercase `tool`, `mcp`, or `command`; rule
+`permission` accepts `allow`/`Allow`, `ask`/`Ask`, or `deny`/`Deny`. Selectors
+use Rust regular-expression search semantics, so `read` also matches
+`read_file`; use `^read$` for an exact match. Invalid values or regular
+expressions produce a config error and a strict permission fallback.
 
 Rules are evaluated in file order:
 
 | Model | Behavior |
 | --- | --- |
-| `allow` | Any matching `Deny` denies; otherwise allow. |
+| `allow` | Any matching `Deny` denies; otherwise allow. Does not prompt for tool, MCP, command, or external-directory checks. |
 | `default` | The last matching rule wins. Without a match, local read-only and task tools allow; other tools, MCP calls, and commands ask. |
 | `strict` | Any matching `Deny` denies; otherwise ask, except for an exact subject previously approved with Allow Always. |
-| `danger` | Allow immediately, bypassing configured and legacy permission checks. |
+| `danger` | Allow immediately, bypassing configured and legacy permission checks (including explicit Deny rules). |
 
 The default local read-only set is `read`, `ls`, `glob`, `find`, `grep`, `lsp`,
 `skill`, `list_agents`, `roster`, and `channels`; `task` also allows by default.
 Network reads (`webfetch` and `websearch`), writes, plugins, MCP tools, and shell
-commands ask by default. Existing path, URL, external-directory, and other
-resource rules still apply after an invocation is approved.
+commands ask by default under `default`/`strict`. Under `allow`, those resource
+checks auto-approve unless a snapshot rule explicitly denies them.
 
 Interactive TUI and server modes forward asks to their existing permission UI
 or endpoint. Headless `exec`, RPC, and goal modes reject unresolved asks.

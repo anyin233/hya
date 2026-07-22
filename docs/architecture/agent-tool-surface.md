@@ -433,8 +433,10 @@ and MCP invocations use an MCP subject.
 At normal app startup, the action-level snapshot explicitly allows READ, GLOB,
 and GREP. Tools still make their own typed action/resource assertions. An
 invocation grant satisfies later action checks except `ExternalDirectory`,
-which always remains independently enforceable unless the permission model is
-Danger.
+which remains independently enforceable under `default`/`strict`. Under
+`permission.model: allow`, resource checks (including `ExternalDirectory`)
+auto-approve unless a snapshot rule explicitly denies them; `danger` bypasses
+checks entirely (including Deny).
 ([crates/hya-app/src/runtime.rs:475-481](../../crates/hya-app/src/runtime.rs#L475-L481),
 [crates/hya-tool/src/permission.rs:496-532](../../crates/hya-tool/src/permission.rs#L496-L532),
 [crates/hya-tool/src/permission.rs:534-570](../../crates/hya-tool/src/permission.rs#L534-L570))

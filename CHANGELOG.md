@@ -1,5 +1,4 @@
-# 0.33.29
+# 0.33.30
 
-- Made the SolidJS/OpenTUI frontend the default `hya` TUI through the adjacent `hya-ts` launcher while retaining the `hya-ts` alias and Compat config import.
-- Removed the shipped Rust TUI entrypoint and routed bare `hya-backend` startup through the canonical frontend.
-- Added installed and release-archive startup checks for the default frontend chain.
+- Fixed `permission.model: allow` still prompting the CLI for tool and external-directory checks; allow mode now auto-approves resource asserts while still honoring explicit Deny rules.
+- Accepted `permission.mode` as an alias for `permission.model`, and lowercase `allow`/`ask`/`deny` on rule effects so config casing matches the model field.
