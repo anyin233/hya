@@ -1,3 +1,3 @@
-# 0.33.18
+# 0.33.19
 
-- Fixed subagent observation navigation so `Esc` returns to the main agent after failed starts or split attempts, and docked the complete roster shortcuts above the main prompt and at the bottom of observation views.
+- Fixed batch subagent task calls so an unused top-level `task_id` no longer blocks dispatch.
