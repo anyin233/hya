@@ -532,11 +532,9 @@ impl PermissionPlane {
     }
 
     pub async fn assert(&self, action: Action, resource: Resource) -> Result<(), PermissionError> {
-        if self
-            .invocation_policy
-            .as_ref()
-            .is_some_and(|policy| policy.model == PermissionModel::Danger)
-        {
+        let model = self.invocation_policy.as_ref().map(|policy| policy.model);
+        // `danger` bypasses every resource check, including explicit Deny rules.
+        if model == Some(PermissionModel::Danger) {
             return Ok(());
         }
         // Precedence: a snapshot Allow/Deny is authoritative. Only on Ask do we
@@ -551,6 +549,11 @@ impl PermissionPlane {
                 });
             }
             Mode::Ask => {}
+        }
+        // `allow` auto-approves remaining resource checks (including ExternalDirectory)
+        // so `permission.model: allow` never prompts. Explicit Deny above still wins.
+        if model == Some(PermissionModel::Allow) {
+            return Ok(());
         }
         if self.call_grant && action != Action::ExternalDirectory {
             return Ok(());

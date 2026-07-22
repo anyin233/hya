@@ -110,7 +110,9 @@ struct ToolsConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct PermissionConfig {
-    #[serde(default)]
+    /// Policy model (`allow` / `default` / `strict` / `danger`).
+    /// Accepts the common alias `mode` so `permission.mode: allow` works.
+    #[serde(default, alias = "mode")]
     model: PermissionModel,
     #[serde(default)]
     rules: Vec<PermissionRuleConfig>,
@@ -123,10 +125,16 @@ struct PermissionRuleConfig {
     permission: PermissionModeConfig,
 }
 
+/// Rule effect. Accepts both lowercase (`allow`) and PascalCase (`Allow`) so
+/// config stays consistent with `permission.model` casing.
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum PermissionModeConfig {
+    #[serde(alias = "Allow")]
     Allow,
+    #[serde(alias = "Deny")]
     Deny,
+    #[serde(alias = "Ask")]
     Ask,
 }
 
@@ -1590,11 +1598,17 @@ permission:
             )
             .is_err()
         );
-        assert!(
-            parse_config(
-                "permission:\n  rules:\n    - target: tool\n      selector: x\n      permission: allow\n",
-            )
-            .is_err()
+        // Lowercase rule effects match `permission.model` casing.
+        let lower = parse_config(
+            "permission:\n  rules:\n    - target: tool\n      selector: x\n      permission: allow\n",
+        )
+        .unwrap();
+        assert!(resolve_permission(&lower).is_ok());
+        // `mode` is accepted as an alias for `model`.
+        let mode_alias = parse_config("permission:\n  mode: allow\n").unwrap();
+        assert_eq!(
+            resolve_permission(&mode_alias).unwrap().model(),
+            PermissionModel::Allow
         );
     }
 
