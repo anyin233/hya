@@ -52,6 +52,9 @@ pub enum ProviderError {
     Incompatible(String),
     #[error("decode: {0}")]
     Decode(String),
+    /// OAuth (or other) credentials expired/revoked; user must re-authenticate.
+    #[error("auth expired for provider '{provider}': {hint}")]
+    AuthExpired { provider: String, hint: String },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

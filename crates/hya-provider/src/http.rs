@@ -26,6 +26,8 @@ use crate::{
 pub enum ProviderKind {
     OpenAiCompatible,
     OpenAiResponse,
+    /// ChatGPT Codex subscription backend (`chatgpt.com/backend-api/codex`).
+    OpenAiCodex,
     GrokBuild,
     Anthropic,
     Google,
@@ -37,7 +39,7 @@ impl ProviderKind {
         let levels: &[&str] = match self {
             ProviderKind::Anthropic => &["low", "medium", "high", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
-            ProviderKind::OpenAiResponse => {
+            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
             ProviderKind::GrokBuild => &["low", "medium", "high"],
@@ -52,13 +54,21 @@ pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send +
 
 enum AuthStyle {
     Bearer(SecretString),
+    /// ChatGPT Codex OAuth: Bearer JWT plus optional account id header.
+    CodexSession {
+        token: SecretString,
+        account_id: Option<String>,
+    },
     /// Grok Build OAuth session: Bearer JWT plus CLI chat-proxy session headers.
     GrokSession {
         token: SecretString,
         client_version: String,
         client_identifier: String,
     },
-    Anthropic { key: SecretString, version: String },
+    Anthropic {
+        key: SecretString,
+        version: String,
+    },
     Google(SecretString),
 }
 
@@ -114,7 +124,7 @@ impl HttpProvider {
                 format!("{base}/chat/completions"),
                 AuthStyle::Bearer(key),
             ),
-            ProviderKind::OpenAiResponse => (
+            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => (
                 Box::new(OpenAiResponsesProtocol),
                 format!("{base}/responses"),
                 AuthStyle::Bearer(key),
@@ -165,6 +175,24 @@ impl HttpProvider {
         })
     }
 
+    /// Switch a ChatGPT Codex provider to OAuth session auth (account id header).
+    ///
+    /// No-op for non-`OpenAiCodex` kinds so callers can chain unconditionally.
+    #[must_use]
+    pub fn with_codex_session_auth(mut self, account_id: Option<String>) -> Self {
+        if self.kind != ProviderKind::OpenAiCodex {
+            return self;
+        }
+        let token = match &self.auth {
+            AuthStyle::Bearer(key)
+            | AuthStyle::CodexSession { token: key, .. }
+            | AuthStyle::GrokSession { token: key, .. } => key.clone(),
+            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
+        };
+        self.auth = AuthStyle::CodexSession { token, account_id };
+        self
+    }
+
     /// Switch a Grok Build provider to OAuth session auth (CLI chat-proxy headers).
     ///
     /// No-op for non-`GrokBuild` kinds so callers can chain unconditionally.
@@ -178,7 +206,9 @@ impl HttpProvider {
             return self;
         }
         let token = match &self.auth {
-            AuthStyle::Bearer(key) | AuthStyle::GrokSession { token: key, .. } => key.clone(),
+            AuthStyle::Bearer(key)
+            | AuthStyle::CodexSession { token: key, .. }
+            | AuthStyle::GrokSession { token: key, .. } => key.clone(),
             AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
         };
         self.auth = AuthStyle::GrokSession {
@@ -218,6 +248,16 @@ impl HttpProvider {
             AuthStyle::Bearer(key) => {
                 let token = self.resolve_bearer(key)?;
                 headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+            }
+            AuthStyle::CodexSession { token, account_id } => {
+                let token = self.resolve_bearer(token)?;
+                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+                if let Some(account_id) = account_id.as_deref().filter(|s| !s.is_empty()) {
+                    headers.insert(
+                        HeaderName::from_static("chatgpt-account-id"),
+                        sensitive(account_id)?,
+                    );
+                }
             }
             AuthStyle::GrokSession {
                 token,
@@ -349,8 +389,8 @@ impl Provider for HttpProvider {
             ),
             None => self.endpoint.clone(),
         };
-        let model_override = matches!(self.auth, AuthStyle::GrokSession { .. })
-            .then_some(req.model.as_str());
+        let model_override =
+            matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
         let resp = self
             .client
             .post(&url)

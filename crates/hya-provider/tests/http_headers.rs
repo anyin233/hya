@@ -243,6 +243,49 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
 }
 
 #[tokio::test]
+async fn http_provider_codex_session_sends_account_id_header() {
+    let response = concat!(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+        "data: [DONE]\n\n",
+    )
+    .to_string();
+    let (base_url, request_rx) = start_sse_server(response).await;
+    let provider = HttpProvider::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        &base_url,
+        "codex-jwt".to_string(),
+        ["gpt-5.3-codex".to_string()],
+    )
+    .unwrap()
+    .with_codex_session_auth(Some("acct-42".to_string()));
+    let req = CompletionRequest {
+        model: ModelRef::new("codex/gpt-5.3-codex"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let request = captured_request(request_rx).await;
+    let headers = request.headers.to_ascii_lowercase();
+
+    assert!(events.iter().all(Result::is_ok));
+    assert!(headers.contains("authorization: bearer codex-jwt"));
+    assert!(headers.contains("chatgpt-account-id: acct-42"));
+    assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
+}
+
+#[tokio::test]
 async fn http_provider_grok_session_sends_oauth_proxy_headers() {
     let response = concat!(
         "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::agent_cmd::AgentCommand;
-use crate::auth_cmd::AuthCommand;
+use crate::auth_cmd::{AuthCommand, OauthCommand};
 
 #[derive(Parser)]
 #[command(
@@ -112,6 +112,11 @@ pub(crate) enum Command {
         provider: String,
         /// The bearer/API token to store.
         token: String,
+    },
+    /// Interactive OAuth login / status for openai-codex and grok-build.
+    Oauth {
+        #[command(subcommand)]
+        command: OauthCommand,
     },
     /// Inspect or remove saved provider auth tokens.
     #[command(alias = "providers")]
@@ -328,6 +333,44 @@ mod tests {
                 command: crate::auth_cmd::AuthCommand::List,
             }) => {}
             _ => panic!("expected auth list command"),
+        }
+    }
+
+    #[test]
+    fn parses_oauth_login_command() {
+        let cli = parse([
+            "hya-backend",
+            "oauth",
+            "login",
+            "--provider",
+            "codex",
+            "--type",
+            "openai-codex",
+            "--device",
+            "--no-browser",
+            "--model",
+            "gpt-5.3-codex",
+        ]);
+        match cli.command {
+            Some(super::Command::Oauth {
+                command:
+                    crate::auth_cmd::OauthCommand::Login {
+                        provider,
+                        oauth_type,
+                        device,
+                        no_browser,
+                        model,
+                        base_url,
+                    },
+            }) => {
+                assert_eq!(provider, "codex");
+                assert_eq!(oauth_type, "openai-codex");
+                assert!(device);
+                assert!(no_browser);
+                assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
+                assert!(base_url.is_none());
+            }
+            _ => panic!("expected oauth login command"),
         }
     }
 }

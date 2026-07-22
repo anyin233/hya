@@ -186,6 +186,7 @@ Supported `kind` values:
 | --- | --- |
 | `openai`, `openai-compatible`, or `openai-completion` | OpenAI Chat Completions compatible route (`/chat/completions`). |
 | `openai-response` | OpenAI Responses route (`/responses`). |
+| `openai-codex` | ChatGPT Codex subscription Responses route (`/responses` on `chatgpt.com/backend-api/codex`). |
 | `grok-build` | Grok Build Responses route (`/responses`). |
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
@@ -198,35 +199,71 @@ content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
 defaulting to `high`. Grok streams must end with `response.completed` or
 `response.incomplete`; `[DONE]` alone is not completion.
 
-### Grok Build OAuth (`kind: grok-build`)
+### OAuth login (`openai-codex` and `grok-build`)
 
-Credentials are **self-contained in hya config** (or `hya-backend login`). hya
-never reads `~/.grok/auth.json`.
+Interactive OAuth is implemented entirely in Rust:
 
-1. Run `grok login` to mint a session JWT (optional source).
-2. Put the access token in config `api_key` (literal, `{env:…}`, or `{file:…}`)
-   or save it with `hya-backend login grok <token>`.
-3. Point `base_url` at the official CLI chat proxy.
+```sh
+# ChatGPT / Codex subscription (PKCE loopback; use --device on headless hosts)
+hya-backend oauth login --provider codex --type openai-codex
+
+# xAI SuperGrok / Grok CLI (device-code flow)
+hya-backend oauth login --provider grok --type grok-build --no-browser
+
+hya-backend oauth status
+```
+
+On success hya:
+
+1. Writes an OAuth credential bundle to `~/.config/hya/auth/<provider>.yaml`
+   (`access_token`, `refresh_token`, `expires_at`, optional `account_id`).
+2. Upserts a non-secret provider route into `config.yaml` (`kind`, `base_url`,
+   `models`). Secrets are **not** written into `config.yaml`.
+
+Access tokens are refreshed automatically when near expiry. If the refresh
+token is revoked (`invalid_grant`), provider calls fail with a clear re-login
+hint:
+
+```text
+hya-backend oauth login --provider <name> --type <openai-codex|grok-build>
+```
+
+#### OpenAI Codex (`kind: openai-codex`)
+
+```yaml
+providers:
+  codex:
+    kind: openai-codex
+    base_url: https://chatgpt.com/backend-api/codex
+    models: [gpt-5.3-codex]
+```
+
+Requests send `Authorization: Bearer <access_token>` and, when known,
+`ChatGPT-Account-Id`. Do not point Codex OAuth tokens at `api.openai.com`.
+
+#### Grok Build OAuth (`kind: grok-build`)
+
+Credentials are **self-contained in hya config / auth** (`hya-backend oauth
+login` or `hya-backend login`). hya never reads `~/.grok/auth.json`.
 
 ```yaml
 providers:
   grok:
     kind: grok-build
     base_url: https://cli-chat-proxy.grok.com/v1
-    api_key: "{env:GROK_OAUTH_TOKEN}"
     models: [grok-4.5]
 ```
 
 Every `grok-build` request uses CLI chat-proxy session headers:
 
-- `Authorization: Bearer <api_key>`
+- `Authorization: Bearer <token>`
 - `X-XAI-Token-Auth: xai-grok-cli`
 - `x-grok-client-version: <hya version>`
 - `x-grok-client-identifier: grok-cli`
 - `x-grok-model-override: <model id>`
 
-Session JWTs expire (typically hours). When requests return 401, refresh via
-`grok login` and update the configured token.
+You can still paste a bearer with `hya-backend login grok <token>` or an
+inline `api_key`, but that path has no automatic refresh.
 
 Models may use the existing string form or a detailed entry with per-model
 reasoning metadata:
@@ -260,13 +297,15 @@ Saved tokens take precedence over inline `api_key` values:
 
 ```sh
 hya-backend login anthropic "$ANTHROPIC_API_KEY"
+hya-backend oauth login --provider codex --type openai-codex
 hya-backend auth list
+hya-backend oauth status
 hya-backend auth logout anthropic
 ```
 
-Tokens are stored under `~/.config/hya/auth/<provider>.yaml`. HTTP auth headers
-are marked sensitive and redirects are disabled so a secret is not forwarded to
-another host.
+Tokens are stored under `~/.config/hya/auth/<provider>.yaml` (plain API keys or
+OAuth bundles). HTTP auth headers are marked sensitive and redirects are
+disabled so a secret is not forwarded to another host.
 
 ## Model Selection
 
