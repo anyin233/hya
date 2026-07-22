@@ -1,5 +1,5 @@
-# 0.33.35
+# 0.33.36
 
-- Fix session resume: owned `hya` backends now open a durable SQLite store at `$XDG_STATE_HOME/hya/sessions.db` (override with `HYA_DB`, empty for in-memory) so `hya --continue` / `hya -c` and `hya -s <id>` can restore prior sessions after restart.
-- Interactive bare `hya-backend` and default `sessions`/`tail-session` paths use the same store when `--db` is omitted.
-- Add short flags `-c` (`--continue`) and `-s` (`--session`) on the public `hya` launcher.
+- Fix subagent pane switching after Ctrl+X V (vertical split): splits always place an observation beside Main instead of nesting under the focused observation, so focusMain / roster agent switches keep working.
+- Selecting Main in the subagent roster returns focus to the Main pane; Main rows are selectable.
+- Do not swallow leader-chord completion keys while an observation pane is focused.

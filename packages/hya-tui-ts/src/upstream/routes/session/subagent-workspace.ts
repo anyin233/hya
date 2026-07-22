@@ -148,7 +148,8 @@ export function flattenRunTree(tree: RunTreeNode): RunTreeRow[] {
     rows.push({
       node,
       depth,
-      selectable: depth > 0 && node.session !== undefined,
+      // Depth-0 Main is selectable so the roster can return focus to Main after a split.
+      selectable: node.session !== undefined,
       searchText: [
         node.roster?.handle,
         node.roster?.agent_type ?? node.member?.subagent_type ?? node.agent,
@@ -308,28 +309,79 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
       return { ...state, tabs: [...state.tabs, tab], activeTabID: tab.id, focusedPaneID: pane.id }
     }
     case "openSplit": {
-      const existing = workspaceLeaves(state).find(
-        (pane) => pane.type === "observation" && pane.sessionID === action.sessionID,
-      )
-      if (existing) return focusPane(state, existing.id)
-      const pane: ObservationPane = {
-        type: "observation",
-        id: `observation:${action.sessionID}`,
-        sessionID: action.sessionID,
-      }
-      let replaced = false
-      const tabs = state.tabs.map((tab) => {
-        const root = replacePane(tab.root, state.focusedPaneID, (focused) => ({
-          type: "split",
-          axis: action.axis,
-          first: focused,
-          second: pane,
-        }))
-        if (root !== tab.root) replaced = true
-        return root === tab.root ? tab : { ...tab, root }
-      })
-      return replaced ? { ...state, tabs, focusedPaneID: pane.id } : state
+      // ADR-0003: a split always shows Main beside one observation on the main tab.
+      // Never nest into the currently focused observation — that hid Main and broke
+      // subsequent agent switching / focusMain after Ctrl+X V.
+      return openSplitBesideMain(state, action.sessionID, action.axis)
     }
+  }
+}
+
+/**
+ * Put `sessionID` as the sole observation beside Main on the main tab.
+ *
+ * Replaces any prior main-tab split/observation layout so switching agents while a
+ * split is open always yields a clean Main | observation pair with focus on the
+ * selected observation.
+ */
+function openSplitBesideMain(
+  state: WorkspaceState,
+  sessionID: string,
+  axis: "vertical" | "horizontal",
+): WorkspaceState {
+  const pane: ObservationPane = {
+    type: "observation",
+    id: `observation:${sessionID}`,
+    sessionID,
+  }
+  // Drop this observation from every tab first so it is not duplicated.
+  let next = state
+  for (const leaf of workspaceLeaves(state)) {
+    if (leaf.type === "observation" && leaf.sessionID === sessionID) {
+      next = removeFromWorkspace(next, leaf.id)
+    }
+  }
+  // Rebuild the main tab as split(main, observation). Preserve other tabs.
+  const tabs = next.tabs
+    .map((tab) => {
+      if (tab.id !== "main") {
+        // Keep observation-only tabs for other agents; strip this session if present.
+        const root = removePane(tab.root, pane.id)
+        return root ? { ...tab, root } : undefined
+      }
+      return {
+        ...tab,
+        root: {
+          type: "split" as const,
+          axis,
+          first: { type: "main" as const, id: "main" as const },
+          second: pane,
+        },
+      }
+    })
+    .filter((tab): tab is WorkspaceTab => tab !== undefined)
+
+  const hasMain = tabs.some((tab) => tab.id === "main")
+  const finalTabs = hasMain
+    ? tabs
+    : [
+        {
+          id: "main",
+          root: {
+            type: "split" as const,
+            axis,
+            first: { type: "main" as const, id: "main" as const },
+            second: pane,
+          },
+        },
+        ...tabs,
+      ]
+
+  return {
+    ...next,
+    tabs: finalTabs,
+    activeTabID: "main",
+    focusedPaneID: pane.id,
   }
 }
 
