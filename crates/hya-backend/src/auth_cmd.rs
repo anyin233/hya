@@ -147,10 +147,22 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
                 result.oauth_type.provider_kind(),
                 result.base_url
             );
-            println!(
-                "  model:  {}/{} (set default_model or pass --model to hya)",
-                result.provider, result.model
-            );
+            if result.models_from_catalog {
+                println!(
+                    "  models: {} from live catalog (default {}/{})",
+                    result.models.len(),
+                    result.provider,
+                    result.model
+                );
+                for id in &result.models {
+                    println!("    - {id}");
+                }
+            } else {
+                println!(
+                    "  model:  {}/{} (catalog unavailable; only default written)",
+                    result.provider, result.model
+                );
+            }
             Ok(())
         }
         OauthCommand::Status { provider } => {

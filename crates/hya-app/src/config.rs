@@ -352,16 +352,29 @@ pub fn expected_config_path() -> PathBuf {
     PathBuf::from("~/.config/hya/config.yaml")
 }
 
+/// Model entry written under `providers.<id>.models` after OAuth login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthConfigModel {
+    pub id: String,
+    pub reasoning_default: Option<String>,
+    pub reasoning_variants: Vec<String>,
+}
+
 /// Upsert a non-secret OAuth provider route into `config.yaml`.
 ///
 /// Creates the file (and parents) when missing. Preserves unrelated top-level
 /// keys. Does **not** write secrets — tokens live under `auth/<provider>.yaml`.
+///
+/// When `models` is non-empty, replaces the provider's model list (typical after
+/// a live catalog fetch). When empty, keeps any existing models and falls back
+/// to a single default model derived from `default_model_id`.
 pub fn upsert_oauth_provider(
     config_path: &Path,
     provider_id: &str,
     kind: &str,
     base_url: &str,
-    model: &str,
+    models: &[OAuthConfigModel],
+    default_model_id: &str,
 ) -> anyhow::Result<()> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -404,34 +417,36 @@ pub fn upsert_oauth_provider(
         Value::String("base_url".into()),
         Value::String(base_url.to_string()),
     );
-    provider_map.insert(
-        Value::String("models".into()),
-        Value::Sequence(vec![Value::String(model.to_string())]),
-    );
 
-    // Preserve existing models / api_key when re-logging the same provider.
+    let models_value = if models.is_empty() {
+        // Preserve existing models on re-login when catalog fetch failed.
+        if let Some(existing_models) = providers
+            .get(Value::String(provider_id.into()))
+            .and_then(Value::as_mapping)
+            .and_then(|p| p.get(Value::String("models".into())))
+            .filter(|m| !m.is_null())
+        {
+            existing_models.clone()
+        } else {
+            Value::Sequence(vec![Value::String(default_model_id.to_string())])
+        }
+    } else {
+        Value::Sequence(
+            models
+                .iter()
+                .map(oauth_config_model_to_yaml)
+                .collect::<Vec<_>>(),
+        )
+    };
+    provider_map.insert(Value::String("models".into()), models_value);
+
+    // Preserve existing inline api_key when re-logging the same provider.
     if let Some(existing_provider) = providers
         .get(Value::String(provider_id.into()))
         .and_then(Value::as_mapping)
+        && let Some(api_key) = existing_provider.get(Value::String("api_key".into()))
     {
-        if let Some(models) = existing_provider.get(Value::String("models".into()))
-            && !models.is_null()
-        {
-            provider_map.insert(Value::String("models".into()), models.clone());
-        }
-        if let Some(api_key) = existing_provider.get(Value::String("api_key".into())) {
-            // Keep legacy inline key if present (OAuth auth file still takes precedence).
-            provider_map.insert(Value::String("api_key".into()), api_key.clone());
-        }
-        // Always refresh kind/base_url to the OAuth defaults (or caller overrides).
-        provider_map.insert(
-            Value::String("kind".into()),
-            Value::String(kind.to_string()),
-        );
-        provider_map.insert(
-            Value::String("base_url".into()),
-            Value::String(base_url.to_string()),
-        );
+        provider_map.insert(Value::String("api_key".into()), api_key.clone());
     }
 
     providers.insert(
@@ -439,7 +454,12 @@ pub fn upsert_oauth_provider(
         Value::Mapping(provider_map),
     );
 
-    // Promote default_model off offline when still at starter default.
+    // Prefer the first catalog model (or explicit default) when still offline.
+    let preferred = models
+        .first()
+        .map(|m| m.id.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_model_id);
     let default_model_key = Value::String("default_model".into());
     let should_set_default = match map.get(&default_model_key).and_then(Value::as_str) {
         None => true,
@@ -449,7 +469,7 @@ pub fn upsert_oauth_provider(
     if should_set_default {
         map.insert(
             default_model_key,
-            Value::String(format!("{provider_id}/{model}")),
+            Value::String(format!("{provider_id}/{preferred}")),
         );
     }
 
@@ -457,6 +477,37 @@ pub fn upsert_oauth_provider(
     std::fs::write(config_path, rendered)
         .with_context(|| format!("write {}", config_path.display()))?;
     Ok(())
+}
+
+fn oauth_config_model_to_yaml(model: &OAuthConfigModel) -> Value {
+    if model.reasoning_variants.is_empty() && model.reasoning_default.is_none() {
+        return Value::String(model.id.clone());
+    }
+    let mut detailed = Mapping::new();
+    detailed.insert(Value::String("id".into()), Value::String(model.id.clone()));
+    let mut reasoning = Mapping::new();
+    if let Some(default) = model.reasoning_default.as_ref() {
+        reasoning.insert(
+            Value::String("default".into()),
+            Value::String(default.clone()),
+        );
+    }
+    if !model.reasoning_variants.is_empty() {
+        reasoning.insert(
+            Value::String("variants".into()),
+            Value::Sequence(
+                model
+                    .reasoning_variants
+                    .iter()
+                    .map(|v| Value::String(v.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    if !reasoning.is_empty() {
+        detailed.insert(Value::String("reasoning".into()), Value::Mapping(reasoning));
+    }
+    Value::Mapping(detailed)
 }
 
 /// Create the default hya config file if neither supported config path exists.
@@ -1830,6 +1881,11 @@ providers:
             "codex",
             "openai-codex",
             "https://chatgpt.com/backend-api/codex",
+            &[OAuthConfigModel {
+                id: "gpt-5.3-codex".into(),
+                reasoning_default: None,
+                reasoning_variants: Vec::new(),
+            }],
             "gpt-5.3-codex",
         )
         .unwrap();
@@ -1838,17 +1894,34 @@ providers:
         assert!(raw.contains("chatgpt.com/backend-api/codex"));
         assert!(raw.contains("gpt-5.3-codex"));
         assert!(raw.contains("default_model:"));
-        // Second upsert preserves models list content.
+        // Live catalog replaces models (including reasoning metadata).
         upsert_oauth_provider(
             &path,
             "codex",
             "openai-codex",
             "https://chatgpt.com/backend-api/codex",
-            "other-model",
+            &[
+                OAuthConfigModel {
+                    id: "gpt-5.6-sol".into(),
+                    reasoning_default: Some("low".into()),
+                    reasoning_variants: vec!["low".into(), "high".into()],
+                },
+                OAuthConfigModel {
+                    id: "gpt-5.5".into(),
+                    reasoning_default: None,
+                    reasoning_variants: Vec::new(),
+                },
+            ],
+            "gpt-5.6-sol",
         )
         .unwrap();
         let raw2 = std::fs::read_to_string(&path).unwrap();
-        assert!(raw2.contains("gpt-5.3-codex"));
+        assert!(raw2.contains("gpt-5.6-sol"));
+        assert!(raw2.contains("gpt-5.5"));
+        assert!(raw2.contains("variants:"));
+        // default_model stays put once set (still may mention the old model id).
+        assert!(raw2.contains("models:"));
+        assert!(raw2.contains("id: gpt-5.6-sol") || raw2.contains("gpt-5.6-sol"));
     }
 
     #[test]
