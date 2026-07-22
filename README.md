@@ -68,12 +68,12 @@ hya                 # start the TUI against the live provider
 For ChatGPT Codex or Grok Build subscription OAuth (no API key):
 
 ```sh
-hya-backend oauth login --provider codex --type openai-codex
-hya-backend oauth login --provider grok --type grok-build
-hya-backend oauth status
+hya oauth login --provider codex --type openai-codex
+hya oauth login --provider grok --type grok-build
+hya oauth status
 # same commands work on hya-ts:
-hya-ts oauth login --provider codex --type openai-codex
-hya-ts oauth status
+hya oauth login --provider codex --type openai-codex
+hya oauth status
 ```
 
 See [docs/configuration.md](docs/configuration.md) for first-run behavior,
