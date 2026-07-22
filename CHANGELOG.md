@@ -1,4 +1,3 @@
-# 0.33.31
+# 0.33.32
 
-- Fixed TypeScript TUI subagent observation exit: Escape again returns focus to the Main agent view even while the main turn is still busy (session.interrupt no longer steals Escape when the prompt is hidden).
-- Escape on a child-session route walks back to the parent session.
+- Model reasoning variants keep the order listed in config (no longer re-ranked by effort or sorted alphabetically in the catalog/picker cycle).

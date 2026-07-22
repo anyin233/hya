@@ -61,8 +61,8 @@ pub trait Client: Send + Sync {
     /// `GET /config/providers` — provider/model catalog for the model switch dialog. Returns
     /// `(value = "providerID/modelID", title, provider display name, context token limit, variant
     /// names)` tuples; deprecated models are skipped. Variants are the keys of the model's
-    /// `variants` object (empty when the model has none). Fetched in the background like
-    /// [`Client::commands`].
+    /// `variants` object in the order the server/config provided them (empty when the model has
+    /// none). Fetched in the background like [`Client::commands`].
     async fn models(&self) -> Result<Vec<(String, String, String, i64, Vec<String>)>>;
 
     async fn mcp_status(&self) -> Result<Vec<(String, String)>>;
@@ -429,24 +429,7 @@ impl<T: Transport> Client for ApiClient<T> {
                     .and_then(|limit| limit.get("context"))
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
-                let mut variants: Vec<String> = info
-                    .get("variants")
-                    .and_then(serde_json::Value::as_object)
-                    .map(|map| map.keys().cloned().collect())
-                    .unwrap_or_default();
-                variants.sort_by_key(|name| {
-                    let rank = match name.as_str() {
-                        "none" | "off" => 0u8,
-                        "minimal" => 1,
-                        "low" => 2,
-                        "medium" => 3,
-                        "high" => 4,
-                        "xhigh" => 5,
-                        "max" => 6,
-                        _ => 7,
-                    };
-                    (rank, name.clone())
-                });
+                let variants = model_variant_names(info);
                 out.push((
                     format!("{provider_id}/{model_id}"),
                     title,
@@ -649,9 +632,20 @@ fn encode_query_component(value: &str) -> String {
         .collect()
 }
 
+/// Variant names from a catalog model info object, preserving key order from the server.
+///
+/// Order is whatever the config/catalog provided — not effort rank and not alphabetical.
+fn model_variant_names(info: &Value) -> Vec<String> {
+    info.get("variants")
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_plugin_entry, question_path};
+    use super::{model_variant_names, parse_plugin_entry, question_path};
+    use serde_json::json;
 
     #[test]
     fn parse_plugin_entry_handles_name_at_version_and_file_urls() {
@@ -695,5 +689,23 @@ mod tests {
             question_path("que_1", "reject", None),
             "/question/que_1/reject"
         );
+    }
+
+    #[test]
+    fn model_variant_names_preserve_server_key_order() {
+        // Intentionally not effort-ranked and not alphabetical.
+        let info = json!({
+            "variants": {
+                "max": {},
+                "high": {},
+                "low": {},
+                "medium": {}
+            }
+        });
+        assert_eq!(
+            model_variant_names(&info),
+            vec!["max", "high", "low", "medium"]
+        );
+        assert!(model_variant_names(&json!({})).is_empty());
     }
 }

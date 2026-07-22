@@ -56,7 +56,9 @@ pub(super) struct ModelInfo {
     api: ModelApi,
     capabilities: ModelCapabilities,
     request: ModelRequest,
-    variants: BTreeMap<String, Value>,
+    /// Insertion-ordered so config/catalog variant order is preserved on the wire
+    /// (TUI cycle and picker use object key order).
+    variants: serde_json::Map<String, Value>,
     time: ModelTime,
     cost: Vec<ModelCost>,
     status: &'static str,
@@ -202,9 +204,32 @@ mod tests {
             .get("variants")
             .and_then(Value::as_object)
             .expect("variants must serialize as a JSON object");
-        let mut keys: Vec<&String> = variants.keys().collect();
-        keys.sort();
-        assert_eq!(keys, ["high", "low"]);
+        let keys: Vec<&String> = variants.keys().collect();
+        assert_eq!(keys, ["low", "high"]);
         assert!(variants["low"].is_object());
+    }
+
+    #[test]
+    fn model_info_preserves_configured_variant_order() {
+        // Config order, not effort rank and not alphabetical (high < low < medium).
+        let info = model_info(
+            "gateway",
+            "gpt-5.6-sol",
+            true,
+            200_000,
+            &[
+                "max".to_string(),
+                "high".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+            ],
+        );
+        let value = serde_json::to_value(&info).expect("serialize model info");
+        let keys: Vec<&String> = value["variants"]
+            .as_object()
+            .expect("variants object")
+            .keys()
+            .collect();
+        assert_eq!(keys, ["max", "high", "low", "medium"]);
     }
 }

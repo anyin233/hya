@@ -1798,6 +1798,29 @@ providers:
     }
 
     #[test]
+    fn reasoning_variants_keep_configured_order() {
+        let parsed = parse_providers(
+            r#"
+providers:
+  gateway:
+    kind: openai-response
+    base_url: https://gateway.example/v1
+    models:
+      - id: gpt-5.6-sol
+        reasoning:
+          variants: [max, high, low, medium]
+"#,
+        )
+        .unwrap();
+
+        let entries = model_entries(&parsed);
+        assert_eq!(
+            entries[0].reasoning_variants,
+            vec!["max", "high", "low", "medium"]
+        );
+    }
+
+    #[test]
     fn grok_build_config_defaults_to_high_reasoning() {
         let parsed = parse_providers(
             r#"
