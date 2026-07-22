@@ -458,3 +458,36 @@ Restored Esc navigation from all subagent observation states, added shared roste
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Fix batch task ID validation
+
+**Date**: 2026-07-22
+**Task**: Fix batch task ID validation
+**Branch**: `main`
+
+### Summary
+
+Moved task_id validation into single-task mode, added a batch regression, released 0.33.19, and documented the task tool contract.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2fa6a60f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
