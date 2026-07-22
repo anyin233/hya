@@ -118,7 +118,7 @@ tools:
 # name used by `hya-backend login <id>` and shown as the provider in model refs.
 providers:
   anthropic:
-    kind: anthropic                      # openai-completion | openai-response | anthropic | google
+    kind: anthropic                      # openai-completion | openai-response | grok-build | anthropic | google
     base_url: https://api.anthropic.com/v1
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
     # A token saved via `hya-backend login anthropic <token>` takes precedence.
@@ -166,6 +166,13 @@ providers:
         reasoning:
           default: medium
           variants: [none, minimal, low, medium, high, xhigh, max]
+  grok:
+    kind: grok-build
+    # Prefer the Grok Build CLI chat proxy when using OAuth session auth.
+    base_url: https://cli-chat-proxy.grok.com/v1
+    # Optional when `~/.grok/auth.json` exists after `grok login`.
+    # api_key: "{env:XAI_API_KEY}"
+    models: [grok-4.5]
   google:
     kind: google
     base_url: https://generativelanguage.googleapis.com
@@ -179,11 +186,49 @@ Supported `kind` values:
 | --- | --- |
 | `openai`, `openai-compatible`, or `openai-completion` | OpenAI Chat Completions compatible route (`/chat/completions`). |
 | `openai-response` | OpenAI Responses route (`/responses`). |
+| `grok-build` | Grok Build Responses route (`/responses`). |
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
 
 Providers without models are skipped. Providers without an inline `api_key` are
 still valid if a saved token exists for that provider id.
+
+`grok-build` uses the Responses request shape and adds encrypted reasoning
+content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
+defaulting to `high`. Grok streams must end with `response.completed` or
+`response.incomplete`; `[DONE]` alone is not completion.
+
+### Grok Build OAuth (preferred for `kind: grok-build`)
+
+After you run `grok login` once, hya can reuse the Grok Build session token from
+`~/.grok/auth.json` (or `$GROK_HOME/auth.json`):
+
+1. **Grok Build OAuth** session JWT from `auth.json` field `key`
+2. Saved hya token (`hya-backend login <id> …`)
+3. Inline `api_key` (`literal` / `{env:}` / `{file:}`)
+
+When the credential comes from Grok OAuth, hya sends CLI chat-proxy session
+headers on every request:
+
+- `Authorization: Bearer <access token>`
+- `X-XAI-Token-Auth: xai-grok-cli`
+- `x-grok-client-version: <hya version>`
+- `x-grok-client-identifier: hya`
+- `x-grok-model-override: <model id>`
+
+Recommended base URL for that mode:
+
+```yaml
+providers:
+  grok:
+    kind: grok-build
+    base_url: https://cli-chat-proxy.grok.com/v1
+    models: [grok-4.5]
+```
+
+No `api_key` is required when OAuth is present. Static API keys still work as a
+fallback and keep Bearer-only auth (no session headers), which is appropriate
+for `https://api.x.ai/v1` or custom gateways.
 
 Models may use the existing string form or a detailed entry with per-model
 reasoning metadata:

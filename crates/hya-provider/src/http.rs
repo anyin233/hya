@@ -3,6 +3,7 @@
 //! Anthropic), selected by the model id it serves.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -16,7 +17,7 @@ mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
 use crate::google::GoogleProtocol;
-use crate::openai::{OpenAiChatProtocol, OpenAiResponsesProtocol};
+use crate::openai::{GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol};
 use crate::{
     Capabilities, CompletionRequest, EventStream, Protocol, Provider, ProviderError, ProviderModel,
 };
@@ -25,6 +26,7 @@ use crate::{
 pub enum ProviderKind {
     OpenAiCompatible,
     OpenAiResponse,
+    GrokBuild,
     Anthropic,
     Google,
 }
@@ -38,14 +40,24 @@ impl ProviderKind {
             ProviderKind::OpenAiResponse => {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
+            ProviderKind::GrokBuild => &["low", "medium", "high"],
             ProviderKind::Google => &["high", "max"],
         };
         levels.iter().map(|level| (*level).to_string()).collect()
     }
 }
 
+/// Optional live bearer source (e.g. re-read `~/.grok/auth.json` each stream).
+pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send + Sync>;
+
 enum AuthStyle {
     Bearer(SecretString),
+    /// Grok Build OAuth session: Bearer JWT plus CLI chat-proxy session headers.
+    GrokSession {
+        token: SecretString,
+        client_version: String,
+        client_identifier: String,
+    },
     Anthropic { key: SecretString, version: String },
     Google(SecretString),
 }
@@ -57,6 +69,7 @@ pub struct HttpProvider {
     endpoint: String,
     google_base: Option<String>,
     auth: AuthStyle,
+    bearer_resolver: Option<BearerResolver>,
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
     caps: Capabilities,
@@ -106,6 +119,11 @@ impl HttpProvider {
                 format!("{base}/responses"),
                 AuthStyle::Bearer(key),
             ),
+            ProviderKind::GrokBuild => (
+                Box::new(GrokBuildProtocol),
+                format!("{base}/responses"),
+                AuthStyle::Bearer(key),
+            ),
             ProviderKind::Anthropic => (
                 Box::new(AnthropicMessagesProtocol),
                 format!("{base}/messages"),
@@ -132,6 +150,7 @@ impl HttpProvider {
             endpoint,
             google_base,
             auth,
+            bearer_resolver: None,
             models: models.into_iter().collect(),
             model_reasoning_variants: BTreeMap::new(),
             kind,
@@ -146,6 +165,37 @@ impl HttpProvider {
         })
     }
 
+    /// Switch a Grok Build provider to OAuth session auth (CLI chat-proxy headers).
+    ///
+    /// No-op for non-`GrokBuild` kinds so callers can chain unconditionally.
+    #[must_use]
+    pub fn with_grok_session_auth(
+        mut self,
+        client_version: impl Into<String>,
+        client_identifier: impl Into<String>,
+    ) -> Self {
+        if self.kind != ProviderKind::GrokBuild {
+            return self;
+        }
+        let token = match &self.auth {
+            AuthStyle::Bearer(key) | AuthStyle::GrokSession { token: key, .. } => key.clone(),
+            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
+        };
+        self.auth = AuthStyle::GrokSession {
+            token,
+            client_version: client_version.into(),
+            client_identifier: client_identifier.into(),
+        };
+        self
+    }
+
+    /// Re-resolve the bearer token on each stream (hot-reload for Grok OAuth).
+    #[must_use]
+    pub fn with_bearer_resolver(mut self, resolver: BearerResolver) -> Self {
+        self.bearer_resolver = Some(resolver);
+        self
+    }
+
     #[must_use]
     pub fn with_model_reasoning_variants(
         mut self,
@@ -155,14 +205,45 @@ impl HttpProvider {
         self
     }
 
-    fn auth_headers(&self) -> Result<HeaderMap, ProviderError> {
+    fn resolve_bearer(&self, fallback: &SecretString) -> Result<String, ProviderError> {
+        if let Some(resolver) = &self.bearer_resolver {
+            return resolver();
+        }
+        Ok(fallback.expose_secret().clone())
+    }
+
+    fn auth_headers(&self, model_override: Option<&str>) -> Result<HeaderMap, ProviderError> {
         let mut headers = HeaderMap::new();
         match &self.auth {
             AuthStyle::Bearer(key) => {
+                let token = self.resolve_bearer(key)?;
+                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+            }
+            AuthStyle::GrokSession {
+                token,
+                client_version,
+                client_identifier,
+            } => {
+                let token = self.resolve_bearer(token)?;
+                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
                 headers.insert(
-                    AUTHORIZATION,
-                    sensitive(&format!("Bearer {}", key.expose_secret()))?,
+                    HeaderName::from_static("x-xai-token-auth"),
+                    sensitive("xai-grok-cli")?,
                 );
+                headers.insert(
+                    HeaderName::from_static("x-grok-client-version"),
+                    request_header_value(client_version)?,
+                );
+                headers.insert(
+                    HeaderName::from_static("x-grok-client-identifier"),
+                    request_header_value(client_identifier)?,
+                );
+                if let Some(model) = model_override {
+                    headers.insert(
+                        HeaderName::from_static("x-grok-model-override"),
+                        request_header_value(model)?,
+                    );
+                }
             }
             AuthStyle::Anthropic { key, version } => {
                 headers.insert(
@@ -188,8 +269,9 @@ impl HttpProvider {
     fn request_headers(
         &self,
         extra: &BTreeMap<String, String>,
+        model_override: Option<&str>,
     ) -> Result<HeaderMap, ProviderError> {
-        let mut headers = self.auth_headers()?;
+        let mut headers = self.auth_headers(model_override)?;
         for (name, value) in extra {
             let header_name = HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| ProviderError::Http("invalid request header name".to_string()))?;
@@ -267,10 +349,12 @@ impl Provider for HttpProvider {
             ),
             None => self.endpoint.clone(),
         };
+        let model_override = matches!(self.auth, AuthStyle::GrokSession { .. })
+            .then_some(req.model.as_str());
         let resp = self
             .client
             .post(&url)
-            .headers(self.request_headers(&req.headers)?)
+            .headers(self.request_headers(&req.headers, model_override)?)
             .json(&body)
             .send()
             .await

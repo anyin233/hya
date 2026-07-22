@@ -7,6 +7,22 @@ use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
 pub struct OpenAiResponsesProtocol;
 
+pub(crate) struct GrokBuildProtocol;
+
+impl Protocol for GrokBuildProtocol {
+    fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        let mut body = OpenAiResponsesProtocol.encode(req)?;
+        body["include"] = json!(["reasoning.encrypted_content"]);
+        Ok(body)
+    }
+
+    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
+        Box::new(OpenAiResponsesDecoder::new_requiring_typed_terminal(
+            session, message,
+        ))
+    }
+}
+
 impl Protocol for OpenAiResponsesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         let mut input = Vec::new();

@@ -10,6 +10,7 @@ mod responses;
 
 pub use decoder::OpenAiChatDecoder;
 pub use response_decoder::OpenAiResponsesDecoder;
+pub(crate) use responses::GrokBuildProtocol;
 pub use responses::OpenAiResponsesProtocol;
 
 pub struct OpenAiChatProtocol;

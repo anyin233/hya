@@ -3,7 +3,9 @@
 //! Reads YAML: each entry under `providers.<id>` maps to one `HttpProvider`
 //! (route chosen by `kind`), and the union of `models` becomes the set hya can
 //! address. API keys come from `~/.config/hya/auth/<id>.yaml` (via `hya login`)
-//! or an inline `api_key`. Absent config or key → caller falls back to offline.
+//! or an inline `api_key`. For `kind: grok-build`, Grok Build OAuth from
+//! `~/.grok/auth.json` (after `grok login`) takes precedence and enables CLI
+//! chat-proxy session headers. Absent config or key → caller falls back to offline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
@@ -199,6 +201,8 @@ enum ProviderKindConfig {
     Openai,
     #[serde(rename = "openai-response")]
     OpenaiResponse,
+    #[serde(rename = "grok-build")]
+    GrokBuild,
     Anthropic,
     Google,
 }
@@ -208,6 +212,7 @@ impl From<ProviderKindConfig> for ProviderKind {
         match kind {
             ProviderKindConfig::Openai => Self::OpenAiCompatible,
             ProviderKindConfig::OpenaiResponse => Self::OpenAiResponse,
+            ProviderKindConfig::GrokBuild => Self::GrokBuild,
             ProviderKindConfig::Anthropic => Self::Anthropic,
             ProviderKindConfig::Google => Self::Google,
         }
@@ -227,6 +232,64 @@ struct ParsedProvider {
     base_url: String,
     api_key: Option<String>,
     models: Vec<ParsedModel>,
+}
+
+/// Resolved bearer material for one configured provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProviderCredential {
+    token: String,
+    /// When true, attach Grok Build CLI chat-proxy session headers.
+    use_grok_session: bool,
+}
+
+/// Resolve auth for a provider.
+///
+/// For `grok-build`, prefer Grok Build OAuth (`~/.grok/auth.json`), then hya login
+/// token, then inline `api_key`. Other kinds keep login → inline only.
+fn resolve_provider_credential(provider: &ParsedProvider) -> Option<ProviderCredential> {
+    if provider.kind == ProviderKind::GrokBuild
+        && let Some(oauth) = crate::grok_oauth::load_grok_oauth()
+    {
+        let token = oauth.access_token.trim().to_string();
+        if !token.is_empty() {
+            return Some(ProviderCredential {
+                token,
+                use_grok_session: true,
+            });
+        }
+    }
+    let token = crate::auth::load_token(&provider.id).or_else(|| provider.api_key.clone())?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    Some(ProviderCredential {
+        token,
+        use_grok_session: false,
+    })
+}
+
+/// Test seam: resolve credentials with injected OAuth / login / inline values.
+#[cfg(test)]
+fn resolve_provider_credential_with(
+    kind: ProviderKind,
+    oauth_token: Option<&str>,
+    login_token: Option<&str>,
+    inline_api_key: Option<&str>,
+) -> Option<ProviderCredential> {
+    if kind == ProviderKind::GrokBuild
+        && let Some(token) = oauth_token.map(str::trim).filter(|t| !t.is_empty())
+    {
+        return Some(ProviderCredential {
+            token: token.to_string(),
+            use_grok_session: true,
+        });
+    }
+    let token = login_token.or(inline_api_key).map(str::trim).filter(|t| !t.is_empty())?;
+    Some(ProviderCredential {
+        token: token.to_string(),
+        use_grok_session: false,
+    })
 }
 
 const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
@@ -1210,17 +1273,14 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut router = ProviderRouter::new();
     let mut authorized = Vec::new();
     for p in parsed {
-        let Some(api_key) = crate::auth::load_token(&p.id).or(p.api_key.clone()) else {
+        let Some(credential) = resolve_provider_credential(&p) else {
             continue;
         };
-        if api_key.trim().is_empty() {
-            continue;
-        }
-        let provider = HttpProvider::new(
+        let mut provider = HttpProvider::new(
             p.id.clone(),
             p.kind,
             &p.base_url,
-            api_key,
+            credential.token,
             p.models.iter().map(|model| model.id.clone()),
         )?
         .with_model_reasoning_variants(
@@ -1228,6 +1288,19 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 .iter()
                 .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
         );
+        if credential.use_grok_session {
+            provider = provider
+                .with_grok_session_auth(env!("CARGO_PKG_VERSION"), "hya")
+                .with_bearer_resolver(Arc::new(|| {
+                    crate::grok_oauth::load_grok_oauth()
+                        .map(|cred| cred.access_token)
+                        .ok_or_else(|| {
+                            hya_provider::ProviderError::Http(
+                                "Grok OAuth missing; run `grok login`".to_string(),
+                            )
+                        })
+                }));
+        }
         router = router.with(Arc::new(provider));
         authorized.push(p);
     }
@@ -1514,6 +1587,63 @@ providers:
             entries[0].reasoning_default,
             Some(hya_provider::ReasoningEffort::Medium)
         );
+    }
+
+    #[test]
+    fn grok_build_config_defaults_to_high_reasoning() {
+        let parsed = parse_providers(
+            r#"
+providers:
+  grok:
+    kind: grok-build
+    base_url: https://grok.example/v1
+    models: [grok-4.5]
+"#,
+        )
+        .unwrap();
+
+        let entries = model_entries(&parsed);
+        assert_eq!(entries[0].reasoning_variants, vec!["low", "medium", "high"]);
+        assert_eq!(entries[0].reasoning_default, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn grok_build_oauth_wins_over_login_and_inline() {
+        let cred = resolve_provider_credential_with(
+            ProviderKind::GrokBuild,
+            Some("oauth-jwt"),
+            Some("login-sk"),
+            Some("inline-sk"),
+        )
+        .unwrap();
+        assert_eq!(cred.token, "oauth-jwt");
+        assert!(cred.use_grok_session);
+    }
+
+    #[test]
+    fn grok_build_falls_back_to_login_without_oauth() {
+        let cred = resolve_provider_credential_with(
+            ProviderKind::GrokBuild,
+            None,
+            Some("login-sk"),
+            Some("inline-sk"),
+        )
+        .unwrap();
+        assert_eq!(cred.token, "login-sk");
+        assert!(!cred.use_grok_session);
+    }
+
+    #[test]
+    fn non_grok_provider_ignores_oauth_token() {
+        let cred = resolve_provider_credential_with(
+            ProviderKind::OpenAiResponse,
+            Some("oauth-jwt"),
+            Some("login-sk"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(cred.token, "login-sk");
+        assert!(!cred.use_grok_session);
     }
 
     #[test]

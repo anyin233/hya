@@ -397,8 +397,8 @@ jobs:
 
 ### 2. Signatures
 
-- Provider kinds: `openai-completion` and `openai-response`; `openai` and
-  `openai-compatible` remain Chat Completions aliases.
+- Provider kinds: `openai-completion`, `openai-response`, and `grok-build`;
+  `openai` and `openai-compatible` remain Chat Completions aliases.
 - Model entries accept a string ID or
   `{ id, reasoning: { default?, variants? } }`.
 - Provider behavior stays behind `Protocol::encode(CompletionRequest)` and a
@@ -412,6 +412,13 @@ jobs:
   `store: false`, and `reasoning: { effort, summary: "auto" }`.
 - Responses preserves `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
   `max` on the wire. Chat omits `none` and maps `max` to `xhigh`.
+- Grok Build uses `/responses` with Bearer authentication, adds only
+  `include: ["reasoning.encrypted_content"]`, and advertises fallback efforts
+  `low`, `medium`, and `high` in ascending order so `high` is the default.
+- Both `response.reasoning_summary_text.delta` and
+  `response.reasoning_text.delta` emit normalized reasoning events.
+- Grok Build requires `response.completed` or `response.incomplete`; bare
+  `[DONE]` and EOF are decode errors. Other Responses routes stay permissive.
 - The selected model's configured default reaches the initial `AgentSpec`.
   Explicit Compat variants/options may override it per turn.
 - Completed opaque Responses reasoning is stored in
@@ -425,6 +432,8 @@ jobs:
 - Default effort absent from configured variants -> configuration error.
 - Legacy string model or Chat alias -> preserve existing Chat behavior.
 - `response.failed` or top-level Responses `error` -> `ProviderError`.
+- Grok Build transport termination without a typed terminal event ->
+  `ProviderError::Decode`.
 
 ### 5. Good/Base/Bad Cases
 
@@ -443,6 +452,8 @@ jobs:
   catalog metadata retains per-model variants.
 - Local HTTP/SSE tests assert endpoint and JSON shape, ordered canonical events,
   parallel tool assembly, usage, failures, and stateless continuation.
+- Grok Build HTTP/SSE tests assert encrypted reasoning inclusion, all fallback
+  efforts, both reasoning delta names, typed completion, and truncated streams.
 - Event/projection/core tests assert opaque reasoning survives serde, replay,
   request reconstruction, and session forks.
 

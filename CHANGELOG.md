@@ -1,3 +1,3 @@
-# 0.33.19
+# 0.33.20
 
-- Fixed batch subagent task calls so an unused top-level `task_id` no longer blocks dispatch.
+- Grok Build OAuth: `kind: grok-build` prefers `~/.grok/auth.json` session tokens from `grok login`, sends CLI chat-proxy session headers, and falls back to hya login / inline API keys.

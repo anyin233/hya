@@ -238,6 +238,196 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
         );
         assert_eq!(body["stream"], true);
         assert_eq!(body["store"], false);
+        assert!(body.get("include").is_none());
+    }
+}
+
+#[tokio::test]
+async fn http_provider_grok_session_sends_oauth_proxy_headers() {
+    let response = concat!(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+        "data: [DONE]\n\n",
+    )
+    .to_string();
+    let (base_url, request_rx) = start_sse_server(response).await;
+    let provider = HttpProvider::new(
+        "grok",
+        ProviderKind::GrokBuild,
+        &base_url,
+        "oauth-jwt-token".to_string(),
+        ["grok-4.5".to_string()],
+    )
+    .unwrap()
+    .with_grok_session_auth("0.33.19", "hya");
+    let req = CompletionRequest {
+        model: ModelRef::new("grok/grok-4.5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let request = captured_request(request_rx).await;
+    let headers = request.headers.to_ascii_lowercase();
+
+    assert!(events.iter().all(Result::is_ok));
+    assert!(headers.contains("authorization: bearer oauth-jwt-token"));
+    assert!(headers.contains("x-xai-token-auth: xai-grok-cli"));
+    assert!(headers.contains("x-grok-client-version: 0.33.19"));
+    assert!(headers.contains("x-grok-client-identifier: hya"));
+    assert!(headers.contains("x-grok-model-override: grok-4.5"));
+    assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
+}
+
+#[tokio::test]
+async fn http_provider_posts_grok_build_responses_body() {
+    for effort in [
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+    ] {
+        let response = concat!(
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .to_string();
+        let (base_url, request_rx) = start_sse_server(response).await;
+        let provider = HttpProvider::new(
+            "grok",
+            ProviderKind::GrokBuild,
+            &base_url,
+            "test-token".to_string(),
+            ["grok-4.5".to_string()],
+        )
+        .unwrap();
+        let req = CompletionRequest {
+            model: ModelRef::new("grok/grok-4.5"),
+            system: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            reasoning: Some(effort),
+            headers: Default::default(),
+        };
+
+        let events = provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        let request = captured_request(request_rx).await;
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+
+        assert!(events.iter().all(Result::is_ok));
+        assert!(
+            request
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token")
+        );
+        assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
+        assert_eq!(body["model"], "grok-4.5");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+        assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+        assert_eq!(
+            body["reasoning"],
+            json!({"effort": effort.as_str(), "summary": "auto"})
+        );
+    }
+}
+
+#[tokio::test]
+async fn http_provider_decodes_grok_reasoning_text_delta_and_typed_terminal() {
+    let sse = [
+        r#"data: {"type":"response.reasoning_text.delta","output_index":0,"delta":"Need a file."}"#,
+        r#"data: {"type":"response.completed","response":{"status":"completed"}}"#,
+    ]
+    .join("\n\n")
+        + "\n\n";
+    let (base_url, _request_rx) = start_sse_server(sse).await;
+    let provider = HttpProvider::new(
+        "grok",
+        ProviderKind::GrokBuild,
+        &base_url,
+        "test-token".to_string(),
+        ["grok-4.5".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("grok/grok-4.5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: Some(ReasoningEffort::High),
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(events.len(), 4);
+    let reasoning_part = match &events[0] {
+        Event::ReasoningStart { part, .. } => *part,
+        event => panic!("expected reasoning start, got {event:?}"),
+    };
+    assert!(matches!(
+        &events[1],
+        Event::ReasoningDelta { part, delta, .. }
+            if *part == reasoning_part && delta == "Need a file."
+    ));
+    assert!(matches!(
+        &events[2],
+        Event::ReasoningEnd { part, .. } if *part == reasoning_part
+    ));
+    assert!(matches!(
+        &events[3],
+        Event::MessageFinished {
+            finish: FinishReason::Stop,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn grok_requires_typed_terminal_while_openai_responses_remains_permissive() {
+    for response in ["data: [DONE]\n\n", ""] {
+        let grok = response_events(ProviderKind::GrokBuild, response).await;
+        let openai = response_events(ProviderKind::OpenAiResponse, response).await;
+
+        assert!(matches!(
+            grok.as_slice(),
+            [Err(ProviderError::Decode(message))]
+                if message == "Responses stream ended without response.completed or response.incomplete"
+        ));
+        assert!(openai.iter().all(Result::is_ok));
+        assert!(matches!(
+            openai.last(),
+            Some(Ok(Event::MessageFinished {
+                finish: FinishReason::Stop,
+                ..
+            }))
+        ));
     }
 }
 
@@ -625,6 +815,35 @@ async fn captured_request(request_rx: oneshot::Receiver<CapturedRequest>) -> Cap
         .await
         .unwrap()
         .unwrap()
+}
+
+async fn response_events(kind: ProviderKind, response: &str) -> Vec<Result<Event, ProviderError>> {
+    let (base_url, _request_rx) = start_sse_server(response.to_string()).await;
+    let provider = HttpProvider::new(
+        "test",
+        kind,
+        &base_url,
+        "test-token".to_string(),
+        ["model".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("test/model"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await
 }
 
 async fn start_sse_server(response: String) -> (String, oneshot::Receiver<CapturedRequest>) {

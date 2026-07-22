@@ -21,7 +21,7 @@ pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
-pub use http::{HttpProvider, ProviderKind};
+pub use http::{BearerResolver, HttpProvider, ProviderKind};
 pub use openai::{
     OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder, OpenAiResponsesProtocol,
 };
