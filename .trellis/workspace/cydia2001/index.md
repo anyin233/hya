@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~427 | Active |
+| `journal-1.md` | ~460 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-22 | Fix subagent navigation and roster shortcuts | `d492135b` | `main` |
 | 12 | 2026-07-22 | Configure web search providers | `bfcefef9`, `64476077` | `main` |
 | 11 | 2026-07-21 | Restore synchronous prompt working lifecycle | `dac61e8d` | `main` |
 | 10 | 2026-07-21 | Clean repository and verify outstanding work | `2c1670d2` | `main` |

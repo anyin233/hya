@@ -425,3 +425,36 @@ Added configurable Exa and Parallel web search, enabled unauthenticated Exa by d
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Fix subagent navigation and roster shortcuts
+
+**Date**: 2026-07-22
+**Task**: Fix subagent navigation and roster shortcuts
+**Branch**: `main`
+
+### Summary
+
+Restored Esc navigation from all subagent observation states, added shared roster shortcut docks, verified the workspace, and released version 0.33.18.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d492135b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
