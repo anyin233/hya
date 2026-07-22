@@ -1,11 +1,14 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::ffi::OsString;
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser as _;
-use hya_ts::{Cli, build_bun_command, resolve_runtime_dir};
+use hya_ts::{
+    AuthCommand, Cli, Command, OauthCommand, backend_auth_args, build_bun_command,
+    resolve_backend_bin, resolve_runtime_dir,
+};
 
 #[test]
 fn parses_public_launcher_contract_and_builds_tui_command() {
@@ -97,6 +100,112 @@ fn validates_url_and_fork_before_process_construction() {
         .unwrap()
         .validate()
         .unwrap();
+}
+
+#[test]
+fn parses_oauth_login_and_forwards_backend_args() {
+    let cli = Cli::try_parse_from([
+        "hya-ts",
+        "oauth",
+        "login",
+        "--provider",
+        "codex",
+        "--type",
+        "openai-codex",
+        "--device",
+        "--no-browser",
+        "--model",
+        "gpt-5.3-codex",
+        "--base-url",
+        "https://chatgpt.com/backend-api/codex",
+    ])
+    .unwrap();
+    cli.validate().unwrap();
+    let command = cli.command.expect("oauth subcommand");
+    assert_eq!(
+        command,
+        Command::Oauth {
+            command: OauthCommand::Login {
+                provider: "codex".into(),
+                oauth_type: "openai-codex".into(),
+                device: true,
+                no_browser: true,
+                model: Some("gpt-5.3-codex".into()),
+                base_url: Some("https://chatgpt.com/backend-api/codex".into()),
+            }
+        }
+    );
+    assert_eq!(
+        backend_auth_args(&command),
+        os_strings(&[
+            "oauth",
+            "login",
+            "--provider",
+            "codex",
+            "--type",
+            "openai-codex",
+            "--device",
+            "--no-browser",
+            "--model",
+            "gpt-5.3-codex",
+            "--base-url",
+            "https://chatgpt.com/backend-api/codex",
+        ])
+    );
+}
+
+#[test]
+fn parses_login_auth_list_and_oauth_status() {
+    let login = Cli::try_parse_from(["hya-ts", "login", "anthropic", "sk-test"]).unwrap();
+    assert_eq!(
+        backend_auth_args(&login.command.unwrap()),
+        os_strings(&["login", "anthropic", "sk-test"])
+    );
+
+    let list = Cli::try_parse_from(["hya-ts", "auth", "list"]).unwrap();
+    assert_eq!(
+        backend_auth_args(&list.command.unwrap()),
+        os_strings(&["auth", "list"])
+    );
+
+    let providers = Cli::try_parse_from(["hya-ts", "providers", "logout", "codex"]).unwrap();
+    let providers_cmd = providers.command.expect("providers alias");
+    assert!(matches!(
+        &providers_cmd,
+        Command::Auth {
+            command: AuthCommand::Logout { provider }
+        } if provider == "codex"
+    ));
+    assert_eq!(
+        backend_auth_args(&providers_cmd),
+        os_strings(&["auth", "logout", "codex"])
+    );
+
+    let status = Cli::try_parse_from(["hya-ts", "oauth", "status", "grok"]).unwrap();
+    assert_eq!(
+        backend_auth_args(&status.command.expect("oauth status")),
+        os_strings(&["oauth", "status", "grok"])
+    );
+}
+
+#[test]
+fn resolve_backend_bin_prefers_flag_env_then_sibling() {
+    let root = temp_dir("hya-ts-backend-resolution");
+    let exe = root.join("prefix/bin/hya-ts");
+    let sibling = root.join("prefix/bin/hya-backend");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, []).unwrap();
+    std::fs::write(&sibling, []).unwrap();
+
+    assert_eq!(
+        resolve_backend_bin(Some(Path::new("/explicit/backend")), None, &exe, &root),
+        PathBuf::from("/explicit/backend")
+    );
+    assert_eq!(
+        resolve_backend_bin(None, Some(OsStr::new("/env/backend")), &exe, &root),
+        PathBuf::from("/env/backend")
+    );
+    assert_eq!(resolve_backend_bin(None, None, &exe, &root), sibling);
 }
 
 #[test]

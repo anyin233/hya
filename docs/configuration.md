@@ -206,11 +206,15 @@ Interactive OAuth is implemented entirely in Rust:
 ```sh
 # ChatGPT / Codex subscription (PKCE loopback; use --device on headless hosts)
 hya-backend oauth login --provider codex --type openai-codex
+# same commands on the TypeScript launcher:
+hya-ts oauth login --provider codex --type openai-codex
 
 # xAI SuperGrok / Grok CLI (device-code flow)
 hya-backend oauth login --provider grok --type grok-build --no-browser
+hya-ts oauth login --provider grok --type grok-build --no-browser
 
 hya-backend oauth status
+hya-ts oauth status
 ```
 
 On success hya:
