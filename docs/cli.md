@@ -143,7 +143,7 @@ and v2 route groups. See
 
 ```sh
 hya-backend login <provider> <token>
-hya-backend oauth login --provider <name> --type <openai-codex|grok-build> [--device] [--no-browser] [--model <id>] [--base-url <url>]
+hya-backend oauth login --provider <name> --type <openai-codex|grok-build> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya-backend oauth status [provider]
 hya-backend auth list
 hya-backend auth logout <provider>
@@ -155,11 +155,13 @@ hya-backend agent list
 
 `login` writes a plain provider token under `~/.config/hya/auth`. Prefer
 `oauth login` for ChatGPT Codex and Grok Build subscription auth — it runs the
-browser/device OAuth flow in Rust, stores a refreshable credential bundle, and
-upserts the provider route into `config.yaml`. Saved credentials take
-precedence over inline `api_key` values. `providers` is an alias for `auth`.
-`models --refresh` is accepted for Compat compatibility but does not fetch a
-remote catalog.
+OAuth flow in Rust, stores a refreshable credential bundle, and upserts the
+provider route into `config.yaml`. For `openai-codex`, the default matches
+Codex CLI: **device-code with URL/code printed** (no auto-open browser). Use
+`--browser` to open the verification URL, or `--loopback` for localhost PKCE.
+Saved credentials take precedence over inline `api_key` values. `providers` is
+an alias for `auth`. `models --refresh` is accepted for Compat compatibility
+but does not fetch a remote catalog.
 
 The same auth/oauth commands are available on `hya-ts` (forwarded to
 `hya-backend`, same credential store):

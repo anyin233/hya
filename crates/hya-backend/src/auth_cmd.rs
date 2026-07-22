@@ -26,12 +26,19 @@ pub(crate) enum OauthCommand {
         /// OAuth provider type: `openai-codex` or `grok-build`.
         #[arg(long = "type", value_name = "TYPE")]
         oauth_type: String,
-        /// Use the device-code flow (default for grok-build; optional for openai-codex).
+        /// Use the device-code flow (default for openai-codex and grok-build).
         #[arg(long)]
         device: bool,
-        /// Print the verification URL without opening a browser.
+        /// openai-codex only: use localhost PKCE callback instead of Codex device-code.
+        #[arg(long)]
+        loopback: bool,
+        /// Print the verification URL without opening a browser
+        /// (default for openai-codex device login, matching Codex CLI).
         #[arg(long)]
         no_browser: bool,
+        /// Open a system browser for the verification / authorize URL.
+        #[arg(long)]
+        browser: bool,
         /// Model id to register on the provider (default depends on type).
         #[arg(long)]
         model: Option<String>,
@@ -84,7 +91,9 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             provider,
             oauth_type,
             device,
+            loopback,
             no_browser,
+            browser,
             model,
             base_url,
         } => {
@@ -93,12 +102,31 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
                     "unknown OAuth type '{oauth_type}'; supported: openai-codex, grok-build"
                 )
             })?;
-            // grok-build is always device-code.
-            let device = device || matches!(oauth_type, OAuthType::GrokBuild);
+            if loopback && !matches!(oauth_type, OAuthType::OpenaiCodex) {
+                anyhow::bail!("--loopback is only supported for --type openai-codex");
+            }
+            if browser && no_browser {
+                anyhow::bail!("pass only one of --browser or --no-browser");
+            }
+            // openai-codex defaults to Codex device-code (no local callback).
+            // grok-build is always device-code. --loopback opts into localhost PKCE for codex.
+            let use_loopback = loopback && matches!(oauth_type, OAuthType::OpenaiCodex);
+            let device = !use_loopback
+                && (device || matches!(oauth_type, OAuthType::GrokBuild | OAuthType::OpenaiCodex));
+            // Codex default: print URL/code only (no auto-open). --browser enables open.
+            // Other types open unless --no-browser.
+            let no_browser = if browser {
+                false
+            } else if no_browser {
+                true
+            } else {
+                matches!(oauth_type, OAuthType::OpenaiCodex) && !use_loopback
+            };
             let result = oauth::login(OAuthLoginOptions {
                 provider,
                 oauth_type,
                 device,
+                loopback: use_loopback,
                 no_browser,
                 model,
                 base_url,

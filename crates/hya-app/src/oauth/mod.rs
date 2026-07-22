@@ -67,9 +67,15 @@ impl OAuthError {
 pub struct OAuthLoginOptions {
     pub provider: String,
     pub oauth_type: OAuthType,
-    /// Prefer device-code for openai-codex (always used for grok-build).
+    /// Prefer device-code (default for openai-codex and grok-build).
+    ///
+    /// For openai-codex, device-code is the Codex CLI default (no local callback).
+    /// Set `loopback` to use localhost PKCE instead.
     pub device: bool,
-    /// Do not attempt to open a system browser.
+    /// Use localhost PKCE callback for openai-codex instead of device-code.
+    pub loopback: bool,
+    /// Do not attempt to open a system browser (print URL only).
+    /// Default for openai-codex device login is true (Codex-style no-browser).
     pub no_browser: bool,
     pub model: Option<String>,
     pub base_url: Option<String>,
@@ -86,6 +92,7 @@ impl Default for OAuthLoginOptions {
             provider: String::new(),
             oauth_type: OAuthType::GrokBuild,
             device: false,
+            loopback: false,
             no_browser: false,
             model: None,
             base_url: None,
@@ -119,8 +126,13 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
 
     let credential = match options.oauth_type {
         OAuthType::OpenaiCodex => {
-            if options.device {
-                login_openai_codex_device(options.timeout).await?
+            // Codex CLI default: device-code, print URL/code, no local callback.
+            // Loopback PKCE is opt-in via `loopback`.
+            let use_device = !options.loopback;
+            if use_device {
+                // Device path defaults to no auto-open unless caller set no_browser=false
+                // and did not force loopback — open only when explicitly allowed.
+                login_openai_codex_device(options.timeout, !options.no_browser).await?
             } else {
                 login_openai_codex(options.timeout, !options.no_browser).await?
             }

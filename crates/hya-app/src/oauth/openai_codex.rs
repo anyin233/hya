@@ -86,8 +86,16 @@ pub async fn login_openai_codex(
     credential_from_token_response(&token_json, None)
 }
 
-/// Device-code login for headless openai-codex sessions.
-pub async fn login_openai_codex_device(timeout: Duration) -> Result<OAuthCredential, OAuthError> {
+/// Device-code login for openai-codex (Codex CLI default / no-browser path).
+///
+/// Prints a verification URL and user code, then polls until the user completes
+/// sign-in in any browser. Matches Codex's default device-auth flow: no local
+/// callback server is required. When `open` is false (the default for this
+/// path), the URL is only printed — the CLI does not launch a browser.
+pub async fn login_openai_codex_device(
+    timeout: Duration,
+    open: bool,
+) -> Result<OAuthCredential, OAuthError> {
     let (verifier, challenge) = generate_pkce_pair();
     let client = http_client()?;
     let start = post_form(
@@ -117,13 +125,15 @@ pub async fn login_openai_codex_device(timeout: Duration) -> Result<OAuthCredent
         .max(1);
     let mut poll_interval = Duration::from_secs(interval);
 
-    println!("\nChatGPT / Codex device sign-in:");
-    println!("  Open: {verification}");
+    println!("\nChatGPT / Codex sign-in (device code — Codex default):");
+    println!("  Open this URL in a browser on any device:\n  {verification}");
     if !user_code.is_empty() {
         println!("  Code: {user_code}");
     }
     println!("Waiting for authorization...\n");
-    open_browser(&verification);
+    if open {
+        open_browser(&verification);
+    }
 
     let deadline = tokio::time::Instant::now() + timeout;
     let authorization_code = loop {
