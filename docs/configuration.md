@@ -224,8 +224,13 @@ On success hya:
 
 1. Writes an OAuth credential bundle to `~/.config/hya/auth/<provider>.yaml`
    (`access_token`, `refresh_token`, `expires_at`, optional `account_id`).
-2. Upserts a non-secret provider route into `config.yaml` (`kind`, `base_url`,
-   `models`). Secrets are **not** written into `config.yaml`.
+2. Fetches the live model catalog with the new token:
+   - `openai-codex` → `GET https://chatgpt.com/backend-api/codex/models`
+   - `grok-build` → `GET <base_url>/models` (CLI chat proxy)
+3. Upserts a non-secret provider route into `config.yaml` (`kind`, `base_url`,
+   full `models` list, including reasoning metadata when the catalog provides
+   it). Secrets are **not** written into `config.yaml`. If the catalog fetch
+   fails, hya still saves credentials and writes a single default model.
 
 Access tokens are refreshed automatically when near expiry. If the refresh
 token is revoked (`invalid_grant`), provider calls fail with a clear re-login

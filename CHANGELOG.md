@@ -1,3 +1,3 @@
-# 0.33.26
+# 0.33.27
 
-- Fix openai-codex device/user-code login to match official Codex JSON deviceauth API.
+- After OAuth login, fetch the live model catalog and write it into config.yaml.
