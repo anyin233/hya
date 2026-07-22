@@ -85,14 +85,20 @@ impl Tool for EditTool {
             if formatted {
                 utf8_bom::sync_file(&path, incoming_has_bom).await?;
             }
+            let after_snapshot = tokio::fs::read_to_string(&path).await?;
+            let (_, after_content) = utf8_bom::split(&after_snapshot);
             let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
             return Ok(success_result(
                 true,
                 0,
                 &path,
                 &workdir,
-                "",
-                new,
+                EditContents {
+                    before: "",
+                    after: after_content,
+                    snapshot_before: "",
+                    snapshot_after: &after_snapshot,
+                },
                 diagnostics,
             ));
         }
@@ -110,17 +116,35 @@ impl Tool for EditTool {
         if formatted {
             utf8_bom::sync_file(&path, desired_bom).await?;
         }
+        let before_snapshot = if source_has_bom {
+            format!("\u{feff}{content}")
+        } else {
+            content.clone()
+        };
+        let after_snapshot = tokio::fs::read_to_string(&path).await?;
+        let (_, after_content) = utf8_bom::split(&after_snapshot);
         let diagnostics = lsp_post_edit::touch_and_diagnostics(&ctx.lsp, &path).await?;
         Ok(success_result(
             false,
             replacement.replaced,
             &path,
             &workdir,
-            &content,
-            updated,
+            EditContents {
+                before: &content,
+                after: after_content,
+                snapshot_before: &before_snapshot,
+                snapshot_after: &after_snapshot,
+            },
             diagnostics,
         ))
     }
+}
+
+struct EditContents<'a> {
+    before: &'a str,
+    after: &'a str,
+    snapshot_before: &'a str,
+    snapshot_after: &'a str,
 }
 
 fn success_result(
@@ -128,11 +152,10 @@ fn success_result(
     replaced: usize,
     path: &Path,
     workdir: &Path,
-    content_old: &str,
-    content_new: &str,
+    contents: EditContents<'_>,
     diagnostics: Value,
 ) -> Value {
-    let diff = file_diff::create(path, content_old, content_new);
+    let diff = file_diff::create(path, contents.before, contents.after);
     let filepath = display_path(path);
     let patch = diff.patch;
     let mut output = "Edit applied successfully.".to_string();
@@ -148,6 +171,8 @@ fn success_result(
             "filediff": {
                 "file": filepath,
                 "patch": patch,
+                "beforeContent": contents.snapshot_before,
+                "afterContent": contents.snapshot_after,
                 "additions": diff.additions,
                 "deletions": diff.deletions,
             },

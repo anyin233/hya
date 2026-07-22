@@ -122,22 +122,28 @@ async fn edit_preserves_existing_utf8_bom_without_duplicating_incoming_bom() {
     let tool = ToolRegistry::builtins().get("edit").unwrap();
 
     // When
-    tool.execute(
-        &ctx,
-        json!({
-            "filePath": "bom.txt",
-            "oldString": "old\n",
-            "newString": "\u{feff}new\n"
-        }),
-    )
-    .await
-    .unwrap();
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "bom.txt",
+                "oldString": "old\n",
+                "newString": "\u{feff}new\n"
+            }),
+        )
+        .await
+        .unwrap();
 
     // Then
     assert_eq!(
         tokio::fs::read(&target).await.unwrap(),
         b"\xEF\xBB\xBFnew\n"
     );
+    assert_eq!(
+        out["metadata"]["filediff"]["beforeContent"],
+        "\u{feff}old\n"
+    );
+    assert_eq!(out["metadata"]["filediff"]["afterContent"], "\u{feff}new\n");
 }
 
 #[tokio::test]
@@ -151,22 +157,24 @@ async fn edit_runs_formatter_after_successful_edit() {
     let tool = ToolRegistry::builtins().get("edit").unwrap();
 
     // When
-    tool.execute(
-        &ctx,
-        json!({
-            "filePath": "target.txt",
-            "oldString": "old\n",
-            "newString": "new\n"
-        }),
-    )
-    .await
-    .unwrap();
+    let out = tool
+        .execute(
+            &ctx,
+            json!({
+                "filePath": "target.txt",
+                "oldString": "old\n",
+                "newString": "new\n"
+            }),
+        )
+        .await
+        .unwrap();
 
     // Then
     assert_eq!(
         tokio::fs::read_to_string(&target).await.unwrap(),
         "formatted\n"
     );
+    assert_eq!(out["metadata"]["filediff"]["afterContent"], "formatted\n");
 }
 
 #[tokio::test]
@@ -229,6 +237,8 @@ async fn edit_returns_open_code_success_metadata_with_diff() {
         out["metadata"]["filediff"]["file"],
         target.to_string_lossy().as_ref()
     );
+    assert_eq!(out["metadata"]["filediff"]["beforeContent"], "one\ntwo\n");
+    assert_eq!(out["metadata"]["filediff"]["afterContent"], "one\nthree\n");
     assert_eq!(out["metadata"]["filediff"]["additions"], 1);
     assert_eq!(out["metadata"]["filediff"]["deletions"], 1);
     let diff = out["metadata"]["diff"].as_str().unwrap();
