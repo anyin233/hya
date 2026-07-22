@@ -140,6 +140,7 @@ const sessionBindingCommands = [
   "pane.open.horizontal",
   "pane.close",
   "pane.cycle",
+  "pane.cycle.reverse",
   "pane.focus.main",
 ] as const
 
@@ -439,11 +440,19 @@ export function Session() {
     ],
   }))
   const leaderActive = useLeaderActive()
-  // Pane navigation is handled here (not only via keymap) so focus switching still
-  // works when leader chords / command resolution miss — a real regression when
-  // users open multiple subagent views. useKeyboard runs after the keymap.
+  // Pane navigation uses leader+arrows so Main's prompt keeps bare arrows for the
+  // caret. useKeyboard backs the keymap so chords still work if command resolution
+  // misses (useKeyboard runs after the keymap).
   useKeyboard((key) => {
     if (dialog.stack.length > 0) return
+
+    // Ctrl+X then ←/→: cycle panes without stealing bare arrows from the prompt.
+    if (leaderActive() && multiPane() && (key.name === "left" || key.name === "right") && !key.ctrl && !key.meta && !key.option) {
+      dispatchWorkspace({ type: "cycleFocus", direction: key.name === "left" ? -1 : 1 })
+      key.preventDefault()
+      key.stopPropagation()
+      return
+    }
     if (leaderActive()) return
 
     // Esc from any observation returns to Main (ADR-0003).
@@ -454,18 +463,7 @@ export function Session() {
       return
     }
 
-    // Left/Right cycle every open leaf (Main + all retained subagents). While Main
-    // owns the prompt, require Ctrl so bare arrows still move the caret.
-    if (multiPane() && (key.name === "left" || key.name === "right")) {
-      if (!mainFocused() || key.ctrl) {
-        dispatchWorkspace({ type: "cycleFocus", direction: key.name === "left" ? -1 : 1 })
-        key.preventDefault()
-        key.stopPropagation()
-        return
-      }
-    }
-
-    // Digit jump to pane strip: 1=Main, 2=first open subagent, …
+    // Digit jump to pane strip while an observation is focused: 1=Main, 2=…
     if (!mainFocused() && multiPane() && key.name.length === 1 && key.name >= "1" && key.name <= "9" && !key.ctrl && !key.meta && !key.option) {
       const entry = workspacePaneStrip(workspace())[Number(key.name) - 1]
       if (entry) {
@@ -478,6 +476,7 @@ export function Session() {
 
     if (mainFocused()) return
     // Ignore bare typing while an observation pane is focused (read-only).
+    // Bare left/right are not pane nav — use leader+arrows from any focused pane.
     if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
       key.preventDefault()
       key.stopPropagation()
@@ -1097,10 +1096,16 @@ export function Session() {
       run: () => dispatchWorkspace({ type: "close", paneID: workspace().focusedPaneID }),
     },
     {
-      title: "Cycle pane focus",
+      title: "Cycle pane focus forward",
       value: "pane.cycle",
       category: "Pane",
       run: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
+    },
+    {
+      title: "Cycle pane focus backward",
+      value: "pane.cycle.reverse",
+      category: "Pane",
+      run: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
     },
     {
       title: "Focus Main pane",
@@ -1220,7 +1225,7 @@ export function Session() {
         placement,
         focused ? "focused" : "open",
         "read-only",
-        focused ? "←/→ or 1-9 panes · esc main · ctrl+x w close" : undefined,
+        focused ? "ctrl+x ←/→ panes · 1-9 · esc main · ctrl+x w close" : undefined,
       ]
         .filter(Boolean)
         .join(" - "),

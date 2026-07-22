@@ -22,14 +22,15 @@ test("exposes exact pane command defaults", () => {
     pane_open_vertical: ["pane.open.vertical", "<leader>V"],
     pane_open_horizontal: ["pane.open.horizontal", "<leader>S"],
     pane_close: ["pane.close", "<leader>w"],
-    pane_cycle: ["pane.cycle", "<leader>."],
+    pane_cycle: ["pane.cycle", "<leader>.,<leader>right"],
+    pane_cycle_reverse: ["pane.cycle.reverse", "<leader>left"],
     pane_focus_main: ["pane.focus.main", "<leader>0"],
   } as const
   for (const [name, [command, binding]] of Object.entries(expected)) {
     expect(CommandMap[name as keyof typeof expected]).toBe(command)
     expect(Definitions[name as keyof typeof expected].default).toBe(binding)
   }
-  expect(new Set(Object.values(expected).map(([command]) => command)).size).toBe(7)
+  expect(new Set(Object.values(expected).map(([command]) => command)).size).toBe(8)
 })
 
 test("validates recursive run tree payloads", () => {
