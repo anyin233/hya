@@ -112,23 +112,57 @@ impl SessionEngine {
                 return Ok(FinishReason::Cancelled);
             }
 
-            let projection = self.store.read_projection(session).await?;
-            let agent = effective_agent_for_projection(agent, &projection);
-            let messages = projection_to_messages(&agent, &projection);
-            let messages = if let Some(summarizer) = &self.summarizer {
-                match crate::compaction::compact_with(
-                    messages,
+            let mut projection = self.store.read_projection(session).await?;
+            let mut agent = effective_agent_for_projection(agent, &projection);
+            let mut messages = projection_to_messages(&agent, &projection);
+            // Context protection: prefer provider `/responses/compact` when the
+            // route supports it; otherwise fall back to the local model summarizer.
+            if crate::compaction::needs_compaction(&messages, &self.compaction) {
+                let model = projection
+                    .session
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| agent.model.clone());
+                match self
+                    .providers
+                    .compact_if_supported(&model, &messages, Some(agent.system_prompt.as_str()))
+                    .await
+                {
+                    Ok(Some(window)) => {
+                        let body = hya_provider::format_responses_compact_system(&window.items);
+                        // Persist so subsequent rounds re-inject the compact window
+                        // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
+                        if self.inject_system_message(session, body).await.is_ok() {
+                            projection = self.store.read_projection(session).await?;
+                            agent = effective_agent_for_projection(&agent, &projection);
+                            messages = projection_to_messages(&agent, &projection);
+                        }
+                    }
+                    Ok(None) | Err(_) => {
+                        if let Some(summarizer) = &self.summarizer
+                            && let Ok(compacted) = crate::compaction::compact_with(
+                                messages.clone(),
+                                &self.compaction,
+                                summarizer.as_ref(),
+                            )
+                            .await
+                        {
+                            messages = compacted;
+                        }
+                    }
+                }
+            } else if let Some(summarizer) = &self.summarizer {
+                // Under threshold, compact_with is a no-op; keep prior call sites' shape.
+                if let Ok(compacted) = crate::compaction::compact_with(
+                    messages.clone(),
                     &self.compaction,
                     summarizer.as_ref(),
                 )
                 .await
                 {
-                    Ok(compacted) => compacted,
-                    Err(_) => projection_to_messages(&agent, &projection),
+                    messages = compacted;
                 }
-            } else {
-                messages
-            };
+            }
             let request = request_from_messages(&agent, &projection, messages, &self.tools);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
@@ -300,7 +334,9 @@ impl SessionEngine {
                         message,
                         part: tc.part,
                         call: tc.call,
-                        output,
+                        // Cap every tool (builtin/MCP/plugin) so a single oversized
+                        // result cannot blow the next model context window.
+                        output: hya_tool::cap_tool_output(output),
                         time_ms,
                     },
                     Err(e) => Event::ToolError {

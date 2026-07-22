@@ -5,6 +5,14 @@ use super::OpenAiResponsesDecoder;
 use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
+/// System-message prefix written by the engine after a successful
+/// `POST /responses/compact`. The JSON array that follows is the canonical
+/// next input window and must be re-injected verbatim.
+pub const RESPONSES_COMPACT_ITEMS_MARKER: &str = "<<<RESPONSES_COMPACT_ITEMS>>>";
+
+/// Shared with `hya-core` compaction injects (`HYA_COMPACTED_CONTEXT`).
+pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
+
 pub struct OpenAiResponsesProtocol;
 
 pub(crate) struct GrokBuildProtocol;
@@ -25,24 +33,7 @@ impl Protocol for GrokBuildProtocol {
 
 impl Protocol for OpenAiResponsesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
-        let mut input = Vec::new();
-        for message in &req.messages {
-            let (role, parts) = match message {
-                Message::System { content, .. } => {
-                    input.push(json!({"role": "system", "content": content}));
-                    continue;
-                }
-                Message::User { parts, .. } => ("user", parts),
-                Message::Assistant { parts, .. } => {
-                    emit_assistant(&mut input, parts)?;
-                    continue;
-                }
-            };
-            let content = text(parts)?;
-            if !content.is_empty() {
-                input.push(json!({"role": role, "content": content}));
-            }
-        }
+        let input = encode_input_items(&req.messages)?;
         let tools: Vec<Value> = req
             .tools
             .iter()
@@ -82,6 +73,82 @@ impl Protocol for OpenAiResponsesProtocol {
 
     fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
         Box::new(OpenAiResponsesDecoder::new(session, message))
+    }
+}
+
+/// Build the Responses API `input` item array from hya messages.
+///
+/// Used by both `/responses` create and `/responses/compact`.
+pub fn encode_input_items(messages: &[Message]) -> Result<Vec<Value>, ProviderError> {
+    let mut input = Vec::new();
+    for message in messages {
+        let (role, parts) = match message {
+            Message::System { content, .. } => {
+                if let Some(items) = parse_responses_compact_items(content)? {
+                    input.extend(items);
+                } else {
+                    input.push(json!({"role": "system", "content": content}));
+                }
+                continue;
+            }
+            Message::User { parts, .. } => ("user", parts),
+            Message::Assistant { parts, .. } => {
+                emit_assistant(&mut input, parts)?;
+                continue;
+            }
+        };
+        let content = text(parts)?;
+        if !content.is_empty() {
+            input.push(json!({"role": role, "content": content}));
+        }
+    }
+    Ok(input)
+}
+
+/// Format a system message body that carries a compact window for re-injection.
+#[must_use]
+pub fn format_responses_compact_system(items: &[Value]) -> String {
+    format!(
+        "{COMPACT_CONTEXT_MARKER}\n{RESPONSES_COMPACT_ITEMS_MARKER}\n{}",
+        Value::Array(items.to_vec())
+    )
+}
+
+/// Extract the compact-item array from a system message body, if present.
+pub fn parse_responses_compact_items(content: &str) -> Result<Option<Vec<Value>>, ProviderError> {
+    let Some(rest) = content
+        .strip_prefix(COMPACT_CONTEXT_MARKER)
+        .map(str::trim_start)
+    else {
+        return Ok(None);
+    };
+    let Some(json_text) = rest
+        .strip_prefix(RESPONSES_COMPACT_ITEMS_MARKER)
+        .map(str::trim_start)
+    else {
+        // Local-summarizer compact (text summary only) — not a Responses window.
+        return Ok(None);
+    };
+    let value: Value = serde_json::from_str(json_text).map_err(|e| {
+        ProviderError::Decode(format!("invalid responses compact window payload: {e}"))
+    })?;
+    match value {
+        Value::Array(items) => Ok(Some(items)),
+        other => Err(ProviderError::Decode(format!(
+            "responses compact window must be a JSON array, got {}",
+            other_kind(&other)
+        ))),
+    }
+}
+
+fn other_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -154,4 +221,50 @@ fn text(parts: &[Part]) -> Result<String, ProviderError> {
         }
     }
     Ok(text)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use hya_proto::{MessageId, PartId};
+
+    #[test]
+    fn encode_expands_compact_items_marker_verbatim() {
+        let items = vec![
+            json!({"type": "compaction", "encrypted_content": "abc"}),
+            json!({"role": "user", "content": "continue"}),
+        ];
+        let system = format_responses_compact_system(&items);
+        let messages = vec![
+            Message::System {
+                id: MessageId::new(),
+                content: system,
+            },
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "next turn".into(),
+                }],
+            },
+        ];
+        let input = encode_input_items(&messages).unwrap();
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[0], items[0]);
+        assert_eq!(input[1], items[1]);
+        assert_eq!(input[2]["role"], "user");
+        assert_eq!(input[2]["content"], "next turn");
+    }
+
+    #[test]
+    fn plain_system_message_still_encoded_as_system() {
+        let messages = vec![Message::System {
+            id: MessageId::new(),
+            content: "HYA_COMPACTED_CONTEXT\nsummary only".into(),
+        }];
+        let input = encode_input_items(&messages).unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["role"], "system");
+    }
 }

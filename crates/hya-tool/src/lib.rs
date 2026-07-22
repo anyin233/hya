@@ -16,6 +16,7 @@ mod lsp_path;
 mod lsp_plane;
 mod lsp_post_edit;
 pub mod mailbox;
+mod output_cap;
 pub mod permission;
 mod plan;
 mod question;
@@ -46,6 +47,7 @@ pub use interaction::{
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
+pub use output_cap::{MAX_TOOL_OUTPUT_CHARS, cap_tool_output};
 pub use permission::{
     Action, AskRequest, Decision, ExactSubject, Invocation, InvocationDecision, InvocationPolicy,
     InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
