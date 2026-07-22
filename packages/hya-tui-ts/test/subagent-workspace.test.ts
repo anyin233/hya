@@ -186,6 +186,23 @@ test("cycles focus in tab and visual leaf order", () => {
   expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
 })
 
+test("Esc-equivalent focusMain exits every observation placement back to Main", () => {
+  // Session Escape binding dispatches focusMain; this is the workspace half of the
+  // "cannot exit subagent view" regression (ADR-0003: Esc returns to Main).
+  for (const open of [
+    { type: "openTab" as const, sessionID: "child-tab" },
+    { type: "openSplit" as const, axis: "vertical" as const, sessionID: "child-v" },
+    { type: "openSplit" as const, axis: "horizontal" as const, sessionID: "child-h" },
+  ]) {
+    let state = createWorkspaceState("root")
+    state = reduceWorkspace(state, open)
+    expect(state.focusedPaneID).toBe(`observation:${open.sessionID}`)
+    state = reduceWorkspace(state, { type: "focusMain" })
+    expect(state.focusedPaneID).toBe("main")
+    expect(state.activeTabID).toBe("main")
+  }
+})
+
 test("retains focused and unfocused terminal observations after focus leaves", () => {
   const tree = parseRunTree({
     session: "root",

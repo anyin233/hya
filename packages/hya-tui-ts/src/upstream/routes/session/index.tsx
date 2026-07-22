@@ -399,14 +399,41 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
+  // Observation focus: Escape returns to Main via the keymap so it wins over any
+  // residual Escape bindings. useKeyboard alone runs after keymap and can lose to
+  // session.interrupt when the main turn is still busy.
+  useBindings(() => ({
+    enabled: () => !mainFocused() && dialog.stack.length === 0,
+    priority: 10,
+    bindings: [
+      {
+        key: "escape",
+        desc: "Focus Main pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "focusMain" }),
+      },
+    ],
+  }))
+  // Child session route (legacy / deep-link): Escape walks back to the parent.
+  useBindings(() => ({
+    enabled: () => !!session()?.parentID && mainFocused() && dialog.stack.length === 0,
+    priority: 10,
+    bindings: [
+      {
+        key: "escape",
+        desc: "Return to parent session",
+        group: "Session",
+        cmd: () => {
+          const parentID = session()?.parentID
+          if (!parentID) return
+          navigate({ type: "session", sessionID: parentID })
+        },
+      },
+    ],
+  }))
   useKeyboard((key) => {
     if (mainFocused() || dialog.stack.length > 0) return
-    if (key.name === "escape") {
-      dispatchWorkspace({ type: "focusMain" })
-      key.preventDefault()
-      key.stopPropagation()
-      return
-    }
+    // Ignore typing while an observation pane is focused (read-only).
     if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
       key.preventDefault()
       key.stopPropagation()
