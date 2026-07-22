@@ -62,8 +62,8 @@ is replayed through the projection and provider request builder.
 8. Appends `ToolResult` or `ToolError`.
 
 If a provider round produces tool calls, the engine starts another round with
-the updated projection. `MAX_TOOL_ROUNDS` is currently `25`; hitting it emits a
-text notice and finishes the message with `FinishReason::Error`.
+the updated projection. The turn continues until the provider finishes,
+cancellation is observed, or execution returns an error.
 
 ## Cancellation
 

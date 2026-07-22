@@ -1,0 +1,22 @@
+# Findings
+
+- `hya-core::SessionEngine::run_turn_rounds` is the shared root/subagent model-tool loop.
+- It defines `MAX_TOOL_ROUNDS = 25`, increments `rounds` after each round containing one or more tool calls, then emits a synthetic error step and ends the message with `FinishReason::Error` when the counter reaches 25.
+- The guard counts tool-bearing model rounds, not individual tool calls, despite its user-facing `25-tool-call limit` wording.
+- `rounds` also supplies `Event::StepStarted`/`StepFinished` step numbers, so the counter remains necessary after deleting the cap.
+- `hya-app` loads `SubagentLimits`, but `per_run_budget` counts spawned members and resident-team budgets count turns/messages; none enforce per-agent tool calling.
+- Goal and loop drivers have explicit iteration budgets separate from one agent turn; they are not this limit.
+- Compat `AgentEntry.steps` is serialized as metadata but current evidence shows no path into `AgentSpec` or `SessionEngine` enforcement.
+- The tool registry's `SEARCH_LIMIT` limits registry search output, not agent tool-call quantity.
+- `FakeProvider::scripted_turns` advances one script per provider stream and returns `Finish(Stop)` after scripts are exhausted, so it can express 26 tool-bearing rounds followed by a normal stop without new test infrastructure.
+- `crates/hya-core/tests/turn_loop.rs` already owns multi-round `SessionEngine::run_turn` behavior and is the likely home for the regression.
+- Project release rules require this feature to bump workspace version `0.33.27`, archive the current root changelog as `docs/changes/CHANGELOG_0.33.27.md`, and make root `CHANGELOG.md` describe only the new version.
+- The worktree contains unrelated untracked Trellis tasks; they must remain untouched.
+- All four planning reviews agree that deleting the constant and its synthetic error branch is the correct shared fix; no deeper redesign or replacement configuration is justified.
+- Planner proposals favored a 26-tool-round script plus an explicit 27th normal-stop script. The final sentinel text is the key assertion proving the post-limit provider response was consumed.
+- The only material operational tradeoff is intentional: a repeatedly tool-calling provider can now continue until cancellation, provider completion, or a real execution error.
+- `SessionEngine::replay` exposes persisted step events, but the minimal behavior proof is `FinishReason::Stop` plus unique final text from the explicit 27th provider script; this cannot be produced by the legacy cap path.
+- `docs/changes/CHANGELOG_0.33.27.md` does not currently exist, so the required archive has no path collision.
+- `Cargo.lock` contains workspace package entries at `0.33.27`; normal Cargo metadata refresh should update only those local package versions.
+- `hya/tests/version_metadata.rs` also requires the README workspace version and packaged TypeScript TUI version to match each workspace release.
+- The final full-scope check found `docs/architecture/runtime.md` still documenting the removed 25-round guard; it now describes the provider completion, cancellation, and execution-error exits.
