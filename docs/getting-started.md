@@ -5,7 +5,9 @@ backend CLI/API binary is `hya-backend`.
 
 ## Prerequisites
 
-- Rust toolchain compatible with the workspace manifest in [`../Cargo.toml`](../Cargo.toml).
+- Rust 1.91 or later.
+- Bun 1.3.x.
+- Git.
 - A terminal that supports alternate-screen TUI programs.
 - Optional: a hya provider config if you want live model calls. Without
   one, hya uses an offline development provider that echoes prompts.
@@ -19,40 +21,38 @@ cargo build --workspace
 Building does not create `~/.config/hya`; the starter config is created on the
 first `hya` or `hya-backend` startup that needs runtime config.
 
-Install the frontend from [`../crates/hya`](../crates/hya) and the backend CLI
-from [`../crates/hya-backend`](../crates/hya-backend):
+Build and install the complete frontend/runtime layout:
 
 ```sh
-cargo install --path crates/hya
-cargo install --path crates/hya-backend
+./install.sh --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+The installer colocates `hya`, `hya-ts`, and `hya-backend` and prepares the Bun
+runtime under `lib/hya/hya-tui-ts`. Installing only the `hya` Cargo package is
+unsupported because that executable delegates to the adjacent launcher and
+runtime.
 
 ## Run the TUI
-
-```sh
-cargo run -p hya --
-```
-
-or, after installing:
 
 ```sh
 hya
 ```
 
-The TUI creates an in-memory session, streams assistant events into the chat
-view, and prompts for permission when a tool requests a mutating action.
+`hya` delegates to the TypeScript/OpenTUI frontend. The launcher starts an owned
+local `hya-backend`, or attaches to an existing server when `--server <URL>` is
+provided. It streams assistant events into the chat view and prompts for
+permission when a tool requests a mutating action.
 
 Key controls:
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Send the current input when no turn is running. |
-| `PgUp` / `PgDn` | Scroll the conversation. |
-| `Up` / `Down` | Scroll one line. |
-| `Tab` on `/` input | Complete slash commands or open the command picker. |
-| `F2` | Open the model selector. |
-| `Ctrl-P` | Open command/help. |
-| `Ctrl-C` | Close dialogs, clear input, interrupt a running turn, or exit when idle. |
+| `Ctrl-P` | List available commands. |
+| `Ctrl-X` | Show leader-key actions. |
+| `Escape` | Interrupt the current session or dismiss a dialog. |
+| `Ctrl-C` / `Ctrl-D` | Exit. |
 
 ## Run One Headless Turn
 
@@ -133,12 +133,16 @@ intentional, not an error — see
 
 hya creates a starter `~/.config/hya/config.yaml` (or
 `$XDG_CONFIG_HOME/hya/config.yaml`) the first time a command needs runtime
-config. Interactive startup also offers to import provider/model entries from
-your Compat config. You can run the same model-only import explicitly:
+config. Canonical `hya` imports Compat configuration only when requested
+explicitly:
 
 ```sh
 hya --import compat
 ```
+
+This imports providers, models, and supported local MCP servers. Skills import
+is not implemented yet. Bare interactive `hya-backend` retains its first-run
+import prompt when it creates the starter config.
 
 To switch to a live model manually, edit the starter file:
 

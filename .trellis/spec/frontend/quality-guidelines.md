@@ -6,141 +6,68 @@
 
 ## Overview
 
-TUI changes must be covered by semantic render/layout tests. Use
-`ratatui::backend::TestBackend` when output rendering matters, and assert stable
-geometry, text, or validation behavior instead of brittle full-frame snapshots.
-Reusable `hya-tui-lib` layout/component/layer changes need direct crate tests in
-addition to any `hya-tui` compatibility checks.
+The shipped TUI is `packages/hya-tui-ts`. Cover behavior with focused Bun tests
+at the existing SDK, state, command, or rendering boundary. Prefer semantic
+assertions over brittle full-screen snapshots.
 
-The normal project gate applies after Rust frontend changes:
+Run from `packages/hya-tui-ts` after frontend changes:
+
+```sh
+bun run typecheck
+bun test
+```
+
+Launcher or backend changes additionally require the Rust workspace gate:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo build -p hya
-```
-
-For new `hya-tui-lib` public API, also run:
-
-```sh
-cargo rustdoc -p hya-tui-lib -- -D warnings
 ```
 
 ---
 
 ## Forbidden Patterns
 
-- Non-Rust TUI renderers in this crate.
-- Terminal I/O, async streaming, or crossterm event loops inside `hya-tui` or
-  `hya-tui-lib`.
-- Raw color literals inside widgets when a semantic theme field can express the role.
-- Layout code that indexes optional sidebar columns eagerly; use explicit `if`
-  branches when a rectangle may not exist.
-- Silent same-layer component overlap; library layouts must return typed
-  `LayerError`/`ComponentError` results.
+- Reconnecting a shipped binary to the retained Rust TUI renderer.
+- Direct backend process discovery or spawning inside the TypeScript package.
+- A second HTTP/SSE client or projection beside the existing SDK/sync contexts.
+- Imports from excluded OpenCode backend, worker, updater, web, or desktop code.
+- Raw color literals when an existing semantic theme role expresses the state.
 
 ---
 
 ## Required Patterns
 
-- Write failing render/layout tests before changing TUI behavior.
-- Use saturating geometry math for terminal dimensions.
-- Keep `AppState` application idempotent and projection-driven.
-- Preserve prompt visibility on narrow terminals.
-- Keep `hya-tui-lib` app-neutral: no Hya runtime crates, app state, prompt/keymap
-  behavior, themes, screens, SDK, terminal I/O, or async runtime.
+- Write and run one focused failing test before changing frontend behavior.
+- Preserve the `src/hya` and `src/upstream` ownership boundary.
+- Reuse the existing Solid contexts, routes, command registry, and plugin slots.
+- Keep backend state synchronized through `@opencode-ai/sdk/v2`.
+- Preserve prompt visibility and readable state labels on narrow terminals.
 
 ---
 
 ## Testing Requirements
 
-Every TUI layout change should include at least one focused render or layout
-test. Responsive changes should cover narrow and wide widths, currently
-represented by 80-column and 120-column tests. `hya-tui-lib` component/layer
-changes should assert both accepted cases and typed rejection cases.
+Every behavior change needs the smallest Bun test that fails without it.
+Responsive changes should exercise narrow and wide terminal dimensions. Changes
+to runtime preparation or release packaging must retain the installer and
+archive smoke tests described below.
 
 ---
 
 ## Code Review Checklist
 
-- Does terminal/event-loop behavior still live outside presentation crates?
+- Does the change live in `packages/hya-tui-ts`, not the retained Rust UI?
 - Does the TUI remain readable at 80 columns?
 - Are status labels understandable without color?
 - Do new tests fail on the old behavior and pass on the new behavior?
-- Do reusable primitives belong in `hya-tui-lib`, and are app-specific prompt,
-  keymap, theme, screen, SDK, and runtime dependencies kept out of that crate?
-- If `tui-check` reports `borderMisaligned=true` on a capture with multiple independent valid frames, verify manually and track the durable fix upstream in `oh-my-openagent`; do not patch the installed generated package cache.
-
----
-
-## Scenario: Native TUI model identity and reasoning defaults
-
-### 1. Scope / Trigger
-
-- Trigger: any current `hya` TUI change that selects models, displays the active model, resolves reasoning effort, or persists per-model reasoning preferences.
-- Applies to `crates/hya-app/src/config.rs`, `crates/hya/src/main.rs`, `crates/hya/src/transport.rs`, `crates/hya-tui/src/app/runtime.rs`, and the relevant `crates/hya-tui/src/state`, `screens`, or `widgets` module.
-
-### 2. Signatures
-
-- Direct model command: `/model <model>` or `/model <provider>/<model>`.
-- `ModelEntry { id: String, provider: String, reasoning_variants: Vec<String> }` is the TUI/catalog identity type.
-- `ModelEntry::model_ref() -> String` returns `<provider>/<id>` when `provider` is known, otherwise `<id>`.
-- `ModelEntry::matches_model_ref(model: &str) -> bool` accepts both bare ids and provider-prefixed refs.
-- Persisted reasoning preferences, if added, must be keyed by exact provider/model; do not key duplicate model ids by bare id.
-
-### 3. Contracts
-
-- Provider/model identity must not be collapsed to a bare model id when duplicate ids can exist across providers.
-- Dialog selection effects carry the selected `ModelEntry`, not only a `String` model id.
-- Runtime model switches send provider-prefixed `ModelRef`s to the engine/provider when provider identity is known.
-- The status line may display provider-prefixed refs such as `qa-oai/shared` to make duplicate-model routing explicit.
-- `/think` options are derived from the active `ModelEntry.reasoning_variants`; do not hardcode `low|medium|high` in controller paths.
-
-### 4. Validation & Error Matrix
-
-- Unknown `/think <level>` -> system message with available levels, no state mutation.
-- Unsupported effort for the active model -> system message with active model and available levels, no state mutation.
-- Display state `think:none` -> `/think` dialog marks the `off` row as current; `none` is the stored/display string for explicit `ReasoningEffort::Off`, while `off` is the command/menu label.
-- Missing reasoning variants -> reasoning remains unset unless the user explicitly selects `off`.
-- Corrupt `model_reasoning.json` -> ignore as empty preferences and overwrite on the next successful write.
-- Provider-prefixed `/model <provider>/<model>` that matches the catalog -> select that provider's `ModelEntry`; do not create an unknown fallback entry.
-- Unknown direct `/model <id>` -> system message with the requested id, no `AppState.model`, `active_model`, runtime agent model, reasoning, or session snapshot mutation.
-- Ambiguous bare `/model <id>` when multiple providers expose the same id -> system message listing provider-prefixed refs; require `/model <provider>/<id>`.
-
-### 5. Good/Base/Bad Cases
-
-- Good: `/model qa-oai/shared` selects the OpenAI-compatible duplicate, status shows `qa-oai/shared`, and `/think` lists `off|minimal|low|medium|high|xhigh`.
-- Good: `/model qa-anth/shared` selects the Anthropic duplicate, status shows `qa-anth/shared`, and `/think` lists `off|low|medium|high|max`.
-- Base: `/model gpt-5.5` still works when the id is unique.
-- Bad: direct `/model qa-oai/shared` creates `ModelEntry { provider: "", id: "qa-oai/shared" }`, which loses provider-specific reasoning variants and preference keys.
-
-### 6. Tests Required
-
-- Unit: provider resolver tests for explicit > last-used > highest, preserving explicit `Off`.
-- Unit: `ModelEntry`/controller tests for provider-prefixed `/model` selection and duplicate model ids.
-- Unit: `/think` dialog tests for provider-specific variants including `minimal`, `xhigh`, and `max`.
-- Unit: `/think` dialog test that `reasoning_effort: "none"` selects and marks the `off` row current.
-- Runtime/helper: selected `ModelEntry` converts to provider-prefixed `ModelRef` before engine switch.
-- Manual QA: run native `./target/debug/hya` at 80 columns and drive provider-prefixed duplicate model paths plus `/think`.
-
-### 7. Wrong vs Correct
-
-#### Wrong
-
-```rust
-let model = ModelRef::new(entry.id.clone());
-```
-
-This silently routes duplicate bare ids to whichever provider resolves first.
-
-#### Correct
-
-```rust
-let model = ModelRef::new(entry.model_ref());
-```
-
-This preserves exact provider/model identity through the TUI -> engine -> provider boundary.
+- Does server state still flow through the SDK/sync contexts?
+- Does hya-specific integration remain in `src/hya/` when it should not alter
+  retained upstream behavior?
+- If `tui-check` reports `borderMisaligned=true` on a capture with multiple
+  independent valid frames, verify manually and track the durable fix upstream;
+  do not patch an installed generated package cache.
 
 ---
 

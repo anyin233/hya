@@ -146,6 +146,29 @@ jobs:
           test -f "$runtime/bunfig.toml"
           test -f "$runtime/tsconfig.json"
           test -f "$runtime/src/main.tsx"
+          project="$scratch/project"
+          mock_bun="$scratch/mock-bun"
+          bun_invocation="$scratch/bun-invocation"
+          mkdir -p "$project"
+          cat >"$mock_bun" <<'MOCK_BUN'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'cwd=%s\n' "$PWD" >"${HYA_RELEASE_BUN_INVOCATION:?}"
+          printf 'arg=%s\n' "$@" >>"$HYA_RELEASE_BUN_INVOCATION"
+          exit 23
+          MOCK_BUN
+          chmod +x "$mock_bun"
+          set +e
+          HYA_RELEASE_BUN_INVOCATION="$bun_invocation" "$packaged_binary" "$project" --server http://127.0.0.1:54321 --bun "$mock_bun" >/dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 23
+          grep -Fx "cwd=$runtime" "$bun_invocation"
+          grep -Fx "arg=src/main.tsx" "$bun_invocation"
+          grep -Fx "arg=--url" "$bun_invocation"
+          grep -Fx "arg=http://127.0.0.1:54321" "$bun_invocation"
+          grep -Fx "arg=--project" "$bun_invocation"
+          grep -Fx "arg=$project" "$bun_invocation"
           cmp packages/hya-tui-ts/LICENSE "$runtime/LICENSE"
           cmp packages/hya-tui-ts/UPSTREAM.md "$runtime/UPSTREAM.md"
           test -d "$runtime/node_modules"

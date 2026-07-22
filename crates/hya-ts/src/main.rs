@@ -8,7 +8,7 @@ use std::time::Duration;
 use clap::Parser as _;
 use hya_sdk::ServerHandle;
 use hya_ts::{
-    Cli, Command, backend_auth_args, build_bun_command_from, resolve_backend_bin,
+    Cli, Command, backend_auth_args, build_bun_command_from, invocation_name, resolve_backend_bin,
     resolve_runtime_dir,
 };
 use tokio::process::Command as TokioCommand;
@@ -18,7 +18,7 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
-            eprintln!("hya-ts: {error}");
+            eprintln!("{}: {error}", invocation_name());
             ExitCode::FAILURE
         }
     }
@@ -30,6 +30,10 @@ async fn run() -> Result<u8, Box<dyn Error>> {
 
     if let Some(command) = &cli.command {
         return run_auth_command(&cli, command).await;
+    }
+    if let Some(source) = cli.import.as_deref() {
+        cmd_import(source)?;
+        return Ok(0);
     }
 
     let cwd = std::env::current_dir()?;
@@ -71,7 +75,8 @@ async fn run() -> Result<u8, Box<dyn Error>> {
         build_bun_command_from(&attached, &runtime, &cwd)?
     };
     let mut terminal = TerminalState::capture()?;
-    let child = TokioCommand::new(spec.program)
+    let program = spec.program;
+    let child = TokioCommand::new(&program)
         .args(spec.args)
         .current_dir(spec.current_dir)
         .process_group(0)
@@ -81,7 +86,7 @@ async fn run() -> Result<u8, Box<dyn Error>> {
         Err(error) => {
             restore_terminal(&mut terminal)?;
             drop(owned);
-            return Err(error.into());
+            return Err(format!("failed to launch Bun `{}`: {error}", program.display()).into());
         }
     };
     let pid = child.id();
@@ -121,6 +126,38 @@ async fn run() -> Result<u8, Box<dyn Error>> {
     restore_terminal(&mut terminal)?;
     drop(owned);
     Ok(result?)
+}
+
+fn cmd_import(source: &str) -> Result<(), Box<dyn Error>> {
+    if !source.eq_ignore_ascii_case("compat") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown import source {source}; currently supported: compat"),
+        )
+        .into());
+    }
+    let compat_path = hya_app::config::default_compat_config_path().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no Compat config found; set COMPAT_CONFIG or create ~/.config/opencode/opencode.json",
+        )
+    })?;
+    let summary = hya_app::config::import_compat_models_into_config(
+        &compat_path,
+        &hya_app::config::expected_config_path(),
+    )?;
+    println!(
+        "hya: imported {} providers and {} models from Compat into {}",
+        summary.providers,
+        summary.models,
+        summary.config_path.display()
+    );
+    println!("hya: skills import: TODO");
+    println!(
+        "hya: imported {} local MCP servers and skipped {} unsupported MCP entries",
+        summary.mcp_servers, summary.mcp_skipped
+    );
+    Ok(())
 }
 
 /// Forward auth/oauth commands to the sibling `hya-backend` binary (same store/config).

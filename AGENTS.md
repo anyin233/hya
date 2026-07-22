@@ -51,13 +51,14 @@ projection for the TUI, HTTP API, and client surfaces.
 The main runtime path is:
 
 ```text
-hya / hya-backend / hya-server
+hya -> hya-ts -> packages/hya-tui-ts -> hya-backend HTTP/SSE
+hya-backend / hya-server
   -> hya-app config/auth/plugin/MCP setup
   -> hya-core::SessionEngine
   -> hya-provider streaming model route
   -> hya-tool builtin, MCP, or plugin tools
   -> hya-store SQLite event log
-  -> hya-tui, hya-server, or hya-client views over the same projection
+  -> TypeScript TUI, hya-server, or hya-client views over the same projection
 ```
 
 The engine owns stop decisions. Goal mode and loop mode use separate evaluators
@@ -67,10 +68,12 @@ or verifiers; workers do not decide that their own objective is done.
 
 | Component | Feature |
 | --- | --- |
-| `crates/hya` | User-facing frontend binary. Runs the current interactive TUI, connects to an in-process/native/HTTP/Compat backend, queues input while connecting, and validates startup resume before navigation. |
+| `crates/hya` | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` executable while preserving public `hya` branding; it does not contain a TUI or backend fallback. |
+| `crates/hya-ts` | TypeScript TUI supervisor. Parses launcher/auth/import arguments, resolves the prepared runtime and backend, starts or attaches to `hya-backend`, and owns terminal process-group handoff and cleanup. |
+| `packages/hya-tui-ts` | Current SolidJS/OpenTUI frontend. Owns terminal rendering, interaction, routes, command/keybinding UI, and HTTP/SSE synchronization through `@opencode-ai/sdk/v2`. |
 | `crates/hya-backend` | Backend umbrella binary. Bare startup still launches the interactive TUI by spawning the current `hya` frontend, but no longer owns a legacy TUI renderer/controller. Also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, prompt templates, plugin loading, MCP setup, permission policy, and AGENTS/skills discovery. |
-| `crates/hya-tui` | Current ratatui app runtime. Owns terminal setup, crossterm event input, app state, keymaps, panes, screens, widgets, theme, prompt/transcript rendering, status, overlays, permission prompts, and question prompts. |
-| `crates/hya-tui-lib` | Pure reusable terminal UI primitives: geometry, color, flex layout, overlay/layer validation, component descriptors, and ratatui adapters. |
+| `crates/hya-tui` | Retained Rust TUI compatibility crate. It remains buildable and tested, but no shipped binary launches its renderer or controller. |
+| `crates/hya-tui-lib` | Retained pure terminal UI primitives; not on the shipped frontend path. |
 | `crates/hya-core` | Agent runtime. Owns `SessionEngine`, turn admission, streaming rounds, shell turns, event bus, prompt construction, compaction, goal/loop drivers, hook dispatch, subagents, team state, worktree/tmux helpers, and session forking. |
 | `crates/hya-proto` | Shared wire/domain types. Defines newtyped IDs, tagged `Event`/`Envelope`, messages, parts, roles, model/tool schema types, API DTOs, and the deterministic projection reducer. Keep this dependency-light so UI/client crates can reuse it cheaply. |
 | `crates/hya-provider` | Model provider abstraction. Normalizes OpenAI-compatible, Anthropic, Google, dev, and fake providers into one streamed `Event` model; handles protocol encoding/decoding, provider routing, capability metadata, reasoning effort, and preflight checks for tool-capable routes. |
@@ -95,7 +98,9 @@ or verifiers; workers do not decide that their own objective is done.
 - Preserve the event-sourced architecture: append events, replay with the shared
   projection, and avoid parallel read-model logic that can drift from replay.
 - Keep `hya-proto` free of heavy runtime dependencies.
-- Keep `hya-tui-lib` pure and app-neutral. `hya-tui` owns terminal runtime/rendering; do not reintroduce a backend-owned legacy TUI controller or renderer.
+- Put new interactive behavior in `packages/hya-tui-ts`. Do not reconnect a
+  shipped binary to the retained Rust `hya-tui` renderer or reintroduce a
+  backend-owned TUI controller.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.
@@ -117,6 +122,13 @@ cargo test --workspace
 
 For Compat adapter changes, also run from
 `crates/hya-plugin-compat/adapter`:
+
+```sh
+bun run typecheck
+bun test
+```
+
+For TypeScript TUI changes, also run from `packages/hya-tui-ts`:
 
 ```sh
 bun run typecheck

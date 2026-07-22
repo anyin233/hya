@@ -6,85 +6,69 @@
 
 ## Overview
 
-The frontend layer is split between the app-specific Rust terminal UI in
-`crates/hya-tui` and the reusable primitive library in `crates/hya-tui-lib`.
-`hya-tui` owns the current TUI runtime: terminal setup/restore, crossterm
-events, async app loop, prompt/keymap/theme/screen behavior, panes, widgets,
-and Hya-specific rendering. `hya-tui-lib` owns only app-neutral geometry, color,
-flex layout, overlay/layer validation, declarative component descriptors, and
-ratatui adapter helpers.
+The shipped terminal frontend lives in `packages/hya-tui-ts`. The small Rust
+packages around it are process boundaries, not presentation layers:
 
-For TUI work, keep app presentation modules inside `crates/hya-tui/src/`:
+- `crates/hya` replaces itself with adjacent `hya-ts`.
+- `crates/hya-ts` owns CLI parsing, runtime/backend discovery, process-group
+  handoff, and cleanup.
+- `packages/hya-tui-ts` owns terminal rendering and interaction.
+- `hya-backend` owns runtime composition and the HTTP/SSE surface.
 
-- `lib.rs` exposes public app-facing state types and draw entry points.
-- `contracts.rs` keeps app-specific input/keymap/prompt document contracts and
-  compatibility re-exports for shared primitives from `hya-tui-lib`.
-- `render/` owns app text/style adapters and compatibility re-exports for shared
-  flex/overlay/draw primitives.
-- `theme.rs`, screen modules, widgets, and prompt modules remain app-specific.
-
-Reusable primitives that have no dependency on Hya app state belong in
-`crates/hya-tui-lib/src/`, not in `hya-tui`.
-
----
+`crates/hya-tui` and `crates/hya-tui-lib` are retained compatibility crates. No
+shipped binary launches them, so new interactive behavior does not belong there.
 
 ---
 
 ## Directory Layout
 
-```
-crates/hya-tui-lib/src/
-├── lib.rs
-├── contracts.rs
-├── component.rs
-├── layer.rs
-└── render/
-    ├── draw.rs
-    ├── flex.rs
-    ├── mod.rs
-    └── overlay.rs
+```text
+packages/hya-tui-ts/
+|-- src/
+|   |-- main.tsx             # Bun entrypoint
+|   |-- hya/                 # hya-owned product/platform/SDK integration
+|   `-- upstream/            # retained SolidJS/OpenTUI frontend boundary
+|       |-- component/
+|       |-- context/
+|       |-- feature-plugins/
+|       |-- prompt/
+|       |-- routes/
+|       |-- theme/
+|       |-- ui/
+|       `-- util/
+|-- test/                    # Bun tests
+|-- scripts/                 # runtime preparation and asset generation
+|-- package.json
+|-- bun.lock
+|-- bunfig.toml
+`-- tsconfig.json
 
-crates/hya-tui/src/
-├── lib.rs
-├── app.rs
-├── tui.rs
-├── contracts.rs
-├── app/
-├── keymap/
-├── render/
-├── screens/
-├── state/
-├── theme/
-├── widgets/
-└── prompt/
-
+crates/hya/src/main.rs       # canonical exec shim
+crates/hya-ts/src/           # supervisor library and binary
 ```
 
 ---
 
 ## Module Organization
 
-Add app-specific TUI runtime or presentation behavior to the smallest matching
-`crates/hya-tui/src/` module. `hya-tui` may reference Hya app state, terminal
-I/O, crossterm events, async tasks, prompt behavior, keymaps, themes,
-provider/model concepts, sessions, and screens.
+- Put hya-specific platform, product, boundary validation, or SDK integration in
+  `src/hya/`.
+- Keep retained frontend components, routes, contexts, themes, and utilities in
+  their existing `src/upstream/` domain directory.
+- Reuse the existing context/provider and feature-plugin boundaries before
+  adding another cross-cutting state path.
+- Keep backend execution and persistence out of the package. Access them through
+  `@opencode-ai/sdk/v2` over the configured server URL.
+- Keep launcher concerns in `crates/hya-ts`; do not teach the frontend to spawn
+  or locate `hya-backend`.
 
-Add generic layout/component/layer/geometry primitives to `hya-tui-lib` only
-when they do not reference Hya runtime crates, app state, terminal I/O, async
-tasks, prompt behavior, keymaps, themes, provider/model concepts, or screens.
+The upstream provenance and excluded boundary are recorded in
+`packages/hya-tui-ts/UPSTREAM.md`.
 
 ---
 
 ## Naming Conventions
 
-Use short, responsibility-based module names. Prefer `snake_case` for files and
-types that describe render concepts (`TimelineItem`, `AppLayout`, `Theme`).
-
----
-
-## Examples
-
-- `crates/hya-tui-lib/src/render/flex.rs` for app-neutral flex layout solving.
-- `crates/hya-tui-lib/src/component.rs` for declarative component trees and layer claims.
-- `crates/hya-tui/src/contracts.rs` for Hya-specific input/keymap/prompt contracts.
-- `crates/hya-tui/src/render/draw.rs` for app text/style conversion plus shared draw-adapter re-exports.
+Follow the surrounding TypeScript module. Use `kebab-case` filenames in the
+retained frontend, `PascalCase` for Solid components, and `camelCase` for
+functions, signals, and context accessors.

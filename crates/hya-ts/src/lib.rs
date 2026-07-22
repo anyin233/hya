@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "hya-ts", about = "hya TypeScript terminal frontend")]
+#[command(name = invocation_name(), version, about = "hya TypeScript terminal frontend")]
 pub struct Cli {
     /// Auth / OAuth subcommands (when absent, launch the TypeScript TUI).
     #[command(subcommand)]
@@ -20,6 +20,8 @@ pub struct Cli {
     pub backend_bin: Option<PathBuf>,
     #[arg(long, value_name = "PATH", default_value = "bun")]
     pub bun: PathBuf,
+    #[arg(long, value_name = "SOURCE")]
+    pub import: Option<String>,
     #[arg(long)]
     pub r#continue: bool,
     #[arg(long, value_name = "ID")]
@@ -32,6 +34,17 @@ pub struct Cli {
     pub agent: Option<String>,
     #[arg(long, value_name = "PROVIDER/MODEL")]
     pub model: Option<String>,
+}
+
+pub fn invocation_name() -> &'static str {
+    match std::env::args_os()
+        .next()
+        .as_deref()
+        .and_then(|arg| Path::new(arg).file_name())
+    {
+        Some(name) if name == "hya" => "hya",
+        _ => "hya-ts",
+    }
 }
 
 /// Top-level subcommands available on `hya-ts` in addition to the default TUI launch.
@@ -110,6 +123,9 @@ pub enum AuthCommand {
 impl Cli {
     /// Validate argument relationships before any process starts.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.command.is_some() && self.import.is_some() {
+            return Err("--import cannot be used with a subcommand");
+        }
         if self.command.is_some() {
             return Ok(());
         }

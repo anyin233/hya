@@ -1,0 +1,48 @@
+# Progress
+
+- Created Trellis task `07-22-default-typescript-tui` with user consent.
+- Traced both frontend launchers and the backend no-subcommand dispatch; no implementation changes made.
+- Confirmed existing installer/release support for the TypeScript runtime and drafted the initial PRD.
+- Reviewed the original hya-ts migration contract and isolated the remaining binary-naming decision.
+- Recorded the decision to remove every shipped Rust TUI entrypoint while retaining `hya-ts` as an alias.
+- Confirmed the Rust TUI library can remain independently tested after repurposing the sole executable consumer.
+- Resumed Trellis step 1.1, corrected the TypeScript package-version requirement, and completed command/runtime/packaging/test discovery.
+- Loaded step 1.1 and confirmed the likely shared-launcher boundary plus the backend argument-regression test point.
+- Re-ran the Trellis brainstorm gate; repository evidence and the recorded no-Rust-entrypoint decision leave no unresolved product question.
+- Read the complete launcher/test surfaces and selected an `exec` shim as the minimal leading design for planner challenge.
+- Found one remaining product choice: retain or remove the non-TUI `hya --import compat` command.
+- Recorded the decision to migrate `hya --import compat`; requirement exploration is now converged for planner review.
+- Completed all four parallel planner reviews; they converge on the exec shim, and unsupported scope expansions were rejected during main-agent merge.
+- Reconciled concurrent release metadata at `0.33.28`; the planned feature version is `0.33.29` subject to a final pre-edit recheck.
+- Wrote the converged PRD, merged technical design, and ordered strict-TDD implementation plan.
+- Reviewed the planning artifacts; no unresolved requirement or design conflict remains.
+- Trellis step 1.3 is skipped for this inline Codex session, so the seed context manifests remain unused.
+- User approved activation; the task is now `in_progress` and the live release baseline remains `0.33.28`.
+- Confirmed the public process and backend-argument behavior-contract seams and ran the existing `hya-ts` process suite green (4 tests).
+- Added the Compat-import process contract and observed RED because `hya-ts` rejected `--import`.
+- Implemented the shared Compat import path and reran its focused process test GREEN.
+- Added the missing-Bun diagnostic contract and observed RED because the raw spawn error omitted the attempted path.
+- Added path context at the existing Bun spawn boundary and passed all six `hya-ts` process contracts.
+- Replaced the obsolete non-TTY Rust frontend contract with adjacent-launcher delegation and observed RED because the Rust frontend rejected forwarded TypeScript arguments.
+- Replaced `hya` main with the adjacent `hya-ts` Unix exec shim; delegation, PID preservation, and status propagation are GREEN.
+- Added canonical `hya` and direct `hya-ts` help-branding regressions; both frontend process suites are GREEN.
+- Changed the backend resume-translation contract to expect `--session` and observed RED against the old `--resume` forwarding.
+- Changed the backend launcher argument at the shared builder and reran the focused resume-translation contract GREEN.
+- Added an installed-chain smoke contract and observed RED because the test fixtures did not delegate from `hya` to `hya-ts` or Bun.
+- Updated the installer fixtures to model the shipped exec chain; the installer suite is GREEN.
+- Added a release-workflow mock-Bun contract and observed RED against the membership-only smoke test.
+- Added the packaged mock-Bun process smoke to the release workflow and reran the installer suite GREEN.
+- Deleted the obsolete Rust frontend modules and reduced `crates/hya` to its standard-library exec shim plus native/version test dependencies.
+- Ran `cargo test -p hya` GREEN, including frontend delegation, native no-socket transport, and version metadata coverage.
+- Resumed at Trellis step 2.1 and began the active-documentation and `0.33.29` metadata slice.
+- Corrected the three remaining active current-frontend claims in the comparison, OpenCode inventory, and development guides.
+- Bumped workspace, lockfile, TypeScript package, README, and root changelog metadata to `0.33.29`; archived the verbatim `0.33.28` root changelog under `docs/changes/`.
+- Ran `cargo test -p hya --test version_metadata` GREEN (1 passed) and completed an active-only stale-reference scan with no unsupported install, canonical `hya --resume`, or direct Rust-renderer startup claims.
+- Ran `git diff --check` GREEN. Full workspace verification, final review, and task completion remain with the main agent.
+- Final TypeScript typecheck, 29-test suite, build, installer suite, and native no-HTTP check passed; the first Rust formatting check failed on `frontend_cli.rs`, then passed after `cargo fmt --all` applied the expected mechanical formatting.
+- The release smoke exposed a final acceptance gap: both launchers rejected `--version`, and canonical launch failures were mislabeled `hya-ts:`.
+- Added canonical/direct version and missing-Bun branding process contracts, observed the expected RED failures, then reused `argv[0]` for Clap and top-level error identity; both process suites are GREEN (8 `hya-ts`, 5 `hya`).
+- Check review added the missing adjacent-launcher contract and found its initial `std::fs::copy` fixture could race concurrent executable tests with Linux `ETXTBSY`; the fixture now writes already-read bytes and the full workspace suite is stable.
+- Tightened missing-sibling branding to require `hya:`, observed RED against Rust's generic `Error:` termination output, and changed the stdlib shim to print the canonical path-bearing launch error before exiting failure.
+- Final verification passed: TypeScript typecheck, 29 Bun tests, Bun build, Rust formatting, workspace clippy with warnings denied, full workspace tests, locked release build, installer transaction suite, zero-HTTP trace, both release aliases, canonical attached-mode smoke, and `git diff --check`.
+- Reviewed the complete diff and status; unrelated task directories and the pre-existing `docs/FOLLOWUPS.md` changes remain untouched. Commit, push, and task archival remain for the main session.

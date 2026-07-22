@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 clap = { workspace = true }
+hya-app = { workspace = true }
 hya-sdk = { path = "../hya-sdk" }
 libc = { workspace = true }
 reqwest = { workspace = true }

@@ -9,14 +9,9 @@ default-run = "hya"
 name = "hya"
 path = "src/main.rs"
 
-[dependencies]
-hya-sdk = { path = "../hya-sdk" }
-hya-tui = { path = "../hya-tui" }
-hya-native = { path = "../hya-native" }
-hya-app = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "charset", "http2"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync"] }
-
 [dev-dependencies]
+hya-app = { workspace = true }
+hya-native = { path = "../hya-native" }
+hya-sdk = { path = "../hya-sdk" }
 serde_json = { workspace = true }
-async-trait = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
