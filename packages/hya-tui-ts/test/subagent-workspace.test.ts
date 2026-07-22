@@ -129,37 +129,36 @@ test("opens and focuses one observation per session", () => {
   expect(state.focusedPaneID).toBe("observation:child")
 })
 
-test("splits only the focused leaf", () => {
+test("split always places observation beside Main, never nests under another observation", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
+  // While observation is focused, opening another split must rebuild Main | child-b
+  // rather than nesting under child-a (which broke agent switching after Ctrl+X V).
   state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
 
   expect(
     workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID)),
-  ).toEqual(["main", "child-a", "child-b"])
+  ).toEqual(["main", "child-b"])
   expect(state.tabs[0]?.root).toMatchObject({
     type: "split",
-    axis: "vertical",
-    first: { type: "main" },
-    second: {
-      type: "split",
-      axis: "horizontal",
-      first: { sessionID: "child-a" },
-      second: { sessionID: "child-b" },
-    },
+    axis: "horizontal",
+    first: { type: "main", id: "main" },
+    second: { type: "observation", sessionID: "child-b" },
   })
+  expect(state.activeTabID).toBe("main")
   expect(state.focusedPaneID).toBe("observation:child-b")
+
+  // focusMain still works after a post-split agent switch
+  state = reduceWorkspace(state, { type: "focusMain" })
+  expect(state.focusedPaneID).toBe("main")
+  expect(state.activeTabID).toBe("main")
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child-b"])
 })
 
-test("closes one leaf and collapses only its parent", () => {
+test("closes split observation and returns to Main", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
-  state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
   state = reduceWorkspace(state, { type: "close", paneID: "observation:child-a" })
-  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child-b"])
-  expect(state.focusedPaneID).toBe("observation:child-b")
-
-  state = reduceWorkspace(state, { type: "close", paneID: "observation:child-b" })
   expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main"])
   expect(state.focusedPaneID).toBe("main")
 
@@ -169,20 +168,19 @@ test("closes one leaf and collapses only its parent", () => {
   expect(state.activeTabID).toBe("main")
 })
 
-test("cycles focus in tab and visual leaf order", () => {
+test("cycles focus across split observation and tab observations", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
-  state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child-c" })
   state = reduceWorkspace(state, { type: "focusMain" })
 
   const order = []
-  for (let index = 0; index < 4; index++) {
+  for (let index = 0; index < 3; index++) {
     state = reduceWorkspace(state, { type: "cycleFocus" })
     order.push(state.focusedPaneID)
   }
-  expect(order).toEqual(["observation:child-a", "observation:child-b", "observation:child-c", "main"])
-  state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-b" })
+  expect(order).toEqual(["observation:child-a", "observation:child-c", "main"])
+  state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-a" })
   expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
 })
 
@@ -266,8 +264,9 @@ test("retains an already-terminal observation after focus leaves", () => {
 test("prunes sessions missing from a successful tree", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
-  state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child-c" })
+  // Switch the split observation to child-b (replaces child-a beside Main)
+  state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
   state = reduceWorkspace(state, { type: "reconcileSessions", sessionIDs: ["root", "child-b"] })
 
   expect(workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID))).toEqual([
@@ -275,8 +274,36 @@ test("prunes sessions missing from a successful tree", () => {
     "child-b",
   ])
   expect(state.tabs).toHaveLength(1)
-  expect(state.focusedPaneID).toBe("main")
+  // child-b remains valid; focus stays on the surviving observation
+  expect(state.focusedPaneID).toBe("observation:child-b")
   expect(state.activeTabID).toBe("main")
+  // And focusMain still works after prune
+  expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
+})
+
+test("main tree row is selectable so roster can return to Main", () => {
+  const tree = parseRunTree({
+    session: "root",
+    agent: "build",
+    children: [
+      {
+        session: "child",
+        member: {
+          member: "m1",
+          child: "child",
+          subagent_type: "explore",
+          description: "x",
+          depth: 1,
+          status: "running",
+        },
+      },
+    ],
+  })
+  const rows = flattenRunTree(tree)
+  expect(rows[0]?.depth).toBe(0)
+  expect(rows[0]?.selectable).toBe(true)
+  expect(rows[0]?.node.session).toBe("root")
+  expect(rows[1]?.selectable).toBe(true)
 })
 
 test("retains the last valid tree after a failed refresh", async () => {
@@ -441,7 +468,7 @@ test("flattens nested rows and marks non-session nodes unselectable", () => {
 
   const rows = flattenRunTree(tree)
   expect(rows.map((row) => [row.node.session, row.depth, row.selectable])).toEqual([
-    ["root", 0, false],
+    ["root", 0, true],
     ["child", 1, true],
     ["grandchild", 2, true],
     [undefined, 1, false],

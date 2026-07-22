@@ -77,7 +77,13 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
-import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
+import {
+  OPENCODE_BASE_MODE,
+  useBindings,
+  useCommandShortcut,
+  useLeaderActive,
+  useOpencodeKeymap,
+} from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { DialogSubagent, type SubagentPlacement } from "./dialog-subagent"
 import {
@@ -299,7 +305,12 @@ export function Session() {
   )
   const openSubagent = (sessionID: string, placement: SubagentPlacement) => {
     const tree = treeResource().tree
-    if (!tree || sessionID === tree.session || !treeSessionIDs(tree).has(sessionID)) return
+    if (!tree || !treeSessionIDs(tree).has(sessionID)) return
+    // Selecting Main (tree root) always returns focus to the Main pane.
+    if (sessionID === tree.session) {
+      dispatchWorkspace({ type: "focusMain" })
+      return
+    }
     dispatchWorkspace(
       placement === "tab"
         ? { type: "openTab", sessionID }
@@ -431,9 +442,13 @@ export function Session() {
       },
     ],
   }))
+  const leaderActive = useLeaderActive()
   useKeyboard((key) => {
     if (mainFocused() || dialog.stack.length > 0) return
-    // Ignore typing while an observation pane is focused (read-only).
+    // Never swallow keys that complete a leader chord (Ctrl+X then 0/. /o /V …);
+    // stopPropagation here previously broke pane/agent switching after a split.
+    if (leaderActive()) return
+    // Ignore bare typing while an observation pane is focused (read-only).
     if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
       key.preventDefault()
       key.stopPropagation()
