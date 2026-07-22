@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Required quality gate and test-first verification checks"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify single-member validation and error semantics remain intact"}
+{"file":".trellis/tasks/07-21-debug-subagent-spawn-tool-calls/findings.md","reason":"Acceptance evidence, release constraints, and protected baseline paths"}
