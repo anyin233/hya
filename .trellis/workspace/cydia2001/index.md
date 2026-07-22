@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
+- **Total Sessions**: 14
 - **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~460 | Active |
+| `journal-1.md` | ~493 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-07-22 | Fix batch task ID validation | `2fa6a60f` | `main` |
 | 13 | 2026-07-22 | Fix subagent navigation and roster shortcuts | `d492135b` | `main` |
 | 12 | 2026-07-22 | Configure web search providers | `bfcefef9`, `64476077` | `main` |
 | 11 | 2026-07-21 | Restore synchronous prompt working lifecycle | `dac61e8d` | `main` |
