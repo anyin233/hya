@@ -26,10 +26,20 @@ pub(crate) const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize"
 pub(crate) const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 /// Official device-auth API base (Codex CLI uses `{issuer}/api/accounts`).
 pub(crate) const DEVICE_API_BASE: &str = "https://auth.openai.com/api/accounts";
-pub(crate) const DEVICE_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
-pub(crate) const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
 pub(crate) const SCOPE: &str = "openid profile email offline_access";
 pub(crate) const AUTH_CLAIMS_NS: &str = "https://api.openai.com/auth";
+
+/// Codex CLI: `{issuer}/api/accounts/deviceauth/usercode`.
+#[must_use]
+pub(crate) fn device_code_url() -> String {
+    format!("{DEVICE_API_BASE}/deviceauth/usercode")
+}
+
+/// Codex CLI: `{issuer}/api/accounts/deviceauth/token`.
+#[must_use]
+pub(crate) fn device_token_url() -> String {
+    format!("{DEVICE_API_BASE}/deviceauth/token")
+}
 
 /// Codex CLI: `{issuer}/deviceauth/callback`.
 #[must_use]
@@ -42,6 +52,7 @@ pub(crate) fn device_redirect_uri() -> String {
 pub(crate) fn device_verification_url() -> String {
     format!("{ISSUER}/codex/device")
 }
+
 const DEFAULT_REDIRECT_HOST: &str = "localhost";
 const DEFAULT_REDIRECT_PORT: u16 = 1455;
 const DEFAULT_REDIRECT_PATH: &str = "/auth/callback";
