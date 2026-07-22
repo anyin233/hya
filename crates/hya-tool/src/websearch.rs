@@ -20,79 +20,52 @@ pub struct WebSearchPlane {
     config: Arc<WebSearchConfig>,
 }
 
-#[derive(Clone)]
-struct WebSearchConfig {
-    provider: WebSearchProviderMode,
-    exa_url: String,
-    parallel_url: String,
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct WebSearchConfig {
+    pub provider: WebSearchProvider,
+    pub endpoint: Option<String>,
+    pub key: Option<String>,
+    pub enabled: bool,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            provider: WebSearchProvider::Exa,
+            endpoint: None,
+            key: None,
+            enabled: true,
+        }
+    }
 }
 
 impl Default for WebSearchPlane {
     fn default() -> Self {
-        let provider = match std::env::var("COMPAT_WEBSEARCH_PROVIDER").as_deref() {
-            Ok("exa") => WebSearchProviderMode::Fixed(WebSearchProvider::Exa),
-            Ok("parallel") => WebSearchProviderMode::Fixed(WebSearchProvider::Parallel),
-            _ => WebSearchProviderMode::Auto,
-        };
-        let exa_url = exa_url_from_env();
-        Self {
-            config: Arc::new(WebSearchConfig {
-                provider,
-                exa_url,
-                parallel_url: PARALLEL_URL.to_string(),
-            }),
-        }
+        Self::configured(WebSearchConfig::default())
     }
 }
 
 impl WebSearchPlane {
     #[must_use]
     pub fn new(provider: WebSearchProvider, url: String) -> Self {
-        let exa_url = if provider == WebSearchProvider::Exa {
-            url.clone()
-        } else {
-            EXA_URL.to_string()
-        };
-        let parallel_url = if provider == WebSearchProvider::Parallel {
-            url
-        } else {
-            PARALLEL_URL.to_string()
-        };
-        Self {
-            config: Arc::new(WebSearchConfig {
-                provider: WebSearchProviderMode::Fixed(provider),
-                exa_url,
-                parallel_url,
-            }),
-        }
+        Self::configured(WebSearchConfig {
+            provider,
+            endpoint: Some(url),
+            ..WebSearchConfig::default()
+        })
     }
 
     #[must_use]
-    pub fn auto(exa_url: String, parallel_url: String) -> Self {
+    pub fn configured(config: WebSearchConfig) -> Self {
         Self {
-            config: Arc::new(WebSearchConfig {
-                provider: WebSearchProviderMode::Auto,
-                exa_url,
-                parallel_url,
-            }),
-        }
-    }
-
-    fn provider_for_session(&self, session: Option<SessionId>) -> WebSearchProvider {
-        match self.config.provider {
-            WebSearchProviderMode::Fixed(provider) => provider,
-            WebSearchProviderMode::Auto => select_provider(session),
+            config: Arc::new(config),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WebSearchProviderMode {
-    Auto,
-    Fixed(WebSearchProvider),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum WebSearchProvider {
     Exa,
     Parallel,
@@ -174,7 +147,7 @@ impl Tool for WebSearchTool {
         ctx.permission
             .assert(Action::WebSearch, Resource::WebSearch(input.query.clone()))
             .await?;
-        let provider = ctx.websearch.provider_for_session(ctx.session);
+        let provider = ctx.websearch.config.provider;
         let result = call_provider(&ctx.websearch.config, provider, &input, ctx.session).await?;
         Ok(json!({
             "title": format!("{}: {}", provider.label(), input.query),
@@ -190,15 +163,21 @@ async fn call_provider(
     input: &WebSearchInput,
     session: Option<SessionId>,
 ) -> Result<Option<String>, ToolError> {
-    let (url, tool, arguments) = match provider {
-        WebSearchProvider::Exa => (&config.exa_url, "web_search_exa", exa_arguments(input)),
+    let (default_url, tool, arguments) = match provider {
+        WebSearchProvider::Exa => (EXA_URL, "web_search_exa", exa_arguments(input)),
         WebSearchProvider::Parallel => (
-            &config.parallel_url,
+            PARALLEL_URL,
             "web_search",
             parallel_arguments(input, session),
         ),
     };
-    let url = Url::parse(url).map_err(|e| ToolError::Input(e.to_string()))?;
+    let url = config.endpoint.as_deref().unwrap_or(default_url);
+    let mut url = Url::parse(url).map_err(|e| ToolError::Input(e.to_string()))?;
+    if provider == WebSearchProvider::Exa
+        && let Some(key) = config.key.as_deref().filter(|key| !key.is_empty())
+    {
+        url.query_pairs_mut().append_pair("exaApiKey", key);
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .user_agent("hya")
@@ -220,8 +199,7 @@ async fn call_provider(
             },
         }));
     if provider == WebSearchProvider::Parallel
-        && let Ok(key) = std::env::var("PARALLEL_API_KEY")
-        && !key.is_empty()
+        && let Some(key) = config.key.as_deref().filter(|key| !key.is_empty())
     {
         request = request.bearer_auth(key);
     }
@@ -240,40 +218,6 @@ async fn call_provider(
         .await
         .map_err(|e| ToolError::Other(e.to_string()))?;
     crate::websearch_response::parse_response(&body)
-}
-
-fn exa_url_from_env() -> String {
-    let Ok(key) = std::env::var("EXA_API_KEY") else {
-        return EXA_URL.to_string();
-    };
-    if key.is_empty() {
-        return EXA_URL.to_string();
-    }
-    let Ok(mut url) = Url::parse(EXA_URL) else {
-        return EXA_URL.to_string();
-    };
-    url.query_pairs_mut().append_pair("exaApiKey", &key);
-    url.into()
-}
-
-fn select_provider(session: Option<SessionId>) -> WebSearchProvider {
-    let Some(session) = session else {
-        return WebSearchProvider::Exa;
-    };
-    if fnv1a(session.to_string().as_bytes()).is_multiple_of(2) {
-        WebSearchProvider::Exa
-    } else {
-        WebSearchProvider::Parallel
-    }
-}
-
-fn fnv1a(bytes: &[u8]) -> u32 {
-    let mut hash = 0x811c9dc5u32;
-    for byte in bytes {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
 }
 
 fn exa_arguments(input: &WebSearchInput) -> Value {

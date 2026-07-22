@@ -1,7 +1,7 @@
 use hya_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
 };
-use hya_provider::{CompletionRequest, ProviderRouter};
+use hya_provider::CompletionRequest;
 use hya_tool::ToolRegistry;
 use serde_json::Value;
 
@@ -40,16 +40,10 @@ pub(super) fn request_from_messages(
     projection: &Projection,
     messages: Vec<Message>,
     tools: &ToolRegistry,
-    providers: &ProviderRouter,
 ) -> CompletionRequest {
     let model = active_model(agent, projection);
-    let provider = providers.resolve(&model);
     CompletionRequest {
-        tools: filtered_tool_schemas(
-            tools,
-            provider.as_deref().map(hya_provider::Provider::id),
-            &model,
-        ),
+        tools: filtered_tool_schemas(tools, &model),
         model,
         system: Some(agent.system_prompt.clone()),
         messages,
@@ -60,24 +54,19 @@ pub(super) fn request_from_messages(
     }
 }
 
-fn filtered_tool_schemas(
-    tools: &ToolRegistry,
-    provider_id: Option<&str>,
-    model: &ModelRef,
-) -> Vec<hya_proto::ToolSchema> {
+fn filtered_tool_schemas(tools: &ToolRegistry, model: &ModelRef) -> Vec<hya_proto::ToolSchema> {
     tools
         .schemas()
         .into_iter()
-        .filter(|schema| include_tool(schema.name.as_str(), provider_id, model.as_str()))
+        .filter(|schema| include_tool(schema.name.as_str(), model.as_str()))
         .collect()
 }
 
-fn include_tool(id: &str, provider_id: Option<&str>, model: &str) -> bool {
+fn include_tool(id: &str, model: &str) -> bool {
     let use_patch = model.contains("gpt-") && !model.contains("oss") && !model.contains("gpt-4");
     match id {
         "apply_patch" => use_patch,
         "edit" | "write" => !use_patch,
-        "websearch" => provider_id == Some("compat"),
         _ => true,
     }
 }

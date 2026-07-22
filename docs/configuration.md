@@ -7,7 +7,7 @@ hya reads its own YAML config from:
 
 If no usable provider route is configured, hya falls back to `DevProvider`, the
 offline echo provider from [`../crates/hya-provider/src/dev.rs`](../crates/hya-provider/src/dev.rs).
-The same config file also drives MCP servers, plugins, permissions, and
+The same config file also drives tools, MCP servers, plugins, permissions, and
 formatter status.
 
 ## First-Run / Offline Behavior
@@ -105,6 +105,14 @@ permission:
     - target: command
       selector: "^git (status|diff)"
       permission: Allow
+
+# Web search defaults to enabled, unauthenticated Exa when omitted.
+tools:
+  websearch:
+    provider: exa                        # exa | parallel
+    # endpoint: https://mcp.exa.ai/mcp
+    # key: your-api-key
+    enabled: true
 
 # Each entry under `providers.<id>` becomes one HTTP route. The <id> is also the
 # name used by `hya-backend login <id>` and shown as the provider in model refs.
@@ -239,6 +247,25 @@ hya-backend models gateway --verbose
 
 The selected model must be served by one configured route. If no route reports
 capabilities for the model, the router returns `unknown provider for model`.
+
+## Web Search
+
+Web search is enabled by default and uses Exa without authentication. Override
+it under `tools.websearch`:
+
+```yaml
+tools:
+  websearch:
+    provider: exa # exa or parallel
+    endpoint: https://mcp.exa.ai/mcp
+    key: your-api-key
+    enabled: true
+```
+
+`endpoint` and `key` are optional. Exa sends the key as the `exaApiKey` query
+parameter; Parallel sends it as a bearer token. Set `enabled: false` to remove
+the built-in `websearch` tool. When enabled, the tool is available to every
+model provider.
 
 ## Permissions
 

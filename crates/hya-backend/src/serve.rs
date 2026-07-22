@@ -21,7 +21,7 @@ pub(crate) async fn cmd_serve(
         agent.as_ref(),
         runtime.mcp,
         runtime.plugins,
-        runtime.permission,
+        (runtime.websearch, runtime.permission),
         true,
     )
     .await;
@@ -82,7 +82,7 @@ pub(crate) async fn cmd_tui_hya(
         agent.as_ref(),
         runtime.mcp,
         runtime.plugins,
-        runtime.permission,
+        (runtime.websearch, runtime.permission),
         true,
     )
     .await;
