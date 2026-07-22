@@ -112,8 +112,6 @@ fn parses_oauth_login_and_forwards_backend_args() {
         "codex",
         "--type",
         "openai-codex",
-        "--device",
-        "--no-browser",
         "--model",
         "gpt-5.3-codex",
         "--base-url",
@@ -128,13 +126,16 @@ fn parses_oauth_login_and_forwards_backend_args() {
             command: OauthCommand::Login {
                 provider: "codex".into(),
                 oauth_type: "openai-codex".into(),
-                device: true,
-                no_browser: true,
+                device: false,
+                loopback: false,
+                no_browser: false,
+                browser: false,
                 model: Some("gpt-5.3-codex".into()),
                 base_url: Some("https://chatgpt.com/backend-api/codex".into()),
             }
         }
     );
+    // Defaults are applied in hya-backend (device + no-browser for openai-codex).
     assert_eq!(
         backend_auth_args(&command),
         os_strings(&[
@@ -144,12 +145,36 @@ fn parses_oauth_login_and_forwards_backend_args() {
             "codex",
             "--type",
             "openai-codex",
-            "--device",
-            "--no-browser",
             "--model",
             "gpt-5.3-codex",
             "--base-url",
             "https://chatgpt.com/backend-api/codex",
+        ])
+    );
+
+    let loopback = Cli::try_parse_from([
+        "hya-ts",
+        "oauth",
+        "login",
+        "--provider",
+        "codex",
+        "--type",
+        "openai-codex",
+        "--loopback",
+        "--browser",
+    ])
+    .unwrap();
+    assert_eq!(
+        backend_auth_args(&loopback.command.expect("loopback oauth")),
+        os_strings(&[
+            "oauth",
+            "login",
+            "--provider",
+            "codex",
+            "--type",
+            "openai-codex",
+            "--loopback",
+            "--browser",
         ])
     );
 }

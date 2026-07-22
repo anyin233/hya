@@ -346,8 +346,6 @@ mod tests {
             "codex",
             "--type",
             "openai-codex",
-            "--device",
-            "--no-browser",
             "--model",
             "gpt-5.3-codex",
         ]);
@@ -358,19 +356,55 @@ mod tests {
                         provider,
                         oauth_type,
                         device,
+                        loopback,
                         no_browser,
+                        browser,
                         model,
                         base_url,
                     },
             }) => {
                 assert_eq!(provider, "codex");
                 assert_eq!(oauth_type, "openai-codex");
-                assert!(device);
-                assert!(no_browser);
+                // Defaults applied at runtime: device + no-browser for openai-codex.
+                assert!(!device);
+                assert!(!loopback);
+                assert!(!no_browser);
+                assert!(!browser);
                 assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
                 assert!(base_url.is_none());
             }
             _ => panic!("expected oauth login command"),
+        }
+    }
+
+    #[test]
+    fn parses_oauth_login_loopback_and_browser_flags() {
+        let cli = parse([
+            "hya-backend",
+            "oauth",
+            "login",
+            "--provider",
+            "codex",
+            "--type",
+            "openai-codex",
+            "--loopback",
+            "--browser",
+        ]);
+        match cli.command {
+            Some(super::Command::Oauth {
+                command:
+                    crate::auth_cmd::OauthCommand::Login {
+                        loopback,
+                        browser,
+                        no_browser,
+                        ..
+                    },
+            }) => {
+                assert!(loopback);
+                assert!(browser);
+                assert!(!no_browser);
+            }
+            _ => panic!("expected oauth login with loopback/browser"),
         }
     }
 }

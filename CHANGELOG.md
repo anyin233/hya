@@ -1,3 +1,3 @@
-# 0.33.24
+# 0.33.25
 
-- Expose `oauth login|status`, `login`, and `auth` on `hya-ts` (same as `hya-backend`).
+- Default openai-codex OAuth to Codex-style device-code login (print URL/code, no auto-open browser).

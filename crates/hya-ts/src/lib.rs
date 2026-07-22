@@ -68,12 +68,19 @@ pub enum OauthCommand {
         /// OAuth provider type: `openai-codex` or `grok-build`.
         #[arg(long = "type", value_name = "TYPE")]
         oauth_type: String,
-        /// Use the device-code flow (default for grok-build; optional for openai-codex).
+        /// Use the device-code flow (default for openai-codex and grok-build).
         #[arg(long)]
         device: bool,
-        /// Print the verification URL without opening a browser.
+        /// openai-codex only: use localhost PKCE callback instead of Codex device-code.
+        #[arg(long)]
+        loopback: bool,
+        /// Print the verification URL without opening a browser
+        /// (default for openai-codex device login, matching Codex CLI).
         #[arg(long)]
         no_browser: bool,
+        /// Open a system browser for the verification / authorize URL.
+        #[arg(long)]
+        browser: bool,
         /// Model id to register on the provider (default depends on type).
         #[arg(long)]
         model: Option<String>,
@@ -126,7 +133,9 @@ pub fn backend_auth_args(command: &Command) -> Vec<OsString> {
                     provider,
                     oauth_type,
                     device,
+                    loopback,
                     no_browser,
+                    browser,
                     model,
                     base_url,
                 },
@@ -142,8 +151,14 @@ pub fn backend_auth_args(command: &Command) -> Vec<OsString> {
             if *device {
                 args.push(OsString::from("--device"));
             }
+            if *loopback {
+                args.push(OsString::from("--loopback"));
+            }
             if *no_browser {
                 args.push(OsString::from("--no-browser"));
+            }
+            if *browser {
+                args.push(OsString::from("--browser"));
             }
             if let Some(model) = model {
                 args.push(OsString::from("--model"));

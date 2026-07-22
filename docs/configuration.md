@@ -204,10 +204,13 @@ defaulting to `high`. Grok streams must end with `response.completed` or
 Interactive OAuth is implemented entirely in Rust:
 
 ```sh
-# ChatGPT / Codex subscription (PKCE loopback; use --device on headless hosts)
+# ChatGPT / Codex subscription (Codex default: device-code, print URL, no auto-open browser)
 hya-backend oauth login --provider codex --type openai-codex
 # same commands on the TypeScript launcher:
 hya-ts oauth login --provider codex --type openai-codex
+# optional: open the verification URL, or use localhost PKCE instead of device-code
+#   --browser
+#   --loopback --browser
 
 # xAI SuperGrok / Grok CLI (device-code flow)
 hya-backend oauth login --provider grok --type grok-build --no-browser
