@@ -168,10 +168,10 @@ providers:
           variants: [none, minimal, low, medium, high, xhigh, max]
   grok:
     kind: grok-build
-    # Prefer the Grok Build CLI chat proxy when using OAuth session auth.
     base_url: https://cli-chat-proxy.grok.com/v1
-    # Optional when `~/.grok/auth.json` exists after `grok login`.
-    # api_key: "{env:XAI_API_KEY}"
+    # OAuth access token from `grok login` (JWT). Keep it in this config or via
+    # `hya-backend login grok <token>` — hya does not read `~/.grok/auth.json`.
+    api_key: "{env:GROK_OAUTH_TOKEN}"
     models: [grok-4.5]
   google:
     kind: google
@@ -198,37 +198,35 @@ content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
 defaulting to `high`. Grok streams must end with `response.completed` or
 `response.incomplete`; `[DONE]` alone is not completion.
 
-### Grok Build OAuth (preferred for `kind: grok-build`)
+### Grok Build OAuth (`kind: grok-build`)
 
-After you run `grok login` once, hya can reuse the Grok Build session token from
-`~/.grok/auth.json` (or `$GROK_HOME/auth.json`):
+Credentials are **self-contained in hya config** (or `hya-backend login`). hya
+never reads `~/.grok/auth.json`.
 
-1. **Grok Build OAuth** session JWT from `auth.json` field `key`
-2. Saved hya token (`hya-backend login <id> …`)
-3. Inline `api_key` (`literal` / `{env:}` / `{file:}`)
-
-When the credential comes from Grok OAuth, hya sends CLI chat-proxy session
-headers on every request:
-
-- `Authorization: Bearer <access token>`
-- `X-XAI-Token-Auth: xai-grok-cli`
-- `x-grok-client-version: <hya version>`
-- `x-grok-client-identifier: hya`
-- `x-grok-model-override: <model id>`
-
-Recommended base URL for that mode:
+1. Run `grok login` to mint a session JWT (optional source).
+2. Put the access token in config `api_key` (literal, `{env:…}`, or `{file:…}`)
+   or save it with `hya-backend login grok <token>`.
+3. Point `base_url` at the official CLI chat proxy.
 
 ```yaml
 providers:
   grok:
     kind: grok-build
     base_url: https://cli-chat-proxy.grok.com/v1
+    api_key: "{env:GROK_OAUTH_TOKEN}"
     models: [grok-4.5]
 ```
 
-No `api_key` is required when OAuth is present. Static API keys still work as a
-fallback and keep Bearer-only auth (no session headers), which is appropriate
-for `https://api.x.ai/v1` or custom gateways.
+Every `grok-build` request uses CLI chat-proxy session headers:
+
+- `Authorization: Bearer <api_key>`
+- `X-XAI-Token-Auth: xai-grok-cli`
+- `x-grok-client-version: <hya version>`
+- `x-grok-client-identifier: hya`
+- `x-grok-model-override: <model id>`
+
+Session JWTs expire (typically hours). When requests return 401, refresh via
+`grok login` and update the configured token.
 
 Models may use the existing string form or a detailed entry with per-model
 reasoning metadata:

@@ -7,7 +7,6 @@
 pub mod auth;
 pub mod config;
 pub mod formatter_config;
-pub mod grok_oauth;
 pub mod permission;
 pub mod plugins;
 pub mod runtime;
