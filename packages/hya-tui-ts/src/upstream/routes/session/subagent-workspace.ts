@@ -249,6 +249,11 @@ export type WorkspaceState = {
   tabs: WorkspaceTab[]
   activeTabID: string
   focusedPaneID: string
+  /**
+   * Stable open order of observation session IDs. Cycle / pane-strip navigation
+   * use this so promoting a subagent into the Main split never reorders focus.
+   */
+  observationOrder: string[]
 }
 export type WorkspaceAction =
   | { type: "close"; paneID: string }
@@ -266,11 +271,28 @@ export type WorkspacePaneStripEntry = {
 }
 
 /**
- * Ordered focus targets for the pane strip: Main first, then observation leaves
- * in tab/depth-first visual order. Used by the tab bar and reverse/forward cycle.
+ * Focus targets in stable order: Main first, then observations in open order.
+ * Used by the tab bar and reverse/forward cycle.
  */
+export function workspaceFocusOrder(state: WorkspaceState): Array<MainPane | ObservationPane> {
+  const present = new Map(
+    workspaceLeaves(state)
+      .filter((pane): pane is ObservationPane => pane.type === "observation")
+      .map((pane) => [pane.sessionID, pane] as const),
+  )
+  const ordered: Array<MainPane | ObservationPane> = [{ type: "main", id: "main" }]
+  for (const sessionID of state.observationOrder) {
+    const pane = present.get(sessionID)
+    if (pane) ordered.push(pane)
+  }
+  for (const [sessionID, pane] of present) {
+    if (!state.observationOrder.includes(sessionID)) ordered.push(pane)
+  }
+  return ordered
+}
+
 export function workspacePaneStrip(state: WorkspaceState): WorkspacePaneStripEntry[] {
-  return workspaceLeaves(state).map((pane) => ({
+  return workspaceFocusOrder(state).map((pane) => ({
     paneID: pane.id,
     focused: pane.id === state.focusedPaneID,
   }))
@@ -282,11 +304,16 @@ export function createWorkspaceState(mainSessionID: string): WorkspaceState {
     tabs: [{ id: "main", root: { type: "main", id: "main" } }],
     activeTabID: "main",
     focusedPaneID: "main",
+    observationOrder: [],
   }
 }
 
 export function workspaceLeaves(state: WorkspaceState): Array<MainPane | ObservationPane> {
   return state.tabs.flatMap((tab) => paneLeaves(tab.root))
+}
+
+function rememberObservation(order: string[], sessionID: string): string[] {
+  return order.includes(sessionID) ? order : [...order, sessionID]
 }
 
 export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
@@ -298,7 +325,7 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
     case "focusMain":
       return focusPane(state, "main")
     case "cycleFocus": {
-      const leaves = workspaceLeaves(state)
+      const leaves = workspaceFocusOrder(state)
       if (leaves.length === 0) return state
       const direction = action.direction ?? 1
       const current = leaves.findIndex((pane) => pane.id === state.focusedPaneID)
@@ -328,7 +355,13 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
         sessionID: action.sessionID,
       }
       const tab = { id: `tab:${action.sessionID}`, root: pane }
-      return { ...state, tabs: [...state.tabs, tab], activeTabID: tab.id, focusedPaneID: pane.id }
+      return {
+        ...state,
+        tabs: [...state.tabs, tab],
+        activeTabID: tab.id,
+        focusedPaneID: pane.id,
+        observationOrder: rememberObservation(state.observationOrder, action.sessionID),
+      }
     }
     case "openSplit": {
       // ADR-0003: a split always shows Main beside one observation on the main tab.
@@ -340,11 +373,11 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
 }
 
 /**
- * Put `sessionID` as the sole observation beside Main on the main tab.
+ * Put `sessionID` as the observation beside Main on the main tab.
  *
- * Replaces any prior main-tab split/observation layout so switching agents while a
- * split is open always yields a clean Main | observation pair with focus on the
- * selected observation.
+ * ADR-0003: never nest under another observation. Prior main-tab observations and
+ * other open subagents are retained as tabs so users can navigate Main ↔ A ↔ B
+ * without losing open views.
  */
 function openSplitBesideMain(
   state: WorkspaceState,
@@ -356,62 +389,83 @@ function openSplitBesideMain(
     id: `observation:${sessionID}`,
     sessionID,
   }
-  // Drop this observation from every tab first so it is not duplicated.
-  let next = state
-  for (const leaf of workspaceLeaves(state)) {
-    if (leaf.type === "observation" && leaf.sessionID === sessionID) {
-      next = removeFromWorkspace(next, leaf.id)
-    }
-  }
-  // Rebuild the main tab as split(main, observation). Preserve other tabs.
-  const tabs = next.tabs
-    .map((tab) => {
-      if (tab.id !== "main") {
-        // Keep observation-only tabs for other agents; strip this session if present.
-        const root = removePane(tab.root, pane.id)
-        return root ? { ...tab, root } : undefined
-      }
-      return {
-        ...tab,
-        root: {
-          type: "split" as const,
-          axis,
-          first: { type: "main" as const, id: "main" as const },
-          second: pane,
-        },
-      }
-    })
-    .filter((tab): tab is WorkspaceTab => tab !== undefined)
+  // Preserve open order of every other observation (tabs + prior split partner).
+  // Use observationOrder first so cycle order stays stable across promotions.
+  const retained = new Set(
+    workspaceLeaves(state)
+      .filter((leaf): leaf is ObservationPane => leaf.type === "observation" && leaf.sessionID !== sessionID)
+      .map((leaf) => leaf.sessionID),
+  )
+  const otherSessions = [
+    ...state.observationOrder.filter((id) => retained.has(id)),
+    ...[...retained].filter((id) => !state.observationOrder.includes(id)),
+  ]
 
-  const hasMain = tabs.some((tab) => tab.id === "main")
-  const finalTabs = hasMain
-    ? tabs
-    : [
-        {
-          id: "main",
-          root: {
-            type: "split" as const,
-            axis,
-            first: { type: "main" as const, id: "main" as const },
-            second: pane,
-          },
-        },
-        ...tabs,
-      ]
+  const mainTab: WorkspaceTab = {
+    id: "main",
+    root: {
+      type: "split",
+      axis,
+      first: { type: "main", id: "main" },
+      second: pane,
+    },
+  }
+  const otherTabs: WorkspaceTab[] = otherSessions.map((id) => ({
+    id: `tab:${id}`,
+    root: {
+      type: "observation",
+      id: `observation:${id}`,
+      sessionID: id,
+    },
+  }))
 
   return {
-    ...next,
-    tabs: finalTabs,
+    ...state,
+    tabs: [mainTab, ...otherTabs],
     activeTabID: "main",
     focusedPaneID: pane.id,
+    observationOrder: rememberObservation(state.observationOrder, sessionID),
   }
+}
+
+function mainSplitAxis(state: WorkspaceState): "vertical" | "horizontal" | undefined {
+  const main = state.tabs.find((tab) => tab.id === "main")
+  return main?.root.type === "split" ? main.root.axis : undefined
 }
 
 function paneLeaves(pane: WorkspacePane): Array<MainPane | ObservationPane> {
   return pane.type === "split" ? [...paneLeaves(pane.first), ...paneLeaves(pane.second)] : [pane]
 }
 
+/**
+ * Focus a leaf. When the main tab is in split mode, focusing any open observation
+ * promotes it beside Main (Rust-style active_aux) so Left/Right/cycle always keep
+ * Main visible while switching subagents.
+ */
 function focusPane(state: WorkspaceState, paneID: string): WorkspaceState {
+  if (paneID === "main") {
+    const main = state.tabs.find((tab) => tab.id === "main")
+    return main ? { ...state, activeTabID: "main", focusedPaneID: "main" } : state
+  }
+
+  const leaf = workspaceLeaves(state).find((pane) => pane.id === paneID)
+  if (!leaf) return state
+  if (leaf.type !== "observation") {
+    return paneID === state.focusedPaneID ? state : { ...state, focusedPaneID: paneID }
+  }
+
+  const axis = mainSplitAxis(state)
+  if (axis) {
+    const main = state.tabs.find((tab) => tab.id === "main")
+    const alreadyBesideMain =
+      main !== undefined && paneLeaves(main.root).some((pane) => pane.id === paneID)
+    if (alreadyBesideMain) {
+      return { ...state, activeTabID: "main", focusedPaneID: paneID }
+    }
+    // Promote this observation into the Main | observation split.
+    return openSplitBesideMain(state, leaf.sessionID, axis)
+  }
+
   if (paneID === state.focusedPaneID) return state
   const tab = state.tabs.find((candidate) => paneLeaves(candidate.root).some((pane) => pane.id === paneID))
   return tab ? { ...state, activeTabID: tab.id, focusedPaneID: paneID } : state
@@ -431,10 +485,14 @@ function removeFromWorkspace(state: WorkspaceState, paneID: string): WorkspaceSt
     return root ? [{ ...tab, root }] : []
   })
   if (tabs.length === state.tabs.length && tabs.every((tab, index) => tab.root === state.tabs[index]?.root)) return state
+  const removedSessionID = paneID.startsWith("observation:") ? paneID.slice("observation:".length) : undefined
+  const observationOrder = removedSessionID
+    ? state.observationOrder.filter((id) => id !== removedSessionID)
+    : state.observationOrder
   const focusExists = tabs.some((tab) => paneLeaves(tab.root).some((pane) => pane.id === state.focusedPaneID))
   const focusedPaneID = focusExists ? state.focusedPaneID : "main"
   const focusedTab = tabs.find((tab) => paneLeaves(tab.root).some((pane) => pane.id === focusedPaneID))
-  return { ...state, tabs, focusedPaneID, activeTabID: focusedTab?.id ?? "main" }
+  return { ...state, tabs, observationOrder, focusedPaneID, activeTabID: focusedTab?.id ?? "main" }
 }
 
 function removePane(pane: WorkspacePane, paneID: string): WorkspacePane | undefined {
