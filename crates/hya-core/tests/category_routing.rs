@@ -192,6 +192,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
                 id: MemberId::new(),
                 agent: build_member_agent(&base, &resolved, &[]),
                 directive: format!("work as {cat}"),
+                description: String::new(),
                 session: None,
             }
         })

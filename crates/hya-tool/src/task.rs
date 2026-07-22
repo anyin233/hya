@@ -297,18 +297,41 @@ impl Tool for TaskTool {
             }));
         }
 
+        // Pair outcomes with the original member specs so the TUI can show every
+        // launched subagent (type + short description + session) in the main
+        // message, matching OpenCode's multi-task rows.
         let members_json: Vec<Value> = outcomes
             .into_iter()
-            .map(|o| {
+            .enumerate()
+            .map(|(i, o)| {
+                let member = members.get(i);
                 json!({
                     "member": o.member,
                     "session": o.session,
+                    "sessionId": o.session,
                     "status": o.status,
                     "summary": o.summary,
+                    "description": member.map(|m| m.description.as_str()).unwrap_or(""),
+                    "subagent_type": member.map(|m| m.subagent_type.as_str()).unwrap_or(""),
                 })
             })
             .collect();
-        Ok(json!({ "members": members_json }))
+        let title = format!(
+            "{} subagent{}",
+            members_json.len(),
+            if members_json.len() == 1 { "" } else { "s" }
+        );
+        Ok(json!({
+            "title": title,
+            "metadata": {
+                "parentSessionId": parent_session,
+                "members": members_json,
+            },
+            "output": format!(
+                "<task state=\"completed\">\n<task_result>\n{} members finished\n</task_result>\n</task>",
+                members_json.len()
+            ),
+        }))
     }
 }
 

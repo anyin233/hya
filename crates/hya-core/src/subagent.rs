@@ -106,8 +106,21 @@ pub struct TeamEvidenceEnvelope {
 pub struct MemberSpec {
     pub id: MemberId,
     pub agent: AgentSpec,
+    /// Full task prompt for the child turn.
     pub directive: String,
+    /// Short UI label from the task tool (3–5 words). Empty falls back to a
+    /// truncated directive so observers still get a readable row title.
+    pub description: String,
     pub session: Option<SessionId>,
+}
+
+/// Short label for tree / TUI rows: task description when present, else prompt.
+fn member_ui_description(spec: &MemberSpec) -> String {
+    let short = spec.description.trim();
+    if !short.is_empty() {
+        return short.chars().take(80).collect();
+    }
+    spec.directive.chars().take(80).collect()
 }
 
 fn summarize_member(projection: &Projection) -> String {
@@ -148,8 +161,10 @@ async fn run_member(
     // MemberSpawned upserts rather than listing the same agent twice.
     let member = resolve_member_id(&engine, lead, spec.id, child).await;
     // Announce the member so observers can render it live in the agent tree.
+    // Prefer the short task-tool description so the main transcript Task rows
+    // can match and display status the way OpenCode does.
     let (root, depth) = engine.session_lineage(child).await.unwrap_or((child, 0));
-    let description: String = spec.directive.chars().take(80).collect();
+    let description = member_ui_description(&spec);
     let _ = engine
         .record_member_spawned(
             lead,

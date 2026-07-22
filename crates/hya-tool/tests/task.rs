@@ -331,7 +331,12 @@ async fn task_batch_ignores_invalid_top_level_task_id() {
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();
-    assert_eq!(out["members"].as_array().unwrap().len(), 2);
+    let members = out["metadata"]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0]["description"], "Inspect tools");
+    assert_eq!(members[0]["subagent_type"], "explore");
+    assert_eq!(members[1]["description"], "Inspect runtime");
+    assert_eq!(out["title"], "2 subagents");
 }
 
 #[tokio::test]
