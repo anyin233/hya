@@ -112,6 +112,71 @@ async fn text_tool_result_text_round_trip() {
 }
 
 #[tokio::test]
+async fn turn_continues_past_twenty_five_tool_rounds() {
+    let dir = tempdir();
+    let mut scripts = (0..26)
+        .map(|_| {
+            vec![
+                FakeStep::ToolCall {
+                    name: "unknown".to_string(),
+                    input: json!({}),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let final_text = "continued after twenty-five tool rounds";
+    scripts.push(vec![
+        FakeStep::Text(final_text.to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]);
+
+    let provider = FakeProvider::scripted_turns(scripts);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+
+    let finish = engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+
+    let projection = engine.store().read_projection(session).await.unwrap();
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Assistant)
+        .expect("assistant message");
+    assert!(
+        assistant
+            .parts
+            .iter()
+            .any(|part| matches!(part, PartProjection::Text { text, .. } if text == final_text)),
+        "expected final response after the tool rounds"
+    );
+}
+
+#[tokio::test]
 async fn cancelled_turn_finishes_cancelled() {
     let dir = tempdir();
     let provider = FakeProvider::scripted_turns(vec![vec![

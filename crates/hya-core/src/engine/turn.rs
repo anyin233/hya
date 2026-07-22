@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use hya_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage};
+use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage};
 use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
@@ -83,7 +83,6 @@ impl SessionEngine {
         cancel: &CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
-        const MAX_TOOL_ROUNDS: u32 = 25;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
         // Depth in the subagent tree, derived from the parent chain. Only subagents
@@ -317,68 +316,6 @@ impl SessionEngine {
             }
 
             rounds += 1;
-            if rounds >= MAX_TOOL_ROUNDS {
-                let part = PartId::new();
-                self.emit(
-                    session,
-                    Event::StepStarted {
-                        session,
-                        message,
-                        step: rounds,
-                    },
-                )
-                .await?;
-                self.emit(
-                    session,
-                    Event::TextStart {
-                        session,
-                        message,
-                        part,
-                    },
-                )
-                .await?;
-                self.emit(
-                    session,
-                    Event::TextDelta {
-                        session,
-                        message,
-                        part,
-                        delta: format!("[stopped: reached the {MAX_TOOL_ROUNDS}-tool-call limit]"),
-                    },
-                )
-                .await?;
-                self.emit(
-                    session,
-                    Event::TextEnd {
-                        session,
-                        message,
-                        part,
-                    },
-                )
-                .await?;
-                self.emit(
-                    session,
-                    Event::StepFinished {
-                        session,
-                        message,
-                        step: rounds,
-                        finish: FinishReason::Error,
-                    },
-                )
-                .await?;
-                self.emit(
-                    session,
-                    Event::MessageFinished {
-                        session,
-                        message,
-                        role: Role::Assistant,
-                        finish: FinishReason::Error,
-                        tokens: total_tokens,
-                    },
-                )
-                .await?;
-                return Ok(FinishReason::Error);
-            }
         }
     }
 }

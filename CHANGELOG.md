@@ -1,3 +1,3 @@
-# 0.33.27
+# 0.33.28
 
-- After OAuth login, fetch the live model catalog and write it into config.yaml.
+- Removed the fixed 25-round agent tool-calling limit.

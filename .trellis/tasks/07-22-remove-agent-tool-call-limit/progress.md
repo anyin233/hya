@@ -1,0 +1,32 @@
+# Progress
+
+- Created Trellis task `07-22-remove-agent-tool-call-limit` after user consent.
+- Seeded requirements and task-scoped planning records.
+- Began tracing runtime enforcement before asking scope questions.
+- Located the hard stop at `crates/hya-core/src/engine/turn.rs:86,319-381`.
+- Ruled out subagent, goal/loop, Compat metadata, and tool-output limits as unrelated.
+- Identified the existing `turn_loop.rs` integration-test surface and `FakeProvider::scripted_turns` fixture for a >25-round regression.
+- Recorded mandatory version/changelog work and unrelated dirty paths.
+- Completed four parallel read-only planning reviews and began merging their unanimous deletion-first recommendation.
+- Chose the minimal regression assertions: normal stop plus unique final text after 26 tool-bearing rounds; existing code fails at the legacy cap before consuming that response.
+- Confirmed the required changelog archive path is free.
+- Completed the converged PRD, technical design, execution plan, research brief, and implementation/check manifests.
+- Planning is ready for user review; implementation has not started.
+- Reviewed the final PRD/design/implementation plan top to bottom and passed `git diff --check` for the task artifacts.
+- User approved the planning artifacts and authorized implementation.
+- Implementation preflight found only untracked Trellis task directories; sibling tasks remain untouched.
+- Confirmed workspace version `0.33.27`, current root changelog contents, and that `docs/changes/CHANGELOG_0.33.27.md` is absent.
+- Loaded the backend quality and shared code-reuse guidance; requested task `CONTEXT.md` is not present.
+- RED: `cargo test -p hya-core --test turn_loop turn_continues_past_twenty_five_tool_rounds -- --exact` compiled and failed at the finish assertion with `left: Error`, `right: Stop` after the legacy guard stopped before the final scripted response (1 failed, 5 filtered out).
+- GREEN: the same exact regression passed (1 passed, 5 filtered out), proving the explicit post-limit response was consumed.
+- GREEN: `cargo test -p hya-core --test turn_loop` passed all 6 tests, including cancellation and provider completion coverage.
+- Archived the 0.33.27 changelog verbatim, wrote the single 0.33.28 removal note, bumped the workspace version, and refreshed only workspace package versions in `Cargo.lock`.
+- Verification: `cargo fmt --all --check` and workspace clippy with `-D warnings` passed.
+- Verification retry required: `cargo test --workspace` reached `hya/tests/version_metadata.rs` and failed because `README.md` still reported `0.33.22`; the release-metadata contract also requires the packaged TypeScript TUI version to match.
+- Updated the README and packaged TypeScript TUI manifest to `0.33.28`; `cargo test -p hya --test version_metadata` passed.
+- GREEN gate: `cargo test --workspace` passed all workspace tests and doctests; `cargo build -p hya --bin hya` built the local executable.
+- Final review: `git diff --check` passed, no fixed-round guard remains, no changes are staged, and unrelated Trellis task directories remain untouched.
+- Phase 2.2 check found and corrected stale `MAX_TOOL_ROUNDS` behavior in `docs/architecture/runtime.md`; production-source and architecture-doc searches now contain no fixed-limit branch or synthetic stop text.
+- Independent checks passed: the exact >25-round regression, `hya` version-metadata test, Cargo metadata version consistency, archived-changelog blob identity, and workspace-only `Cargo.lock` version review.
+- Full check gate passed: `cargo fmt --all --check`, workspace clippy with warnings denied, `cargo test --workspace`, `cargo build -p hya --bin hya`, and `git diff --check`.
+- Phase 3.3 review: no `.trellis/spec/` update is needed; the change adds no reusable coding convention or interface contract, and `docs/architecture/runtime.md` now records the engine behavior.
