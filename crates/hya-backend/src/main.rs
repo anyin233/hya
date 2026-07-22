@@ -308,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
             cmd_tail_session(id, command_db.unwrap_or_else(|| db.clone())).await
         }
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
+        Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Models {

@@ -24,6 +24,12 @@ serde_json = { workspace = true }
 serde_norway = { workspace = true }
 anyhow = { workspace = true }
 time = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+rand_core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 http-body-util = { workspace = true }

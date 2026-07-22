@@ -2,6 +2,8 @@ use anyhow::Context as _;
 use clap::Subcommand;
 
 use crate::auth;
+use hya_app::auth::OAuthType;
+use hya_app::oauth::{self, OAuthLoginOptions};
 
 #[derive(Subcommand)]
 pub(crate) enum AuthCommand {
@@ -11,6 +13,36 @@ pub(crate) enum AuthCommand {
     Logout {
         /// Provider id as it appears in your hya config.
         provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum OauthCommand {
+    /// Run an interactive OAuth login for openai-codex or grok-build.
+    Login {
+        /// Provider id to write under `providers.<id>` and `auth/<id>.yaml`.
+        #[arg(long)]
+        provider: String,
+        /// OAuth provider type: `openai-codex` or `grok-build`.
+        #[arg(long = "type", value_name = "TYPE")]
+        oauth_type: String,
+        /// Use the device-code flow (default for grok-build; optional for openai-codex).
+        #[arg(long)]
+        device: bool,
+        /// Print the verification URL without opening a browser.
+        #[arg(long)]
+        no_browser: bool,
+        /// Model id to register on the provider (default depends on type).
+        #[arg(long)]
+        model: Option<String>,
+        /// Override the inference base URL (defaults depend on type).
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Show saved auth status (OAuth type and expiry; no secrets).
+    Status {
+        /// Optional provider id filter.
+        provider: Option<String>,
     },
 }
 
@@ -40,6 +72,93 @@ pub(crate) async fn run(command: AuthCommand) -> anyhow::Result<()> {
                 println!("Removed auth token for provider '{provider}'.");
             } else {
                 println!("No auth token saved for provider '{provider}'.");
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
+    match command {
+        OauthCommand::Login {
+            provider,
+            oauth_type,
+            device,
+            no_browser,
+            model,
+            base_url,
+        } => {
+            let oauth_type = OAuthType::parse(&oauth_type).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown OAuth type '{oauth_type}'; supported: openai-codex, grok-build"
+                )
+            })?;
+            // grok-build is always device-code.
+            let device = device || matches!(oauth_type, OAuthType::GrokBuild);
+            let result = oauth::login(OAuthLoginOptions {
+                provider,
+                oauth_type,
+                device,
+                no_browser,
+                model,
+                base_url,
+                auth_dir: None,
+                config_path: None,
+                timeout: std::time::Duration::from_secs(600),
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "Saved OAuth credentials for provider '{}' ({}).",
+                result.provider, result.oauth_type
+            );
+            println!("  auth:   {}", result.auth_path.display());
+            println!(
+                "  config: {} (kind: {}, base_url: {})",
+                result.config_path.display(),
+                result.oauth_type.provider_kind(),
+                result.base_url
+            );
+            println!(
+                "  model:  {}/{} (set default_model or pass --model to hya)",
+                result.provider, result.model
+            );
+            Ok(())
+        }
+        OauthCommand::Status { provider } => {
+            let dir = auth::auth_dir().ok_or_else(|| {
+                anyhow::anyhow!("no config directory (set HOME or XDG_CONFIG_HOME)")
+            })?;
+            let statuses = oauth::oauth_status_in(&dir, provider.as_deref())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if statuses.is_empty() {
+                println!("no auth credentials saved");
+                return Ok(());
+            }
+            for status in statuses {
+                match status.oauth_type {
+                    Some(oauth_type) => {
+                        let state = if status.expired { "EXPIRED" } else { "ok" };
+                        let exp = status.expires_at.as_deref().unwrap_or("?");
+                        print!(
+                            "{}  oauth={}  expires={}  status={state}",
+                            status.provider, oauth_type, exp
+                        );
+                        if let Some(account) = status.account_id.as_deref() {
+                            print!("  account={account}");
+                        }
+                        println!();
+                        if status.expired {
+                            println!(
+                                "  re-login: hya-backend oauth login --provider {} --type {}",
+                                status.provider, oauth_type
+                            );
+                        }
+                    }
+                    None => {
+                        println!("{}  kind={}", status.provider, status.kind);
+                    }
+                }
             }
             Ok(())
         }

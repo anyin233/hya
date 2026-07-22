@@ -5,7 +5,9 @@
 //! address. API keys come from `~/.config/hya/auth/<id>.yaml` (via `hya login`)
 //! or an inline `api_key` in the provider block. `kind: grok-build` always uses
 //! CLI chat-proxy session headers with that configured bearer token (self-contained
-//! config — it does not read `~/.grok/auth.json`). Absent config or key → offline.
+//! config — it does not read `~/.grok/auth.json`). `kind: openai-codex` targets the
+//! ChatGPT Codex backend. OAuth credentials live under `~/.config/hya/auth/` and
+//! are auto-refreshed when near expiry. Absent config or key → offline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
@@ -201,6 +203,8 @@ enum ProviderKindConfig {
     Openai,
     #[serde(rename = "openai-response")]
     OpenaiResponse,
+    #[serde(rename = "openai-codex")]
+    OpenaiCodex,
     #[serde(rename = "grok-build")]
     GrokBuild,
     Anthropic,
@@ -212,6 +216,7 @@ impl From<ProviderKindConfig> for ProviderKind {
         match kind {
             ProviderKindConfig::Openai => Self::OpenAiCompatible,
             ProviderKindConfig::OpenaiResponse => Self::OpenAiResponse,
+            ProviderKindConfig::OpenaiCodex => Self::OpenAiCodex,
             ProviderKindConfig::GrokBuild => Self::GrokBuild,
             ProviderKindConfig::Anthropic => Self::Anthropic,
             ProviderKindConfig::Google => Self::Google,
@@ -240,22 +245,44 @@ struct ProviderCredential {
     token: String,
     /// When true, attach Grok Build CLI chat-proxy session headers.
     use_grok_session: bool,
+    /// When true, attach ChatGPT Codex session headers.
+    use_codex_session: bool,
+    /// ChatGPT account id for Codex OAuth (if known).
+    account_id: Option<String>,
+    /// When true, re-resolve the bearer via OAuth refresh on each stream.
+    use_oauth_refresh: bool,
 }
 
 /// Resolve auth for a provider from hya login token or inline `api_key` only.
 ///
-/// `kind: grok-build` always enables CLI chat-proxy session headers. Credentials
-/// are never loaded from `~/.grok/auth.json` — keep the OAuth access token in
-/// config (`api_key`) or `hya-backend login`.
+/// `kind: grok-build` always enables CLI chat-proxy session headers.
+/// `kind: openai-codex` enables Codex account headers. OAuth bundles under
+/// `~/.config/hya/auth/` are preferred over inline `api_key` and support refresh.
 fn resolve_provider_credential(provider: &ParsedProvider) -> Option<ProviderCredential> {
-    let token = crate::auth::load_token(&provider.id).or_else(|| provider.api_key.clone())?;
-    let token = token.trim().to_string();
+    if let Some(cred) = crate::auth::load_credential(&provider.id) {
+        let token = cred.access_token().trim().to_string();
+        if token.is_empty() {
+            return None;
+        }
+        let oauth = cred.oauth();
+        return Some(ProviderCredential {
+            token,
+            use_grok_session: provider.kind == ProviderKind::GrokBuild,
+            use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
+            account_id: oauth.and_then(|o| o.account_id.clone()),
+            use_oauth_refresh: oauth.is_some(),
+        });
+    }
+    let token = provider.api_key.as_deref()?.trim().to_string();
     if token.is_empty() {
         return None;
     }
     Some(ProviderCredential {
         token,
         use_grok_session: provider.kind == ProviderKind::GrokBuild,
+        use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
+        account_id: None,
+        use_oauth_refresh: false,
     })
 }
 
@@ -272,6 +299,9 @@ fn resolve_provider_credential_with(
     Some(ProviderCredential {
         token: token.to_string(),
         use_grok_session: kind == ProviderKind::GrokBuild,
+        use_codex_session: kind == ProviderKind::OpenAiCodex,
+        account_id: None,
+        use_oauth_refresh: false,
     })
 }
 
@@ -320,6 +350,113 @@ pub fn expected_config_path() -> PathBuf {
         return PathBuf::from(home).join(".config/hya/config.yaml");
     }
     PathBuf::from("~/.config/hya/config.yaml")
+}
+
+/// Upsert a non-secret OAuth provider route into `config.yaml`.
+///
+/// Creates the file (and parents) when missing. Preserves unrelated top-level
+/// keys. Does **not** write secrets — tokens live under `auth/<provider>.yaml`.
+pub fn upsert_oauth_provider(
+    config_path: &Path,
+    provider_id: &str,
+    kind: &str,
+    base_url: &str,
+    model: &str,
+) -> anyhow::Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
+    }
+    let existing = if config_path.exists() {
+        std::fs::read_to_string(config_path)
+            .with_context(|| format!("read {}", config_path.display()))?
+    } else {
+        DEFAULT_CONFIG_YAML.to_string()
+    };
+    let mut root: Value = if existing.trim().is_empty() {
+        serde_norway::from_str(DEFAULT_CONFIG_YAML).context("parse default config")?
+    } else {
+        serde_norway::from_str(&existing)
+            .with_context(|| format!("parse {}", config_path.display()))?
+    };
+    let map = root
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("config root must be a mapping"))?;
+
+    // Ensure providers mapping exists.
+    if !map.contains_key(Value::String("providers".into())) {
+        map.insert(
+            Value::String("providers".into()),
+            Value::Mapping(Mapping::new()),
+        );
+    }
+    let providers = map
+        .get_mut(Value::String("providers".into()))
+        .and_then(Value::as_mapping_mut)
+        .ok_or_else(|| anyhow::anyhow!("providers must be a mapping"))?;
+
+    let mut provider_map = Mapping::new();
+    provider_map.insert(
+        Value::String("kind".into()),
+        Value::String(kind.to_string()),
+    );
+    provider_map.insert(
+        Value::String("base_url".into()),
+        Value::String(base_url.to_string()),
+    );
+    provider_map.insert(
+        Value::String("models".into()),
+        Value::Sequence(vec![Value::String(model.to_string())]),
+    );
+
+    // Preserve existing models / api_key when re-logging the same provider.
+    if let Some(existing_provider) = providers
+        .get(Value::String(provider_id.into()))
+        .and_then(Value::as_mapping)
+    {
+        if let Some(models) = existing_provider.get(Value::String("models".into()))
+            && !models.is_null()
+        {
+            provider_map.insert(Value::String("models".into()), models.clone());
+        }
+        if let Some(api_key) = existing_provider.get(Value::String("api_key".into())) {
+            // Keep legacy inline key if present (OAuth auth file still takes precedence).
+            provider_map.insert(Value::String("api_key".into()), api_key.clone());
+        }
+        // Always refresh kind/base_url to the OAuth defaults (or caller overrides).
+        provider_map.insert(
+            Value::String("kind".into()),
+            Value::String(kind.to_string()),
+        );
+        provider_map.insert(
+            Value::String("base_url".into()),
+            Value::String(base_url.to_string()),
+        );
+    }
+
+    providers.insert(
+        Value::String(provider_id.to_string()),
+        Value::Mapping(provider_map),
+    );
+
+    // Promote default_model off offline when still at starter default.
+    let default_model_key = Value::String("default_model".into());
+    let should_set_default = match map.get(&default_model_key).and_then(Value::as_str) {
+        None => true,
+        Some("offline") | Some("") => true,
+        Some(_) => false,
+    };
+    if should_set_default {
+        map.insert(
+            default_model_key,
+            Value::String(format!("{provider_id}/{model}")),
+        );
+    }
+
+    let rendered = serde_norway::to_string(&root).context("render updated hya config.yaml")?;
+    std::fs::write(config_path, rendered)
+        .with_context(|| format!("write {}", config_path.display()))?;
+    Ok(())
 }
 
 /// Create the default hya config file if neither supported config path exists.
@@ -1271,9 +1408,41 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 .iter()
                 .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
         );
+        if credential.use_codex_session {
+            provider = provider.with_codex_session_auth(credential.account_id.clone());
+        }
         if credential.use_grok_session {
             // Match Grok Build CLI identity so cli-chat-proxy accepts the session.
             provider = provider.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
+        }
+        if credential.use_oauth_refresh {
+            let provider_id = p.id.clone();
+            provider = provider.with_bearer_resolver(Arc::new(move || {
+                crate::oauth::ensure_access_token(&provider_id).map_err(|err| {
+                    use hya_provider::ProviderError;
+                    match err {
+                        crate::oauth::OAuthError::NeedsLogin {
+                            provider,
+                            oauth_type,
+                            reason,
+                        } => ProviderError::AuthExpired {
+                            provider: provider.clone(),
+                            hint: format!(
+                                "{reason}. Re-login: hya-backend oauth login --provider {provider} --type {oauth_type}"
+                            ),
+                        },
+                        crate::oauth::OAuthError::Entitlement { provider, detail } => {
+                            ProviderError::AuthExpired {
+                                provider,
+                                hint: format!(
+                                    "not entitled for API access ({detail}); API key path or subscription upgrade required"
+                                ),
+                            }
+                        }
+                        other => ProviderError::Http(other.to_string()),
+                    }
+                })
+            }));
         }
         router = router.with(Arc::new(provider));
         authorized.push(p);
@@ -1591,6 +1760,7 @@ providers:
         .unwrap();
         assert_eq!(cred.token, "oauth-jwt");
         assert!(cred.use_grok_session);
+        assert!(!cred.use_codex_session);
     }
 
     #[test]
@@ -1612,6 +1782,73 @@ providers:
         .unwrap();
         assert_eq!(cred.token, "login-sk");
         assert!(!cred.use_grok_session);
+        assert!(!cred.use_codex_session);
+    }
+
+    #[test]
+    fn openai_codex_kind_parses_and_enables_codex_session() {
+        let parsed = parse_providers(
+            r#"
+providers:
+  codex:
+    kind: openai-codex
+    base_url: https://chatgpt.com/backend-api/codex
+    api_key: unused
+    models: [gpt-5.3-codex]
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].kind, ProviderKind::OpenAiCodex);
+        let cred =
+            resolve_provider_credential_with(ProviderKind::OpenAiCodex, Some("jwt"), None).unwrap();
+        assert!(cred.use_codex_session);
+        assert!(!cred.use_grok_session);
+    }
+
+    #[test]
+    fn upsert_oauth_provider_creates_route_and_default_model() {
+        let dir = {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            use std::time::{SystemTime, UNIX_EPOCH};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "hya-cfg-upsert-{}-{}-{}",
+                nanos,
+                NEXT.fetch_add(1, Ordering::Relaxed),
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        };
+        let path = dir.join("config.yaml");
+        upsert_oauth_provider(
+            &path,
+            "codex",
+            "openai-codex",
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5.3-codex",
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("openai-codex"));
+        assert!(raw.contains("chatgpt.com/backend-api/codex"));
+        assert!(raw.contains("gpt-5.3-codex"));
+        assert!(raw.contains("default_model:"));
+        // Second upsert preserves models list content.
+        upsert_oauth_provider(
+            &path,
+            "codex",
+            "openai-codex",
+            "https://chatgpt.com/backend-api/codex",
+            "other-model",
+        )
+        .unwrap();
+        let raw2 = std::fs::read_to_string(&path).unwrap();
+        assert!(raw2.contains("gpt-5.3-codex"));
     }
 
     #[test]

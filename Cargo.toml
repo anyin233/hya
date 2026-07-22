@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.33.22"
+version = "0.33.23"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,7 @@ tokio-tungstenite = "0.24"
 futures = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
+sha2 = "0.10"
 axum = { version = "0.7", features = ["macros", "ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }

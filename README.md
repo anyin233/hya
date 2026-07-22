@@ -74,6 +74,14 @@ hya-backend models  # inspect the resolved catalog
 hya                 # start the TUI against the live provider
 ```
 
+For ChatGPT Codex or Grok Build subscription OAuth (no API key):
+
+```sh
+hya-backend oauth login --provider codex --type openai-codex
+hya-backend oauth login --provider grok --type grok-build
+hya-backend oauth status
+```
+
 See [docs/configuration.md](docs/configuration.md) for first-run behavior,
 the full environment-variable reference, and a fully-commented sample config.
 
