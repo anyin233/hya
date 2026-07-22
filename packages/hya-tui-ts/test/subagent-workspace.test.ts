@@ -12,6 +12,7 @@ import {
   runTreeEventEffect,
   treeSessionIDs,
   workspaceLeaves,
+  workspacePaneStrip,
 } from "../src/upstream/routes/session/subagent-workspace"
 
 test("exposes exact pane command defaults", () => {
@@ -182,6 +183,40 @@ test("cycles focus across split observation and tab observations", () => {
   expect(order).toEqual(["observation:child-a", "observation:child-c", "main"])
   state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-a" })
   expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
+})
+
+test("cycles focus backward across split main and observation panes", () => {
+  // After a left/right split, reverse cycle must walk observation → main so
+  // keyboard left/right navigation can move between the two visible panes.
+  let state = createWorkspaceState("root")
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
+  expect(state.focusedPaneID).toBe("observation:child-a")
+
+  state = reduceWorkspace(state, { type: "cycleFocus", direction: -1 })
+  expect(state.focusedPaneID).toBe("main")
+  expect(state.activeTabID).toBe("main")
+
+  state = reduceWorkspace(state, { type: "cycleFocus", direction: -1 })
+  expect(state.focusedPaneID).toBe("observation:child-a")
+
+  state = reduceWorkspace(state, { type: "cycleFocus", direction: 1 })
+  expect(state.focusedPaneID).toBe("main")
+})
+
+test("pane strip lists every leaf with focus markers for tab-bar navigation", () => {
+  let state = createWorkspaceState("root")
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
+  state = reduceWorkspace(state, { type: "openTab", sessionID: "child-b" })
+
+  expect(workspacePaneStrip(state)).toEqual([
+    { paneID: "main", focused: false },
+    { paneID: "observation:child-a", focused: false },
+    { paneID: "observation:child-b", focused: true },
+  ])
+
+  state = reduceWorkspace(state, { type: "focus", paneID: "main" })
+  expect(workspacePaneStrip(state).find((entry) => entry.paneID === "main")?.focused).toBe(true)
+  expect(workspacePaneStrip(state).filter((entry) => entry.focused)).toHaveLength(1)
 })
 
 test("Esc-equivalent focusMain exits every observation placement back to Main", () => {

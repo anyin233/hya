@@ -95,6 +95,7 @@ import {
   runTreeEventEffect,
   treeSessionIDs,
   workspaceLeaves,
+  workspacePaneStrip,
   type RunTreeNode,
   type RunTreeResource,
   type WorkspaceAction,
@@ -401,6 +402,7 @@ export function Session() {
   const observationScrolls = new Map<string, ScrollBoxRenderable>()
   let prompt: PromptRef | undefined
   const mainFocused = createMemo(() => workspace().focusedPaneID === "main")
+  const multiPane = createMemo(() => workspaceLeaves(workspace()).length > 1)
   const focusedScroll = () =>
     workspace().focusedPaneID === "main" ? scroll : observationScrolls.get(workspace().focusedPaneID)
   const focusedMessages = () => {
@@ -422,6 +424,9 @@ export function Session() {
   // Observation focus: Escape returns to Main via the keymap so it wins over any
   // residual Escape bindings. useKeyboard alone runs after keymap and can lose to
   // session.interrupt when the main turn is still busy.
+  // Left/right cycle panes while an observation is focused so users can move
+  // between left/right Main|subagent splits without a leader chord. Bare h/l are
+  // intentionally not bound — observation focus swallows single-letter typing.
   useBindings(() => ({
     enabled: () => !mainFocused() && dialog.stack.length === 0,
     priority: 10,
@@ -431,6 +436,38 @@ export function Session() {
         desc: "Focus Main pane",
         group: "Pane",
         cmd: () => dispatchWorkspace({ type: "focusMain" }),
+      },
+      {
+        key: "left",
+        desc: "Previous pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
+      },
+      {
+        key: "right",
+        desc: "Next pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
+      },
+    ],
+  }))
+  // When Main is focused but other panes are open (split/tabs), Ctrl+Left/Right
+  // moves focus without stealing bare arrows from the prompt textarea.
+  useBindings(() => ({
+    enabled: () => mainFocused() && multiPane() && dialog.stack.length === 0,
+    priority: 5,
+    bindings: [
+      {
+        key: "ctrl+left",
+        desc: "Previous pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
+      },
+      {
+        key: "ctrl+right",
+        desc: "Next pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
       },
     ],
   }))
@@ -1080,7 +1117,7 @@ export function Session() {
       title: "Cycle pane focus",
       value: "pane.cycle",
       category: "Pane",
-      run: () => dispatchWorkspace({ type: "cycleFocus" }),
+      run: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
     },
     {
       title: "Focus Main pane",
@@ -1171,6 +1208,22 @@ export function Session() {
   // snap to bottom when session changes
   createEffect(on(() => route.sessionID, toBottom))
 
+  const paneStrip = createMemo(() => {
+    const tree = treeResource().tree
+    const rows = tree ? flattenRunTree(tree) : []
+    return workspacePaneStrip(workspace()).map((entry) => {
+      if (entry.paneID === "main") return { ...entry, label: "main" }
+      const sessionID = entry.paneID.startsWith("observation:")
+        ? entry.paneID.slice("observation:".length)
+        : entry.paneID
+      const node = rows.find((row) => row.node.session === sessionID)?.node
+      return {
+        ...entry,
+        label: node?.roster?.handle ?? node?.member?.subagent_type ?? sessionID.slice(0, 12),
+      }
+    })
+  })
+  const focusPaneByID = (paneID: string) => dispatchWorkspace({ type: "focus", paneID })
   const observationPresentation = (sessionID: string, placement: SubagentPlacement, focused: boolean) => {
     const tree = treeResource().tree
     const node = tree && flattenRunTree(tree).find((row) => row.node.session === sessionID)?.node
@@ -1184,6 +1237,7 @@ export function Session() {
         placement,
         focused ? "focused" : "open",
         "read-only",
+        focused ? "←/→ panes · esc main · ctrl+x w close" : undefined,
       ]
         .filter(Boolean)
         .join(" - "),
@@ -1284,6 +1338,7 @@ export function Session() {
               paddingLeft={1}
               paddingRight={1}
               backgroundColor={pane().id === workspace().focusedPaneID ? theme.backgroundElement : theme.backgroundPanel}
+              onMouseUp={() => focusPaneByID(pane().id)}
             >
               <ObservationTranscript paneID={pane().id} sessionID={pane().sessionID} placement={props.placement} />
             </box>
@@ -1315,7 +1370,24 @@ export function Session() {
           tui: tuiConfig,
         }}
       >
-        <box flexDirection="row" flexGrow={1} minHeight={0}>
+        <box flexDirection="column" flexGrow={1} minHeight={0}>
+          <Show when={multiPane()}>
+            <box flexDirection="row" flexShrink={0} gap={1} paddingLeft={1} paddingRight={1} paddingBottom={1}>
+              <For each={paneStrip()}>
+                {(entry) => (
+                  <box
+                    paddingLeft={1}
+                    paddingRight={1}
+                    backgroundColor={entry.focused ? theme.accent : theme.backgroundPanel}
+                    onMouseUp={() => focusPaneByID(entry.paneID)}
+                  >
+                    <text fg={entry.focused ? theme.background : theme.textMuted}>{entry.label}</text>
+                  </box>
+                )}
+              </For>
+            </box>
+          </Show>
+          <box flexDirection="row" flexGrow={1} minHeight={0}>
           <Index each={workspace().tabs}>
             {(tab) => (
               <box
@@ -1336,6 +1408,14 @@ export function Session() {
                       paddingLeft={2}
                       paddingRight={2}
                       gap={1}
+                      backgroundColor={
+                        multiPane()
+                          ? mainFocused()
+                            ? theme.backgroundElement
+                            : theme.backgroundPanel
+                          : undefined
+                      }
+                      onMouseUp={() => focusPaneByID("main")}
                     >
             <Show when={session()}>
               <scrollbox
@@ -1519,6 +1599,7 @@ export function Session() {
               </Match>
             </Switch>
           </Show>
+          </box>
         </box>
       </context.Provider>
     </PathFormatterProvider>
