@@ -256,8 +256,25 @@ export type WorkspaceAction =
   | { type: "openSplit"; axis: "vertical" | "horizontal"; sessionID: string }
   | { type: "focus"; paneID: string }
   | { type: "focusMain" }
-  | { type: "cycleFocus" }
+  | { type: "cycleFocus"; direction?: 1 | -1 }
   | { type: "reconcileSessions"; sessionIDs: string[] }
+
+/** One entry in the session pane strip (tab bar) for click / cycle navigation. */
+export type WorkspacePaneStripEntry = {
+  paneID: string
+  focused: boolean
+}
+
+/**
+ * Ordered focus targets for the pane strip: Main first, then observation leaves
+ * in tab/depth-first visual order. Used by the tab bar and reverse/forward cycle.
+ */
+export function workspacePaneStrip(state: WorkspaceState): WorkspacePaneStripEntry[] {
+  return workspaceLeaves(state).map((pane) => ({
+    paneID: pane.id,
+    focused: pane.id === state.focusedPaneID,
+  }))
+}
 
 export function createWorkspaceState(mainSessionID: string): WorkspaceState {
   return {
@@ -282,8 +299,13 @@ export function reduceWorkspace(state: WorkspaceState, action: WorkspaceAction):
       return focusPane(state, "main")
     case "cycleFocus": {
       const leaves = workspaceLeaves(state)
+      if (leaves.length === 0) return state
+      const direction = action.direction ?? 1
       const current = leaves.findIndex((pane) => pane.id === state.focusedPaneID)
-      return focusPane(state, leaves[(current + 1) % leaves.length]?.id ?? "main")
+      const start = current === -1 ? 0 : current
+      // Add length before modulo so reverse cycle stays non-negative.
+      const next = (start + direction + leaves.length) % leaves.length
+      return focusPane(state, leaves[next]?.id ?? "main")
     }
     case "reconcileSessions": {
       const valid = new Set(action.sessionIDs)

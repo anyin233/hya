@@ -1,5 +1,4 @@
-# 0.33.37
+# 0.33.38
 
-- Show all launched subagents in the main assistant message (OpenCode-style Task rows), including multi-member `task` calls, with live status from the run tree and child session activity.
-- Task tool batch results now carry per-member `description`, `subagent_type`, and `sessionId` metadata for the TUI.
-- Member spawn rows use the short task description (not the full prompt) so main-message status can match the live tree.
+- Fix subagent split-pane navigation: after dividing the session into Main | observation, users can move between panes with Left/Right (observation focused), Ctrl+Left/Right (Main focused), click a pane or the top pane strip, Esc to Main, and Ctrl+X W to close.
+- Pane focus cycle supports reverse direction; the workspace strip lists every open leaf for one-click switching between Main and subagent views.
