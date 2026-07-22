@@ -135,11 +135,12 @@ test("split always places observation beside Main, never nests under another obs
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
   // While observation is focused, opening another split must rebuild Main | child-b
   // rather than nesting under child-a (which broke agent switching after Ctrl+X V).
+  // The previous observation is retained as a tab so users can still navigate to it.
   state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
 
   expect(
     workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID)),
-  ).toEqual(["main", "child-b"])
+  ).toEqual(["main", "child-b", "child-a"])
   expect(state.tabs[0]?.root).toMatchObject({
     type: "split",
     axis: "horizontal",
@@ -153,7 +154,50 @@ test("split always places observation beside Main, never nests under another obs
   state = reduceWorkspace(state, { type: "focusMain" })
   expect(state.focusedPaneID).toBe("main")
   expect(state.activeTabID).toBe("main")
-  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual(["main", "observation:child-b"])
+  expect(workspaceLeaves(state).map((pane) => pane.id)).toEqual([
+    "main",
+    "observation:child-b",
+    "observation:child-a",
+  ])
+})
+
+test("focusing another open subagent in split mode swaps it beside Main", () => {
+  // Users must be able to walk Main ↔ A ↔ B while a split is open without losing either subagent.
+  let state = createWorkspaceState("root")
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-b" })
+  expect(state.focusedPaneID).toBe("observation:child-b")
+  expect(workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID))).toEqual([
+    "main",
+    "child-b",
+    "child-a",
+  ])
+  // Stable open order is open-sequence, not current split partner order.
+  expect(state.observationOrder).toEqual(["child-a", "child-b"])
+
+  state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-a" })
+  expect(state.activeTabID).toBe("main")
+  expect(state.focusedPaneID).toBe("observation:child-a")
+  expect(state.tabs[0]?.root).toMatchObject({
+    type: "split",
+    axis: "vertical",
+    second: { type: "observation", sessionID: "child-a" },
+  })
+  // child-b remains open as a retained tab
+  expect(workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID))).toEqual([
+    "main",
+    "child-a",
+    "child-b",
+  ])
+
+  // Cycle walks every open leaf in stable open order so Left/Right reaches every subagent.
+  state = reduceWorkspace(state, { type: "focusMain" })
+  const order = []
+  for (let index = 0; index < 3; index++) {
+    state = reduceWorkspace(state, { type: "cycleFocus", direction: 1 })
+    order.push(state.focusedPaneID)
+  }
+  expect(order).toEqual(["observation:child-a", "observation:child-b", "main"])
 })
 
 test("closes split observation and returns to Main", () => {
@@ -173,6 +217,7 @@ test("cycles focus across split observation and tab observations", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child-c" })
+  // leaves: main, child-a (split), child-c (tab)
   state = reduceWorkspace(state, { type: "focusMain" })
 
   const order = []
@@ -180,8 +225,14 @@ test("cycles focus across split observation and tab observations", () => {
     state = reduceWorkspace(state, { type: "cycleFocus" })
     order.push(state.focusedPaneID)
   }
+  // Focusing child-c while split mode is active promotes it beside Main, so leaf
+  // order becomes main, child-c, child-a. Cycle still visits every open subagent.
   expect(order).toEqual(["observation:child-a", "observation:child-c", "main"])
   state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-a" })
+  expect(state.tabs[0]?.root).toMatchObject({
+    type: "split",
+    second: { type: "observation", sessionID: "child-a" },
+  })
   expect(reduceWorkspace(state, { type: "focusMain" }).focusedPaneID).toBe("main")
 })
 
@@ -300,7 +351,7 @@ test("prunes sessions missing from a successful tree", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
   state = reduceWorkspace(state, { type: "openTab", sessionID: "child-c" })
-  // Switch the split observation to child-b (replaces child-a beside Main)
+  // Switch the split observation to child-b (child-a is retained as a tab)
   state = reduceWorkspace(state, { type: "openSplit", axis: "horizontal", sessionID: "child-b" })
   state = reduceWorkspace(state, { type: "reconcileSessions", sessionIDs: ["root", "child-b"] })
 

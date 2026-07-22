@@ -1,4 +1,3 @@
-# 0.33.38
+# 0.33.39
 
-- Fix subagent split-pane navigation: after dividing the session into Main | observation, users can move between panes with Left/Right (observation focused), Ctrl+Left/Right (Main focused), click a pane or the top pane strip, Esc to Main, and Ctrl+X W to close.
-- Pane focus cycle supports reverse direction; the workspace strip lists every open leaf for one-click switching between Main and subagent views.
+- Fix multi-subagent pane navigation: opening another split keeps prior subagents open, focusing a subagent in split mode swaps it beside Main, and Left/Right (or Ctrl+Left/Right on Main), digits 1-9, the pane strip, and Esc reliably switch between Main and every open subagent.

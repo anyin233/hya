@@ -421,56 +421,6 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
-  // Observation focus: Escape returns to Main via the keymap so it wins over any
-  // residual Escape bindings. useKeyboard alone runs after keymap and can lose to
-  // session.interrupt when the main turn is still busy.
-  // Left/right cycle panes while an observation is focused so users can move
-  // between left/right Main|subagent splits without a leader chord. Bare h/l are
-  // intentionally not bound — observation focus swallows single-letter typing.
-  useBindings(() => ({
-    enabled: () => !mainFocused() && dialog.stack.length === 0,
-    priority: 10,
-    bindings: [
-      {
-        key: "escape",
-        desc: "Focus Main pane",
-        group: "Pane",
-        cmd: () => dispatchWorkspace({ type: "focusMain" }),
-      },
-      {
-        key: "left",
-        desc: "Previous pane",
-        group: "Pane",
-        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
-      },
-      {
-        key: "right",
-        desc: "Next pane",
-        group: "Pane",
-        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
-      },
-    ],
-  }))
-  // When Main is focused but other panes are open (split/tabs), Ctrl+Left/Right
-  // moves focus without stealing bare arrows from the prompt textarea.
-  useBindings(() => ({
-    enabled: () => mainFocused() && multiPane() && dialog.stack.length === 0,
-    priority: 5,
-    bindings: [
-      {
-        key: "ctrl+left",
-        desc: "Previous pane",
-        group: "Pane",
-        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
-      },
-      {
-        key: "ctrl+right",
-        desc: "Next pane",
-        group: "Pane",
-        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
-      },
-    ],
-  }))
   // Child session route (legacy / deep-link): Escape walks back to the parent.
   useBindings(() => ({
     enabled: () => !!session()?.parentID && mainFocused() && dialog.stack.length === 0,
@@ -489,11 +439,44 @@ export function Session() {
     ],
   }))
   const leaderActive = useLeaderActive()
+  // Pane navigation is handled here (not only via keymap) so focus switching still
+  // works when leader chords / command resolution miss — a real regression when
+  // users open multiple subagent views. useKeyboard runs after the keymap.
   useKeyboard((key) => {
-    if (mainFocused() || dialog.stack.length > 0) return
-    // Never swallow keys that complete a leader chord (Ctrl+X then 0/. /o /V …);
-    // stopPropagation here previously broke pane/agent switching after a split.
+    if (dialog.stack.length > 0) return
     if (leaderActive()) return
+
+    // Esc from any observation returns to Main (ADR-0003).
+    if (!mainFocused() && key.name === "escape" && !key.ctrl && !key.meta && !key.option) {
+      dispatchWorkspace({ type: "focusMain" })
+      key.preventDefault()
+      key.stopPropagation()
+      return
+    }
+
+    // Left/Right cycle every open leaf (Main + all retained subagents). While Main
+    // owns the prompt, require Ctrl so bare arrows still move the caret.
+    if (multiPane() && (key.name === "left" || key.name === "right")) {
+      if (!mainFocused() || key.ctrl) {
+        dispatchWorkspace({ type: "cycleFocus", direction: key.name === "left" ? -1 : 1 })
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+    }
+
+    // Digit jump to pane strip: 1=Main, 2=first open subagent, …
+    if (!mainFocused() && multiPane() && key.name.length === 1 && key.name >= "1" && key.name <= "9" && !key.ctrl && !key.meta && !key.option) {
+      const entry = workspacePaneStrip(workspace())[Number(key.name) - 1]
+      if (entry) {
+        dispatchWorkspace({ type: "focus", paneID: entry.paneID })
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+    }
+
+    if (mainFocused()) return
     // Ignore bare typing while an observation pane is focused (read-only).
     if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
       key.preventDefault()
@@ -1237,7 +1220,7 @@ export function Session() {
         placement,
         focused ? "focused" : "open",
         "read-only",
-        focused ? "←/→ panes · esc main · ctrl+x w close" : undefined,
+        focused ? "←/→ or 1-9 panes · esc main · ctrl+x w close" : undefined,
       ]
         .filter(Boolean)
         .join(" - "),
@@ -1338,6 +1321,7 @@ export function Session() {
               paddingLeft={1}
               paddingRight={1}
               backgroundColor={pane().id === workspace().focusedPaneID ? theme.backgroundElement : theme.backgroundPanel}
+              onMouseDown={() => focusPaneByID(pane().id)}
               onMouseUp={() => focusPaneByID(pane().id)}
             >
               <ObservationTranscript paneID={pane().id} sessionID={pane().sessionID} placement={props.placement} />
@@ -1379,9 +1363,12 @@ export function Session() {
                     paddingLeft={1}
                     paddingRight={1}
                     backgroundColor={entry.focused ? theme.accent : theme.backgroundPanel}
+                    onMouseDown={() => focusPaneByID(entry.paneID)}
                     onMouseUp={() => focusPaneByID(entry.paneID)}
                   >
-                    <text fg={entry.focused ? theme.background : theme.textMuted}>{entry.label}</text>
+                    <text fg={entry.focused ? theme.background : theme.textMuted}>
+                      {`${paneStrip().findIndex((item) => item.paneID === entry.paneID) + 1}:${entry.label}`}
+                    </text>
                   </box>
                 )}
               </For>
@@ -1415,6 +1402,7 @@ export function Session() {
                             : theme.backgroundPanel
                           : undefined
                       }
+                      onMouseDown={() => focusPaneByID("main")}
                       onMouseUp={() => focusPaneByID("main")}
                     >
             <Show when={session()}>
