@@ -204,11 +204,6 @@ impl Tool for TaskTool {
             .ok_or_else(|| ToolError::Other("task tool requires a session".to_string()))?
             .to_string();
         let task_id = input.task_id;
-        if let Some(task_id) = task_id.as_deref() {
-            task_id
-                .parse::<SessionId>()
-                .map_err(|e| ToolError::Input(format!("invalid task_id: {e}")))?;
-        }
 
         let mut members: Vec<SpawnMember> = input
             .members
@@ -230,6 +225,11 @@ impl Tool for TaskTool {
             })
             .collect();
         if members.is_empty() {
+            if let Some(task_id) = task_id.as_deref() {
+                task_id
+                    .parse::<SessionId>()
+                    .map_err(|e| ToolError::Input(format!("invalid task_id: {e}")))?;
+            }
             if input.description.trim().is_empty()
                 || input.prompt.trim().is_empty()
                 || input.subagent_type.trim().is_empty()

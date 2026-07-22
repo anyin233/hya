@@ -208,6 +208,66 @@ async fn task_forwards_task_id_to_spawner_for_resume() {
 }
 
 #[tokio::test]
+async fn task_batch_ignores_invalid_top_level_task_id() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let mut handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Inspect batch",
+                "prompt": "Inspect both paths",
+                "subagent_type": "explore",
+                "task_id": "",
+                "members": [
+                    {
+                        "description": "Inspect tools",
+                        "prompt": "Inspect tool dispatch",
+                        "subagent_type": "explore"
+                    },
+                    {
+                        "description": "Inspect runtime",
+                        "prompt": "Inspect runtime dispatch",
+                        "subagent_type": "explore"
+                    }
+                ]
+            }),
+        )
+        .await
+    });
+
+    let req = tokio::select! {
+        biased;
+        result = &mut handle => panic!("batch rejected before spawn: {result:?}"),
+        req = rx.recv() => req.unwrap(),
+    };
+    assert_eq!(req.members.len(), 2);
+    assert!(req.members.iter().all(|member| member.task_id.is_none()));
+    req.reply
+        .send(vec![
+            MemberOutcome {
+                member: "mbr_1".to_string(),
+                session: SessionId::new().to_string(),
+                status: "done".to_string(),
+                summary: "tools inspected".to_string(),
+            },
+            MemberOutcome {
+                member: "mbr_2".to_string(),
+                session: SessionId::new().to_string(),
+                status: "done".to_string(),
+                summary: "runtime inspected".to_string(),
+            },
+        ])
+        .unwrap();
+
+    let out = handle.await.unwrap().unwrap();
+    assert_eq!(out["members"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn task_rejects_invalid_task_id() {
     let parent = SessionId::new();
     let (spawner, _rx) = SpawnerPlane::new();
