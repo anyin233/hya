@@ -524,3 +524,36 @@ Removed the fixed 25-round guard from the shared session turn loop, added a 26-r
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Make TypeScript TUI the default
+
+**Date**: 2026-07-22
+**Task**: Make TypeScript TUI the default
+**Branch**: `main`
+
+### Summary
+
+Replaced canonical hya with the adjacent hya-ts exec path, preserved launcher/import/backend behavior, updated packaging and docs to 0.33.29, and verified all Rust, Bun, installer, and release gates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fd9f80d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
