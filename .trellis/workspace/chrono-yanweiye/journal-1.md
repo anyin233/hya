@@ -391,3 +391,37 @@ Published busy and idle lifecycle events for synchronous Compat prompts, added a
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Configure web search providers
+
+**Date**: 2026-07-22
+**Task**: Configure web search providers
+**Branch**: `main`
+
+### Summary
+
+Added configurable Exa and Parallel web search, enabled unauthenticated Exa by default for every model provider, documented the agent tool surface, and verified the Rust workspace.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bfcefef9` | (see git log) |
+| `64476077` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
