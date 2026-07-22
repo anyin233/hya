@@ -491,3 +491,36 @@ Moved task_id validation into single-task mode, added a batch regression, releas
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Remove agent tool-call round limit
+
+**Date**: 2026-07-22
+**Task**: Remove agent tool-call round limit
+**Branch**: `main`
+
+### Summary
+
+Removed the fixed 25-round guard from the shared session turn loop, added a 26-round regression, synchronized 0.33.28 release metadata and runtime docs, passed full workspace verification, and pushed the feature commit.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `46db2229` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
