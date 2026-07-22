@@ -707,6 +707,20 @@ mod tests {
         .await;
     }
 
+    async fn seed_main_child_and_sibling_roster(h: &mut AppHarness) {
+        seed_main_and_child_roster(h).await;
+        h.push_sse(
+            "session.created",
+            json!({ "info": { "id": "ses_sibling" } }),
+        )
+        .await;
+        h.push_team_event(json!({
+            "type": "agent_registered", "session": "ses_main", "agent_session": "ses_sibling",
+            "handle": "reviewer-4", "agent_type": "reviewer", "mode": "resident"
+        }))
+        .await;
+    }
+
     async fn press_shift_char(h: &mut AppHarness, ch: char) {
         h.dispatch(AppEvent::Key(KeyEvent {
             shift: true,
@@ -764,6 +778,54 @@ mod tests {
             "the main Session should show attention for a roster child with a pending permission request; frame:\n{}",
             h.buffer_text()
         );
+    }
+
+    #[tokio::test]
+    async fn escape_returns_from_parentless_roster_child_to_team_root() {
+        let mut h = AppHarness::new(100, 30).await;
+        seed_main_and_child_roster(&mut h).await;
+        h.navigate("ses_child").await;
+
+        h.press(Key::Esc).await;
+
+        assert_eq!(h.main_route_session().as_deref(), Some("ses_main"));
+    }
+
+    #[tokio::test]
+    async fn escape_returns_after_failed_split_from_parentless_roster_child() {
+        let mut h = AppHarness::new(100, 30).await;
+        seed_main_and_child_roster(&mut h).await;
+        h.navigate("ses_child").await;
+
+        h.press_ctrl('x').await;
+        press_shift_char(&mut h, 'v').await;
+        h.press(Key::Enter).await;
+
+        assert!(h.aux_sessions().is_empty());
+
+        h.press(Key::Esc).await;
+
+        assert_eq!(h.main_route_session().as_deref(), Some("ses_main"));
+    }
+
+    #[tokio::test]
+    async fn escape_returns_from_child_backed_vertical_split_to_team_root() {
+        let mut h = AppHarness::new(120, 30).await;
+        seed_main_child_and_sibling_roster(&mut h).await;
+        h.navigate("ses_child").await;
+
+        h.press_ctrl('x').await;
+        press_shift_char(&mut h, 'v').await;
+        h.press(Key::Enter).await;
+
+        assert_eq!(h.aux_sessions(), vec!["ses_sibling".to_owned()]);
+        assert_eq!(h.pane_layout_kind(), PaneLayoutKind::VerticalSplit);
+        assert!(!h.focus_is_main());
+
+        h.press(Key::Esc).await;
+
+        assert!(h.focus_is_main());
+        assert_eq!(h.main_route_session().as_deref(), Some("ses_main"));
     }
 
     #[tokio::test]

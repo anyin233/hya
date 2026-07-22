@@ -1,4 +1,3 @@
-# 0.33.17
+# 0.33.18
 
-- Added `tools.websearch` configuration for selecting Exa or Parallel, overriding the endpoint and key, or disabling the built-in tool.
-- Enabled unauthenticated Exa web search by default and exposed enabled web search to every model provider.
+- Fixed subagent observation navigation so `Esc` returns to the main agent after failed starts or split attempts, and docked the complete roster shortcuts above the main prompt and at the bottom of observation views.

@@ -236,11 +236,10 @@ impl MessageStore {
 
     /// Returns the topmost team session for `session_id`.
     ///
-    /// Team events are keyed by the root session. If the starting session is not
-    /// known locally, the input id is already the safest key. If a stored child
-    /// points at a parent that is not cached, the parent id is still returned so
-    /// child routes can see root-scoped Team events before the root Session row
-    /// has been hydrated.
+    /// Team events are keyed by the root session. Explicit parent ancestry stays
+    /// authoritative even when the parent is not cached. Without ancestry or an
+    /// owned Team, exactly one roster owner is used; zero or multiple owners keep
+    /// the input id as the safest key.
     #[must_use]
     pub fn team_root_for<'a>(&'a self, session_id: &'a str) -> &'a str {
         let mut current = session_id;
@@ -251,7 +250,23 @@ impl MessageStore {
                 .and_then(|session| session.parent_id.as_deref())
                 .filter(|parent| !parent.is_empty())
             else {
-                return current;
+                if current != session_id || self.teams.contains_key(session_id) {
+                    return current;
+                }
+                let mut owners = self.teams.iter().filter_map(|(root, team)| {
+                    team.roster
+                        .values()
+                        .any(|entry| entry.session == session_id)
+                        .then_some(root.as_str())
+                });
+                let Some(owner) = owners.next() else {
+                    return session_id;
+                };
+                return if owners.next().is_none() {
+                    owner
+                } else {
+                    session_id
+                };
             };
             current = parent;
         }
@@ -825,6 +840,41 @@ mod tests {
         assert!(store.apply_event(&session_created("cycle_a", Some("cycle_b"))));
         assert!(store.apply_event(&session_created("cycle_b", Some("cycle_a"))));
         assert_eq!(store.team_root_for("cycle_a"), "cycle_a");
+    }
+
+    #[test]
+    fn team_root_for_resolves_unique_roster_owner() {
+        let registered = |root: &str, child: &str, handle: &str| -> GlobalEvent {
+            serde_json::from_value(serde_json::json!({
+                "payload": { "type": "hya.envelope", "properties": {
+                    "event": {
+                        "type": "agent_registered", "session": root,
+                        "agent_session": child, "handle": handle,
+                        "agent_type": "reviewer", "mode": "resident"
+                    }
+                }}
+            }))
+            .unwrap()
+        };
+        let mut store = MessageStore::default();
+        let child: GlobalEvent = serde_json::from_value(serde_json::json!({
+            "payload": { "type": "session.created", "properties": {
+                "info": { "id": "ses_child" }
+            }}
+        }))
+        .unwrap();
+
+        assert!(store.apply_event(&child));
+        assert!(store.apply_event(&registered("ses_root", "ses_child", "reviewer-1")));
+        assert_eq!(store.team_root_for("ses_child"), "ses_root");
+
+        assert!(store.apply_event(&registered("ses_other", "ses_child", "reviewer-2")));
+        assert_eq!(store.team_root_for("ses_child"), "ses_child");
+
+        let mut own_team = MessageStore::default();
+        assert!(own_team.apply_event(&registered("ses_root", "ses_child", "reviewer-1")));
+        assert!(own_team.apply_event(&registered("ses_child", "ses_nested", "reviewer-2")));
+        assert_eq!(own_team.team_root_for("ses_child"), "ses_child");
     }
 
     #[test]

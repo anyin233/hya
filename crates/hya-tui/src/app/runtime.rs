@@ -1661,6 +1661,7 @@ impl Runtime {
         let no_mods = !key.ctrl && !key.alt && !key.meta;
         if no_mods && matches!(key.key, Key::Esc) {
             self.panes.focus_main();
+            self.return_to_team_root();
             return false;
         }
         self.dispatch_key(key)
@@ -2056,6 +2057,10 @@ impl Runtime {
             return Some(false);
         }
         match key.key {
+            Key::Esc if no_mods && self.subagent_nav => {
+                self.return_to_team_root();
+                Some(false)
+            }
             Key::Enter if !no_mods => {
                 self.insert_char('\n');
                 Some(false)
@@ -3063,6 +3068,20 @@ impl Runtime {
                 .and_then(|session| session.parent_id.clone());
             if let Some(parent) = parent {
                 let _ = tx.send(AppEvent::LoadSession(parent));
+            }
+        });
+    }
+
+    fn return_to_team_root(&mut self) {
+        let Some(session_id) = self.current_session_id() else {
+            return;
+        };
+        let data = Arc::clone(&self.input.state.data);
+        let tx = self.input.tx.clone();
+        tokio::spawn(async move {
+            let root = data.read().await.team_root_for(&session_id).to_owned();
+            if root != session_id {
+                let _ = tx.send(AppEvent::LoadSession(root));
             }
         });
     }
