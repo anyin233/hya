@@ -1,0 +1,4 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Owns the hya-tui versus hya-tui-lib boundary, app-specific renderer shape, semantic styling, and non-snapshot component testing rules."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Requires TDD, saturating terminal geometry, prompt visibility, 80/120-column semantic render coverage, and the Rust frontend verification gate."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of the existing keymap table, projection, wrapper, and event-dispatch patterns instead of parallel constants or state."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Guides the projection-to-runtime-to-render data flow and keeps ownership resolution in the shared projection rather than duplicated by consumers."}
