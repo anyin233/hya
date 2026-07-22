@@ -1,0 +1,31 @@
+{
+  "id": "07-03-opencode-parity-pr-split",
+  "name": "07-03-opencode-parity-pr-split",
+  "title": "OpenCode parity worktree PR split",
+  "description": "Deliver the remaining OpenCode parity slices as a verified stacked PR series with TDD gates and explicit merge-order notes.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "project-control",
+  "package": null,
+  "priority": "P1",
+  "creator": "codex",
+  "assignee": "codex",
+  "createdAt": "2026-07-03",
+  "completedAt": "2026-07-16",
+  "branch": "chore/opencode-parity-task-plan",
+  "base_branch": "feat/opencode-revert-snapshot-baseline",
+  "worktree_path": "/Users/chivier/.codex/worktrees/3b66/hya",
+  "commit": null,
+  "pr_url": "https://github.com/anyin233/hya/pull/11",
+  "subtasks": [],
+  "children": [
+    "07-03-opencode-version-release-hygiene",
+    "07-03-opencode-compat-mcp-import",
+    "07-03-opencode-revert-snapshot-baseline",
+    "07-03-opencode-tui-theme-picker"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Merge bottom-up: #7 -> #9 -> #8 -> #10 -> #11. After each merge, fetch main, retarget the successor to main, verify its reduced diff, and wait for fresh checks.",
+  "meta": {}
+}
