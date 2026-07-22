@@ -536,8 +536,16 @@ export function Prompt(props: PromptProps) {
       "prompt.stash",
       "prompt.stash.pop",
       "prompt.stash.list",
-      "session.interrupt",
     ]),
+  }))
+
+  // Escape is session.interrupt only while this prompt is the active input surface.
+  // When a subagent observation is focused, Prompt is hidden/blurred and Escape must
+  // reach the Session observation handler to return focus to Main (ADR-0003).
+  useBindings(() => ({
+    mode: OPENCODE_BASE_MODE,
+    enabled: () => props.visible !== false && status().type !== "idle",
+    bindings: tuiConfig.keybinds.gather("prompt.palette", ["session.interrupt"]),
   }))
 
   const ref: PromptRef = {

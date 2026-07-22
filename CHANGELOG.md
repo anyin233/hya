@@ -1,4 +1,4 @@
-# 0.33.30
+# 0.33.31
 
-- Fixed `permission.model: allow` still prompting the CLI for tool and external-directory checks; allow mode now auto-approves resource asserts while still honoring explicit Deny rules.
-- Accepted `permission.mode` as an alias for `permission.model`, and lowercase `allow`/`ask`/`deny` on rule effects so config casing matches the model field.
+- Fixed TypeScript TUI subagent observation exit: Escape again returns focus to the Main agent view even while the main turn is still busy (session.interrupt no longer steals Escape when the prompt is hidden).
+- Escape on a child-session route walks back to the parent session.
