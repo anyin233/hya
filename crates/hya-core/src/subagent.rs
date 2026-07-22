@@ -19,6 +19,11 @@ use crate::error::CoreError;
 /// members from racing to the same ordinal. The main/root registration (its
 /// session is the team root) is excluded from the counts so member handles start
 /// at `-1`.
+///
+/// Resume path: when a member reuses an existing child session that already has
+/// a roster binding, that handle is returned as-is. Allocating a second handle
+/// for the same session would make the TUI roster list the agent twice and
+/// multi-highlight both rows (they share one session id as the select value).
 async fn assign_handles(
     engine: &SessionEngine,
     root: SessionId,
@@ -39,12 +44,41 @@ async fn assign_handles(
     }
     let mut handles = Vec::with_capacity(specs.len());
     for spec in specs {
+        if let Some(session) = spec.session
+            && let Some(existing) = roster.values().find(|entry| entry.session == session)
+        {
+            handles.push(existing.handle.clone());
+            continue;
+        }
         let agent_type = spec.agent.name.as_str().to_string();
         let ordinal = counts.entry(agent_type.clone()).or_insert(0);
         *ordinal += 1;
         handles.push(format!("{agent_type}-{ordinal}"));
     }
     handles
+}
+
+/// Prefer the member id already bound to `child` under `lead`, so a task_id
+/// resume upserts the original tree row instead of appending a duplicate.
+async fn resolve_member_id(
+    engine: &SessionEngine,
+    lead: SessionId,
+    preferred: MemberId,
+    child: SessionId,
+) -> MemberId {
+    engine
+        .read_projection(lead)
+        .await
+        .ok()
+        .and_then(|projection| {
+            projection
+                .session
+                .members
+                .iter()
+                .find(|entry| entry.child == Some(child))
+                .map(|entry| entry.member)
+        })
+        .unwrap_or(preferred)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -98,7 +132,6 @@ async fn run_member(
     handle: String,
     cancel: CancellationToken,
 ) -> Result<(SessionId, String), CoreError> {
-    let member = spec.id;
     let child = if let Some(session) = spec.session {
         session
     } else {
@@ -111,6 +144,9 @@ async fn run_member(
             })
             .await?
     };
+    // Resume (task_id) reuses the child session; keep the original member id so
+    // MemberSpawned upserts rather than listing the same agent twice.
+    let member = resolve_member_id(&engine, lead, spec.id, child).await;
     // Announce the member so observers can render it live in the agent tree.
     let (root, depth) = engine.session_lineage(child).await.unwrap_or((child, 0));
     let description: String = spec.directive.chars().take(80).collect();
@@ -216,6 +252,14 @@ pub async fn run_team(
     // is registered first so it appears in the roster and is addressable.
     let (root, _) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
     let _ = engine.ensure_root_registered(root).await;
+    // Resume (existing child session): reuse member id + roster handle so finish /
+    // tree events upsert the original row instead of appending a duplicate.
+    let mut specs = specs;
+    for spec in &mut specs {
+        if let Some(session) = spec.session {
+            spec.id = resolve_member_id(&engine, lead, spec.id, session).await;
+        }
+    }
     let handles = assign_handles(&engine, root, &specs).await;
 
     let mut member_tasks = Vec::new();
