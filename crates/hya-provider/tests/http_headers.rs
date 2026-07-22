@@ -258,7 +258,7 @@ async fn http_provider_grok_session_sends_oauth_proxy_headers() {
         ["grok-4.5".to_string()],
     )
     .unwrap()
-    .with_grok_session_auth("0.33.19", "hya");
+    .with_grok_session_auth("0.33.19", "grok-cli");
     let req = CompletionRequest {
         model: ModelRef::new("grok/grok-4.5"),
         system: None,
@@ -283,7 +283,7 @@ async fn http_provider_grok_session_sends_oauth_proxy_headers() {
     assert!(headers.contains("authorization: bearer oauth-jwt-token"));
     assert!(headers.contains("x-xai-token-auth: xai-grok-cli"));
     assert!(headers.contains("x-grok-client-version: 0.33.19"));
-    assert!(headers.contains("x-grok-client-identifier: hya"));
+    assert!(headers.contains("x-grok-client-identifier: grok-cli"));
     assert!(headers.contains("x-grok-model-override: grok-4.5"));
     assert!(request.raw.starts_with("POST /responses HTTP/1.1\r\n"));
 }

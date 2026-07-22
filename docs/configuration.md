@@ -222,7 +222,7 @@ Every `grok-build` request uses CLI chat-proxy session headers:
 - `Authorization: Bearer <api_key>`
 - `X-XAI-Token-Auth: xai-grok-cli`
 - `x-grok-client-version: <hya version>`
-- `x-grok-client-identifier: hya`
+- `x-grok-client-identifier: grok-cli`
 - `x-grok-model-override: <model id>`
 
 Session JWTs expire (typically hours). When requests return 401, refresh via
