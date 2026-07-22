@@ -398,6 +398,7 @@ pub fn spawn_team_supervisor(
                             id,
                             agent,
                             directive: member.prompt,
+                            description: member.description,
                             session: Some(session),
                         });
                     }
@@ -412,6 +413,7 @@ pub fn spawn_team_supervisor(
                             id: MemberId::new(),
                             agent,
                             directive: m.prompt,
+                            description: m.description,
                             session: m
                                 .task_id
                                 .as_deref()

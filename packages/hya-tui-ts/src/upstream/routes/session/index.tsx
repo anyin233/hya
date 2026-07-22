@@ -95,10 +95,17 @@ import {
   runTreeEventEffect,
   treeSessionIDs,
   workspaceLeaves,
+  type RunTreeNode,
   type RunTreeResource,
   type WorkspaceAction,
   type WorkspacePane,
 } from "./subagent-workspace"
+import {
+  launchedMembersFromTree,
+  resolveTaskMembers,
+  resolveTaskSessionId,
+  type TaskMemberView,
+} from "./task-presentation"
 
 addDefaultParsers(parsers.parsers)
 
@@ -167,6 +174,8 @@ const context = createContext<{
   diffWrapMode: () => "word" | "none"
   providers: () => ReadonlyMap<string, Provider>
   openSubagent: (sessionID: string) => void
+  /** Live subagent run tree for the focused main session (OpenCode-style status). */
+  runTree: () => RunTreeNode | undefined
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -1301,6 +1310,7 @@ export function Session() {
           diffWrapMode,
           providers,
           openSubagent: (sessionID) => openSubagent(sessionID, "tab"),
+          runTree: () => treeResource().tree,
           sync,
           tui: tuiConfig,
         }}
@@ -1655,6 +1665,48 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const rosterShortcut = useCommandShortcut("pane.roster")
   const backgroundShortcut = useCommandShortcut("session.background")
 
+  // Subagents already rendered via task tool parts (by session id or description).
+  const coveredTaskKeys = createMemo(() => {
+    const keys = new Set<string>()
+    const tree = ctx.runTree()
+    for (const part of props.parts) {
+      if (part.type !== "tool" || part.tool !== "task") continue
+      const metadata =
+        part.state.status === "pending" ? {} : ((part.state.metadata as Record<string, unknown> | undefined) ?? {})
+      const input = (part.state.input as Record<string, unknown> | undefined) ?? {}
+      const output = part.state.status === "completed" ? part.state.output : undefined
+      for (const member of resolveTaskMembers({
+        input,
+        metadata,
+        output: typeof output === "string" ? output : undefined,
+        background: metadata.background === true,
+      })) {
+        keys.add(`desc:${member.description}`)
+        const sessionID = resolveTaskSessionId(member, tree)
+        if (sessionID) keys.add(`ses:${sessionID}`)
+      }
+    }
+    return keys
+  })
+
+  // Live tree members not yet attached to a task row (e.g. mid-spawn before
+  // tool input finished) still appear in the main message so status is visible.
+  // Only on the latest assistant message to avoid replaying the whole roster on
+  // every historical turn.
+  const extraLaunched = createMemo(() => {
+    if (!props.last || props.message.sessionID !== ctx.sessionID) return [] as TaskMemberView[]
+    const coveredSessions = new Set(
+      [...coveredTaskKeys()].filter((key) => key.startsWith("ses:")).map((key) => key.slice(4)),
+    )
+    return launchedMembersFromTree(ctx.runTree(), coveredSessions).filter(
+      (member) => !coveredTaskKeys().has(`desc:${member.description}`),
+    )
+  })
+
+  const hasTaskUi = createMemo(
+    () => props.parts.some((x) => x.type === "tool" && x.tool === "task") || extraLaunched().length > 0,
+  )
+
   return (
     <>
       <For each={props.parts}>
@@ -1672,7 +1724,36 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <For each={extraLaunched()}>
+        {(member) => (
+          <TaskMemberRow
+            member={member}
+            sessionID={member.sessionId}
+            part={
+              {
+                id: `tree-${member.sessionId ?? member.description}`,
+                sessionID: props.message.sessionID,
+                messageID: props.message.id,
+                type: "tool",
+                callID: `tree-${member.sessionId ?? member.description}`,
+                tool: "task",
+                state: {
+                  status: member.status === "done" || member.status === "completed" ? "completed" : "running",
+                  input: {
+                    description: member.description,
+                    subagent_type: member.subagentType,
+                  },
+                  ...(member.status === "done" || member.status === "completed"
+                    ? { output: "", title: "", metadata: { sessionId: member.sessionId }, time: { start: 0, end: 0 } }
+                    : { time: { start: 0 } }),
+                },
+              } as ToolPart
+            }
+            toolRunning={member.status === "running" || member.status === "spawning" || member.status === "busy"}
+          />
+        )}
+      </For>
+      <Show when={hasTaskUi()}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {rosterShortcut()}
@@ -1883,9 +1964,12 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   const ctx = use()
   const display = createMemo(() => toolDisplay(props.part.tool))
 
-  // Hide tool if showDetails is false and tool completed successfully
+  // Hide tool if showDetails is false and tool completed successfully.
+  // Always keep `task` rows: users need subagent status in the main message
+  // (OpenCode parity), even when other tool details are collapsed.
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
+    if (props.part.tool === "task") return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -2388,13 +2472,71 @@ function Task(props: ToolProps) {
   const sync = useSync()
   const dialog = useDialog()
 
-  onMount(() => {
-    const sessionID = stringValue(props.metadata.sessionId)
-    if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
+  const members = createMemo(() =>
+    resolveTaskMembers({
+      input: props.input,
+      metadata: props.metadata,
+      output: props.output,
+      background: props.metadata.background === true,
+    }),
+  )
+
+  const resolvedMembers = createMemo(() => {
+    const tree = ctx.runTree()
+    return members().map((member) => ({
+      member,
+      sessionID: resolveTaskSessionId(member, tree),
+    }))
   })
 
-  const sessionID = createMemo(() => stringValue(props.metadata.sessionId))
-  const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
+  createEffect(() => {
+    for (const { sessionID } of resolvedMembers()) {
+      if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
+    }
+  })
+
+  return (
+    <Show
+      when={resolvedMembers().length > 0}
+      fallback={
+        <InlineTool
+          icon="│"
+          separate={true}
+          spinner={props.part.state.status === "running" || props.part.state.status === "pending"}
+          complete={false}
+          pending="Delegating..."
+          part={props.part}
+        >
+          {""}
+        </InlineTool>
+      }
+    >
+      <For each={resolvedMembers()}>
+        {(row) => (
+          <TaskMemberRow
+            member={row.member}
+            sessionID={row.sessionID}
+            part={props.part}
+            toolRunning={props.part.state.status === "running"}
+          />
+        )}
+      </For>
+    </Show>
+  )
+}
+
+function TaskMemberRow(props: {
+  member: TaskMemberView
+  sessionID?: string
+  part: ToolPart
+  toolRunning: boolean
+}) {
+  const ctx = use()
+  const { theme } = useTheme()
+  const sync = useSync()
+  const dialog = useDialog()
+
+  const messages = createMemo(() => sync.data.message[props.sessionID ?? ""] ?? [])
 
   const tools = createMemo(() => {
     return messages().flatMap((msg) =>
@@ -2408,18 +2550,34 @@ function Task(props: ToolProps) {
     tools().findLast((x) => (x.state.status === "running" || x.state.status === "completed") && x.state.title),
   )
 
-  const status = createMemo(() => sync.data.session_status[sessionID() ?? ""])
+  const status = createMemo(() => sync.data.session_status[props.sessionID ?? ""])
   const isRunning = createMemo(() => {
     const value = status()
+    const memberStatus = props.member.status
+    if (memberStatus === "done" || memberStatus === "completed" || memberStatus === "failed" || memberStatus === "cancelled") {
+      return false
+    }
     return (
-      props.part.state.status === "running" ||
-      (props.metadata.background === true && value !== undefined && value.type !== "idle")
+      props.toolRunning ||
+      memberStatus === "running" ||
+      memberStatus === "spawning" ||
+      memberStatus === "busy" ||
+      (props.member.background && value !== undefined && value.type !== "idle")
     )
   })
   const retry = createMemo(() => {
     const value = status()
     if (value?.type !== "retry") return
     return value
+  })
+  const failed = createMemo(() => {
+    const memberStatus = props.member.status
+    return (
+      props.part.state.status === "error" ||
+      memberStatus === "failed" ||
+      memberStatus === "error" ||
+      !!retry()
+    )
   })
 
   const duration = createMemo(() => {
@@ -2430,45 +2588,54 @@ function Task(props: ToolProps) {
   })
 
   const content = createMemo(() => {
-    const description = stringValue(props.input.description)
-    if (!description) return ""
-    let content = [
+    if (!props.member.description) return ""
+    const lines = [
       formatSubagentTitle(
-        Locale.titlecase(stringValue(props.input.subagent_type) ?? "General"),
-        description,
-        props.metadata.background === true,
+        Locale.titlecase(props.member.subagentType || "General"),
+        props.member.description,
+        props.member.background,
       ),
     ]
 
     const retrying = retry()
     if (isRunning() && retrying) {
-      content.push(`↳ ${formatSubagentRetry(retrying.attempt, Locale.truncate(retrying.message, 80))}`)
+      lines.push(`↳ ${formatSubagentRetry(retrying.attempt, Locale.truncate(retrying.message, 80))}`)
     } else if (isRunning() && tools().length > 0) {
       if (current()) {
         const state = current()!.state
         const title = state.status === "running" || state.status === "completed" ? state.title : undefined
-        content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title}`)
-      } else content.push(`↳ ${formatSubagentToolcalls(tools().length)}`)
+        lines.push(`↳ ${Locale.titlecase(current()!.tool)} ${title ?? ""}`.trimEnd())
+      } else lines.push(`↳ ${formatSubagentToolcalls(tools().length)}`)
+    } else if (isRunning()) {
+      lines.push("↳ Working...")
     }
 
-    if (!isRunning() && props.part.state.status === "completed") {
-      content.push(`↳ ${formatCompletedSubagentDetail(tools().length, Locale.duration(duration()))}`)
+    if (!isRunning() && (props.part.state.status === "completed" || props.member.status === "done" || props.member.status === "completed")) {
+      if (props.member.summary) {
+        lines.push(`↳ ${Locale.truncate(props.member.summary, 120)}`)
+      } else {
+        lines.push(`↳ ${formatCompletedSubagentDetail(tools().length, Locale.duration(duration()))}`)
+      }
     }
 
-    return content.join("\n")
+    if (failed() && props.member.summary) {
+      lines.push(`↳ ${Locale.truncate(props.member.summary, 120)}`)
+    }
+
+    return lines.join("\n")
   })
 
   return (
     <InlineTool
-      icon={props.part.state.status === "completed" ? "✓" : "│"}
+      icon={failed() ? "✗" : !isRunning() && props.part.state.status !== "pending" ? "✓" : "│"}
       separate={true}
-      color={retry() ? theme.error : undefined}
+      color={failed() ? theme.error : undefined}
       spinner={isRunning()}
-      complete={stringValue(props.input.description)}
+      complete={props.member.description}
       pending="Delegating..."
       part={props.part}
       onClick={() => {
-        if (sessionID()) ctx.openSubagent(sessionID()!)
+        if (props.sessionID) ctx.openSubagent(props.sessionID)
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)
       }}
