@@ -47,7 +47,7 @@ impl ProviderKind {
     }
 }
 
-/// Optional live bearer source (e.g. re-read `~/.grok/auth.json` each stream).
+/// Optional live bearer source for re-resolving tokens on each stream.
 pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send + Sync>;
 
 enum AuthStyle {
