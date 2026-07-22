@@ -48,8 +48,8 @@ launcher, which starts the TypeScript/OpenTUI frontend and an owned local
 | `--backend-bin <PATH>` | Override the backend executable. |
 | `--bun <PATH>` | Override the Bun executable. |
 | `--import <SOURCE>` | Import configuration. The supported source is `compat`. |
-| `--continue` | Continue the latest session. |
-| `--session <ID>` | Resume an exact session id. |
+| `-c, --continue` | Continue the most recently updated root session from the persisted store. |
+| `-s, --session <ID>` | Resume an exact session id (`hysec_…` / `ses_…`). |
 | `--fork` | Fork the continued or selected session. |
 | `--prompt <TEXT>` | Submit an initial prompt. |
 | `--agent <NAME>` | Select the initial agent. |
@@ -59,11 +59,17 @@ Examples:
 
 ```sh
 hya .
+hya -c
 hya --continue
+hya -s hysec_...
 hya --session hysec_...
 hya --server http://127.0.0.1:8787
 hya --import compat
 ```
+
+Owned backends started by `hya` persist sessions to
+`$XDG_STATE_HOME/hya/sessions.db` (or `~/.local/state/hya/sessions.db`). Override
+with `HYA_DB=/path/to.db`, or set `HYA_DB=` empty for an in-memory store.
 
 `hya-ts` exposes the same launcher surface for diagnostics. Normal use should
 invoke `hya` so help and errors retain canonical branding. In the TUI, press

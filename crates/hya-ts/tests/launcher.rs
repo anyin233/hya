@@ -103,6 +103,17 @@ fn validates_url_and_fork_before_process_construction() {
 }
 
 #[test]
+fn short_continue_and_session_flags_parse() {
+    let cli = Cli::try_parse_from(["hya-ts", "-c"]).unwrap();
+    assert!(cli.r#continue);
+    assert!(cli.session.is_none());
+
+    let cli = Cli::try_parse_from(["hya-ts", "-s", "hysec_ABCDEFGHIJKLMNOPQRST"]).unwrap();
+    assert!(!cli.r#continue);
+    assert_eq!(cli.session.as_deref(), Some("hysec_ABCDEFGHIJKLMNOPQRST"));
+}
+
+#[test]
 fn parses_oauth_login_and_forwards_backend_args() {
     let cli = Cli::try_parse_from([
         "hya-ts",
