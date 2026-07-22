@@ -4,6 +4,7 @@
 //! which we parse for the base URL (see [`parse_listen_url`]). `Drop` guarantees no orphaned
 //! server even if the caller forgets to shut down (PLAN.md R1/S-8).
 
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -28,8 +29,13 @@ const COMPAT_SERVE_ARGS: &[&str] = &[
     "127.0.0.1",
     "--print-logs",
 ];
-/// `hya-backend serve` flags: ephemeral loopback port (`:0`). hya prints the same `listening on` line.
-const HYA_SERVE_ARGS: &[&str] = &["serve", "--bind", "127.0.0.1:0"];
+
+/// Env override for the owned-backend SQLite path.
+///
+/// - unset → `XDG_STATE_HOME/hya/sessions.db` (or `~/.local/state/hya/sessions.db`)
+/// - set to a non-empty path → use that file
+/// - set to empty string → in-memory store (no `--db` flag)
+pub const HYA_DB_ENV: &str = "HYA_DB";
 
 /// A running `compat serve` process plus its discovered base URL.
 #[derive(Debug)]
@@ -60,10 +66,24 @@ impl ServerHandle {
 
     /// Spawn `hya-backend serve` on an ephemeral loopback port and wait until it announces its URL.
     ///
+    /// Passes `--db` with [`default_session_db_path`] so TUI sessions survive process restarts
+    /// and `hya --continue` / `hya -s <id>` can resume them. Set `HYA_DB=` (empty) for in-memory.
+    ///
     /// # Errors
     /// See [`ServerHandle::spawn`].
     pub async fn spawn_hya_backend(bin: &str, directory: &str) -> Result<Self> {
-        Self::spawn_args(bin, HYA_SERVE_ARGS, directory, HYA_READY_TIMEOUT).await
+        let mut args: Vec<String> = vec!["serve".into(), "--bind".into(), "127.0.0.1:0".into()];
+        if let Some(db) = default_session_db_path() {
+            if let Some(parent) = db.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    SdkError::Spawn(format!("create session db dir {}: {e}", parent.display()))
+                })?;
+            }
+            args.push("--db".into());
+            args.push(db.to_string_lossy().into_owned());
+        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        Self::spawn_args(bin, &arg_refs, directory, HYA_READY_TIMEOUT).await
     }
 
     async fn spawn_args(
@@ -130,6 +150,38 @@ impl ServerHandle {
     pub fn directory(&self) -> &str {
         &self.directory
     }
+}
+
+/// Resolve the default SQLite path used by an owned `hya-backend` process.
+///
+/// Returns `None` when the caller requested an in-memory store via empty `HYA_DB`.
+#[must_use]
+pub fn default_session_db_path() -> Option<PathBuf> {
+    match std::env::var(HYA_DB_ENV) {
+        Ok(value) if value.is_empty() => None,
+        Ok(value) => Some(PathBuf::from(value)),
+        Err(_) => Some(hya_state_dir().join("sessions.db")),
+    }
+}
+
+/// `$XDG_STATE_HOME/hya` or `~/.local/state/hya`.
+#[must_use]
+pub fn hya_state_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
+        let trimmed = xdg.trim();
+        if !trimmed.is_empty() {
+            return Path::new(trimmed).join("hya");
+        }
+    }
+    home_dir()
+        .map(|home| home.join(".local/state/hya"))
+        .unwrap_or_else(|| PathBuf::from(".local/state/hya"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 impl Drop for ServerHandle {
@@ -285,5 +337,44 @@ mod tests {
             matches!(err, SdkError::Spawn(_)),
             "expected Spawn error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn default_session_db_path_uses_state_dir_when_env_unset() {
+        // SAFETY: test-only process-env mutation; restored below.
+        let previous = std::env::var_os(HYA_DB_ENV);
+        unsafe { std::env::remove_var(HYA_DB_ENV) };
+        let path = default_session_db_path().expect("default path");
+        assert!(path.ends_with("sessions.db"));
+        assert!(path.to_string_lossy().contains("hya"));
+        match previous {
+            Some(value) => unsafe { std::env::set_var(HYA_DB_ENV, value) },
+            None => unsafe { std::env::remove_var(HYA_DB_ENV) },
+        }
+    }
+
+    #[test]
+    fn default_session_db_path_empty_env_means_memory() {
+        let previous = std::env::var_os(HYA_DB_ENV);
+        unsafe { std::env::set_var(HYA_DB_ENV, "") };
+        assert!(default_session_db_path().is_none());
+        match previous {
+            Some(value) => unsafe { std::env::set_var(HYA_DB_ENV, value) },
+            None => unsafe { std::env::remove_var(HYA_DB_ENV) },
+        }
+    }
+
+    #[test]
+    fn default_session_db_path_honors_explicit_env() {
+        let previous = std::env::var_os(HYA_DB_ENV);
+        unsafe { std::env::set_var(HYA_DB_ENV, "/tmp/custom-hya-sessions.db") };
+        assert_eq!(
+            default_session_db_path().as_deref(),
+            Some(Path::new("/tmp/custom-hya-sessions.db"))
+        );
+        match previous {
+            Some(value) => unsafe { std::env::set_var(HYA_DB_ENV, value) },
+            None => unsafe { std::env::remove_var(HYA_DB_ENV) },
+        }
     }
 }

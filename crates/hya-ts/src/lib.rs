@@ -22,9 +22,11 @@ pub struct Cli {
     pub bun: PathBuf,
     #[arg(long, value_name = "SOURCE")]
     pub import: Option<String>,
-    #[arg(long)]
+    /// Continue the most recently updated root session from the persisted store.
+    #[arg(short = 'c', long)]
     pub r#continue: bool,
-    #[arg(long, value_name = "ID")]
+    /// Resume an exact session id (`hysec_…` / `ses_…`).
+    #[arg(short = 's', long, value_name = "ID")]
     pub session: Option<String>,
     #[arg(long)]
     pub fork: bool,

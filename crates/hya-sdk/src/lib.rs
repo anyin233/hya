@@ -22,7 +22,7 @@ pub use events::stream_global_events;
 pub use native::{NativeBridge, NativeClient};
 pub use pending::{PendingClient, PendingSlot};
 pub use reducer::{Data, V2Event};
-pub use server::ServerHandle;
+pub use server::{default_session_db_path, hya_state_dir, ServerHandle, HYA_DB_ENV};
 pub use store::{MemberProjection, MessageStore, StoredPart};
 pub use team::{ChannelProjection, MailEndpoint, MailMessage, RosterEntry, TeamProjection};
 pub use types::{

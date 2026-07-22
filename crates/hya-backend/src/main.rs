@@ -42,6 +42,30 @@ pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()
     config::first_run_config_bootstrap(interactive)
 }
 
+/// Resolve the SQLite path for bare interactive `hya-backend` startup.
+///
+/// Empty `--db` (CLI default) maps to `$XDG_STATE_HOME/hya/sessions.db` so
+/// `hya --continue` / `hya -s` can resume after restarts. Explicit `--db ""`
+/// is not distinguishable from the clap default here; use a real path or the
+/// `hya` frontend's `HYA_DB=` empty override for intentional in-memory runs.
+fn resolve_interactive_db(cli_db: &str) -> String {
+    if !cli_db.is_empty() {
+        return cli_db.to_string();
+    }
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|v| !v.is_empty())
+                .map(|home| std::path::PathBuf::from(home).join(".local/state"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(".local/state"))
+        .join("hya");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("sessions.db").to_string_lossy().into_owned()
+}
+
 async fn cmd_exec(
     prompt: String,
     model_override: Option<String>,
@@ -272,7 +296,11 @@ async fn main() -> anyhow::Result<()> {
         return cmd_goal(goal, cli.max_iterations, model, yolo).await;
     }
     match cli.command {
-        None => serve::cmd_tui_hya(model, db, yolo, resume).await,
+        // Interactive TUI: default to a durable SQLite path so sessions survive restarts.
+        None => {
+            let db = resolve_interactive_db(&db);
+            serve::cmd_tui_hya(model, db, yolo, resume).await
+        }
         Some(Command::Run {
             message,
             format,
@@ -305,7 +333,8 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Some(Command::TailSession { id, db: command_db }) => {
-            cmd_tail_session(id, command_db.unwrap_or_else(|| db.clone())).await
+            let path = command_db.unwrap_or_else(|| db.clone());
+            cmd_tail_session(id, resolve_interactive_db(&path)).await
         }
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
@@ -321,7 +350,8 @@ async fn main() -> anyhow::Result<()> {
             models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
         }
         Some(Command::Sessions { db: command_db }) => {
-            cmd_sessions(command_db.unwrap_or_else(|| db.clone())).await
+            let path = command_db.unwrap_or_else(|| db.clone());
+            cmd_sessions(resolve_interactive_db(&path)).await
         }
         Some(Command::Rpc) => cmd_rpc(model, yolo).await,
     }
