@@ -1,14 +1,17 @@
 use std::error::Error;
 use std::io;
 use std::mem::MaybeUninit;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser as _;
 use hya_sdk::ServerHandle;
-use hya_ts::{Cli, build_bun_command_from, resolve_runtime_dir};
-use tokio::process::Command;
+use hya_ts::{
+    Cli, Command, backend_auth_args, build_bun_command_from, resolve_backend_bin,
+    resolve_runtime_dir,
+};
+use tokio::process::Command as TokioCommand;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -24,6 +27,11 @@ async fn main() -> ExitCode {
 async fn run() -> Result<u8, Box<dyn Error>> {
     let cli = Cli::parse();
     cli.validate()?;
+
+    if let Some(command) = &cli.command {
+        return run_auth_command(&cli, command).await;
+    }
+
     let cwd = std::env::current_dir()?;
     let project = cli.project.as_deref().unwrap_or(&cwd).canonicalize()?;
     let executable = std::env::current_exe()?;
@@ -39,7 +47,14 @@ async fn run() -> Result<u8, Box<dyn Error>> {
     let url = if let Some(url) = cli.server.as_deref() {
         url.to_string()
     } else {
-        let backend = resolve_backend_bin(&cli, &executable);
+        let backend = resolve_backend_bin(
+            cli.backend_bin.as_deref(),
+            std::env::var_os("HYA_BACKEND_BIN").as_deref(),
+            &executable,
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .as_path(),
+        );
         let handle =
             ServerHandle::spawn_hya_backend(&backend.to_string_lossy(), project_str(&project)?)
                 .await?;
@@ -56,7 +71,7 @@ async fn run() -> Result<u8, Box<dyn Error>> {
         build_bun_command_from(&attached, &runtime, &cwd)?
     };
     let mut terminal = TerminalState::capture()?;
-    let child = Command::new(spec.program)
+    let child = TokioCommand::new(spec.program)
         .args(spec.args)
         .current_dir(spec.current_dir)
         .process_group(0)
@@ -106,6 +121,38 @@ async fn run() -> Result<u8, Box<dyn Error>> {
     restore_terminal(&mut terminal)?;
     drop(owned);
     Ok(result?)
+}
+
+/// Forward auth/oauth commands to the sibling `hya-backend` binary (same store/config).
+async fn run_auth_command(cli: &Cli, command: &Command) -> Result<u8, Box<dyn Error>> {
+    let executable = std::env::current_exe()?;
+    let backend = resolve_backend_bin(
+        cli.backend_bin.as_deref(),
+        std::env::var_os("HYA_BACKEND_BIN").as_deref(),
+        &executable,
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .as_path(),
+    );
+    let args = backend_auth_args(command);
+    let status = TokioCommand::new(&backend)
+        .args(&args)
+        .status()
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to run {} {}: {error}",
+                backend.display(),
+                args.iter()
+                    .map(|a| a.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        })?;
+    Ok(status
+        .code()
+        .and_then(|code| u8::try_from(code).ok())
+        .unwrap_or(1))
 }
 
 struct TerminalState {
@@ -250,27 +297,4 @@ fn project_str(project: &Path) -> Result<&str, Box<dyn Error>> {
     project
         .to_str()
         .ok_or_else(|| format!("project path is not valid UTF-8: {}", project.display()).into())
-}
-
-fn resolve_backend_bin(cli: &Cli, executable: &Path) -> PathBuf {
-    if let Some(path) = &cli.backend_bin {
-        return path.clone();
-    }
-    if let Some(path) = std::env::var_os("HYA_BACKEND_BIN") {
-        return path.into();
-    }
-    let sibling = executable.with_file_name("hya-backend");
-    if sibling.is_file() {
-        return sibling;
-    }
-    for profile in ["release", "debug"] {
-        let candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
-            .join(profile)
-            .join("hya-backend");
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from("hya-backend")
 }

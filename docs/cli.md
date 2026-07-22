@@ -161,6 +161,17 @@ precedence over inline `api_key` values. `providers` is an alias for `auth`.
 `models --refresh` is accepted for Compat compatibility but does not fetch a
 remote catalog.
 
+The same auth/oauth commands are available on `hya-ts` (forwarded to
+`hya-backend`, same credential store):
+
+```sh
+hya-ts oauth login --provider codex --type openai-codex
+hya-ts oauth login --provider grok --type grok-build --no-browser
+hya-ts oauth status
+hya-ts login anthropic "$ANTHROPIC_API_KEY"
+hya-ts auth list
+```
+
 ## Session and RPC Commands
 
 ```sh
