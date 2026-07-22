@@ -5,7 +5,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.33.19"
+version = "0.33.20"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -48,7 +48,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "json", "uuid",
 thiserror = "1"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
-time = { version = "0.3", features = ["serde", "macros"] }
+time = { version = "0.3", features = ["serde", "macros", "parsing", "formatting"] }
 tracing = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"

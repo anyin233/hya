@@ -7,6 +7,9 @@ use serde_json::Value;
 
 use crate::{Decoder, ProviderError};
 
+const MISSING_TYPED_TERMINAL: &str =
+    "Responses stream ended without response.completed or response.incomplete";
+
 struct PartAsm {
     part: PartId,
     started: bool,
@@ -54,6 +57,7 @@ pub struct OpenAiResponsesDecoder {
     usage: TokenUsage,
     saw_tool_call: bool,
     finished: bool,
+    typed_terminal_required: bool,
 }
 
 impl OpenAiResponsesDecoder {
@@ -68,6 +72,14 @@ impl OpenAiResponsesDecoder {
             usage: TokenUsage::default(),
             saw_tool_call: false,
             finished: false,
+            typed_terminal_required: false,
+        }
+    }
+
+    pub(crate) fn new_requiring_typed_terminal(session: SessionId, message: MessageId) -> Self {
+        Self {
+            typed_terminal_required: true,
+            ..Self::new(session, message)
         }
     }
 
@@ -316,6 +328,9 @@ impl Decoder for OpenAiResponsesDecoder {
             return Ok(Vec::new());
         }
         if data == "[DONE]" {
+            if self.typed_terminal_required {
+                return Err(ProviderError::Decode(MISSING_TYPED_TERMINAL.to_string()));
+            }
             let finish = if self.saw_tool_call {
                 FinishReason::ToolCalls
             } else {
@@ -330,10 +345,11 @@ impl Decoder for OpenAiResponsesDecoder {
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(0);
         let out = match event.get("type").and_then(Value::as_str).unwrap_or("") {
-            "response.reasoning_summary_text.delta" => self.reasoning_delta(
-                index,
-                event.get("delta").and_then(Value::as_str).unwrap_or(""),
-            ),
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => self
+                .reasoning_delta(
+                    index,
+                    event.get("delta").and_then(Value::as_str).unwrap_or(""),
+                ),
             "response.output_item.added"
                 if event.pointer("/item/type").and_then(Value::as_str) == Some("function_call") =>
             {
@@ -392,6 +408,9 @@ impl Decoder for OpenAiResponsesDecoder {
     }
 
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
+        if self.typed_terminal_required && !self.finished {
+            return Err(ProviderError::Decode(MISSING_TYPED_TERMINAL.to_string()));
+        }
         let finish = if self.saw_tool_call {
             FinishReason::ToolCalls
         } else {
