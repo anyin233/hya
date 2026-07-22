@@ -1,4 +1,13 @@
 //! OpenAI Codex / ChatGPT subscription OAuth (PKCE + device-code).
+//!
+//! Device-code flow matches the official Codex CLI
+//! (`codex-rs/login/src/device_code_auth.rs`):
+//! - JSON POST to `/api/accounts/deviceauth/usercode` with only `client_id`
+//! - response fields: `device_auth_id`, `user_code`, string `interval`
+//! - verification URL is fixed: `{issuer}/codex/device`
+//! - poll JSON POST with `device_auth_id` + `user_code`
+//! - pending is HTTP 403 (not OAuth `authorization_pending`)
+//! - success returns `authorization_code` **and** server-issued PKCE pair
 
 use std::time::Duration;
 
@@ -11,13 +20,28 @@ use super::{
 };
 
 pub(crate) const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+/// Codex OAuth issuer (`auth.openai.com`).
+pub(crate) const ISSUER: &str = "https://auth.openai.com";
 pub(crate) const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 pub(crate) const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+/// Official device-auth API base (Codex CLI uses `{issuer}/api/accounts`).
+pub(crate) const DEVICE_API_BASE: &str = "https://auth.openai.com/api/accounts";
 pub(crate) const DEVICE_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 pub(crate) const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
-pub(crate) const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 pub(crate) const SCOPE: &str = "openid profile email offline_access";
 pub(crate) const AUTH_CLAIMS_NS: &str = "https://api.openai.com/auth";
+
+/// Codex CLI: `{issuer}/deviceauth/callback`.
+#[must_use]
+pub(crate) fn device_redirect_uri() -> String {
+    format!("{ISSUER}/deviceauth/callback")
+}
+
+/// Codex CLI: `{issuer}/codex/device`.
+#[must_use]
+pub(crate) fn device_verification_url() -> String {
+    format!("{ISSUER}/codex/device")
+}
 const DEFAULT_REDIRECT_HOST: &str = "localhost";
 const DEFAULT_REDIRECT_PORT: u16 = 1455;
 const DEFAULT_REDIRECT_PATH: &str = "/auth/callback";
@@ -88,67 +112,62 @@ pub async fn login_openai_codex(
 
 /// Device-code login for openai-codex (Codex CLI default / no-browser path).
 ///
-/// Prints a verification URL and user code, then polls until the user completes
-/// sign-in in any browser. Matches Codex's default device-auth flow: no local
-/// callback server is required. When `open` is false (the default for this
-/// path), the URL is only printed — the CLI does not launch a browser.
+/// Matches official Codex CLI field names and JSON bodies — not RFC 8628 form
+/// encoding.
 pub async fn login_openai_codex_device(
     timeout: Duration,
     open: bool,
 ) -> Result<OAuthCredential, OAuthError> {
-    let (verifier, challenge) = generate_pkce_pair();
     let client = http_client()?;
-    let start = post_form(
+    // Codex only sends client_id; PKCE is issued by the server on poll success.
+    let start = post_json(
         &client,
-        DEVICE_CODE_URL,
-        &[
-            ("client_id", CLIENT_ID),
-            ("scope", SCOPE),
-            ("code_challenge", &challenge),
-            ("code_challenge_method", "S256"),
-        ],
+        &device_code_url(),
+        &serde_json::json!({ "client_id": CLIENT_ID }),
     )
     .await?;
 
-    let device_code = json_str(&start, "device_code")
-        .ok_or_else(|| OAuthError::Protocol("device-code response missing device_code".into()))?
+    let device_auth_id = json_str(&start, "device_auth_id")
+        .ok_or_else(|| {
+            OAuthError::Protocol(
+                "device usercode response missing device_auth_id (is the body JSON?)".into(),
+            )
+        })?
         .to_string();
-    let user_code = json_str(&start, "user_code").unwrap_or("").to_string();
-    let verification = json_str(&start, "verification_uri_complete")
-        .or_else(|| json_str(&start, "verification_uri"))
-        .unwrap_or("https://auth.openai.com/codex/device")
+    let user_code = json_str(&start, "user_code")
+        .or_else(|| json_str(&start, "usercode"))
+        .ok_or_else(|| OAuthError::Protocol("device usercode response missing user_code".into()))?
         .to_string();
-    let interval = start
-        .get("interval")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5)
-        .max(1);
-    let mut poll_interval = Duration::from_secs(interval);
+    let interval = parse_interval(&start).unwrap_or(5).max(1);
+    let poll_interval = Duration::from_secs(interval);
+    let verification = device_verification_url();
+    let redirect_uri = device_redirect_uri();
 
-    println!("\nChatGPT / Codex sign-in (device code — Codex default):");
-    println!("  Open this URL in a browser on any device:\n  {verification}");
-    if !user_code.is_empty() {
-        println!("  Code: {user_code}");
-    }
-    println!("Waiting for authorization...\n");
+    println!("\nChatGPT / Codex sign-in (device code — Codex default):\n");
+    println!("1. Open this link in your browser and sign in:");
+    println!("   {verification}");
+    println!("2. Enter this one-time code (expires in ~15 minutes):");
+    println!("   {user_code}");
+    println!("\nWaiting for authorization...\n");
     if open {
         open_browser(&verification);
     }
 
     let deadline = tokio::time::Instant::now() + timeout;
-    let authorization_code = loop {
+    let code_success = loop {
         if tokio::time::Instant::now() >= deadline {
             return Err(OAuthError::Timeout(
                 "timed out waiting for ChatGPT device authorization".into(),
             ));
         }
         let poll = client
-            .post(DEVICE_TOKEN_URL)
+            .post(device_token_url())
             .header("Accept", "application/json")
-            .form(&[
-                ("client_id", CLIENT_ID),
-                ("device_code", device_code.as_str()),
-            ])
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "device_auth_id": device_auth_id,
+                "user_code": user_code,
+            }))
             .send()
             .await
             .map_err(|e| OAuthError::Network(e.to_string()))?;
@@ -159,42 +178,66 @@ pub async fn login_openai_codex_device(
             .map_err(|e| OAuthError::Network(e.to_string()))?;
         let json: serde_json::Value =
             serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
-        if let Some(code) = json_str(&json, "authorization_code") {
-            break code.to_string();
-        }
-        let error = json_str(&json, "error").unwrap_or("");
-        if error == "authorization_pending" || (!status.is_success() && error.is_empty()) {
-            tokio::time::sleep(poll_interval).await;
-            continue;
-        }
-        if error == "slow_down" {
-            poll_interval += Duration::from_secs(5);
-            tokio::time::sleep(poll_interval).await;
-            continue;
-        }
-        if !error.is_empty() {
-            return Err(OAuthError::Protocol(format!(
-                "device authorization failed: {error}"
-            )));
-        }
+
         if status.is_success() {
-            // Unexpected success without code.
-            return Err(OAuthError::Protocol(
-                "device token response missing authorization_code".into(),
-            ));
+            let authorization_code = json_str(&json, "authorization_code")
+                .ok_or_else(|| {
+                    OAuthError::Protocol(
+                        "device token success response missing authorization_code".into(),
+                    )
+                })?
+                .to_string();
+            // Codex server returns the PKCE pair used for the subsequent token exchange.
+            let code_verifier = json_str(&json, "code_verifier")
+                .ok_or_else(|| {
+                    OAuthError::Protocol(
+                        "device token success response missing code_verifier".into(),
+                    )
+                })?
+                .to_string();
+            break (authorization_code, code_verifier);
         }
-        tokio::time::sleep(poll_interval).await;
+
+        // Codex treats 403/404 as "still pending" while the user enters the code.
+        if status.as_u16() == 403 || status.as_u16() == 404 {
+            let code = json
+                .pointer("/error/code")
+                .and_then(|v| v.as_str())
+                .or_else(|| json_str(&json, "error"))
+                .unwrap_or("");
+            if code == "access_denied"
+                || code == "authorization_denied"
+                || code == "deviceauth_denied"
+            {
+                return Err(OAuthError::Protocol(format!(
+                    "device authorization denied: {code}"
+                )));
+            }
+            tokio::time::sleep(poll_interval).await;
+            continue;
+        }
+
+        let message = json
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .or_else(|| json_str(&json, "error_description"))
+            .or_else(|| json_str(&json, "error"))
+            .unwrap_or(body.as_str());
+        return Err(OAuthError::Protocol(format!(
+            "device auth failed with status {status}: {message}"
+        )));
     };
 
+    let (authorization_code, code_verifier) = code_success;
     let token_json = post_form(
         &client,
         TOKEN_URL,
         &[
             ("grant_type", "authorization_code"),
             ("code", &authorization_code),
-            ("redirect_uri", DEVICE_REDIRECT_URI),
+            ("redirect_uri", redirect_uri.as_str()),
             ("client_id", CLIENT_ID),
-            ("code_verifier", &verifier),
+            ("code_verifier", &code_verifier),
         ],
     )
     .await?;
@@ -226,17 +269,59 @@ pub async fn refresh_openai_codex(refresh_token: &str) -> Result<OAuthCredential
 }
 
 pub(crate) fn build_authorize_url(redirect_uri: &str, state: &str, code_challenge: &str) -> String {
-    let mut url = format!(
+    format!(
         "{AUTHORIZE_URL}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
         urlencoding(CLIENT_ID),
         urlencoding(redirect_uri),
         urlencoding(SCOPE),
         urlencoding(code_challenge),
         urlencoding(state),
-    );
-    // Keep stable for tests / logs.
-    let _ = &mut url;
-    url
+    )
+}
+
+/// Parse Codex device `interval` which is a JSON string (`"5"`), not an int.
+fn parse_interval(payload: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = payload.get("interval").and_then(|v| v.as_u64()) {
+        return Some(n);
+    }
+    payload
+        .get("interval")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.trim().parse().ok())
+}
+
+async fn post_json(
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, OAuthError> {
+    let resp = client
+        .post(url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| OAuthError::Network(e.to_string()))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| OAuthError::Network(e.to_string()))?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|_| serde_json::json!({ "error": "non_json", "error_description": text }));
+    if status.is_success() {
+        return Ok(json);
+    }
+    let message = json
+        .pointer("/error/message")
+        .and_then(|v| v.as_str())
+        .or_else(|| json_str(&json, "error_description"))
+        .or_else(|| json_str(&json, "error"))
+        .unwrap_or(text.as_str());
+    Err(OAuthError::Protocol(format!(
+        "{url} returned {status}: {message}"
+    )))
 }
 
 fn credential_from_token_response(
@@ -300,6 +385,35 @@ fn urlencoding(s: &str) -> String {
     out
 }
 
+/// Pure parsing helpers exercised by unit tests (no network).
+#[cfg(test)]
+pub(crate) fn parse_device_usercode_response(
+    payload: &serde_json::Value,
+) -> Result<(String, String, u64), OAuthError> {
+    let device_auth_id = json_str(payload, "device_auth_id")
+        .ok_or_else(|| OAuthError::Protocol("missing device_auth_id".into()))?
+        .to_string();
+    let user_code = json_str(payload, "user_code")
+        .or_else(|| json_str(payload, "usercode"))
+        .ok_or_else(|| OAuthError::Protocol("missing user_code".into()))?
+        .to_string();
+    let interval = parse_interval(payload).unwrap_or(5).max(1);
+    Ok((device_auth_id, user_code, interval))
+}
+
+#[cfg(test)]
+pub(crate) fn parse_device_token_success(
+    payload: &serde_json::Value,
+) -> Result<(String, String), OAuthError> {
+    let authorization_code = json_str(payload, "authorization_code")
+        .ok_or_else(|| OAuthError::Protocol("missing authorization_code".into()))?
+        .to_string();
+    let code_verifier = json_str(payload, "code_verifier")
+        .ok_or_else(|| OAuthError::Protocol("missing code_verifier".into()))?
+        .to_string();
+    Ok((authorization_code, code_verifier))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -342,5 +456,53 @@ mod tests {
         assert_eq!(cred.refresh_token, "refresh");
         assert_eq!(cred.account_id.as_deref(), Some("acct-99"));
         assert_eq!(cred.oauth_type, OAuthType::OpenaiCodex);
+    }
+
+    #[test]
+    fn parses_codex_device_usercode_json_shape() {
+        // Live shape from auth.openai.com (interval is a string).
+        let payload = serde_json::json!({
+            "device_auth_id": "deviceauth_abc",
+            "user_code": "ABCD-EFGH",
+            "interval": "5",
+            "expires_at": "2026-07-22T10:32:41.091782+00:00"
+        });
+        let (id, code, interval) = parse_device_usercode_response(&payload).unwrap();
+        assert_eq!(id, "deviceauth_abc");
+        assert_eq!(code, "ABCD-EFGH");
+        assert_eq!(interval, 5);
+        // Must not look for RFC 8628 device_code / verification_uri.
+        assert!(payload.get("device_code").is_none());
+        assert!(payload.get("verification_uri").is_none());
+    }
+
+    #[test]
+    fn parses_codex_device_token_success_with_server_pkce() {
+        let payload = serde_json::json!({
+            "authorization_code": "auth-code-1",
+            "code_challenge": "chal",
+            "code_verifier": "verif-xyz"
+        });
+        let (code, verifier) = parse_device_token_success(&payload).unwrap();
+        assert_eq!(code, "auth-code-1");
+        assert_eq!(verifier, "verif-xyz");
+    }
+
+    #[test]
+    fn verification_url_matches_codex_cli() {
+        assert_eq!(device_verification_url(), format!("{ISSUER}/codex/device"));
+        assert_eq!(
+            device_redirect_uri(),
+            format!("{ISSUER}/deviceauth/callback")
+        );
+        assert_eq!(DEVICE_API_BASE, format!("{ISSUER}/api/accounts"));
+        assert_eq!(
+            device_code_url(),
+            format!("{DEVICE_API_BASE}/deviceauth/usercode")
+        );
+        assert_eq!(
+            device_token_url(),
+            format!("{DEVICE_API_BASE}/deviceauth/token")
+        );
     }
 }
