@@ -1,3 +1,3 @@
-# 0.33.25
+# 0.33.26
 
-- Default openai-codex OAuth to Codex-style device-code login (print URL/code, no auto-open browser).
+- Fix openai-codex device/user-code login to match official Codex JSON deviceauth API.
