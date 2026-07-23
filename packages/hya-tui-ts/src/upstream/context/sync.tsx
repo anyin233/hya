@@ -28,6 +28,7 @@ import { useExit } from "./exit"
 import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import path from "path"
+import { startupMark } from "../../hya/startup-trace"
 import { useKV } from "./kv"
 
 function search<T>(items: T[], target: string, key: (item: T) => string) {
@@ -480,6 +481,7 @@ export const {
         })
         .then(() => {
           if (store.status !== "complete") setStore("status", "partial")
+          startupMark("sync_partial")
           // non-blocking
           void Promise.all([
             ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
@@ -496,6 +498,7 @@ export const {
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
           ]).then(() => {
             setStore("status", "complete")
+            startupMark("sync_complete")
           })
         })
         .catch(async (e) => {

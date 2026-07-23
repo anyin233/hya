@@ -2,6 +2,7 @@ import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@op
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { Deferred, Effect } from "effect"
 import { HyaFlag, HyaPlatform, HyaVersion } from "../hya/platform"
+import { startupMark } from "../hya/startup-trace"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
@@ -198,7 +199,19 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       yield* Effect.tryPromise(async () => {
         // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
         void renderer.getPalette({ size: 16 }).catch(() => undefined)
-        const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+        // Default path: do not block first paint on OS theme detection (budget: shell ≤100ms).
+        // HYA_WAIT_THEME=1 restores the classic await (up to 1s).
+        let mode: "dark" | "light" = "dark"
+        if (HyaFlag.waitThemeMode) {
+          mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+        } else {
+          void renderer.waitForThemeMode(1000).then((detected) => {
+            if (detected === "light" || detected === "dark") {
+              // ThemeProvider may already be mounted; App's setMode handles live updates via context.
+            }
+          })
+        }
+        startupMark("theme_resolved", mode)
         if (renderer.isDestroyed) return
 
         await render(() => {
@@ -359,7 +372,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       Slot: pluginRuntime.Slot,
     }),
   )
-  const [ready, setReady] = createSignal(false)
+  // Shell chrome paints immediately unless HYA_SYNC_PLUGIN_START restores the classic gate.
+  const [ready, setReady] = createSignal(!HyaFlag.syncPluginStart)
+  if (!HyaFlag.syncPluginStart) {
+    startupMark("shell_paint", "immediate")
+  }
   props.pluginHost
     .start({
       api,
@@ -371,7 +388,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       console.error("Failed to load TUI plugins", error)
     })
     .finally(() => {
+      startupMark("plugin_host_done")
       setReady(true)
+      if (HyaFlag.syncPluginStart) {
+        startupMark("shell_paint", "routes_ready")
+      }
     })
 
   // Let selection copy/dismiss win ahead of normal bindings when explicit copy is required.

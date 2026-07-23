@@ -1,5 +1,6 @@
 //! Dev tooling entrypoint.
 
+mod startup_bench;
 mod sync_compat;
 
 fn main() {
@@ -10,8 +11,9 @@ fn main() {
     let result = match task.as_deref() {
         Some("sync-compat") => sync_compat::run(args.collect()),
         Some("migrate") => sync_compat::run(args.collect()),
+        Some("startup-bench") => startup_bench::run(args.collect()),
         _ => {
-            eprintln!("usage: cargo xtask <sync-compat|migrate>");
+            eprintln!("usage: cargo xtask <sync-compat|migrate|startup-bench>");
             Ok(())
         }
     };
