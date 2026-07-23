@@ -775,30 +775,23 @@ async function runChildObservation(columns: number) {
           ])
           return JSON.stringify(worker.data).includes(workerLate) && JSON.stringify(researcher.data).includes(researcherLate)
         }, "late observation messages")
-        for (let index = 0; index < 2; index++) {
-          process.stdin.write("\x18")
-          await Bun.sleep(100)
-          process.stdin.write(".")
-          await Bun.sleep(100)
+        // ADR-0003 paints Main + one observation; other open agents stay as tabs.
+        // Focus each late pane explicitly so markers paint regardless of cycle order.
+        for (const [handle, marker] of [
+          ["worker-1", workerLate],
+          ["researcher-1", researcherLate],
+        ] as const) {
+          await openSubagentByHandle(handle)
+          await waitFor(
+            async () => (await output()).slice(redrawStart).includes(marker),
+            `late ${handle} redraw`,
+          ).catch(async (error) => {
+            const frame = (await output()).slice(redrawStart).slice(-5000)
+            throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+          })
         }
-        await waitFor(async () => {
-          const frame = (await output()).slice(redrawStart)
-          return frame.includes(workerLate) && frame.includes(researcherLate)
-        }, "late split redraw").catch(async (error) => {
-          const frame = (await output()).slice(redrawStart).slice(-5000)
-          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
-        })
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("o")
-        await Bun.sleep(200)
-        process.stdin.write("\x1b[B")
-        await Bun.sleep(100)
-        process.stdin.write("\x1b[B")
-        await Bun.sleep(100)
         const reviewerTabStart = (await output()).length
-        process.stdin.write("\r")
-        await waitForFocusedHeader(reviewerTabStart, "reviewer-1")
+        await openSubagentByHandle("reviewer-1")
         await waitFor(
           async () => (await output()).slice(reviewerTabStart).includes(secondChildTranscript),
           "auxiliary reviewer tab",
