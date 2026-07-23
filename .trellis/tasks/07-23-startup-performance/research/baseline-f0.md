@@ -42,8 +42,15 @@ Notes:
 | --- | --- | --- |
 | backend listen | ≤ 150 ms | **~8.5 ms** (WP-1) |
 | Bun → shell paint | ≤ 100 ms | TBD (PTY / interactive) |
-| blocking + complete bootstrap | ≤ 200 ms | TBD |
+| blocking + complete bootstrap | ≤ 200 ms | **~22 ms** single `/tui/bootstrap` (WP-4); multi-call ~17 ms warm parallel |
 | slack | remainder | — |
+
+### WP-4 bootstrap payload
+
+| Endpoint | Bytes | Notes |
+| --- | --- | --- |
+| `/command` (full) | ~258 KB | includes full skill templates |
+| `/tui/bootstrap` | ~108 KB | commands omit templates; one RTT for full sync fields |
 
 ## Instrumentation shipped (WP-0)
 
