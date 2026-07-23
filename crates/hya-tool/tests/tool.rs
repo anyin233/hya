@@ -99,7 +99,7 @@ impl Tool for NamedTestTool {
 
 #[test]
 fn registry_rejects_duplicate_tool_name() {
-    let mut registry = ToolRegistry::builtins();
+    let registry = ToolRegistry::builtins();
     let result = registry.register(Arc::new(DuplicateTool));
     assert!(result.is_err());
     assert_eq!(
@@ -147,7 +147,7 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
 
 #[test]
 fn removing_a_builtin_also_removes_its_alias() {
-    let mut registry = ToolRegistry::builtins();
+    let registry = ToolRegistry::builtins();
 
     registry.remove("websearch");
 
@@ -156,8 +156,45 @@ fn removing_a_builtin_also_removes_its_alias() {
 }
 
 #[test]
+fn registry_hot_registers_through_arc_after_engine_would_hold_it() {
+    struct LateTool;
+    #[async_trait]
+    impl Tool for LateTool {
+        fn name(&self) -> &str {
+            "late_tool"
+        }
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new("late_tool"),
+                description: "late".into(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+            }
+        }
+        async fn execute(
+            &self,
+            _ctx: &ToolCtx,
+            _input: Value,
+        ) -> Result<Value, hya_tool::ToolError> {
+            Ok(json!({ "ok": true }))
+        }
+    }
+
+    let registry = Arc::new(ToolRegistry::builtins());
+    assert!(registry.get("late_tool").is_none());
+    registry
+        .register_with_permission(Arc::new(LateTool), ToolPermission::Mcp)
+        .unwrap();
+    assert!(registry.get("late_tool").is_some());
+    assert_eq!(
+        registry.resolve("late_tool").unwrap().permission,
+        ToolPermission::Mcp
+    );
+}
+
+#[test]
 fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
-    let mut registry = ToolRegistry::builtins();
+    let registry = ToolRegistry::builtins();
 
     for name in [
         "read",

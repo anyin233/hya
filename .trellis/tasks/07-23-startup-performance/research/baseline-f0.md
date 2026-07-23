@@ -1,8 +1,8 @@
-# F0 baseline (Gate 0 partial)
+# F0 baseline (Gate 0 → after WP-1)
 
 Machine: development host (Linux). Date: 2026-07-23.
 
-## Backend ready (release `hya-backend serve`, empty temp DB, no MCP)
+## Backend ready (release `hya-backend serve`)
 
 Command:
 
@@ -10,33 +10,40 @@ Command:
 cargo run -p xtask --release -- startup-bench --mode backend --runs 5
 ```
 
-Results:
+### Before WP-1 (MCP/plugins blocked listen)
 
 | run | backend_ready_ms |
 | --- | --- |
-| 1 | 126.2 |
-| 2 | 120.5 |
-| 3 | 128.2 |
-| 4 | 126.2 |
-| 5 | 122.9 |
+| 1–5 | ~120–128 |
 
-- **p50** ≈ **126.2 ms**
-- **p95** ≈ **128.2 ms**
+- **p50** ≈ **126 ms**, **p95** ≈ **128 ms**
+
+### After WP-1 (MCP deferred by default)
+
+| run | backend_ready_ms | mark_delta_ms |
+| --- | --- | --- |
+| 1 | 8.5 | 8.0 |
+| 2 | 8.0 | 8.0 |
+| 3 | 8.5 | 9.0 |
+| 4 | 8.0 | 8.0 |
+| 5 | 8.6 | 8.0 |
+
+- **p50** ≈ **8.5 ms**, **p95** ≈ **8.6 ms**
+- Slow MCP no longer blocks listen (`McpStatus::Connecting` until attach finishes; tools hot-register).
 
 Notes:
 
-- Already ~25% of the 500 ms full-sync budget before Bun or TUI bootstrap starts.
-- `HYA_STARTUP_TRACE=1` emits `backend_listen` marks from `hya-backend` / `hya-ts`.
-- Full E2E (shell paint + sync complete) still requires a PTY-capable harness; TUI marks are wired for interactive runs with `HYA_STARTUP_TRACE=1`.
+- `HYA_STARTUP_TRACE=1` emits marks; restore classic path with `HYA_DEFER_SIDEPLANES=0`.
+- Full E2E (shell paint + sync complete) still needs a PTY-capable harness.
 
-## Residual budget ledger (F0 sketch)
+## Residual budget ledger (updated)
 
-| Slice | Budget allocation (draft) | Measured floor |
+| Slice | Budget allocation | Measured floor |
 | --- | --- | --- |
-| backend listen | ≤ 150 ms | ~126 ms |
-| Bun → shell paint | ≤ 100 ms | TBD (needs PTY / interactive) |
+| backend listen | ≤ 150 ms | **~8.5 ms** (WP-1) |
+| Bun → shell paint | ≤ 100 ms | TBD (PTY / interactive) |
 | blocking + complete bootstrap | ≤ 200 ms | TBD |
-| slack | ≤ 50 ms | — |
+| slack | remainder | — |
 
 ## Instrumentation shipped (WP-0)
 
