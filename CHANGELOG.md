@@ -1,6 +1,5 @@
-# 0.34.0
+# 0.34.1
 
-- Removed the retained Rust interactive TUI crates (`hya-tui`, `hya-tui-lib`) and
-  the unused TS-vs-Rust parity harness (`hya-parity`).
-- The TypeScript package `packages/hya-tui-ts` is the sole interactive terminal
-  UI implementation; launch path remains `hya` → `hya-ts` → prepared runtime.
+- TUI home and epilogue logo art now come from an 8-bit Hya wordmark
+  (`docs/assets/hya-icon-8bit.png`); decorations are omitted so only the main
+  "Hya" letters render in the terminal glyph art.

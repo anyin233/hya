@@ -33,6 +33,7 @@ artwork have been replaced with hya project branding; the upstream copyright
 and permission notices are retained in `LICENSE`. See `NOTICE` for details.
 
 The logo artwork shown on the home screen and in the session epilogue is
-generated from the project logo image (`imgs/Hya icon v7.png`) by
+generated from the 8-bit Hya wordmark (`docs/assets/hya-icon-8bit.png`) by
 `scripts/generate-logo-art.py` into `src/upstream/component/logo-art.data.ts`
-and `src/upstream/util/epilogue-art.data.ts`.
+and `src/upstream/util/epilogue-art.data.ts`. The classic full sticker remains
+at `docs/assets/hya-icon.png` for docs/README use.
