@@ -449,6 +449,38 @@ pub fn spawn_team_supervisor(
     });
 }
 
+/// When true (default), MCP connect runs after the engine is built so HTTP can
+/// listen without waiting on child process handshakes. Set `HYA_DEFER_SIDEPLANES=0`
+/// to restore the classic await-before-listen path.
+fn defer_sideplanes() -> bool {
+    match std::env::var("HYA_DEFER_SIDEPLANES") {
+        Ok(value) => {
+            let text = value.trim();
+            !(text.eq_ignore_ascii_case("0")
+                || text.eq_ignore_ascii_case("false")
+                || text.eq_ignore_ascii_case("off")
+                || text.eq_ignore_ascii_case("no"))
+        }
+        Err(_) => true,
+    }
+}
+
+fn register_mcp_tools(registry: &ToolRegistry, manager: &hya_mcp::McpManager) {
+    for tool in manager.tools() {
+        if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
+            eprintln!("hya: skipping MCP tool ({error})");
+        }
+    }
+}
+
+fn register_plugin_tools(registry: &ToolRegistry, host: &hya_plugin::PluginHost) {
+    for tool in host.tools() {
+        if let Err(error) = registry.register(tool) {
+            eprintln!("hya: skipping plugin tool ({error})");
+        }
+    }
+}
+
 pub async fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
@@ -466,23 +498,33 @@ pub async fn build_session_engine(
 ) {
     let (websearch, invocation_policy) = tool_config;
     let router = Arc::new(router);
-    let mut registry = ToolRegistry::builtins();
+    let registry = ToolRegistry::builtins();
     if !websearch.enabled {
         registry.remove("websearch");
     }
-    let mcp_manager = hya_mcp::McpManager::connect_all(mcp).await;
-    for tool in mcp_manager.tools() {
-        if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
-            eprintln!("hya: skipping MCP tool ({error})");
-        }
-    }
-    let plugin_host = Arc::new(hya_plugin::PluginHost::connect_all(plugins, host_info()).await);
-    for tool in plugin_host.tools() {
-        if let Err(error) = registry.register(tool) {
-            eprintln!("hya: skipping plugin tool ({error})");
-        }
-    }
     let tools = Arc::new(registry);
+
+    // Plugins stay on the synchronous path for now (hooks must be installed before
+    // the engine is sealed). MCP is the unbounded hang — defer by default.
+    let plugin_host = Arc::new(hya_plugin::PluginHost::connect_all(plugins, host_info()).await);
+    register_plugin_tools(tools.as_ref(), plugin_host.as_ref());
+
+    let defer_mcp = defer_sideplanes() && !mcp.is_empty();
+    let mcp_manager = if defer_mcp {
+        let manager = hya_mcp::McpManager::pending(&mcp);
+        let tools_bg = tools.clone();
+        let manager_bg = manager.clone();
+        tokio::spawn(async move {
+            manager_bg.connect_all_into(mcp).await;
+            register_mcp_tools(tools_bg.as_ref(), &manager_bg);
+        });
+        manager
+    } else {
+        let manager = hya_mcp::McpManager::connect_all(mcp).await;
+        register_mcp_tools(tools.as_ref(), &manager);
+        manager
+    };
+
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
         Rule::new(Action::Glob, "*", Mode::Allow),
@@ -836,6 +878,56 @@ mod tests {
                 .tool_schemas()
                 .iter()
                 .all(|schema| schema.name.as_str() != "websearch")
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_mcp_returns_before_slow_child_handshake() {
+        let previous = {
+            let _env_lock = ENV_LOCK.lock().unwrap();
+            let previous = std::env::var_os("HYA_DEFER_SIDEPLANES");
+            unsafe { std::env::set_var("HYA_DEFER_SIDEPLANES", "1") };
+            previous
+        };
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut mcp = BTreeMap::new();
+        mcp.insert(
+            "slow".to_string(),
+            hya_mcp::McpServerConfig {
+                // Sleep longer than the assert budget so classic await-before-listen would fail.
+                command: vec!["sleep".into(), "30".into()],
+                ..hya_mcp::McpServerConfig::default()
+            },
+        );
+        let started = std::time::Instant::now();
+        let result = build_session_engine(
+            store,
+            router,
+            &agent,
+            mcp,
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            false,
+        )
+        .await;
+        {
+            let _env_lock = ENV_LOCK.lock().unwrap();
+            match previous {
+                Some(value) => unsafe { std::env::set_var("HYA_DEFER_SIDEPLANES", value) },
+                None => unsafe { std::env::remove_var("HYA_DEFER_SIDEPLANES") },
+            }
+        }
+        let (_engine, _asks, _questions, mcp_manager, _plugins) = result;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "build_session_engine blocked on MCP for {elapsed:?}"
+        );
+        assert_eq!(
+            mcp_manager.status().get("slow"),
+            Some(&hya_mcp::McpStatus::Connecting)
         );
     }
 

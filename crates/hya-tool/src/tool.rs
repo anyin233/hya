@@ -104,7 +104,14 @@ impl Tool for NamedTool {
     }
 }
 
+/// Shared tool catalog. Uses interior mutability so callers can hot-register MCP
+/// and plugin tools after the engine has already been built (listen-before-connect).
 pub struct ToolRegistry {
+    inner: std::sync::RwLock<ToolRegistryInner>,
+}
+
+#[derive(Default)]
+struct ToolRegistryInner {
     tools: HashMap<String, ResolvedTool>,
     aliases: HashMap<String, ResolvedTool>,
 }
@@ -143,12 +150,27 @@ impl ResolvedTool {
 }
 
 impl ToolRegistry {
+    fn empty() -> Self {
+        Self {
+            inner: std::sync::RwLock::new(ToolRegistryInner::default()),
+        }
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, ToolRegistryInner> {
+        self.inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, ToolRegistryInner> {
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[must_use]
     pub fn builtins() -> Self {
-        let mut registry = Self {
-            tools: HashMap::new(),
-            aliases: HashMap::new(),
-        };
+        let registry = Self::empty();
         for tool in [
             Arc::new(InvalidTool) as Arc<dyn Tool>,
             Arc::new(ReadTool),
@@ -183,20 +205,23 @@ impl ToolRegistry {
         registry
     }
 
-    pub fn register(&mut self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
+    /// Register a tool. Takes `&self` so tools can be hot-added through an `Arc`.
+    pub fn register(&self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
         self.register_with_permission(tool, ToolPermission::Tool)
     }
 
+    /// Register a tool with an explicit permission class. Hot-register safe (`&self`).
     pub fn register_with_permission(
-        &mut self,
+        &self,
         tool: Arc<dyn Tool>,
         permission: ToolPermission,
     ) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
-        if self.tools.contains_key(&name) || self.aliases.contains_key(&name) {
+        let mut inner = self.write();
+        if inner.tools.contains_key(&name) || inner.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
-        self.tools.insert(name, ResolvedTool { tool, permission });
+        inner.tools.insert(name, ResolvedTool { tool, permission });
         Ok(())
     }
 
@@ -207,29 +232,34 @@ impl ToolRegistry {
 
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
-        self.tools
+        let inner = self.read();
+        inner
+            .tools
             .get(name)
-            .or_else(|| self.aliases.get(name))
+            .or_else(|| inner.aliases.get(name))
             .cloned()
     }
 
-    pub fn remove(&mut self, name: &str) {
-        self.tools.remove(name);
-        self.aliases
+    pub fn remove(&self, name: &str) {
+        let mut inner = self.write();
+        inner.tools.remove(name);
+        inner
+            .aliases
             .retain(|alias, resolved| alias != name && resolved.tool.name() != name);
     }
 
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.tools
+        self.read()
+            .tools
             .values()
             .map(|resolved| resolved.tool.schema())
             .collect()
     }
 
-    fn insert_builtin(&mut self, tool: Arc<dyn Tool>) {
+    fn insert_builtin(&self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
-        self.tools.insert(
+        self.write().tools.insert(
             name.clone(),
             ResolvedTool {
                 tool,
@@ -238,8 +268,8 @@ impl ToolRegistry {
         );
     }
 
-    fn insert_named_builtin(&mut self, name: &str, tool: Arc<dyn Tool>) {
-        self.tools.insert(
+    fn insert_named_builtin(&self, name: &str, tool: Arc<dyn Tool>) {
+        self.write().tools.insert(
             name.to_string(),
             ResolvedTool {
                 tool: Arc::new(NamedTool {
@@ -251,9 +281,10 @@ impl ToolRegistry {
         );
     }
 
-    fn insert_aliased_builtin(&mut self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
+    fn insert_aliased_builtin(&self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
         let permission = builtin_permission(canonical);
-        self.tools.insert(
+        let mut inner = self.write();
+        inner.tools.insert(
             canonical.to_string(),
             ResolvedTool {
                 tool: Arc::new(NamedTool {
@@ -263,7 +294,8 @@ impl ToolRegistry {
                 permission,
             },
         );
-        self.aliases
+        inner
+            .aliases
             .insert(legacy.to_string(), ResolvedTool { tool, permission });
     }
 }
