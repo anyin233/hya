@@ -214,6 +214,51 @@ test("closes split observation and returns to Main", () => {
   expect(state.activeTabID).toBe("main")
 })
 
+test("Ctrl+X W equivalent closes the focused observation without leaving a stuck focus", () => {
+  // Session binds pane.close to <leader>w while an observation is focused. Closing must
+  // drop the focused leaf and restore Main so subsequent pane shortcuts keep working.
+  for (const open of [
+    { type: "openTab" as const, sessionID: "child-tab" },
+    { type: "openSplit" as const, axis: "vertical" as const, sessionID: "child-v" },
+    { type: "openSplit" as const, axis: "horizontal" as const, sessionID: "child-h" },
+  ]) {
+    let state = createWorkspaceState("root")
+    state = reduceWorkspace(state, open)
+    expect(state.focusedPaneID).toBe(`observation:${open.sessionID}`)
+
+    // Close the focused observation (same paneID the Session keyboard path dispatches).
+    state = reduceWorkspace(state, { type: "close", paneID: state.focusedPaneID })
+    expect(state.focusedPaneID).toBe("main")
+    expect(state.activeTabID).toBe("main")
+    expect(workspaceLeaves(state).some((pane) => pane.id === `observation:${open.sessionID}`)).toBe(false)
+
+    // Closing Main is a no-op so a double Ctrl+X W after return cannot brick focus.
+    expect(reduceWorkspace(state, { type: "close", paneID: "main" })).toBe(state)
+  }
+})
+
+test("closing one of several open observations keeps the rest navigable", () => {
+  let state = createWorkspaceState("root")
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })
+  state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-b" })
+  expect(state.focusedPaneID).toBe("observation:child-b")
+
+  state = reduceWorkspace(state, { type: "close", paneID: state.focusedPaneID })
+  expect(state.focusedPaneID).toBe("main")
+  expect(workspaceLeaves(state).map((pane) => (pane.type === "main" ? "main" : pane.sessionID))).toEqual([
+    "main",
+    "child-a",
+  ])
+
+  // Remaining observation must still accept focus / cycle after close.
+  state = reduceWorkspace(state, { type: "focus", paneID: "observation:child-a" })
+  expect(state.focusedPaneID).toBe("observation:child-a")
+  state = reduceWorkspace(state, { type: "cycleFocus", direction: 1 })
+  expect(state.focusedPaneID).toBe("main")
+  state = reduceWorkspace(state, { type: "cycleFocus", direction: 1 })
+  expect(state.focusedPaneID).toBe("observation:child-a")
+})
+
 test("cycles focus across split observation and tab observations", () => {
   let state = createWorkspaceState("root")
   state = reduceWorkspace(state, { type: "openSplit", axis: "vertical", sessionID: "child-a" })

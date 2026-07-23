@@ -78,10 +78,10 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import {
+  LEADER_TOKEN,
   OPENCODE_BASE_MODE,
   useBindings,
   useCommandShortcut,
-  useLeaderActive,
   useOpencodeKeymap,
 } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
@@ -439,24 +439,110 @@ export function Session() {
       },
     ],
   }))
-  const leaderActive = useLeaderActive()
-  // Pane navigation uses leader+arrows so Main's prompt keeps bare arrows for the
-  // caret. useKeyboard backs the keymap so chords still work if command resolution
-  // misses (useKeyboard runs after the keymap).
+  // Multi-pane chords use inline `cmd` handlers (not string command names) so they stay
+  // reachable while an observation is focused. String-command resolution can miss and
+  // leave the leader sequence armed; while that happened, Esc / 1-9 / close all looked dead.
+  useBindings(() => ({
+    enabled: () => multiPane() && dialog.stack.length === 0,
+    priority: 15,
+    bindings: [
+      {
+        key: "<leader>w",
+        desc: "Close focused pane",
+        group: "Pane",
+        cmd: () => {
+          const paneID = workspace().focusedPaneID
+          if (paneID !== "main") dispatchWorkspace({ type: "close", paneID })
+        },
+      },
+      {
+        key: "<leader>.",
+        desc: "Cycle pane focus forward",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
+      },
+      {
+        key: "<leader>right",
+        desc: "Cycle pane focus forward",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: 1 }),
+      },
+      {
+        key: "<leader>left",
+        desc: "Cycle pane focus backward",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "cycleFocus", direction: -1 }),
+      },
+      {
+        key: "<leader>0",
+        desc: "Focus Main pane",
+        group: "Pane",
+        cmd: () => dispatchWorkspace({ type: "focusMain" }),
+      },
+    ],
+  }))
+  // Esc while a leader chord is armed normally only cancels the chord (global intercept).
+  // When an observation is focused, one Esc must still return to Main (ADR-0003).
+  onCleanup(
+    keymap.intercept(
+      "key",
+      ({ event, consume }) => {
+        if (dialog.stack.length > 0) return
+        if (mainFocused()) return
+        if (event.name !== "escape" || event.ctrl || event.meta || event.option) return
+        if (keymap.hasPendingSequence()) keymap.clearPendingSequence()
+        dispatchWorkspace({ type: "focusMain" })
+        consume()
+      },
+      { priority: 10 },
+    ),
+  )
+  // useKeyboard backs the keymap when command resolution misses (runs after keymap).
+  // Read pending sequence from the keymap directly — the Solid leader selector is batched
+  // and can lag one key behind, which used to leave Esc/digits dead mid-chord.
   useKeyboard((key) => {
     if (dialog.stack.length > 0) return
 
-    // Ctrl+X then ←/→: cycle panes without stealing bare arrows from the prompt.
-    if (leaderActive() && multiPane() && (key.name === "left" || key.name === "right") && !key.ctrl && !key.meta && !key.option) {
-      dispatchWorkspace({ type: "cycleFocus", direction: key.name === "left" ? -1 : 1 })
-      key.preventDefault()
-      key.stopPropagation()
-      return
-    }
-    if (leaderActive()) return
+    const leaderPending = keymap.getPendingSequence()[0]?.tokenName === LEADER_TOKEN
+    const noMods = !key.ctrl && !key.meta && !key.option
 
-    // Esc from any observation returns to Main (ADR-0003).
-    if (!mainFocused() && key.name === "escape" && !key.ctrl && !key.meta && !key.option) {
+    // Ctrl+X then ←/→ / w / . / 0: pane ops if the keymap chord did not fire.
+    if (leaderPending && multiPane() && noMods) {
+      if (key.name === "left" || key.name === "right") {
+        dispatchWorkspace({ type: "cycleFocus", direction: key.name === "left" ? -1 : 1 })
+        keymap.clearPendingSequence()
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+      if (key.name === "w") {
+        const paneID = workspace().focusedPaneID
+        if (paneID !== "main") dispatchWorkspace({ type: "close", paneID })
+        keymap.clearPendingSequence()
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+      if (key.name === ".") {
+        dispatchWorkspace({ type: "cycleFocus", direction: 1 })
+        keymap.clearPendingSequence()
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+      if (key.name === "0") {
+        dispatchWorkspace({ type: "focusMain" })
+        keymap.clearPendingSequence()
+        key.preventDefault()
+        key.stopPropagation()
+        return
+      }
+    }
+
+    // Esc from any observation returns to Main (ADR-0003). The intercept above also
+    // covers the leader-armed case; this path handles the common non-leader case.
+    if (!mainFocused() && key.name === "escape" && noMods) {
+      if (leaderPending) keymap.clearPendingSequence()
       dispatchWorkspace({ type: "focusMain" })
       key.preventDefault()
       key.stopPropagation()
@@ -464,7 +550,8 @@ export function Session() {
     }
 
     // Digit jump to pane strip while an observation is focused: 1=Main, 2=…
-    if (!mainFocused() && multiPane() && key.name.length === 1 && key.name >= "1" && key.name <= "9" && !key.ctrl && !key.meta && !key.option) {
+    if (!mainFocused() && multiPane() && key.name.length === 1 && key.name >= "1" && key.name <= "9" && noMods) {
+      if (leaderPending) keymap.clearPendingSequence()
       const entry = workspacePaneStrip(workspace())[Number(key.name) - 1]
       if (entry) {
         dispatchWorkspace({ type: "focus", paneID: entry.paneID })
@@ -475,9 +562,12 @@ export function Session() {
     }
 
     if (mainFocused()) return
+    // While a leader chord is still armed, do not swallow follow-up keys — that used to
+    // freeze every observation shortcut after Ctrl+X until the leader timeout expired.
+    if (leaderPending) return
     // Ignore bare typing while an observation pane is focused (read-only).
     // Bare left/right are not pane nav — use leader+arrows from any focused pane.
-    if (key.name === "return" || (key.name.length === 1 && !key.ctrl && !key.meta && !key.option)) {
+    if (key.name === "return" || (key.name.length === 1 && noMods)) {
       key.preventDefault()
       key.stopPropagation()
     }
