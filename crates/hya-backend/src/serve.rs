@@ -39,11 +39,39 @@ pub(crate) async fn cmd_serve(
         .await
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
-    println!("hya server listening on http://{addr}");
+    let url = format!("http://{addr}");
+    println!("hya server listening on {url}");
+    emit_startup_mark("backend_listen", Some(&url));
     axum::serve(listener, server_router(state))
         .await
         .context("serve http")?;
     Ok(())
+}
+
+/// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
+fn emit_startup_mark(mark: &str, detail: Option<&str>) {
+    let enabled = std::env::var_os("HYA_STARTUP_TRACE")
+        .map(|value| {
+            let text = value.to_string_lossy();
+            text.eq_ignore_ascii_case("1") || text.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    let wall_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    match detail {
+        Some(detail) => {
+            let escaped = detail.replace('\\', "\\\\").replace('"', "\\\"");
+            eprintln!(
+                r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms},"detail":"{escaped}"}}"#
+            );
+        }
+        None => eprintln!(r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms}}}"#),
+    }
 }
 
 /// Default `hya`: run the HTTP/SSE backend in-process on an ephemeral loopback port and hand the

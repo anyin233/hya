@@ -25,6 +25,10 @@ export const HyaFlag = {
   disableTerminalTitle: truthy("HYA_DISABLE_TERMINAL_TITLE"),
   disableCopyOnSelect: process.platform === "win32" || truthy("HYA_DISABLE_COPY_ON_SELECT"),
   showTimeToFirstDraw: truthy("HYA_SHOW_TTFD"),
+  /** Classic: await terminal theme mode (up to 1s) before first paint. Default is instant dark. */
+  waitThemeMode: truthy("HYA_WAIT_THEME"),
+  /** Classic: gate shell routes on sequential builtin plugin host start. Default paints shell immediately. */
+  syncPluginStart: truthy("HYA_SYNC_PLUGIN_START"),
 }
 
 export const HyaVersion = process.env.HYA_VERSION ?? "local"

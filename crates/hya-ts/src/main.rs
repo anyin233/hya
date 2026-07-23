@@ -47,6 +47,7 @@ async fn run() -> Result<u8, Box<dyn Error>> {
             .as_path(),
     )?;
 
+    emit_startup_mark("hya_ts_start", None);
     let mut owned = None;
     let url = if let Some(url) = cli.server.as_deref() {
         url.to_string()
@@ -59,10 +60,12 @@ async fn run() -> Result<u8, Box<dyn Error>> {
                 .join("../..")
                 .as_path(),
         );
+        emit_startup_mark("backend_spawn", Some(&backend.display().to_string()));
         let handle =
             ServerHandle::spawn_hya_backend(&backend.to_string_lossy(), project_str(&project)?)
                 .await?;
         let url = handle.base_url().to_string();
+        emit_startup_mark("backend_listen", Some(&url));
         owned = Some(handle);
         url
     };
@@ -258,6 +261,32 @@ impl TerminalState {
 impl Drop for TerminalState {
     fn drop(&mut self) {
         let _ = self.restore();
+    }
+}
+
+/// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
+fn emit_startup_mark(mark: &str, detail: Option<&str>) {
+    let enabled = std::env::var_os("HYA_STARTUP_TRACE")
+        .map(|value| {
+            let text = value.to_string_lossy();
+            text.eq_ignore_ascii_case("1") || text.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    let wall_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    match detail {
+        Some(detail) => {
+            let escaped = detail.replace('\\', "\\\\").replace('"', "\\\"");
+            eprintln!(
+                r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms},"detail":"{escaped}"}}"#
+            );
+        }
+        None => eprintln!(r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms}}}"#),
     }
 }
 

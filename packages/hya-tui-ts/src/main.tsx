@@ -4,10 +4,12 @@ import { Effect } from "effect"
 
 import { HyaPaths, HyaPlatform } from "./hya/platform"
 import { createStaticPluginHost } from "./hya/static-host"
+import { startupMark } from "./hya/startup-trace"
 import { run, type TuiInput } from "./upstream"
 import { resolve } from "./upstream/config"
 
 export async function launch(argv: string[], runner: (input: TuiInput) => Promise<unknown> = runTui) {
+  startupMark("bun_entry")
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
