@@ -47,9 +47,9 @@ archived `compat-ai/compat` repository as the Compat baseline.
   reviewed `packages/compat/src/agent/agent.ts` source confirmed `build`,
   `plan`, `general`, `explore`, plus hidden system agents. Treat `scout` as a
   docs/source drift note unless the upstream source changes.
-- **hya TUI transition:** the canonical `hya` entrypoint delegates through
-  `hya-ts` to `packages/hya-tui-ts`. The Rust `crates/hya-tui` renderer remains
-  only as a compatibility crate and has no shipped executable entrypoint.
+- **hya TUI:** the canonical `hya` entrypoint delegates through `hya-ts` to
+  `packages/hya-tui-ts`. That TypeScript package is the sole interactive
+  frontend implementation in the repository.
 
 ## 1. Tool Calling, MCP, and Skills
 

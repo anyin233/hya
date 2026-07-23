@@ -71,9 +71,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya` | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` executable while preserving public `hya` branding; it does not contain a TUI or backend fallback. |
 | `crates/hya-ts` | TypeScript TUI supervisor. Parses launcher/auth/import arguments, resolves the prepared runtime and backend, starts or attaches to `hya-backend`, and owns terminal process-group handoff and cleanup. |
 | `packages/hya-tui-ts` | Current SolidJS/OpenTUI frontend. Owns terminal rendering, interaction, routes, command/keybinding UI, and HTTP/SSE synchronization through `@opencode-ai/sdk/v2`. |
-| `crates/hya-backend` | Backend umbrella binary. Bare startup still launches the interactive TUI by spawning the current `hya` frontend, but no longer owns a legacy TUI renderer/controller. Also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, prompt templates, plugin loading, MCP setup, permission policy, and AGENTS/skills discovery. |
-| `crates/hya-tui` | Retained Rust TUI compatibility crate. It remains buildable and tested, but no shipped binary launches its renderer or controller. |
-| `crates/hya-tui-lib` | Retained pure terminal UI primitives; not on the shipped frontend path. |
+| `crates/hya-backend` | Backend umbrella binary. Bare startup still launches the interactive TUI by spawning the current `hya` frontend, but does not own a terminal renderer. Also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, prompt templates, plugin loading, MCP setup, permission policy, and AGENTS/skills discovery. |
 | `crates/hya-core` | Agent runtime. Owns `SessionEngine`, turn admission, streaming rounds, shell turns, event bus, prompt construction, compaction, goal/loop drivers, hook dispatch, subagents, team state, worktree/tmux helpers, and session forking. |
 | `crates/hya-proto` | Shared wire/domain types. Defines newtyped IDs, tagged `Event`/`Envelope`, messages, parts, roles, model/tool schema types, API DTOs, and the deterministic projection reducer. Keep this dependency-light so UI/client crates can reuse it cheaply. |
 | `crates/hya-provider` | Model provider abstraction. Normalizes OpenAI-compatible, Anthropic, Google, dev, and fake providers into one streamed `Event` model; handles protocol encoding/decoding, provider routing, capability metadata, reasoning effort, and preflight checks for tool-capable routes. |
@@ -85,7 +83,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
 | `crates/hya-plugin-compat` | Compat plugin compatibility. Rust crate pins the supported Compat package versions; the Bun adapter discovers Compat plugin config, loads plugins, translates hook/tool/event methods, and exposes the adapter runtime over JSON-RPC. |
 | `crates/hya-plugin-example` | Minimal plugin binary used as a concrete fixture/example for host and transport behavior. |
-| `xtask` | Dev-tooling entry point. Currently a small scaffold for future workspace maintenance commands. |
+| `crates/xtask` | Dev-tooling entry point. Currently a small scaffold for future workspace maintenance commands. |
 | `.trellis` | Project workflow knowledge: task lifecycle, package/layer specs, session journals, and task artifacts. Read the relevant `.trellis/spec/**/index.md` before changing code in that layer. |
 | `docs` | Supplemental project notes such as Compat parity and follow-up work. |
 | `DESIGN.md` | TUI design system: terminal-first visual rules, theme tokens, layout, transcript/input/overlay behavior. Read before touching TUI rendering. |
@@ -98,9 +96,9 @@ or verifiers; workers do not decide that their own objective is done.
 - Preserve the event-sourced architecture: append events, replay with the shared
   projection, and avoid parallel read-model logic that can drift from replay.
 - Keep `hya-proto` free of heavy runtime dependencies.
-- Put new interactive behavior in `packages/hya-tui-ts`. Do not reconnect a
-  shipped binary to the retained Rust `hya-tui` renderer or reintroduce a
-  backend-owned TUI controller.
+- Put all new interactive terminal UI behavior in `packages/hya-tui-ts`. Do not
+  reintroduce a Rust TUI crate, ratatui frontend, or backend-owned terminal
+  renderer; the TypeScript TUI is the sole interactive frontend.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.
