@@ -1,5 +1,4 @@
-# 0.34.1
+# 0.34.2
 
-- TUI home and epilogue logo art now come from an 8-bit Hya wordmark
-  (`docs/assets/hya-icon-8bit.png`); decorations are omitted so only the main
-  "Hya" letters render in the terminal glyph art.
+- Fix home-screen tagline overlapping the 8-bit Hya logo by reserving full
+  logo row height and padding under the art.
