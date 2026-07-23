@@ -11,11 +11,13 @@ const INK = RGBA.fromInts(
 )
 
 export function LogoArt() {
+  // Each row is one terminal cell tall so the parent reserves full art height
+  // and the home tagline cannot stack into the descender row.
   return (
-    <box>
+    <box flexDirection="column" flexShrink={0}>
       <For each={LOGO_ART.rows}>
         {(row) => (
-          <box flexDirection="row">
+          <box height={1} flexShrink={0} flexDirection="row">
             <text fg={INK} selectable={false}>
               {row}
             </text>

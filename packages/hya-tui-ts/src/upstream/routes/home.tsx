@@ -74,11 +74,12 @@ export function Home() {
       <box flexGrow={1} alignItems="center" paddingLeft={2} paddingRight={2}>
         <box flexGrow={1} minHeight={0} />
         <box height={4} minHeight={0} flexShrink={1} />
-        <box flexShrink={0}>
+        <box flexShrink={0} paddingBottom={1}>
           <pluginRuntime.Slot name="home_logo" mode="replace">
             <LogoArt />
           </pluginRuntime.Slot>
         </box>
+        {/* Keep tagline clear of the logo y-descender / lower half-block row. */}
         <text fg={theme.textMuted} flexShrink={0}>
           The 100 Agents Who Really ×∞ Want to Help You
         </text>
