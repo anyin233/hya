@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="imgs/Hya%20icon%20v7.png" alt="Hya icon" width="20%"><br>
+  <img src="docs/assets/hya-icon.png" alt="Hya icon" width="20%"><br>
 </p>
 
 ---
@@ -18,7 +18,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.33.29`,
+hya is under active development (workspace version `0.34.0`,
 `MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
 crates.io — build it from source as described below. APIs, config, and command
 surface may still change between versions.

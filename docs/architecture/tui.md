@@ -56,14 +56,11 @@ The removed Rust frontend options `--db`, `--yolo`, `--http`, `--compat`, and
 `--resume` are not part of the public `hya` launcher. Use backend configuration,
 the TUI command palette, `--server`, and frontend `--session` respectively.
 
-## Retained Rust UI Crates
+## Sole Frontend Implementation
 
-[`../../crates/hya-tui`](../../crates/hya-tui) and
-[`../../crates/hya-tui-lib`](../../crates/hya-tui-lib) remain in the workspace
-for compatibility and existing tests, but no shipped binary launches their
-renderer or controller. New interactive behavior belongs in
-`packages/hya-tui-ts`; reusable protocol behavior belongs below the HTTP/SDK
-boundary.
+`packages/hya-tui-ts` is the only interactive terminal UI implementation in
+this repository. There is no retained Rust TUI crate. New interactive behavior
+belongs there; reusable protocol behavior belongs below the HTTP/SDK boundary.
 
 `hya-backend` may launch the current `hya` frontend for bare interactive
 startup, but it does not own a terminal renderer.

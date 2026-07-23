@@ -2,10 +2,10 @@
 # See .trellis/tasks/06-20-agent-spec/{design.md,implement.md} for the full spec.
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+members = ["crates/*"]
 
 [workspace.package]
-version = "0.33.40"
+version = "0.34.0"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,6 @@ hya-server = { path = "crates/hya-server" }
 hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }
 hya-app = { path = "crates/hya-app" }
-hya-tui-lib = { path = "crates/hya-tui-lib" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }

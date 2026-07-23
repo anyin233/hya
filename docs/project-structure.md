@@ -25,7 +25,7 @@ hya-core::SessionEngine
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../xtask`](../xtask) | Developer tooling crate. Currently a scaffold. |
+| [`../crates/xtask`](../crates/xtask) | Developer tooling crate. Currently a scaffold. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities
@@ -45,8 +45,6 @@ hya-core::SessionEngine
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
 | `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` launcher. |
 | `hya-ts` | [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs) | TypeScript TUI supervisor: CLI parsing, backend/runtime discovery, process-group handoff, and cleanup. |
-| `hya-tui` | [`../crates/hya-tui/src/lib.rs`](../crates/hya-tui/src/lib.rs) | Retained Rust TUI compatibility crate; no shipped binary launches it. |
-| `hya-tui-lib` | [`../crates/hya-tui-lib/src/lib.rs`](../crates/hya-tui-lib/src/lib.rs) | Retained pure terminal UI primitives; not on the shipped frontend path. |
 | `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC, and interactive startup that launches the current `hya` frontend. |
 
 ## `hya-proto`
@@ -211,9 +209,9 @@ The shipped frontend spans four colocated components:
 | [`packages/hya-tui-ts`](../packages/hya-tui-ts) | SolidJS/OpenTUI rendering, interaction, routes, and HTTP/SSE synchronization through `@opencode-ai/sdk/v2`. |
 | [`crates/hya-backend`](../crates/hya-backend) | Runtime composition, local server ownership, headless commands, and bare interactive startup through `hya`. |
 
-`hya-tui` and `hya-tui-lib` remain buildable compatibility crates, but no
-shipped binary launches their renderer. New interactive behavior belongs in
-`packages/hya-tui-ts`; shared backend behavior belongs below the SDK boundary.
+`packages/hya-tui-ts` is the sole interactive frontend implementation. New
+interactive behavior belongs there; shared backend behavior belongs below the
+SDK boundary.
 
 ## Tests
 
@@ -228,7 +226,6 @@ Tests are crate-local and map closely to runtime boundaries:
 | [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and Compat-compatible route behavior. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
 | [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
-| [`../crates/hya-tui/tests`](../crates/hya-tui/tests) | Runtime/render/input harness behavior, route state, W3C/keymap, and TUI scenarios. |
 | [`../crates/hya/tests`](../crates/hya/tests), [`../crates/hya-ts/tests`](../crates/hya-ts/tests) | Canonical launcher delegation, process supervision, argument forwarding, and native transport integration. |
 | [`../packages/hya-tui-ts/test`](../packages/hya-tui-ts/test) | TypeScript frontend state, SDK integration, rendering, and interaction behavior. |
 
