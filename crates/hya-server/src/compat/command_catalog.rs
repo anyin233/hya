@@ -180,6 +180,20 @@ fn command_info(
 }
 
 impl CommandInfo {
+    /// Wire form for TUI bootstrap: omits heavy `template` bodies (expand is server-side).
+    #[must_use]
+    pub(super) fn bootstrap_summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "agent": self.agent,
+            "model": self.model,
+            "source": self.source,
+            "hints": self.hints,
+            "subtask": self.subtask,
+        })
+    }
+
     pub(super) fn command(
         name: String,
         description: Option<String>,

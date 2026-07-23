@@ -239,3 +239,22 @@ fn location_response<T>(
     let location = LocationRef::from_request(query, headers);
     super::location::response_at(st, &location, data)
 }
+
+/// Provider catalog slices for the TUI single-RTT bootstrap payload.
+pub(super) fn bootstrap_provider_payload(st: &ServerState) -> (Value, Value) {
+    let models = catalog_models(st);
+    let providers = provider_infos(&models);
+    let default = default_models(&models);
+    let connected = provider_ids(&models);
+    (
+        json!({
+            "providers": providers,
+            "default": default,
+        }),
+        json!({
+            "all": providers,
+            "default": default,
+            "connected": connected,
+        }),
+    )
+}

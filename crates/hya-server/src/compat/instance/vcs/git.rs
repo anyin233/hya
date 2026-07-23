@@ -34,11 +34,11 @@ struct GitItem {
     status: &'static str,
 }
 
-pub(super) fn branch(workdir: &Path) -> Option<String> {
+pub(in crate::compat) fn branch(workdir: &Path) -> Option<String> {
     output(workdir, &["branch", "--show-current"])
 }
 
-pub(super) fn default_branch(workdir: &Path) -> Option<String> {
+pub(in crate::compat) fn default_branch(workdir: &Path) -> Option<String> {
     default_branch::get(workdir)
 }
 

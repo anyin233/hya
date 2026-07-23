@@ -424,6 +424,98 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
+
+      try {
+        // Prefer single-RTT /tui/bootstrap (hya servers). Fall back to multi-call for older backends.
+        if (await bootstrapViaBundle(workspace)) {
+          return
+        }
+        await bootstrapViaMultiCall(workspace)
+      } catch (e) {
+        console.error("tui bootstrap failed", {
+          error: e instanceof Error ? e.message : String(e),
+          name: e instanceof Error ? e.name : undefined,
+          stack: e instanceof Error ? e.stack : undefined,
+        })
+        if (fatal) {
+          exit(e)
+        } else {
+          throw e
+        }
+      }
+    }
+
+    type BootstrapBundle = {
+      config?: unknown
+      providers?: { providers?: unknown; default?: unknown }
+      provider_list?: unknown
+      capabilities?: { backgroundSubagents?: boolean }
+      agents?: unknown[]
+      sessions?: unknown[]
+      commands?: unknown[]
+      lsp?: unknown[]
+      mcp?: Record<string, unknown>
+      mcp_resource?: Record<string, unknown>
+      formatter?: unknown[]
+      session_status?: Record<string, unknown>
+      vcs?: unknown
+      path?: unknown
+      project?: { id?: string; worktree?: string }
+    }
+
+    async function bootstrapViaBundle(workspace: string | undefined): Promise<boolean> {
+      const url = new URL("/tui/bootstrap", sdk.url)
+      if (workspace) url.searchParams.set("directory", workspace)
+      const response = await sdk.fetch(url.toString(), {
+        headers: {
+          "x-opencode-directory": sdk.directory ?? "",
+          accept: "application/json",
+        },
+      })
+      if (!response.ok) return false
+      const bundle = (await response.json()) as BootstrapBundle
+      // Reject non-object payloads (legacy mocks often return []).
+      if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return false
+      if (bundle.providers === undefined && bundle.config === undefined && bundle.agents === undefined) {
+        return false
+      }
+      applyBootstrapBundle(bundle)
+      startupMark("sync_partial", "bundle")
+      startupMark("sync_complete", "bundle")
+      return true
+    }
+
+    function applyBootstrapBundle(bundle: BootstrapBundle) {
+      batch(() => {
+        if (bundle.providers) {
+          setStore("provider", reconcile((bundle.providers.providers as never) ?? []))
+          setStore("provider_default", reconcile((bundle.providers.default as never) ?? {}))
+        }
+        if (bundle.provider_list !== undefined) {
+          setStore("provider_next", reconcile(bundle.provider_list as never))
+        }
+        setStore(
+          "capabilities",
+          "experimentalBackgroundSubagents",
+          bundle.capabilities?.backgroundSubagents === true,
+        )
+        if (bundle.agents) setStore("agent", reconcile(bundle.agents as never))
+        if (bundle.config !== undefined) setStore("config", reconcile(bundle.config as never))
+        if (bundle.sessions) setStore("session", reconcile(bundle.sessions as never))
+        if (bundle.commands) setStore("command", reconcile(bundle.commands as never))
+        if (bundle.lsp) setStore("lsp", reconcile(bundle.lsp as never))
+        if (bundle.mcp) setStore("mcp", reconcile(bundle.mcp as never))
+        if (bundle.mcp_resource) setStore("mcp_resource", reconcile(bundle.mcp_resource as never))
+        if (bundle.formatter) setStore("formatter", reconcile(bundle.formatter as never))
+        if (bundle.session_status) setStore("session_status", reconcile(bundle.session_status as never))
+        if (bundle.vcs !== undefined) setStore("vcs", reconcile(bundle.vcs as never))
+        setStore("status", "complete")
+      })
+      // Path/project sync is still owned by ProjectProvider; kick it without blocking complete.
+      void project.sync().catch(() => undefined)
+    }
+
+    async function bootstrapViaMultiCall(workspace: string | undefined) {
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
 
@@ -445,74 +537,41 @@ export const {
         projectPromise,
         ...(args.continue ? [sessionListPromise] : []),
       ])
-        .then(async () => {
-          const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
-          const capabilitiesResponse = capabilitiesPromise
-          const agentsResponse = agentsPromise.then((x) => x.data ?? [])
-          const configResponse = configPromise.then((x) => x.data!)
-          const sessionListResponse = args.continue ? sessionListPromise : undefined
+      const providers = (await providersPromise).data!
+      const providerList = (await providerListPromise).data!
+      const capabilities = await capabilitiesPromise
+      const agents = (await agentsPromise).data ?? []
+      const config = (await configPromise).data!
+      const sessions = args.continue ? await sessionListPromise : undefined
 
-          return Promise.all([
-            providersResponse,
-            providerListResponse,
-            capabilitiesResponse,
-            agentsResponse,
-            configResponse,
-            ...(sessionListResponse ? [sessionListResponse] : []),
-          ]).then((responses) => {
-            const providers = responses[0]
-            const providerList = responses[1]
-            const capabilities = responses[2]
-            const agents = responses[3]
-            const config = responses[4]
-            const sessions = responses[5]
+      batch(() => {
+        setStore("provider", reconcile(providers.providers))
+        setStore("provider_default", reconcile(providers.default))
+        setStore("provider_next", reconcile(providerList))
+        setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
+        setStore("agent", reconcile(agents))
+        setStore("config", reconcile(config))
+        if (sessions !== undefined) setStore("session", reconcile(sessions))
+      })
+      if (store.status !== "complete") setStore("status", "partial")
+      startupMark("sync_partial", "multi")
 
-            batch(() => {
-              setStore("provider", reconcile(providers.providers))
-              setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
-              setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
-              setStore("agent", reconcile(agents))
-              setStore("config", reconcile(config))
-              if (sessions !== undefined) setStore("session", reconcile(sessions))
-            })
-          })
-        })
-        .then(() => {
-          if (store.status !== "complete") setStore("status", "partial")
-          startupMark("sync_partial")
-          // non-blocking
-          void Promise.all([
-            ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
-            sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
-            sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
-            sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
-            sdk.client.experimental.resource
-              .list({ workspace })
-              .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
-            sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
-            sdk.client.session.status({ workspace }).then((x) => {
-              setStore("session_status", reconcile(x.data ?? {}))
-            }),
-            sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
-          ]).then(() => {
-            setStore("status", "complete")
-            startupMark("sync_complete")
-          })
-        })
-        .catch(async (e) => {
-          console.error("tui bootstrap failed", {
-            error: e instanceof Error ? e.message : String(e),
-            name: e instanceof Error ? e.name : undefined,
-            stack: e instanceof Error ? e.stack : undefined,
-          })
-          if (fatal) {
-            exit(e)
-          } else {
-            throw e
-          }
-        })
+      await Promise.all([
+        ...(args.continue ? [] : [sessionListPromise.then((list) => setStore("session", reconcile(list)))]),
+        sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
+        sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
+        sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
+        sdk.client.experimental.resource
+          .list({ workspace })
+          .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
+        sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
+        sdk.client.session.status({ workspace }).then((x) => {
+          setStore("session_status", reconcile(x.data ?? {}))
+        }),
+        sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
+      ])
+      setStore("status", "complete")
+      startupMark("sync_complete", "multi")
     }
 
     onMount(() => {

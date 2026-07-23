@@ -1,18 +1,20 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hya_proto::SessionId;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
 
 use crate::{ApiError, ServerState, parse_session};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/tui/bootstrap", get(bootstrap))
         .route("/tui/append-prompt", post(append_prompt))
         .route("/tui/open-help", post(open_help))
         .route("/tui/open-sessions", post(open_sessions))
@@ -26,6 +28,149 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/tui/select-session", post(select_session))
         .route("/tui/control/next", get(control_next))
         .route("/tui/control/response", post(control_response))
+}
+
+/// Single-RTT payload for TUI startup sync (blocking + complete waves).
+///
+/// Command entries intentionally omit full prompt templates — expansion remains
+/// server-side via `session.command` — so this stays small even with many skills.
+async fn bootstrap(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
+
+    let (providers, provider_list) = super::catalog::bootstrap_provider_payload(&st);
+
+    let home = home_dir();
+    let path = json!({
+        "home": home.to_string_lossy(),
+        "state": env_path("XDG_STATE_HOME", &home, ".local/state/hya"),
+        "config": env_path("XDG_CONFIG_HOME", &home, ".config/hya"),
+        "worktree": workdir.to_string_lossy(),
+        "directory": workdir.to_string_lossy(),
+    });
+
+    let project = json!({
+        "id": workdir.to_string_lossy(),
+        "worktree": workdir.to_string_lossy(),
+    });
+
+    let build_permissions = super::agent_permission::from_engine(&st.engine);
+    let agents: Vec<Value> = super::agent_catalog::list(&workdir, &st)
+        .into_iter()
+        .map(|agent| {
+            let model = agent.model.as_deref().unwrap_or(st.agent.model.as_str());
+            let (provider_id, model_id) = match model.split_once('/') {
+                Some((provider, model_id)) => (provider.to_string(), model_id.to_string()),
+                None => ("hya".to_string(), model.to_string()),
+            };
+            json!({
+                "name": agent.name,
+                "description": agent.description,
+                "mode": agent.mode,
+                "native": agent.native,
+                "hidden": agent.hidden,
+                "permission": super::instance::agent_permissions(
+                    &agent.name,
+                    &build_permissions,
+                    agent.permissions,
+                ),
+                "model": { "modelID": model_id, "providerID": provider_id },
+                "temperature": agent.temperature,
+                "topP": agent.top_p,
+                "color": agent.color,
+                "steps": agent.steps,
+                "prompt": if agent.name == "build" && agent.prompt.is_none() {
+                    Some(st.agent.system_prompt.clone())
+                } else {
+                    agent.prompt
+                },
+                "options": agent.options,
+            })
+        })
+        .collect();
+
+    let commands: Vec<Value> = super::command_catalog::list(&workdir)
+        .iter()
+        .map(super::command_catalog::CommandInfo::bootstrap_summary)
+        .collect();
+
+    let sessions = match st.engine.store().list_sessions().await {
+        Ok(list) => {
+            let mut out = Vec::new();
+            for session in list.into_iter().take(100) {
+                if let Ok(snapshot) =
+                    super::load_session(&st, session.session, Some(session.started_millis)).await
+                {
+                    if snapshot.info.empty_unnamed() {
+                        continue;
+                    }
+                    if let Ok(value) = serde_json::to_value(&snapshot.info) {
+                        out.push(value);
+                    }
+                }
+            }
+            out
+        }
+        Err(_) => Vec::new(),
+    };
+    let session_status = st.runs.statuses();
+    let lsp = st.engine.lsp().status(&workdir).await.unwrap_or_default();
+    let formatter = if st.formatter_status.is_empty() {
+        st.engine
+            .formatter()
+            .status(&workdir)
+            .await
+            .unwrap_or_default()
+    } else {
+        st.formatter_status.clone()
+    };
+    let mcp = st.mcp_http.status(&st.mcp_manager).await;
+    let mcp_resource = st.mcp_http.resources(&st.mcp_manager).await;
+    let vcs = json!({
+        "branch": super::instance::vcs::git::branch(&workdir),
+        "default_branch": super::instance::vcs::git::default_branch(&workdir),
+    });
+
+    Json(json!({
+        "config": st.global.config().await,
+        "providers": providers,
+        "provider_list": provider_list,
+        "capabilities": { "backgroundSubagents": false },
+        "agents": agents,
+        "sessions": sessions,
+        "commands": commands,
+        "lsp": lsp,
+        "mcp": mcp,
+        "mcp_resource": mcp_resource,
+        "formatter": formatter,
+        "session_status": session_status,
+        "vcs": vcs,
+        "path": path,
+        "project": project,
+    }))
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+fn env_path(key: &str, home: &std::path::Path, fallback: &str) -> String {
+    std::env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            std::path::PathBuf::from(value)
+                .join("hya")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| home.join(fallback).to_string_lossy().into_owned())
 }
 
 #[derive(Clone)]

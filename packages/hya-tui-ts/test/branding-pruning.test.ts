@@ -62,7 +62,12 @@ test("reachable source contains no unsupported controls or product branding", as
   const forbiddenFeature =
     /global\.upgrade|experimental\.console|console\.org|session\.(?:un)?share|workspace\.(?:list|set|create|remove|warp|adapter)|provider\.auth|plugins\.(?:list|install)|opencode\.ai|opencode\s+mcp\s+auth|consoleManagedProviders|isConsoleManagedProvider|Open console for more details|dialog-provider|DialogWorkspace|DialogRetryAction/i
   // Stored user-state/protocol constants, not displayed branding, so they remain allowed.
-  const allowedProtocolStrings = new Set(["opencode.mode", "opencode-plain-text"])
+  const allowedProtocolStrings = new Set([
+    "opencode.mode",
+    "opencode-plain-text",
+    // Compat wire header used by the SDK HTTP/SSE surface (not product branding).
+    "x-opencode-directory",
+  ])
 
   for (const file of files) {
     const relative = path.relative(sourceRoot, file).split(path.sep).join("/")

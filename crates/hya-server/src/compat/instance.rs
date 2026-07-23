@@ -14,7 +14,7 @@ use crate::ServerState;
 
 use super::agent_permission::PermissionRule;
 
-mod vcs;
+pub(in crate::compat) mod vcs;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
@@ -166,7 +166,7 @@ fn model_info(model: &str) -> AgentModel {
     }
 }
 
-fn agent_permissions(
+pub(super) fn agent_permissions(
     name: &str,
     build_permissions: &[PermissionRule],
     configured: Vec<PermissionRule>,
