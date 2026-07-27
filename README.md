@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/assets/hya-icon.png" alt="Hya icon" width="20%"><br>
+  <img src="docs/assets/hya-icon-8bit.png" alt="Hya icon" width="20%"><br>
 </p>
 
 ---
