@@ -62,6 +62,6 @@ pub use spawn::{InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnReques
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{
     DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
-    ToolRegistry,
+    ToolRegistry, ToolRegistrySnapshot,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

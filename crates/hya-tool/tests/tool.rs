@@ -157,7 +157,7 @@ fn removing_a_builtin_also_removes_its_alias() {
 }
 
 #[test]
-fn registry_hot_registers_through_arc_after_engine_would_hold_it() {
+fn candidate_builder_mutation_does_not_change_a_frozen_snapshot() {
     struct LateTool;
     #[async_trait]
     impl Tool for LateTool {
@@ -182,11 +182,13 @@ fn registry_hot_registers_through_arc_after_engine_would_hold_it() {
     }
 
     let registry = Arc::new(ToolRegistry::builtins());
+    let frozen = registry.snapshot();
     assert!(registry.get("late_tool").is_none());
     registry
         .register_with_permission(Arc::new(LateTool), ToolPermission::Mcp)
         .unwrap();
     assert!(registry.get("late_tool").is_some());
+    assert!(frozen.resolve("late_tool").is_none());
     assert_eq!(
         registry.resolve("late_tool").unwrap().permission,
         ToolPermission::Mcp

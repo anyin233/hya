@@ -1,11 +1,33 @@
 # Architecture audit closure and next-step roadmap
 
-## 2026-07-31 controlling `0.34.4` execution ruling
+## 2026-07-31 controlling `0.34.5` execution ruling
+
+Release `0.34.4` is committed at
+`709abafb81ba0f94656254d3ecb51b42e051a89d`; draft-PR CI run `30609417298`
+is green. `0.34.5` is now the only active implementation stage:
+
+- one source-owned `RuntimeRegistry` publishes complete immutable
+  tool/skill/MCP snapshots;
+- a successfully admitted turn binds once before prompt/provider/tool behavior
+  and retains that snapshot across every round;
+- failed and logically unchanged candidates preserve the current generation;
+  concurrent successful publications allocate unique monotonic generations and
+  replace one complete `Arc`;
+- events/projection record only the lightweight generation identity associated
+  with an assistant message;
+- startup plugins/synchronous MCP form the complete initial candidate;
+  deferred MCP publishes one complete replacement through the same owner;
+- no desired/observed/effective reconciliation, plugin respawn state,
+  AgentBundle, resident fencing, updater, sandbox, or new permission framework
+  enters this patch.
+
+Exact TDD and implementation evidence is in `implement.md` section 5B.
+
+## 2026-07-31 delivered `0.34.4` execution ruling
 
 Release `0.34.3` is committed at
-`b8c21deeb5004e1f703b199a40de196902fadf35`, pushed to the existing branch and
-draft PR #24, and its remote CI run is green. Release `0.34.4` is now the only
-active implementation stage.
+`b8c21deeb5004e1f703b199a40de196902fadf35`, and `0.34.4` is delivered at the
+green HEAD recorded above.
 
 - Derive a strong internal `OperationId` by fixed-domain UUIDv5 from the
   already-persisted UUID-backed `ToolCallId`; no independent random ID and no
@@ -41,8 +63,8 @@ This block is authoritative over every older release table and phase mapping
 below.
 
 - `0.34.3` delivered pre-create background transient/resident admission,
-  bounded spawn transport, and typed overload. `0.34.4` is active under the
-  preceding ruling.
+  bounded spawn transport, and typed overload. `0.34.4` delivered the durable
+  operation/admission seam; `0.34.5` is active under the preceding ruling.
 - The owner has dropped all old agent-file support. There will be no adapter,
   synthetic representation, old-source bundle list/info, or parser/discovery/
   execution fallback.
@@ -65,17 +87,17 @@ below.
 - All prepared sources flow through
   `AgentBundleIR -> immutable Generation/catalog -> TurnBinding -> AgentSpec ->
   SessionEngine`. TUI and spawn consume the same generation snapshot.
-- The final patch map below is controlling planning. Only `0.34.4` is active;
+- The final patch map below is controlling planning. Only `0.34.5` is active;
   every arrow requires the preceding patch's commit/push and full remote CI
   green.
 
-The native-only future plan does not delay or broaden `0.34.4`.
+The native-only future plan does not delay or broaden `0.34.5`.
 
 ## Status
 
 This roadmap is executable planning for the existing Trellis task
 `modular-harness-native-swarm-runtime-refresh`. The user has authorized
-`0.34.4` after the committed/pushed/remote-green `0.34.3` gate. Every later
+`0.34.5` after the committed/pushed/remote-green `0.34.4` gate. Every later
 patch remains planning-only and cannot begin merely because it appears here.
 
 The roadmap is anchored to:
@@ -86,7 +108,7 @@ The roadmap is anchored to:
   `156d0ad3c50aea67dfac0054485eb6991e77308b`; the only intervening change is
   the README icon reference, so no audited product-source finding changed;
 - workspace/root changelog version `0.34.2` at the audit, delivered isolated
-  release version `0.34.3`, and active target version `0.34.4`;
+  releases `0.34.3`/`0.34.4`, and active target version `0.34.5`;
 - 19 protected pre-existing user-owned dirty entries plus this task directory.
 
 The authoritative evidence and detailed defects are:

@@ -350,6 +350,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }
@@ -405,6 +406,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }
             | Event::TextStart { .. }

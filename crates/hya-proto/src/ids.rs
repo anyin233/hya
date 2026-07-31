@@ -231,6 +231,28 @@ uuid_id!(MessageId, "msg");
 uuid_id!(PartId, "part");
 uuid_id!(ToolCallId, "tc");
 
+/// Monotonic identity of one immutable runtime configuration snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConfigGeneration(u64);
+
+impl ConfigGeneration {
+    pub const INITIAL: Self = Self(1);
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(next) => Some(Self(next)),
+            None => None,
+        }
+    }
+}
+
 /// Internal durable-admission identity derived from the persisted tool call.
 ///
 /// The fixed namespace separates admission identities from every other UUID

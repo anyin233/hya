@@ -16,8 +16,8 @@ pub mod workspace;
 
 pub use event::{Envelope, Event};
 pub use ids::{
-    EventSeq, GoalId, LoopRunId, MemberId, MessageId, OperationId, PartId, PermissionRequestId,
-    QuestionRequestId, SessionId, TeamRunId, ToolCallId,
+    ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId, OperationId, PartId,
+    PermissionRequestId, QuestionRequestId, SessionId, TeamRunId, ToolCallId,
 };
 pub use mail::{MailEndpoint, MailKind};
 pub use message::{

@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{AgentSpec, SessionEngine, authorize_tool_call, session_workdir};
+use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
 
@@ -29,6 +30,9 @@ impl SessionEngine {
         cancel: CancellationToken,
     ) -> Result<(MessageId, FinishReason), CoreError> {
         self.admit_shell_user_message(session).await?;
+        let projection = self.store.read_projection(session).await?;
+        let workdir = session_workdir(agent, &projection);
+        let binding = self.runtime.bind_turn(&workdir)?;
 
         let message = MessageId::new();
         self.emit(
@@ -37,6 +41,15 @@ impl SessionEngine {
                 session,
                 message,
                 role: Role::Assistant,
+            },
+        )
+        .await?;
+        self.emit(
+            session,
+            Event::TurnBindingRecorded {
+                session,
+                message,
+                generation: binding.generation(),
             },
         )
         .await?;
@@ -66,7 +79,7 @@ impl SessionEngine {
                     name,
                 },
                 command,
-                agent,
+                &binding,
                 cancel,
             )
             .await?;
@@ -89,7 +102,7 @@ impl SessionEngine {
         session: SessionId,
         shell_part: ShellPart,
         command: String,
-        agent: &AgentSpec,
+        binding: &TurnBinding,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
         let tool = shell_part.name.to_string();
@@ -140,10 +153,9 @@ impl SessionEngine {
         .await?;
 
         let projection = self.store.read_projection(session).await?;
-        let workdir = session_workdir(agent, &projection);
         let input_for_after = self.hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
-        let result = match self.tools.resolve(&tool) {
+        let result = match binding.resolve_tool(&tool) {
             Some(resolved) => match authorize_tool_call(
                 &resolved,
                 &input,
@@ -163,12 +175,12 @@ impl SessionEngine {
                         session: Some(session),
                         parent_session: projection.session.parent,
                         todo: self.todo.clone(),
-                        skills: self.skills.clone(),
+                        skills: binding.skill_plane(),
                         agents: self.agents.clone(),
                         websearch: self.websearch.clone(),
                         lsp: self.lsp.clone(),
                         formatter: self.formatter.clone(),
-                        workdir,
+                        workdir: binding.workdir().to_path_buf(),
                         cancel,
                     };
                     resolved.tool.execute(&ctx, input).await

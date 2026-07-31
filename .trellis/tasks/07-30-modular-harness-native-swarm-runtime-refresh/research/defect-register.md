@@ -196,6 +196,12 @@ Gate abbreviations:
 ### `MSR-BND-001` — no whole-Turn immutable binding
 
 - **Evidence status:** `source-confirmed`.
+- **`0.34.5` closure status:** local `source-verified` and
+  `experimentally-verified`, pending the patch's full local/remote release
+  gates. `RuntimeRegistry`/`TurnBinding` now pin prompt skills, schemas,
+  resolution, and dispatch for every round; the deterministic mid-turn
+  publication tracer proves old/new visibility. This does not close later
+  process-death/reconciliation fault cases.
 - **Source and symbols:** `crates/hya-tool/src/tool.rs::ToolRegistry` stores
   mutable tool and alias maps. `ToolRegistry::register_with_permission`,
   `ToolRegistry::remove`, `ToolRegistry::schemas`, and
@@ -306,6 +312,11 @@ Gate abbreviations:
 ### `MSR-CFG-001` — direct composition and inconsistent discovery visibility
 
 - **Evidence status:** `source-confirmed`.
+- **`0.34.5` closure status:** partially closed locally, pending release gates.
+  Tool/plugin/synchronous-MCP construction now freezes one initial snapshot;
+  deferred MCP can only publish through the engine owner; workdir skill
+  discovery enters the same snapshot. Agent/AGENTS sources and `0.34.6`
+  desired/observed/effective reconciliation remain open.
 - **Source and symbols:** `crates/hya-app/src/runtime.rs::build_session_engine`
   directly constructs and registers tools, plugin host, deferred/static MCP,
   permission, interaction, spawner, mailbox, agent catalog, governor, resident
@@ -328,6 +339,12 @@ Gate abbreviations:
 ### `MSR-REF-001` — no unified atomic runtime refresh lifecycle
 
 - **Evidence status:** `target-gap`.
+- **`0.34.5` closure status:** the in-process immutable snapshot/publication
+  prerequisite is locally `experimentally-verified`, pending release gates.
+  Failure/no-op preservation, unique monotonic concurrent publication, complete
+  candidate visibility, and retained old bindings are covered. Durable
+  activation, resource incarnation reconciliation, quiesce/drain/retire, and
+  forward-only rollback remain target gaps for later stages.
 - **Source and symbols:** current effective mutation is split across
   `crates/hya-tool/src/tool.rs::ToolRegistry`,
   `crates/hya-app/src/runtime.rs::{register_mcp_tools,register_plugin_tools}`,
