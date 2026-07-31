@@ -28,6 +28,7 @@ fn ctx_with(rules: Vec<Rule>) -> ToolCtx {
         permission,
         interaction,
         spawner,
+        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: hya_tool::MailboxPlane::disconnected(),
         session: None,
         parent_session: None,

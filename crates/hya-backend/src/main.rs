@@ -17,7 +17,6 @@ mod serve;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
 
-use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::sync::Arc;
 
@@ -86,7 +85,7 @@ async fn cmd_exec(
         (runtime.websearch, runtime.permission),
         true,
     )
-    .await;
+    .await?;
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -139,7 +138,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         (runtime.websearch, runtime.permission),
         true,
     )
-    .await;
+    .await?;
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -203,7 +202,7 @@ async fn cmd_goal(
         (runtime.websearch, runtime.permission),
         true,
     )
-    .await;
+    .await?;
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -240,19 +239,7 @@ async fn cmd_goal(
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
-    let (router, model) = offline_router(None);
-    let agent = agent_with_model(&model, None);
-    let (engine, _asks, _, _mcp_manager, _plugin_host) = build_session_engine(
-        store,
-        router,
-        &agent,
-        BTreeMap::new(),
-        Vec::new(),
-        (WebSearchConfig::default(), InvocationPolicy::default()),
-        true,
-    )
-    .await;
-    let envelopes = engine.replay(session).await.context("replay session")?;
+    let envelopes = store.replay(session).await.context("replay session")?;
     let mut out = std::io::stdout().lock();
     for env in envelopes {
         let line = serde_json::to_string(&env).context("serialize envelope")?;

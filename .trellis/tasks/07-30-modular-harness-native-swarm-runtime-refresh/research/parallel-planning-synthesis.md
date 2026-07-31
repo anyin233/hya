@@ -143,11 +143,11 @@ balanced/reversible delivery, risk/fail-closed review, and frontier/deep-seam
 review. The main-agent merge supersedes earlier phase/security/worktree
 assumptions wherever they conflict:
 
-1. Only `0.34.3` is active. It contains the pre-create shared admission
+1. At that supersession boundary only `0.34.3` was active. It contained the pre-create shared admission
    decision, bounded in-memory spawn transport, and typed overload.
 2. `SubagentGovernor::reserve` is currently a per-root budget counter, not a
    permit. Reuse it and move its decision earlier; do not import the
-   lease/refund/recovery design from `0.34.4`.
+   lease/finalize/recovery design from `0.34.4`.
 3. Replace `mpsc::unbounded_channel` with an explicit-capacity bounded channel
    and `try_send`; full is typed overload, closed stays unavailable.
 4. Admission must occur before the request-owned Tokio task,
@@ -287,3 +287,61 @@ The controlling patch map is therefore:
 -> 0.34.12 capacity/fault certification
 -> 0.34.13 independent updater
 ```
+
+## 2026-07-31 `0.34.4` OperationId/durable-admission synthesis
+
+The four mandatory read-only lenses were rerun after `0.34.3` reached remote
+CI green and the MacBook Air coordinator returned the controlling `0.34.4`
+ruling. Rapid sequencing, balanced delivery, fail-closed risk, and deep-module
+architecture agreed on store-first acceptance, mandatory tool-call identity,
+one narrow journal, no redispatch on duplicate/restart, and one terminal
+finalizer.
+
+The main-agent merge resolves their remaining differences:
+
+1. `OperationId` is a dependency-light internal domain newtype in
+   `hya-proto`, next to `ToolCallId`, because both `hya-tool` and `hya-store`
+   consume it. It is not added to any `Event`, HTTP/API DTO, CLI argument or
+   output, TUI payload, or provider schema.
+2. The derivation uses UUIDv5 with one fixed hya operation namespace and the
+   exact persisted `ToolCallId` bytes. This follows the owner-specified fixed
+   namespace/domain mechanism and rejects both an independently random UUID
+   and Rust/process-local hashing. `OperationId` intentionally has no random
+   `new` or `Default`.
+3. `hya-app` owns a versioned canonical spawn fingerprint because it already
+   owns request resolution and SHA-256. It covers parent identity, background
+   mode, ordered normalized members, and every dispatch-affecting inline/model/
+   category/resident/task-id field; it excludes cancellation and reply
+   channels.
+4. `SessionStore` owns the sole durable state machine. A claim stores immutable
+   source call, source/root session, fingerprint, and units before a governor
+   debit. Conditional SQL distinguishes fresh acceptance, identical replay,
+   typed conflict, first start, first terminalization, same-terminal replay,
+   and conflicting terminalization.
+5. The store CAS is the exactly-once logical-release authority. The governor
+   additionally keys process-local debits by `OperationId`, stores its own
+   units, and removes them once; callers cannot over-credit by supplying units.
+   Root cleanup clears legacy anonymous accounting but preserves or cancels
+   operation-owned debits through the same finalization seam.
+6. Identical duplicate delivery returns the existing admission state and does
+   not debit, create, or dispatch. Exact prior child/tool-result replay is
+   deliberately absent; adding an outcome cache or `operation_child` would
+   violate the narrow owner scope.
+7. Startup atomically changes every `accepted`/`started` row to `aborted`
+   before resident/team spawn readiness. It dispatches nothing, emits no
+   public event, and never credits the fresh governor. The owner explicitly
+   excluded a process owner/lease/epoch schema, so multi-runtime leasing is not
+   invented in this patch.
+8. The RED order is identity, mandatory context propagation, journal
+   claim/conflict/concurrency, legal/terminal transitions, operation-keyed
+   debit/release, supervisor no-redispatch/no-child behavior,
+   cancel/create-failure/root-cleanup finalization, startup recovery, and event
+   replay independence.
+
+The frontier proposal to remove the existing `run_team` admission model
+wholesale was rejected as broader than `0.34.4`; only the request-level
+tool-call operation path is made durable. The conservative proposal for a
+new exclusive database lease was also rejected because it would add the
+owner/lease machinery explicitly excluded from this minimal journal. A
+source-proven need for cross-process ownership must become a later,
+separately-authorized patch rather than hidden scope here.

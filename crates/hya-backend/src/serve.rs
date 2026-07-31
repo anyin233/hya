@@ -24,7 +24,7 @@ pub(crate) async fn cmd_serve(
         (runtime.websearch, runtime.permission),
         true,
     )
-    .await;
+    .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_manager(mcp_manager)
@@ -113,7 +113,7 @@ pub(crate) async fn cmd_tui_hya(
         (runtime.websearch, runtime.permission),
         true,
     )
-    .await;
+    .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_manager(mcp_manager)

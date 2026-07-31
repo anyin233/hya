@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hya_proto::{OperationId, SessionId, ToolCallId};
+use hya_store::{AdmissionClaim, AdmissionState, SessionStore};
 use serde_json::Value;
 
 #[test]
@@ -190,6 +192,51 @@ fn tail_session_json_replays_only_requested_session_when_multiple_sessions_exist
     assert_success("tail-session --db", &tail);
     assert_tail_replays_session(&String::from_utf8(tail.stdout)?, &second)?;
 
+    Ok(())
+}
+
+#[test]
+fn tail_session_does_not_run_spawn_admission_recovery() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-backend-tail-admission-read-only")?;
+    let db = env.root.join("tail-admission.db");
+    let db_text = db.to_string_lossy().into_owned();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let root = SessionId::new();
+    let source = ToolCallId::new();
+    let operation = OperationId::from_tool_call(source);
+    runtime.block_on(async {
+        let store = SessionStore::connect(&db_text).await?;
+        store
+            .claim_admission(&AdmissionClaim {
+                operation_id: operation,
+                source_tool_call_id: source,
+                root_session: root,
+                request_fingerprint: [31; 32],
+                admission_units: 1,
+            })
+            .await?;
+        store.start_admission(operation).await?;
+        Ok::<(), hya_store::StoreError>(())
+    })?;
+
+    let tail = hya_command(&env)
+        .arg("tail-session")
+        .arg(root.to_string())
+        .args(["--db"])
+        .arg(&db)
+        .output()?;
+    assert_success("tail-session must stay read-only", &tail);
+
+    let state = runtime.block_on(async {
+        SessionStore::connect(&db_text)
+            .await?
+            .admission(operation)
+            .await
+            .map(|record| record.map(|record| record.state))
+    })?;
+    assert_eq!(state, Some(AdmissionState::Started));
     Ok(())
 }
 

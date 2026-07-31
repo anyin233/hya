@@ -4,23 +4,25 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_core::{
-    AgentSpec, CategoryRegistry, CompactionConfig, CreateSession, EventBus, MemberSpec,
-    MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine, SubagentGovernor,
-    Summarizer, TeamEvidenceEnvelope, build_system_prompt, pre_admit_team, project_envelope,
-    run_mailbox_service, run_pre_admitted_team, run_team,
+    AgentSpec, CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberSpec,
+    MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine,
+    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope, build_system_prompt,
+    project_envelope, run_mailbox_service, run_pre_admitted_team,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, MemberId, ModelRef, SessionId};
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
-use hya_store::SessionStore;
+use hya_store::{AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
     SpawnMember, SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry, WebSearchConfig,
     WebSearchPlane,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use crate::config;
@@ -260,6 +262,24 @@ pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     }
 }
 
+#[derive(Serialize)]
+struct SpawnRequestFingerprint<'a> {
+    domain: &'static str,
+    parent: SessionId,
+    background: bool,
+    members: &'a [SpawnMember],
+}
+
+fn spawn_request_fingerprint(req: &SpawnRequest) -> Result<[u8; 32], serde_json::Error> {
+    let canonical = serde_json::to_vec(&SpawnRequestFingerprint {
+        domain: "hya.spawn-admission.v1",
+        parent: req.parent,
+        background: req.background,
+        members: &req.members,
+    })?;
+    Ok(Sha256::digest(canonical).into())
+}
+
 pub fn spawn_team_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<SpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -271,13 +291,45 @@ pub fn spawn_team_supervisor(
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
-            if req.background
-                && pre_admit_team(engine.as_ref(), req.parent, req.members.len())
-                    .await
-                    .is_err()
-            {
-                let _ = req.reply.send(Err(SpawnError::Overloaded));
-                continue;
+            let fingerprint = match spawn_request_fingerprint(&req) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    eprintln!("hya: failed to fingerprint spawn request ({error})");
+                    let _ = req.reply.send(Err(SpawnError::Unavailable));
+                    continue;
+                }
+            };
+            let admission_units = u32::try_from(req.members.len()).unwrap_or(u32::MAX);
+            let operation_id = req.operation.operation_id();
+            let admission = engine
+                .begin_spawn_admission(
+                    req.parent,
+                    req.operation.source_tool_call_id(),
+                    operation_id,
+                    fingerprint,
+                    admission_units,
+                    req.cancel.clone(),
+                )
+                .await;
+            match admission {
+                Ok(SpawnAdmissionOutcome::Started) => {}
+                Ok(SpawnAdmissionOutcome::Overloaded | SpawnAdmissionOutcome::MaxDepth) => {
+                    let _ = req.reply.send(Err(SpawnError::Overloaded));
+                    continue;
+                }
+                Ok(SpawnAdmissionOutcome::Existing(_) | SpawnAdmissionOutcome::Cancelled) => {
+                    let _ = req.reply.send(Err(SpawnError::OperationAlreadyHandled));
+                    continue;
+                }
+                Err(CoreError::Store(StoreError::OperationIdConflict { .. })) => {
+                    let _ = req.reply.send(Err(SpawnError::OperationIdConflict));
+                    continue;
+                }
+                Err(error) => {
+                    eprintln!("hya: durable spawn admission failed ({error})");
+                    let _ = req.reply.send(Err(SpawnError::Unavailable));
+                    continue;
+                }
             }
             let engine = engine.clone();
             let base = base.clone();
@@ -287,9 +339,11 @@ pub fn spawn_team_supervisor(
             tokio::spawn(async move {
                 let parent = req.parent;
                 let members = req.members;
-                let cancel = req.cancel;
+                let operation_cancel = req.cancel;
+                let cancel = operation_cancel.clone();
                 let background = req.background;
                 let mut reply = Some(req.reply);
+                let mut spawn_failed = false;
                 // A concrete category candidate is servable when the live router
                 // recognizes its provider; used for ordered category failover.
                 let is_servable = |model: &ModelRef| router.resolve(model).is_some();
@@ -356,7 +410,10 @@ pub fn spawn_team_supervisor(
                                 member: "-".to_string(),
                                 session: "-".to_string(),
                                 status: "failed".to_string(),
-                                summary: err.to_string(),
+                                summary: {
+                                    spawn_failed = true;
+                                    err.to_string()
+                                },
                             }),
                         }
                     }
@@ -386,6 +443,7 @@ pub fn spawn_team_supervisor(
                                 {
                                     Ok(session) => session,
                                     Err(err) => {
+                                        spawn_failed = true;
                                         started.push(MemberOutcome {
                                             member: id.to_string(),
                                             session: "-".to_string(),
@@ -435,11 +493,11 @@ pub fn spawn_team_supervisor(
                 // resident spawn replies immediately with the resident handles.
                 let mut outcomes = resident_outcomes;
                 if !specs.is_empty() {
-                    let evidence = if background {
-                        run_pre_admitted_team(engine.clone(), parent, specs, cancel).await
-                    } else {
-                        run_team(engine.clone(), parent, specs, cancel).await
-                    };
+                    let evidence =
+                        run_pre_admitted_team(engine.clone(), parent, specs, cancel).await;
+                    spawn_failed |= evidence
+                        .iter()
+                        .any(|member| member.status == MemberStatus::Failed);
                     let envelope = TeamEvidenceEnvelope {
                         members: evidence.clone(),
                     };
@@ -453,6 +511,23 @@ pub fn spawn_team_supervisor(
                         },
                         summary: e.summary,
                     }));
+                }
+                let (terminal, reason) = if operation_cancel.is_cancelled() {
+                    (AdmissionTerminal::Cancelled, "spawn operation cancelled")
+                } else if spawn_failed {
+                    (AdmissionTerminal::Aborted, "spawn operation failed")
+                } else {
+                    (AdmissionTerminal::Completed, "spawn operation completed")
+                };
+                if let Err(error) = engine
+                    .finalize_spawn_admission(operation_id, terminal, reason)
+                    .await
+                {
+                    eprintln!("hya: failed to finalize spawn admission ({error})");
+                    if !background && let Some(reply) = reply.take() {
+                        let _ = reply.send(Err(SpawnError::Unavailable));
+                    }
+                    return;
                 }
                 if !background && let Some(reply) = reply.take() {
                     let _ = reply.send(Ok(outcomes));
@@ -502,13 +577,17 @@ pub async fn build_session_engine(
     plugins: Vec<PluginSpec>,
     tool_config: (WebSearchConfig, InvocationPolicy),
     include_global_agents: bool,
-) -> (
+) -> anyhow::Result<(
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
     hya_mcp::McpManager,
     Arc<hya_plugin::PluginHost>,
-) {
+)> {
+    store
+        .abort_nonterminal_admissions("startup recovery")
+        .await
+        .context("abort nonterminal admissions before spawn readiness")?;
     let (websearch, invocation_policy) = tool_config;
     let router = Arc::new(router);
     let registry = ToolRegistry::builtins();
@@ -609,7 +688,7 @@ pub async fn build_session_engine(
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
-    (engine, asks, questions, mcp_manager, plugin_host)
+    Ok((engine, asks, questions, mcp_manager, plugin_host))
 }
 
 pub struct RuntimeOptions {
@@ -667,7 +746,7 @@ impl HyaRuntime {
             (runtime.websearch, runtime.permission),
             opts.include_global_agents,
         )
-        .await;
+        .await?;
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
             .with_mcp_manager(mcp_manager)
@@ -888,7 +967,8 @@ mod tests {
             ),
             false,
         )
-        .await;
+        .await
+        .unwrap();
 
         assert!(
             engine
@@ -896,6 +976,51 @@ mod tests {
                 .iter()
                 .all(|schema| schema.name.as_str() != "websearch")
         );
+    }
+
+    #[tokio::test]
+    async fn engine_build_aborts_nonterminal_admissions_before_spawn_readiness() {
+        let database = tempdir().join("admission-recovery.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let source_tool_call_id = hya_proto::ToolCallId::new();
+        let operation_id = hya_proto::OperationId::from_tool_call(source_tool_call_id);
+        let root_session = SessionId::new();
+        store
+            .claim_admission(&hya_store::AdmissionClaim {
+                operation_id,
+                source_tool_call_id,
+                root_session,
+                request_fingerprint: [17; 32],
+                admission_units: 1,
+            })
+            .await
+            .unwrap();
+        store.start_admission(operation_id).await.unwrap();
+        drop(store);
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+
+        let _ = build_session_engine(
+            store.clone(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let recovered = store.admission(operation_id).await.unwrap().unwrap();
+        assert_eq!(recovered.state, hya_store::AdmissionState::Aborted);
+        assert!(recovered.logical_released);
+        assert!(store.replay(root_session).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -936,7 +1061,7 @@ mod tests {
                 None => unsafe { std::env::remove_var("HYA_DEFER_SIDEPLANES") },
             }
         }
-        let (_engine, _asks, _questions, mcp_manager, _plugins) = result;
+        let (_engine, _asks, _questions, mcp_manager, _plugins) = result.unwrap();
         let elapsed = started.elapsed();
         assert!(
             elapsed < std::time::Duration::from_secs(2),

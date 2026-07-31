@@ -5,6 +5,7 @@
 //! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
 //! cannot run inside the transaction sqlx wraps migrations in.
 
+mod admission;
 pub mod error;
 mod permission;
 mod sync;
@@ -16,6 +17,10 @@ use hya_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
+pub use admission::{
+    AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome, AdmissionRecord,
+    AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+};
 pub use error::StoreError;
 pub use permission::SavedPermission;
 
@@ -208,7 +213,7 @@ impl SessionStore {
     }
 }
 
-fn decode_session_key(key: &[u8]) -> Option<SessionId> {
+pub(crate) fn decode_session_key(key: &[u8]) -> Option<SessionId> {
     if let Ok(raw) = std::str::from_utf8(key) {
         return raw.parse().ok();
     }

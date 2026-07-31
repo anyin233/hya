@@ -1,12 +1,48 @@
 # Architecture audit closure and next-step roadmap
 
+## 2026-07-31 controlling `0.34.4` execution ruling
+
+Release `0.34.3` is committed at
+`b8c21deeb5004e1f703b199a40de196902fadf35`, pushed to the existing branch and
+draft PR #24, and its remote CI run is green. Release `0.34.4` is now the only
+active implementation stage.
+
+- Derive a strong internal `OperationId` by fixed-domain UUIDv5 from the
+  already-persisted UUID-backed `ToolCallId`; no independent random ID and no
+  HTTP/Event/CLI exposure.
+- Add one narrow additive `SessionStore` admission journal. Its immutable
+  request identity is claimed before governor debit or child/effect creation.
+- Use only `accepted -> started -> completed|cancelled|aborted`. Terminals are
+  irreversible; identical terminal replay is idempotent and conflicting
+  terminalization fails typed-closed.
+- Same operation and request returns its existing state without another debit
+  or dispatch. A changed fingerprint/units/source returns typed
+  `OPERATION_ID_CONFLICT` without mutation.
+- Overload terminalizes an accepted claim without releasing capacity. A
+  started/debited operation releases exactly once through the common
+  completion/cancel/create-failure/root-cleanup finalizer.
+- Startup atomically aborts every nonterminal admission before any spawn
+  supervisor becomes ready. It never resumes, retries, dispatches, creates a
+  child, emits an admission event, or credits the fresh governor.
+- Do not add `operation_child`, member/effect/queue/scheduler journals, a
+  create-with-ID seam, Bundle work, generation/binding, reconciliation,
+  resident epoch/fencing, or 100/256 certification.
+- `0.34.4` must update exact release metadata, pass all focused/workspace/build
+  gates, produce one atomic commit on the existing branch/PR, and reach green
+  remote CI before `0.34.5` preparation.
+
+The detailed main-agent merge is appended to
+`research/parallel-planning-synthesis.md`; consultation provenance is
+`CONSULT-2026-07-31-OPERATION-ADMISSION-06`.
+
 ## 2026-07-31 controlling native-only supersession
 
 This block is authoritative over every older release table and phase mapping
 below.
 
-- Only `0.34.3` is active: pre-create background transient/resident admission,
-  bounded spawn transport, and typed overload.
+- `0.34.3` delivered pre-create background transient/resident admission,
+  bounded spawn transport, and typed overload. `0.34.4` is active under the
+  preceding ruling.
 - The owner has dropped all old agent-file support. There will be no adapter,
   synthetic representation, old-source bundle list/info, or parser/discovery/
   execution fallback.
@@ -29,19 +65,18 @@ below.
 - All prepared sources flow through
   `AgentBundleIR -> immutable Generation/catalog -> TurnBinding -> AgentSpec ->
   SessionEngine`. TUI and spawn consume the same generation snapshot.
-- The final patch map below is controlling planning. Only `0.34.3` is active;
+- The final patch map below is controlling planning. Only `0.34.4` is active;
   every arrow requires the preceding patch's commit/push and full remote CI
   green.
 
-The hold does not delay or broaden `0.34.3`.
+The native-only future plan does not delay or broaden `0.34.4`.
 
 ## Status
 
 This roadmap is executable planning for the existing Trellis task
-`modular-harness-native-swarm-runtime-refresh`. The user has authorized only
-the `0.34.3` slice to leave planning after exact-HEAD worktree isolation. Every
-later patch remains planning-only and cannot begin merely because it appears
-here.
+`modular-harness-native-swarm-runtime-refresh`. The user has authorized
+`0.34.4` after the committed/pushed/remote-green `0.34.3` gate. Every later
+patch remains planning-only and cannot begin merely because it appears here.
 
 The roadmap is anchored to:
 
@@ -50,8 +85,8 @@ The roadmap is anchored to:
 - current fetched `origin/main` and isolated implementation base
   `156d0ad3c50aea67dfac0054485eb6991e77308b`; the only intervening change is
   the README icon reference, so no audited product-source finding changed;
-- workspace/root changelog version `0.34.2` at the audit and active isolated
-  release version `0.34.3`;
+- workspace/root changelog version `0.34.2` at the audit, delivered isolated
+  release version `0.34.3`, and active target version `0.34.4`;
 - 19 protected pre-existing user-owned dirty entries plus this task directory.
 
 The authoritative evidence and detailed defects are:
@@ -62,8 +97,8 @@ The authoritative evidence and detailed defects are:
 - `research/fuji1-sync-preflight.md`;
 - `research/browser-pro-escalation-protocol.md`.
 
-The protocol ledger records all six consultation rounds through
-`CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05`. Their output is advisory only.
+The protocol ledger records the consultation/ruling chain through
+`CONSULT-2026-07-31-OPERATION-ADMISSION-06`. Its Pro output is advisory only.
 The MacBook Air rulings control plan placement; current source inspection
 independently verifies only the claims explicitly marked source-confirmed.
 
@@ -77,7 +112,7 @@ frontier/deep-module consolidation. The main-agent merge makes these decisions:
    100/256 scheduler and not an end-to-end harness rewrite.
 2. Current `SubagentGovernor::reserve` is a per-root budget counter, not a
    durable lease. This patch moves that existing decision before child creation
-   without inventing the cancel/refund/recovery machinery reserved for
+   without inventing the cancel/finalize/recovery machinery reserved for
    `0.34.4`.
 3. Background transient and resident work share the same pre-create decision;
    the current depth-greater-than-zero provider-stream semaphore remains a
@@ -92,7 +127,7 @@ frontier/deep-module consolidation. The main-agent merge makes these decisions:
 6. The existing `PermissionPlane`/dispatch remains the final authorization
    path. Future plugin policy propagation reuses it; admission is
    correctness/resource control, not another permission framework.
-7. AgentBundle is deferred beyond `0.34.3`. The third-round ruling fixes the
+7. AgentBundle is deferred beyond `0.34.4`. The third-round ruling fixes the
    flat ABI-neutral manifest/catalog, namespace, routing, resource-view, and
    PermissionPlane boundary. Execution option A/B/C, context transfer, and
    resident idle/turn semantics remain deliberately owner-unselected.
@@ -146,7 +181,7 @@ repo-native built-in sources + installed package artifacts
 ```text
 0.34.3 pre-create admission + bounded transport + typed overload
   -> remote CI green
-    -> 0.34.4 OperationId + minimal durable admission/cancel/refund/recovery
+    -> 0.34.4 OperationId + minimal durable admission/cancel/finalize/recovery
       -> remote CI green
         -> 0.34.5 immutable generation + TurnBinding + atomic registry refresh
           -> remote CI green
@@ -181,8 +216,8 @@ repo-native built-in sources + installed package artifacts
 
 | Patch | Primary output | Hard exclusions / entry condition |
 | --- | --- | --- |
-| `0.34.3` | Existing-governor pre-create admission for background transient/resident, explicit bounded spawn transport, typed fail-fast overload | Active now; no durability, permit/lease, OperationId, 100/256 default, bundle, refresh, updater, or deletion |
-| `0.34.4` | `OperationId` and minimal durable admission/cancel/refund/recovery | Requires `0.34.3` remote CI green |
+| `0.34.3` | Existing-governor pre-create admission for background transient/resident, explicit bounded spawn transport, typed fail-fast overload | Delivered at `b8c21dee` with remote CI green; no durability, permit/lease, OperationId, 100/256 default, bundle, refresh, updater, or deletion |
+| `0.34.4` | `OperationId` and minimal durable admission/cancel/finalize/recovery | Requires `0.34.3` remote CI green |
 | `0.34.5` | Immutable config generation, `TurnBinding`, source-owned atomic registry refresh | Requires durable identity/recovery seam |
 | `0.34.6` | MCP/plugin desired-observed-effective state, incarnation declarations, generation binding, current `PermissionPlane` propagation, and generic stable-ID/namespace seams | No Bundle loader, manifest, catalog, ABI, TUI selection, spawn, sandbox, or new permission framework |
 | `0.34.7` | Resident durable recovery, actor lease/epoch, minimal effect fencing | Correctness/fault scope; no independent `SecurityEpoch` |

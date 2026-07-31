@@ -100,6 +100,7 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
         permission,
         interaction,
         spawner,
+        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: hya_tool::MailboxPlane::disconnected(),
         session: None,
         parent_session: None,

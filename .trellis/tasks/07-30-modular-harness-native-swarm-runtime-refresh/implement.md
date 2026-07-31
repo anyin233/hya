@@ -2,10 +2,11 @@
 
 ## 0. Execution guard
 
-The task is `in_progress`, with release `0.34.3` as its only active
-implementation slice after exact-HEAD isolated-worktree validation. Source
+The task is `in_progress`. Release `0.34.3` is committed/pushed at
+`b8c21deeb5004e1f703b199a40de196902fadf35` and its draft-PR remote CI is
+green. Release `0.34.4` is now the only active implementation slice. Source
 edits, builds, tests, commit, push, and remote-CI monitoring are authorized only
-for that slice. Releases `0.34.4+`, tagging, merge, production activation, and
+for that slice. Releases `0.34.5+`, tagging, merge, production activation, and
 synchronization remain unauthorized.
 
 Before any future implementation:
@@ -128,7 +129,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
 - Admission, cancellation propagation, resource limits, binding consistency,
   crash containment, actor epochs, and effect fencing remain
   correctness/performance work.
-- AgentBundle is deferred beyond `0.34.3`. The third-round ruling fixes an
+- AgentBundle is deferred beyond `0.34.4`. The third-round ruling fixes an
   ABI-neutral Harness-attached catalog/flat manifest, namespace resolver,
   `none | basic | full` resource views, and the existing `PermissionPlane` as
   final authority. It does not authorize execution.
@@ -152,7 +153,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
 ```text
 0.34.3 minimal pre-create admission + bounded spawn transport + typed overload
   -> remote CI green
-    -> 0.34.4 OperationId + minimal durable admission/cancel/refund/recovery
+    -> 0.34.4 OperationId + minimal durable admission/cancel/finalize/recovery
       -> remote CI green
         -> 0.34.5 immutable config generation + TurnBinding
           + source-owned atomic registry snapshot/refresh
@@ -187,7 +188,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
                                           + self-update example/skill
 ```
 
-No later patch may be preimplemented in `0.34.3`. Each arrow requires the
+No later patch may be preimplemented in `0.34.4`. Each arrow requires the
 preceding patch's full gate, atomic commit/push, and remote CI green. Pro round
 six is advisory provenance; the MacBook Air coordinator's corrections above
 control. Final external execution/context/resident semantics, private Bundle
@@ -212,7 +213,7 @@ This is a starting map to revalidate with CodeGraph before each edit.
 
 ## 4. Verification commands
 
-These are the required final gates for the active `0.34.3` slice.
+These are the required final gates for the active `0.34.4` slice.
 
 ### 4.1 Rust and executable gate
 
@@ -291,7 +292,7 @@ the scope blocked. The `fuji1 remote worker` may not choose a substitute
 browser/model or silently stand in. At most one narrow follow-up is allowed
 before the unresolved decision returns to its owner/user.
 
-## 5. Active release — `0.34.3`
+## 5. Delivered release — `0.34.3`
 
 ### 5.1 Source-confirmed starting point
 
@@ -438,9 +439,154 @@ Current verification:
   only in the isolated branch under explicit owner authorization. The dirty
   main copy remains untouched.
 
-All required local gates have now passed after the repair. No files are staged,
-no commit/push/PR exists, and remote CI has not yet been triggered. No later
-patch may start before the `0.34.3` remote checks are green.
+All required local gates passed after the repair. Commit `b8c21dee` was pushed
+to the existing draft PR #24 and remote CI run `30598676183` completed green.
+This closes the `0.34.3` entry gate for `0.34.4`.
+
+## 5A. Active release — `0.34.4`
+
+### 5A.1 Controlling identity and journal contract
+
+- Add a strong `OperationId` with no random constructor. Derive it only through
+  fixed-namespace UUIDv5 from the persisted UUID-backed `ToolCallId`.
+- Preserve the derived ID non-optionally in every production `ToolCtx`,
+  including normal provider tool calls and direct shell dispatch. Carry the
+  source call and derived operation through
+  `TaskTool -> SpawnerPlane -> SpawnRequest`.
+- Do not add OperationId to public events, projections, HTTP/API DTOs, provider
+  schemas, CLI arguments/output, or TUI payloads.
+- Add exactly one narrow additive `SessionStore` admission table. Do not reuse
+  dormant `session`, `team_run`, or `team_member`; do not add
+  `operation_child`, queue, scheduler, member, effect, actor, lease, epoch, or
+  generic resource tables.
+- Persist immutable `{operation, source tool call, source/root session,
+  fingerprint, units}` before debit or downstream allocation.
+- Legal states are `accepted -> started -> completed|cancelled|aborted` plus
+  accepted-only `cancelled|aborted` for no-debit rejection. Terminals are
+  irreversible; identical terminal replay is idempotent; a conflicting
+  terminal transition fails typed-closed.
+- Same operation plus identical immutable request returns the existing state
+  without debit or dispatch. Any immutable mismatch returns
+  `OPERATION_ID_CONFLICT` without mutation.
+- Overload terminalizes `accepted` without governor release. A successfully
+  debited operation first persists `started`; all terminal paths then converge
+  on one store-CAS finalizer. Only the winning `started` finalizer removes the
+  operation-keyed governor debit, using governor-owned units.
+- Startup recovery atomically aborts every nonterminal row before
+  `ResidentSupervisor::start`, `spawn_team_supervisor`, mailbox readiness, or a
+  returned runtime. It never dispatches/resumes/retries, emits no admission
+  event, and never credits a fresh governor.
+
+### 5A.2 Main-agent merged TDD sequence
+
+1. **RED/GREEN identity:** fixed ToolCallId vector,
+   deterministic/domain-separated OperationId, different-call separation, and
+   absence of random mint/default.
+2. **RED/GREEN propagation:** the exact persisted normal/direct-shell tool call
+   reaches non-optional `ToolCtx`; task transport preserves both IDs.
+3. **RED/GREEN claim:** first claim is `accepted`; serial and concurrent
+   identical retry returns existing; changed fingerprint/source/units is exact
+   typed conflict with no mutation.
+4. **RED/GREEN transitions:** first `accepted -> started`, legal terminals,
+   same-terminal idempotency, conflicting-terminal fail-closed, and immutable
+   request fields.
+5. **RED/GREEN debit/finalize:** one operation-keyed debit; overload has no
+   debit/release; completion, cancellation, child/create failure, and root
+   cleanup race through one finalizer and release at most once.
+6. **RED/GREEN dispatch:** duplicate accepted/started/terminal requests never
+   call `SessionEngine::create` or dispatch resident/transient work again.
+7. **RED/GREEN recovery:** file-backed restart atomically aborts accepted and
+   started, preserves terminals, dispatches nothing, emits no public Event,
+   gives no fresh-governor credit, and is repeatable.
+8. **Replay independence:** journal mutations do not alter event replay or
+   projection.
+
+### 5A.3 Source ownership and deliberate exclusions
+
+- `hya-proto`: internal strong ID and fixed derivation only.
+- `hya-store`: schema, immutable claim comparison, transition CAS, terminal
+  disposition, and startup recovery.
+- `hya-core::SessionEngine`/governor: begin/finalize facade and process-local
+  operation debit ownership.
+- `hya-tool`: mandatory context and typed transport errors.
+- `hya-app`: versioned canonical SHA-256 request fingerprint and supervisor
+  orchestration after durable start.
+
+Exact previous-result replay is not promised. An identical duplicate receives
+the existing admission state and remains non-dispatchable. The current patch
+does not prebuild `0.34.5` generation/TurnBinding, `0.34.6` reconciliation,
+`0.34.7` actor fencing, any Bundle work, 100/256 certification, or updater
+work.
+
+### 5A.4 Release and exit gate
+
+- Workspace/TUI/README version `0.34.3 -> 0.34.4`.
+- Move the exact prior root changelog to
+  `docs/changes/CHANGELOG_0.34.3.md`; root `CHANGELOG.md` contains only
+  `0.34.4`.
+- Run focused crate/integration tests after each RED/GREEN, then
+  `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, and `cargo build --workspace --bins`.
+- Run existing CI-required TUI coverage because the package version changes;
+  adapter gates remain conditional on adapter changes.
+- Run Trellis/spec/replay/no-public-exposure checks, stage only `0.34.4`, make
+  one semantic one-line commit, push the existing branch, update only draft PR
+  #24, and wait for every required remote check to become green.
+- Do not merge and do not prepare `0.34.5` before the remote gate closes.
+
+### 5A.5 `0.34.4` implementation and local verification evidence
+
+The implementation remains isolated on
+`codex/modular-harness-native-swarm-runtime-refresh`, starting from the green
+`0.34.3` commit `b8c21deeb5004e1f703b199a40de196902fadf35`.
+The protected main checkout remains at `267bfc3c6c66e46fe8514e2e70657489f853b7f0`
+with its 19 user-owned paths and three stashes untouched.
+
+Focused RED evidence was captured before each GREEN:
+
+- the fixed-vector `OperationId` test initially failed because no internal
+  operation identity existed;
+- `ToolCtx`/task transport tests initially failed because the persisted
+  `ToolCallId` had no mandatory derived operation companion;
+- first-claim, concurrent-start, terminal-CAS, startup-recovery, and exact
+  governor-debit tests initially failed on their missing store/engine seams;
+- duplicate/concurrent spawn tests initially demonstrated the missing durable
+  no-redispatch guard;
+- file-backed restart initially left `started` instead of fail-closed
+  `aborted`;
+- overload/cancel-before-debit and root-cleanup tests established zero
+  over-release and one exact release for actually started operations;
+- a controlled `cancelled -> completed` terminal race initially logged the
+  conflict but incorrectly returned foreground success; the final GREEN
+  propagates `SpawnError::Unavailable` and leaves the durable terminal
+  unchanged;
+- the read-only `tail-session` command initially reused runtime startup and
+  changed a live journal row from `started` to `aborted`; the final GREEN
+  replays directly from `SessionStore`, so only a spawn-owning runtime invokes
+  startup recovery.
+
+The resulting implementation uses fixed-namespace UUIDv5 identity, one narrow
+admission journal, SHA-256 request fingerprints, monotonic
+`accepted -> started -> terminal` transitions, operation-keyed governor debit,
+one idempotent finalizer, and startup abort-before-spawn-readiness. It adds no
+public Event/API identity, child/effect journal, durable scheduler, or later
+release work.
+
+Local exit gates after the last GREEN:
+
+- focused `hya-store`, `hya-core`, `hya-tool`, and `hya-app` admission suites
+  passed, including all nine spawn-admission integration tests;
+- `cargo fmt --all --check` passed;
+- `cargo clippy --workspace --all-targets -- -D warnings` passed;
+- `cargo test --workspace` passed;
+- `cargo build --workspace --bins` passed;
+- `bun run typecheck` passed in `packages/hya-tui-ts`;
+- `bun test` passed 43/43 in `packages/hya-tui-ts`;
+- Trellis JSON/JSONL parsing and `git diff --check` passed before staging.
+
+Commit, push, and draft PR #24 remote-CI results are the remaining release
+gate; `0.34.5` remains blocked until they are green.
 
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 

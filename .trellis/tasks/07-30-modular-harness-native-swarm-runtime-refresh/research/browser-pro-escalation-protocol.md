@@ -543,3 +543,49 @@ Post-ledger source accounting on 2026-07-31 is `source-verified`:
 `156d0ad3c50aea67dfac0054485eb6991e77308b` through a README icon-reference
 change only. The isolated branch was rebased to the newer commit; this neither
 changes the Pro ruling nor promotes any advisory conclusion.
+
+### `CONSULT-2026-07-31-OPERATION-ADMISSION-06`
+
+This records the MacBook Air coordinator's completed `0.34.4`
+OperationId/durable-admission consultation and the controlling owner
+corrections delivered to the canonical `fuji1 remote worker` session. The
+delivery did not restate a safe session URL, exact displayed model label,
+timestamps, or packet digest; this ledger does not infer them from an earlier
+round.
+
+```text
+consultation_id: CONSULT-2026-07-31-OPERATION-ADMISSION-06
+packet_id: not supplied to fuji1
+packet_revision: 0.34.4 OperationId and fail-closed recovery ruling
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: not restated in coordinator delivery
+url_access_classification: no URL recorded or inferred
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: not restated in coordinator delivery
+question_summary: choose the minimum durable identity, admission journal, recovery, idempotency, and exact-release contract for 0.34.4
+pro_conclusion: use a deterministic operation identity, a narrow additive journal, fail-closed startup recovery, immutable request identity, and one terminal/finalize path
+macbook_air_ruling: modify-for-verification
+ruling_scope: release 0.34.4 only
+permitted_next_action: derive OperationId from persisted ToolCallId, add the narrow SessionStore journal, implement the specified RED/GREEN matrix, bump to 0.34.4, and deliver through the existing branch and draft PR after full local and remote gates
+forbidden_next_action: add a random operation UUID, public OperationId DTO/event/CLI field, operation_child/member/effect journal, durable runnable queue or scheduler, Bundle/generation/reconciliation/fencing work, merge, or start 0.34.5 before remote CI is green
+required_verification: pinned deterministic identity tests; serial/concurrent idempotency and fingerprint-conflict tests; no-debit overload; exact-once finalization; terminal immutability; startup abort recovery; replay independence; full workspace gates; pushed remote CI green
+remaining_owner_gates: every 0.34.5+ stage and all existing Bundle/key/updater/activation decisions
+head_sha_and_relevant_delta_at_ruling: b8c21deeb5004e1f703b199a40de196902fadf35; clean isolated worktree, with dirty main and its 19 user-owned paths untouched
+follow_up_of: CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05
+supersedes: the generic earlier P1 operation/effect-journal proposal only for the bounded 0.34.4 spawn-admission slice
+final_disposition_and_resumption_decision: 0.34.4 may proceed in the existing isolated worktree/session/task/branch/PR; no later stage may begin before its remote CI gate
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Derive one strong `OperationId` deterministically and domain-separately from the persisted UUID-backed `ToolCallId` | `Pro-advised`, coordinator-adopted, `source-verified` seam | `ToolCallId` is persisted on tool-call events and reaches both normal and direct-shell execution; fixed-vector TDD must verify the derivation and mandatory `ToolCtx` propagation. |
+| Use `accepted -> started -> completed|cancelled|aborted` with immutable fingerprint/units and irreversible terminals | `Pro-advised`, coordinator-adopted | Additive SQLite migration and serial/concurrent transition tests are required; no public `Event` is added. |
+| Abort every nonterminal admission before spawn readiness and never resume or redispatch | `Pro-advised`, coordinator-adopted | `build_session_engine` currently starts the spawner/resident supervisors; recovery must become a fallible prerequisite before those constructors. |
+| Add `operation_child` and preallocate child IDs | `rejected` | Current fail-closed recovery never resumes an operation. The started/terminal gate prevents redispatch without a child table; `SessionEngine::create_with_id` is not expanded for this slice. |
+| Treat restart recovery as governor refund | `rejected` | Old process-local debits disappear with the process. Recovery records only logical release state and never credits the fresh governor. |
+| Treat Pro as migration, release, or security approval | `rejected` | The coordinator ruling plus explicit user authorization bounds implementation; source/TDD/replay/CI and all owner gates remain mandatory. |

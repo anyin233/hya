@@ -61,6 +61,7 @@ pub use skill_catalog::{
 pub use spawn::{InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnerPlane};
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{
-    DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry,
+    DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
+    ToolRegistry,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

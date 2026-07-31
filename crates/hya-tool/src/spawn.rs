@@ -1,9 +1,12 @@
 use hya_proto::SessionId;
+use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug, Default)]
+use crate::tool::ToolOperation;
+
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct SpawnMember {
     pub description: String,
     pub prompt: String,
@@ -30,7 +33,7 @@ pub struct SpawnMember {
 /// It carries the same core fields a disk agent's frontmatter would (name,
 /// system prompt, optional `category`/`model`) but is never persisted; an agent
 /// that wants reuse saves an `.md` itself via the existing `write` tool.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct InlineAgent {
     /// Human-friendly agent name (used as the spawned session's agent name).
     pub name: String,
@@ -56,6 +59,7 @@ pub struct MemberOutcome {
 
 pub struct SpawnRequest {
     pub parent: SessionId,
+    pub operation: ToolOperation,
     pub members: Vec<SpawnMember>,
     pub cancel: CancellationToken,
     pub background: bool,
@@ -68,6 +72,10 @@ pub enum SpawnError {
     Unavailable,
     #[error("spawn admission overloaded")]
     Overloaded,
+    #[error("OPERATION_ID_CONFLICT")]
+    OperationIdConflict,
+    #[error("operation already handled")]
+    OperationAlreadyHandled,
 }
 
 #[derive(Clone)]
@@ -102,22 +110,25 @@ impl SpawnerPlane {
 
     pub async fn spawn(
         &self,
+        operation: ToolOperation,
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
-        self.spawn_inner(members, cancel, false).await
+        self.spawn_inner(operation, members, cancel, false).await
     }
 
     pub async fn spawn_background(
         &self,
+        operation: ToolOperation,
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
-        self.spawn_inner(members, cancel, true).await
+        self.spawn_inner(operation, members, cancel, true).await
     }
 
     async fn spawn_inner(
         &self,
+        operation: ToolOperation,
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
         background: bool,
@@ -126,6 +137,7 @@ impl SpawnerPlane {
         let (tx, rx) = oneshot::channel();
         let req = SpawnRequest {
             parent,
+            operation,
             members,
             cancel,
             background,
@@ -143,6 +155,11 @@ impl SpawnerPlane {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use hya_proto::ToolCallId;
+
+    fn operation() -> ToolOperation {
+        ToolOperation::from_tool_call(ToolCallId::new())
+    }
 
     #[tokio::test]
     async fn spawn_round_trips_outcomes() {
@@ -151,6 +168,7 @@ mod tests {
         let task = tokio::spawn(async move {
             plane
                 .spawn(
+                    operation(),
                     vec![SpawnMember {
                         description: "d".to_string(),
                         prompt: "p".to_string(),
@@ -183,7 +201,9 @@ mod tests {
     #[tokio::test]
     async fn spawn_without_session_is_unavailable() {
         let (plane, _rx) = SpawnerPlane::new();
-        let result = plane.spawn(Vec::new(), CancellationToken::new()).await;
+        let result = plane
+            .spawn(operation(), Vec::new(), CancellationToken::new())
+            .await;
         assert!(matches!(result, Err(SpawnError::Unavailable)));
     }
 
@@ -194,7 +214,11 @@ mod tests {
 
         let result = plane
             .for_session(SessionId::new())
-            .spawn(vec![SpawnMember::default()], CancellationToken::new())
+            .spawn(
+                operation(),
+                vec![SpawnMember::default()],
+                CancellationToken::new(),
+            )
             .await;
 
         assert!(matches!(result, Err(SpawnError::Unavailable)));
@@ -212,7 +236,11 @@ mod tests {
         let queued_plane = plane.for_session(SessionId::new());
         let queued = tokio::spawn(async move {
             queued_plane
-                .spawn(vec![SpawnMember::default()], CancellationToken::new())
+                .spawn(
+                    operation(),
+                    vec![SpawnMember::default()],
+                    CancellationToken::new(),
+                )
                 .await
         });
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
@@ -225,9 +253,11 @@ mod tests {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            plane
-                .for_session(SessionId::new())
-                .spawn(vec![SpawnMember::default()], CancellationToken::new()),
+            plane.for_session(SessionId::new()).spawn(
+                operation(),
+                vec![SpawnMember::default()],
+                CancellationToken::new(),
+            ),
         )
         .await
         .expect("full spawn queue must fail fast");

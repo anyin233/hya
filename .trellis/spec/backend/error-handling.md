@@ -6,46 +6,52 @@
 
 ## Overview
 
-<!--
-Document your project's error handling conventions here.
-
-Questions to answer:
-- What error types do you define?
-- How are errors propagated?
-- How are errors logged?
-- How are errors returned to clients?
--->
-
-(To be filled by the team)
+- Libraries use typed `thiserror` enums and propagate errors with `?`; library
+  code must not panic on runtime failures.
+- Preserve typed errors across existing layer boundaries. Add the smallest
+  variant needed at store/core/tool/spawn seams rather than copying an
+  independent error stack.
 
 ---
 
 ## Error Types
 
-<!-- Custom error classes/types -->
-
-(To be filled by the team)
+- `StoreError::OperationIdConflict` is the durable immutable-request conflict
+  and displays the stable code `OPERATION_ID_CONFLICT`.
+- `StoreError::AdmissionTransitionConflict` rejects terminal rewrites.
+- `SpawnError` distinguishes queue/admission overload, unavailable transport,
+  operation conflict, and already-handled idempotent replay.
+- `TaskTool` maps these into matching `ToolError` variants; engine tool-error
+  payloads retain distinct machine-readable types.
 
 ---
 
 ## Error Handling Patterns
 
-<!-- Try-catch patterns, error propagation -->
-
-(To be filled by the team)
+- Fail closed before child/session/effect creation when identity, fingerprint,
+  persistence, or admission is uncertain.
+- A duplicate identical operation is not redispatched. A conflicting duplicate
+  is not mutated.
+- Startup must return an error rather than expose spawn surfaces if admission
+  recovery fails.
+- Logging is supplemental; do not log-and-continue past a failed pre-create
+  safety gate.
 
 ---
 
 ## API Error Responses
 
-<!-- Standard error response format -->
-
-(To be filled by the team)
+- Operation identity remains internal in 0.34.4; do not add it to HTTP/proto/CLI
+  payloads.
+- Existing tool-result event JSON carries `{ "error": { "type", "message" } }`.
+  Use `operation_id_conflict` and `operation_already_handled` for the new tool
+  variants.
 
 ---
 
 ## Common Mistakes
 
-<!-- Error handling mistakes your team has made -->
-
-(To be filled by the team)
+- Do not collapse overload into unavailable or input errors.
+- Do not treat an identical terminal replay as a second release.
+- Do not convert an operation conflict into a fresh operation ID.
+- Do not add `unwrap`/`expect` to library paths to satisfy tests.

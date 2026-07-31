@@ -70,26 +70,32 @@ if members.is_empty() {
 }
 ```
 
-## Scenario: Bounded Background Spawn Admission
+## Scenario: Durable Spawn Admission
 
 ### 1. Scope / Trigger
 
-- Trigger: changes to `SpawnerPlane`, background `task` dispatch, subagent
-  governor reservation, or resident/transient spawn supervision.
-- This is the `0.34.3` in-memory contract. Durable queueing, cancellation
-  refund, and recovery are separate future work.
+- Trigger: changes to `ToolCtx`, `SpawnerPlane`, task dispatch, subagent
+  governor reservation, the admission journal, startup, or resident/transient
+  spawn supervision.
+- This is the `0.34.4` control-plane contract. It is not a durable runnable
+  queue and does not promise external-effect replay.
 
 ### 2. Signatures
 
+- Every persisted `ToolCallId` deterministically derives one domain-separated
+  `OperationId`. `ToolCtx` and `SpawnRequest` carry the immutable pair through
+  `ToolOperation`; no independent operation UUID is minted.
 - `SpawnerPlane::with_capacity(capacity: usize)` returns a bounded Tokio
   channel-backed plane and receiver.
-- `SpawnerPlane::spawn_background(...)` uses non-blocking `try_send`.
+- Foreground and background spawn use non-blocking `try_send`.
 - Full transport returns `SpawnError::Overloaded`; closed transport returns
   `SpawnError::Unavailable`.
-- `TaskTool` preserves overload as `ToolError::Overloaded`, and the engine
-  serializes that typed tool failure as `"overloaded"`.
-- `pre_admit_team(engine, parent, member_count)` makes one all-or-none
-  depth/per-run-budget decision for a background request.
+- A reused operation with a different immutable request returns
+  `OPERATION_ID_CONFLICT`; an identical already-started or terminal request
+  returns `OperationAlreadyHandled` and never dispatches again.
+- The store journal owns `accepted -> started ->
+  completed|cancelled|aborted`; the governor owns only the current process's
+  in-memory debit and cancellation token.
 
 ### 3. Contracts
 
@@ -100,13 +106,30 @@ if members.is_empty() {
 - Queue full fails immediately. The rejected request never enters the
   supervisor, so it cannot create a request-owned task, child Session, or child
   event.
-- Background transient and resident requests use the same pre-admission
-  boundary before the request-owned Tokio task,
-  `SessionEngine::create`, `ResidentSupervisor::ensure_main`, or
-  `spawn_resident`.
-- A pre-admitted transient continuation must not call the governor reserve a
-  second time.
-- Foreground batch partial-grant/depth evidence remains unchanged.
+- The first durable write records operation ID, source tool-call ID, root
+  session, SHA-256 request fingerprint, admission units, and `accepted` before
+  any governor debit, child/session creation, resident registration, or
+  dispatch.
+- `accepted` means no capacity was charged. Only the request that atomically
+  debits the governor may transition to `started`; all transient/resident and
+  foreground/background continuations then use the pre-admitted execution
+  path and must not reserve again.
+- Same operation plus the same immutable request observes existing state
+  without another debit. A changed parent/background/member request fails
+  closed without mutation.
+- Terminal states are irreversible. Replaying the same terminal is idempotent;
+  attempting a different terminal returns a typed transition conflict.
+- Finalization marks a logical release only when the row was `started`.
+  Governor release is keyed by operation and removes/credits at most one
+  recorded debit. An `accepted` overload/cancel never credits capacity.
+- Explicit cancellation, normal completion, spawn failure, and root-turn
+  cleanup call the same store-first finalizer. Root cleanup cancels current
+  operation tokens before finalizing them.
+- Before building any spawn/resident supervisor, startup atomically moves all
+  `accepted`/`started` rows to `aborted`. A recovered `started` row records a
+  logical release for audit only; it never credits the fresh governor.
+- The journal emits no public `Event`; session replay/projection remains
+  exclusively event-log based.
 - A rejected child may still produce the normal parent Turn's typed tool-error
   event. “No event” applies to rejected child/session/member/roster state.
 
@@ -115,25 +138,31 @@ if members.is_empty() {
 - Queue has capacity -> request enters the supervisor.
 - Queue is full -> typed overload, immediate return, no enqueued request.
 - Queue receiver is closed -> typed unavailable.
-- Background request exceeds depth or exact remaining run budget -> typed
+- Request exceeds depth or exact remaining run budget -> durable `aborted`,
+  typed
   overload before child allocation.
-- Exact reservation cannot grant the whole request -> grant none; a later
-  fitting request still sees the unconsumed budget.
-- Admitted background transient -> child creation and execution proceed once;
-  budget is charged once.
-- Background resident denial -> no main/resident registration or child state.
+- Identical duplicate -> existing state, no debit, task, session, event, or
+  dispatch.
+- Different request fingerprint -> `OPERATION_ID_CONFLICT`, no mutation.
+- Cancel before debit -> `cancelled`, `logical_released = false`.
+- Complete/cancel/abort after `started` -> one logical release and at most one
+  governor release.
+- Restart with nonterminal rows -> all become `aborted` before spawn readiness;
+  repeated recovery changes zero rows.
 
 ### 5. Good / Base / Bad Cases
 
 - Good: one queued request occupies a capacity-one transport; a second
   background task immediately returns typed overload and never reaches the
   receiver.
-- Base: one background transient fits the run budget, creates one child, and a
-  later request after budget exhaustion returns overload.
+- Base: one operation claims, debits, starts, creates once, completes, and
+  releases its exact debit; a serial or concurrent retry observes existing
+  state.
 - Bad: enqueue on an unbounded channel and create a Tokio task/child Session
   before checking the governor.
-- Bad: pre-admit a background transient and then call the normal reserving
-  `run_team` path, consuming the run budget twice.
+- Bad: derive an operation ID from randomness/process state, insert the journal
+  row after child creation, use a terminal replay to credit twice, or resume a
+  nonterminal operation after restart.
 
 ### 6. Tests Required
 
@@ -143,38 +172,39 @@ if members.is_empty() {
   returns `SpawnError::Unavailable`, and an extreme requested capacity is
   clamped without panicking.
 - `hya-tool/tests/task.rs`: assert `TaskTool` returns
-  `ToolError::Overloaded` without rewriting it as unavailable or input error.
-- `hya-core` unit: assert exact reservation is all-or-none.
-- `hya-app/tests/spawn_admission.rs`: zero-budget background transient and
-  resident requests return overload with no child Session, parent
-  event/projection, resident-supervisor, or provider-call delta.
-- The same integration suite must prove one admitted background transient is
-  counted exactly once and one admitted resident reaches registration and its
-  provider turn through the shared boundary.
-- Keep `nested_spawn_tree` and foreground subagent suites green to protect
-  existing foreground semantics.
+  `ToolError::Overloaded`, preserves the persisted tool-call operation pair,
+  and exposes typed operation conflict/already-handled failures.
+- `hya-store/tests/admission.rs`: serial/concurrent claim/start idempotency,
+  fingerprint conflict, terminal immutability, release marker semantics,
+  repeatable startup recovery, and event-log independence.
+- `hya-core` unit: exactly-once operation debit/release, cancellation before
+  debit, and repeated root cleanup.
+- `hya-app/tests/spawn_admission.rs`: transient/resident overload creates no
+  child or lifecycle state; duplicate and concurrent retries dispatch once;
+  changed request conflicts; foreground/background completion releases once.
+- Keep queue saturation, nested spawn, event replay, and projection suites
+  green.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```rust
-let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-tokio::spawn(async move {
-    let child = engine.create(create).await?;
-    let _ = governor.reserve(root, 1);
-    run_child(child).await
-});
+let child = engine.create(create).await?;
+store.claim(operation, fingerprint).await?;
+governor.reserve(root, units);
 ```
 
 #### Correct
 
 ```rust
-tx.try_send(request).map_err(|error| match error {
-    tokio::sync::mpsc::error::TrySendError::Full(_) => SpawnError::Overloaded,
-    tokio::sync::mpsc::error::TrySendError::Closed(_) => SpawnError::Unavailable,
-})?;
-
-pre_admit_team(engine.as_ref(), parent, member_count).await?;
-tokio::spawn(run_pre_admitted_background(...));
+match store.claim_admission(&claim).await? {
+    Claimed(_) => {
+        governor.try_reserve_operation(root, operation, units, cancel)?;
+        store.start_admission(operation).await?;
+        run_pre_admitted_team(...).await;
+        finalize(operation, Completed).await?;
+    }
+    Existing(_) => return Err(OperationAlreadyHandled),
+}
 ```

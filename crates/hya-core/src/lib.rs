@@ -27,7 +27,7 @@ pub use compaction::{
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
-pub use engine::{AgentSpec, CreateSession, SessionEngine};
+pub use engine::{AgentSpec, CreateSession, SessionEngine, SpawnAdmissionOutcome};
 pub use error::CoreError;
 pub use hooks::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
@@ -40,7 +40,7 @@ pub use loop_mode::{
     cost_preflight, drive_loop, run_loop,
 };
 pub use mailbox::run_mailbox_service;
-pub use orchestrator::{SubagentGovernor, SubagentLimits, TeamBudget};
+pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
 pub use prompt::{PromptEnv, build_system_prompt};
 pub use resident::ResidentSupervisor;
 pub use subagent::{

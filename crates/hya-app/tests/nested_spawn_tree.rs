@@ -124,6 +124,7 @@ async fn spawn_one(spawner: &SpawnerPlane, parent: SessionId, agent_type: &str) 
     let outcomes = tokio::time::timeout(
         Duration::from_secs(5),
         spawner.for_session(parent).spawn_background(
+            hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
             vec![SpawnMember {
                 description: format!("spawn {agent_type}"),
                 prompt: format!("run {agent_type}"),
