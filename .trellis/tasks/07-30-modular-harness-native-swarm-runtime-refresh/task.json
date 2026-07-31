@@ -21,19 +21,19 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Patch 0.34.6 is closed green at 680f9fb535fc48f71f9aead64cc3d3d30161678a with draft-PR CI run 30634501761 attempt 2. Patch 0.34.7 is the only active stage. Its deterministic RED/GREEN proves one-winner TTL-free resident claims, monotonic epoch takeover, queued-versus-running recovery, stale canonical event/tool/child rejection, actor-bound admission abort/refund exactly once, atomic claim release, unchanged transient paths, and startup recovery before readiness. No user configuration, example, skill, TTL, HA, generic effect framework, AgentBundle work, or 100/256 certification is added. All required local release gates pass; exact staging, commit/push, and remote CI remain pending. The dirty main checkout and its 19 user-owned paths plus the task directory and three stashes remain untouched. No 0.34.8+ work, merge, tag, or activation is authorized.",
+  "notes": "Patch 0.34.7 is closed green at 064ede0b4fe4601b84ccbe912c75980449527d2c with draft-PR CI run 30657044177. Consult19/20 authorize 0.34.8 as exactly two atomic commits. Commit 1 is an inert, deterministic hya-bundle preparer plus repo-native builtin sources and hya-app build boundary; it does not activate the catalog, change runtime/TUI behavior, remove old loaders, or advance version/release metadata. Focused and full local Rust/bin/zero-INET gates pass; exact staging, commit/push, and remote CI remain pending before Commit 2 may begin. Protected main's 19 user-owned paths plus the task directory and three stashes remain untouched.",
   "meta": {
     "audit_head": "267bfc3c6c66e46fe8514e2e70657489f853b7f0",
     "implementation_base_head": "156d0ad3c50aea67dfac0054485eb6991e77308b",
-    "active_stage_base_head": "680f9fb535fc48f71f9aead64cc3d3d30161678a",
-    "previous_release_head": "680f9fb535fc48f71f9aead64cc3d3d30161678a",
+    "active_stage_base_head": "064ede0b4fe4601b84ccbe912c75980449527d2c",
+    "previous_release_head": "064ede0b4fe4601b84ccbe912c75980449527d2c",
     "feature_commit": "4e50eda9d83e55ab72fb42205e180aa9fca714b8",
     "gate_repair_commit": "680f9fb535fc48f71f9aead64cc3d3d30161678a",
     "implementation_release": "0.34.7",
     "draft_pr_url": "https://github.com/anyin233/hya/pull/24",
-    "remote_ci_run": "30634501761",
-    "remote_ci_status": "0.34.6 baseline green; 0.34.7 commit/push/run pending",
-    "local_gate_status": "0.34.7 deterministic RED/GREEN, focused resident/store/app integration, fmt, clippy, full workspace tests, workspace bins build, zero-INET, TUI typecheck/build and CI-mode 44/44, executable version, metadata, JSON/JSONL, and zero-new-dependency gates pass; exact commit/push/remote CI pending",
+    "remote_ci_run": "30657044177",
+    "remote_ci_status": "0.34.7 baseline green; 0.34.8 inert Commit 1 push/run pending",
+    "local_gate_status": "0.34.8 Commit 1 deterministic preparation RED/GREEN, focused Bundle/app characterization, fmt, workspace clippy/tests, workspace and locked bins, 0.34.7 executable probes, zero-INET, metadata, JSON/JSONL, and zero-new-external-dependency gates pass; exact commit/push/remote CI pending",
     "protected_dirty_paths": 19,
     "pro_advisory_records": [
       "CONSULT-2026-07-31-PATCH-PLAN-01",
@@ -45,12 +45,22 @@
       "CONSULT-2026-07-31-PTY-HARNESS-07",
       "CONSULT-2026-07-31-RUNTIME-GENERATION-08",
       "CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09",
-      "CONSULT-2026-07-31-RESIDENT-FENCING-10"
+      "CONSULT-2026-07-31-RESIDENT-FENCING-10",
+      "CONSULT-2026-07-31-PTY-CONTINUOUS-DRAIN-11",
+      "CONSULT-2026-07-31-PTY-EVENT-ORDER-12",
+      "CONSULT-2026-07-31-PTY-TRANSCRIPT-ORACLE-13",
+      "CONSULT-2026-07-31-PTY-SSE-PASSTHROUGH-14",
+      "CONSULT-2026-07-31-PENDING-SNAPSHOT-CATCHUP-15",
+      "CONSULT-2026-07-31-PENDING-SNAPSHOT-SIMPLIFICATION-16",
+      "CONSULT-2026-07-31-PTY-SANDBOX-PROBE-17",
+      "CONSULT-2026-07-31-ESCAPE-MAIN-PROMPT-18",
+      "CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19",
+      "CONSULT-2026-07-31-RESERVED-SYSTEM-AGENTS-20"
     ],
     "agent_capability_matrix": "research/agent-capability-parity-matrix.md",
     "agent_source_policy": "native-bundle-only; no old agent-file support or adapter",
     "native_bundle_bootstrap": "deterministic build-time preparation; embedded immutable built-ins; boot without install; one AgentBundleIR/generation/AgentSpec/SessionEngine path",
     "future_release_map": "0.34.3 delivered; owner-corrected 0.34.4-0.34.13 native-only sequence; every patch waits for the previous remote CI green",
-    "active_release_boundary": "0.34.7 deterministic single-process resident recovery with TTL-free actor claim/epoch fencing and actor-bound admission finalization only; no external exactly-once, HA, automatic running-work retry, generic effect framework, AgentBundle, or capacity certification"
+    "active_release_boundary": "0.34.8 Commit 1 only: inert native Bundle source schema, canonical prepared IR/catalog, repo-native builtin sources, and build-time embedded artifacts; no runtime activation, old-loader deletion, version bump, package install/CLI, runner, permission framework, or 0.34.9 work"
   }
 }

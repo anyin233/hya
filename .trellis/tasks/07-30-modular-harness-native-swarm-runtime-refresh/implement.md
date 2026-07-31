@@ -1329,8 +1329,10 @@ restores per-name mutation or an old agent-file authority.
 ### Slices
 
 - [ ] **P4.1 Narrowing resource view.** Resolve Harness policy, active binding,
-      AgentBundle requested `none|basic|full`, aliases, allow/deny, and
-      `permission_overlay` so bundle/plugin input can only narrow.
+      AgentBundle `harness_access: none|basic|full`, and separate
+      `resource_view` aliases/allow/deny/namespace so Bundle input can only
+      narrow. Until a typed permission-overlay consumer exists, preparation
+      rejects that field instead of retaining inert policy metadata.
 - [ ] **P4.2 Existing PermissionPlane propagation.** Reuse current
       ask/allow/deny interaction, logging, protocol validation, and fail-closed
       dispatch errors; do not add a second framework.
@@ -1469,9 +1471,9 @@ may start only after the previous patch's remote CI is green.
 Exit requires every A item mapped/tested, every B/C item implemented or typed
 rejected, all seven built-in IDs and replay fixtures green, unknown fields
 fail-closed, no old agent-file caller remains, and missing historical
-definitions never silently execute another agent. The source-tested
-unknown-new-spawn fallback remains an explicit owner decision if the matrix
-cannot reconcile it with fail-closed resolution.
+definitions never silently execute another agent. Consult19 resolves the old
+unknown-new-spawn hold: only an omitted agent selects stable ID `general`;
+an explicitly supplied unknown ID returns typed `UNKNOWN_AGENT_ID`.
 
 ### `0.34.9` — package distribution and registry
 
@@ -1908,3 +1910,163 @@ and one fresh full remote CI run remain pending.
   run passed 4/4, then the unchanged full TUI suite passed 47/47.
 - Pending: coordinator diff review, exact staging, commit/push, and one fresh
   full CI run. Version remains 0.34.7; 0.34.8 remains blocked.
+
+## 18. Active release — `0.34.8` native Bundle cutover
+
+### 18.1 Consult19 authority and verified baseline
+
+`CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19` authorizes exactly two atomic
+commits on the existing task/worktree/branch/PR. The preflight baseline is the
+clean, upstream-equal `0.34.7` tip
+`064ede0b4fe4601b84ccbe912c75980449527d2c`; draft PR #24 and CI run
+`30657044177` are green. Protected main remains at
+`267bfc3c6c66e46fe8514e2e70657489f853b7f0` with 20 status entries and the
+three recorded stashes unchanged.
+
+Controlling corrections supersede older unresolved or overloaded Bundle
+language:
+
+- omitted agent alone resolves to stable ID `general`; explicit unknown is
+  typed `UNKNOWN_AGENT_ID`; replay preserves historical `AgentName` bytes and
+  continuation requiring a removed definition is typed
+  `AGENT_DEFINITION_MISSING`;
+- `role` controls only TUI selector visibility, while `can_spawn` is the sole
+  Bundle reachability graph and internal/model-facing rosters retain eligible
+  subagents;
+- `harness_access = none|basic|full` chooses the Harness resource candidate
+  set, then `resource_view` narrows it with allow/deny/aliases/namespace;
+  neither can expand the current PermissionPlane or plugin authority;
+- runtime consumes only embedded prepared catalog bytes. It never scans source
+  Bundles, examples, ordinary Markdown, old JSON/JSONC/Markdown agents, or an
+  installed-package placeholder;
+- executable features without an existing 0.34.8 consumer are rejected as
+  `UNSUPPORTED_BUNDLE_FEATURE`; external JS/Rust/MCP execution stays in
+  `0.34.10`.
+
+### 18.2 Atomic commit 1 — inert preparation
+
+Commit subject: `feat(bundle): prepare native builtin bundles`.
+
+RED order:
+
+1. freeze exact source behavior for the seven product IDs and eight tracked
+   development IDs, including stable bytes, prompt/model/reasoning/workdir,
+   effective metadata/visibility, and replay/fork identity;
+2. identical sources produce identical prepared bytes, digest, and sorted
+   index independent of filesystem iteration order;
+3. exact `bundle.hya.md` input requires both v1 markers;
+4. unknown fields, missing references, duplicate stable IDs, namespace/alias
+   collisions, wrong kind, and unsupported executable features fail typed;
+5. bundle-local short names win while qualified identities remain exact;
+6. `hya/core-agents` and `hya/development` prepared sources match frozen
+   fixtures.
+
+GREEN is limited to dependency-light `crates/hya-bundle`, deterministic
+built-in sources under `bundles/builtin`, and the `hya-app` build boundary that
+prepares canonical embedded bytes without activating them. RuntimeSnapshot,
+SessionEngine, server/TUI endpoints, and old loaders remain unchanged. Version
+and release metadata remain `0.34.7`. Full Rust/bin/zero-INET gates and green
+remote CI are required before commit 2 begins.
+
+Consult20 resolves the source-mapping hold for the three effective hidden
+native definitions: `compaction`, `title`, and `summary` prepare as
+`role=subagent`, and no ordinary built-in agent's `can_spawn` includes them.
+There is no second `hidden` IR field. This intentionally removes their legacy
+accidental explicit-spawn reachability while retaining their exact stable IDs,
+prompt/model/reasoning characterization, and fixed Harness system use.
+
+#### 18.2.1 Commit 1 RED→GREEN evidence
+
+The inert preparer was developed one missing contract at a time. Each RED was
+an intended public seam or behavioral assertion, never a deliberately broken
+product sorter:
+
+- missing `BundleSource`/`prepare_builtins`, directory-reader,
+  `PreparedCatalog::decode`, and pure `BundleCatalog::from_prepared` seams first
+  failed to compile at their consumer tests, then passed with the minimal API;
+- deterministic preparation initially lacked full alias/reference validation,
+  normalized provenance, content-digest verification, canonical decoded-vector
+  checks, and stable-ID-versus-qualified-ID collision checks; each focused test
+  failed on the exact accepted-invalid candidate before the corresponding
+  validation was added;
+- source `resource_profile` initially returned the wrong manifest error, while
+  executable tool/MCP/hook/JS/Rust declarations and unknown fields were proven
+  rejected rather than retained inertly;
+- the first built-in parity run found the native `title` prompt missing the
+  current exact `in App` suffix; the corrected source then matched all frozen
+  prompt bytes;
+- the app build-boundary test first failed because the embedded OUT_DIR
+  artifacts did not exist, then passed after deterministic build-time prepare;
+- a release-discipline assertion found both inert bundle sources prematurely
+  labeled `0.34.8`; they now remain `0.34.7` until the activating commit bumps
+  the whole release once.
+
+Current focused GREEN commands:
+
+```sh
+cargo test -p hya-bundle
+cargo test -p hya-app --test builtin_bundle_build
+cargo clippy -p hya-bundle --all-targets -- -D warnings
+```
+
+They cover deterministic bytes/digests/index, source-order independence,
+Markdown markers, canonical payloads/paths/vectors, outer and inner tamper
+rejection, second-pass cross-bundle references, namespace/alias conflicts,
+unsupported features, exact current catalog metadata and prompts, Consult20
+roles/reachability, and historical AgentName wire/projection bytes. Commit 2
+still owns runtime selector/roster/spawn/system-call/resume behavior. The pure
+historical fixture clones every projected stable ID into a second
+`SessionCreated` fork fixture and proves the wire/projection bytes remain
+unchanged without editing the current server runtime.
+
+#### 18.2.2 Commit 1 local release gates
+
+```sh
+cargo fmt --all --check                                  # pass
+cargo clippy --workspace --all-targets -- -D warnings   # pass
+cargo test --workspace                                   # pass outside restricted sandbox
+cargo build --workspace --bins                          # pass
+cargo build --locked -p hya -p hya-backend -p hya-ts --bins  # pass
+target/debug/hya --version                              # hya 0.34.7
+target/debug/hya-backend --version                      # hya-backend 0.34.7
+target/debug/hya-ts --version                           # hya-ts 0.34.7
+bash scripts/verify-no-http.sh                           # OK: zero inet sockets
+```
+
+The first sandboxed workspace test failed only at the existing OAuth callback
+loopback bind with `Operation not permitted`; the exact command passed once
+outside the restricted sandbox. The first sandboxed zero-INET gate was blocked
+because `strace` reported `PTRACE_TRACEME: Operation not permitted`; the exact
+gate passed once outside the sandbox. No TUI/package/runtime source or version
+changed in this inert commit, so no TUI behavior gate, example, or skill is
+introduced. JSONL parsing, absence of `context.jsonl`, diff checks, exact scope,
+protected-main accounting, atomic staging, push, and remote CI remain the final
+Commit 1 gates.
+
+### 18.3 Atomic commit 2 — one-authority cutover
+
+Commit subject: `feat(agent): cut over to native bundles`.
+
+RED/GREEN must prove and then implement one `Arc<BundleCatalog>` inside the
+source-owned `RuntimeSnapshot`, captured once by `TurnBinding` and used by TUI
+selection, model-facing/internal roster, SessionEngine resolution, spawn, and
+resident recovery. The cutover simultaneously embeds/loads native built-ins,
+applies `can_spawn` and the separated resource access/view semantics, preserves
+event/projection/replay/fork identity bytes, rejects missing definitions on
+continuation, and deletes AgentCatalogPlane, live catalog closures, hardcoded
+catalogs, merged entries, every old source parser/discovery/execution caller,
+and `.hya/agents`.
+
+The same commit ships authoring documentation, the prepare-valid-only
+`bundle.hya.md` example, the built-in `agent-bundle-authoring` skill, explicit
+Drop Legacy/no-migration/no-sandbox boundaries, and the sole release bump
+`0.34.7 -> 0.34.8` with changelog archival. Focused Bundle/core/app/server/TUI
+and single-run PTY gates precede full workspace/TUI/bin/zero-INET gates, exact
+staging, push, and one green remote-CI run. No 0.34.9 work may begin here.
+
+Consult20 adds the required Commit 2 proofs: model-facing roster/listing is the
+current caller's `can_spawn`-reachable set; explicit ordinary spawn of any of
+the three reserved IDs returns `AGENT_SPAWN_NOT_ALLOWED` without child creation
+or `general` fallback; the existing three Harness system callsites resolve only
+their fixed stable ID from the same TurnBinding catalog. Resume is definition
+resolution, not a new caller spawn, and preserves historical identity bytes.

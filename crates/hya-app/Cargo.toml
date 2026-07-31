@@ -35,3 +35,6 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }
+
+[build-dependencies]
+hya-bundle = { workspace = true }

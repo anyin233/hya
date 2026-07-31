@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # --- internal crates (path deps) ---
+hya-bundle = { path = "crates/hya-bundle" }
 hya-proto = { path = "crates/hya-proto" }
 hya-provider = { path = "crates/hya-provider" }
 hya-tool = { path = "crates/hya-tool" }
