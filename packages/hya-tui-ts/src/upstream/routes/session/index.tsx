@@ -188,6 +188,18 @@ function use() {
   return ctx
 }
 
+type FocusMainPromptOwnershipInput = {
+  dispatch: (action: WorkspaceAction) => void
+  prompt: Pick<PromptRef, "focus"> | undefined
+  modalActive: boolean
+}
+
+/** Package-internal seam for synchronizing Main workspace and prompt focus. */
+export function focusMainPromptOwnership({ dispatch, prompt, modalActive }: FocusMainPromptOwnershipInput) {
+  dispatch({ type: "focusMain" })
+  if (!modalActive) prompt?.focus()
+}
+
 export function Session() {
   const setEpilogue = useEpilogue()
   const clipboard = useClipboard()
@@ -422,6 +434,12 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
+  const focusMain = () =>
+    focusMainPromptOwnership({
+      dispatch: dispatchWorkspace,
+      prompt,
+      modalActive: dialog.stack.length > 0,
+    })
   // Child session route (legacy / deep-link): Escape walks back to the parent.
   useBindings(() => ({
     enabled: () => !!session()?.parentID && mainFocused() && dialog.stack.length === 0,
@@ -491,7 +509,7 @@ export function Session() {
         if (mainFocused()) return
         if (event.name !== "escape" || event.ctrl || event.meta || event.option) return
         if (keymap.hasPendingSequence()) keymap.clearPendingSequence()
-        dispatchWorkspace({ type: "focusMain" })
+        focusMain()
         consume()
       },
       { priority: 10 },
@@ -543,7 +561,7 @@ export function Session() {
     // covers the leader-armed case; this path handles the common non-leader case.
     if (!mainFocused() && key.name === "escape" && noMods) {
       if (leaderPending) keymap.clearPendingSequence()
-      dispatchWorkspace({ type: "focusMain" })
+      focusMain()
       key.preventDefault()
       key.stopPropagation()
       return

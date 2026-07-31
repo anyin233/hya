@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 
 import { CommandMap, Definitions } from "../src/upstream/config/keybind"
+import { focusMainPromptOwnership } from "../src/upstream/routes/session"
 import {
   RunTreeParseError,
   createRunTreeLoader,
@@ -14,6 +15,29 @@ import {
   workspaceLeaves,
   workspacePaneStrip,
 } from "../src/upstream/routes/session/subagent-workspace"
+
+function focusMainCalls(options: { modalActive: boolean; promptPresent: boolean }) {
+  const calls: string[] = []
+  focusMainPromptOwnership({
+    dispatch: (action) => calls.push(action.type),
+    prompt: options.promptPresent ? { focus: () => calls.push("focus") } : undefined,
+    modalActive: options.modalActive,
+  })
+  calls.push("return")
+  return calls
+}
+
+test("focusMain transfers prompt ownership synchronously after dispatch", () => {
+  expect(focusMainCalls({ modalActive: false, promptPresent: true })).toEqual(["focusMain", "focus", "return"])
+})
+
+test("focusMain only dispatches when the prompt ref is absent", () => {
+  expect(focusMainCalls({ modalActive: false, promptPresent: false })).toEqual(["focusMain", "return"])
+})
+
+test("focusMain does not steal prompt ownership from an active modal", () => {
+  expect(focusMainCalls({ modalActive: true, promptPresent: true })).toEqual(["focusMain", "return"])
+})
 
 test("exposes exact pane command defaults", () => {
   const expected = {
