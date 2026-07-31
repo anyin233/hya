@@ -21,18 +21,19 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Patch 0.34.3 is committed/pushed at b8c21deeb5004e1f703b199a40de196902fadf35 and remote CI is green. Patch 0.34.4 feature commit 53a76ec12c516c9cef0cf916b83d29492d80eac9 and first gate-repair commit d4825a8c35d86c37c19f87800c70a7eebd93a6b7 are pushed. Remote runs 30607264119 and 30607763589 stopped in PTY smoke before Rust gates. CONSULT-2026-07-31-PTY-HARNESS-07 rejected concurrency changes and required deterministic FileSink write-then-flush TDD plus request/UI/final-render phase evidence. The final local repair uniquely separates open-by-handle from ctrl-x-dot worker focus, establishes a real predecessor observable, and passes helper regression, PTY 3/3, TUI 44/44, typecheck, Rust fmt/clippy/workspace tests/bins build without product, crate, workflow, timeout, dependency, version, or changelog changes. One atomic test-harness commit/push and fully green remote CI remain required. The dirty main checkout and its 19 user-owned paths plus three stashes remain untouched. No 0.34.5+ work, merge, tag, or activation is authorized.",
+  "notes": "Patch 0.34.4 is committed/pushed at 709abafb81ba0f94656254d3ecb51b42e051a89d and draft-PR CI run 30609417298 is green. Patch 0.34.5 is the only active stage. Its deterministic REDs and GREEN prove immutable runtime snapshots, one per-turn TurnBinding across prompt/schema/skill/dispatch, failure/no-op generation preservation, unique concurrent publication, lightweight generation events, exact direct-shell binding, retained-builder isolation, and atomic deferred MCP publication. Full Rust fmt/clippy/workspace-test/bins, locked executable, zero-INET, TUI typecheck/build, and CI-mode Bun 44/44 gates pass locally; exact staging, commit/push, and remote CI are pending. No public config was added, so no example/skill is required. The dirty main checkout and its 19 user-owned paths plus the task directory and three stashes remain untouched. No 0.34.6+ work, merge, tag, or activation is authorized.",
   "meta": {
     "audit_head": "267bfc3c6c66e46fe8514e2e70657489f853b7f0",
     "implementation_base_head": "156d0ad3c50aea67dfac0054485eb6991e77308b",
-    "active_stage_base_head": "b8c21deeb5004e1f703b199a40de196902fadf35",
+    "active_stage_base_head": "709abafb81ba0f94656254d3ecb51b42e051a89d",
+    "previous_release_head": "709abafb81ba0f94656254d3ecb51b42e051a89d",
     "feature_commit": "53a76ec12c516c9cef0cf916b83d29492d80eac9",
     "gate_repair_commit": "d4825a8c35d86c37c19f87800c70a7eebd93a6b7",
-    "implementation_release": "0.34.4",
+    "implementation_release": "0.34.5",
     "draft_pr_url": "https://github.com/anyin233/hya/pull/24",
-    "remote_ci_run": "30607763589",
-    "remote_ci_status": "failed in uniquely diagnosed PTY worker focus before Rust gates; causal follow-up commit and rerun pending",
-    "local_gate_status": "Browser/Pro PTY causal repair green: helper regression, PTY 3/3, TUI 44/44, typecheck, fmt, clippy, workspace tests, and bins build; commit/push/remote CI pending",
+    "remote_ci_run": "30609417298",
+    "remote_ci_status": "0.34.4 baseline green; 0.34.5 commit/push/run pending",
+    "local_gate_status": "0.34.5 deterministic RED/GREEN plus full fmt, clippy, workspace tests, bins, locked executables, zero-INET, TUI typecheck/build, and CI-mode Bun 44/44 pass; commit/push/remote CI pending",
     "protected_dirty_paths": 19,
     "pro_advisory_records": [
       "CONSULT-2026-07-31-PATCH-PLAN-01",
@@ -41,12 +42,13 @@
       "CONSULT-2026-07-31-AGENT-PARITY-04",
       "CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05",
       "CONSULT-2026-07-31-OPERATION-ADMISSION-06",
-      "CONSULT-2026-07-31-PTY-HARNESS-07"
+      "CONSULT-2026-07-31-PTY-HARNESS-07",
+      "CONSULT-2026-07-31-RUNTIME-GENERATION-08"
     ],
     "agent_capability_matrix": "research/agent-capability-parity-matrix.md",
     "agent_source_policy": "native-bundle-only; no old agent-file support or adapter",
     "native_bundle_bootstrap": "deterministic build-time preparation; embedded immutable built-ins; boot without install; one AgentBundleIR/generation/AgentSpec/SessionEngine path",
     "future_release_map": "0.34.3 delivered; owner-corrected 0.34.4-0.34.13 native-only sequence; every patch waits for the previous remote CI green",
-    "active_release_boundary": "0.34.4 OperationId plus minimal durable spawn admission/cancel/finalize/recovery only"
+    "active_release_boundary": "0.34.5 immutable RuntimeRegistry generation, one per-turn TurnBinding, and atomic tool/skill/MCP snapshot publication only"
   }
 }

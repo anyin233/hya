@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::ids::{ConfigGeneration, EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
@@ -79,6 +79,11 @@ pub enum Event {
         session: SessionId,
         message: MessageId,
         role: Role,
+    },
+    TurnBindingRecorded {
+        session: SessionId,
+        message: MessageId,
+        generation: ConfigGeneration,
     },
     UserPromptContextRecorded {
         session: SessionId,
@@ -333,6 +338,7 @@ impl Event {
             | Event::SessionStatus { session, .. }
             | Event::CommandExecuted { session, .. }
             | Event::MessageStarted { session, .. }
+            | Event::TurnBindingRecorded { session, .. }
             | Event::UserPromptContextRecorded { session, .. }
             | Event::MessageFinished { session, .. }
             | Event::MessageDeleted { session, .. }
@@ -380,6 +386,46 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn turn_binding_round_trips_and_folds_only_generation_identity() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let binding = Event::TurnBindingRecorded {
+            session,
+            message,
+            generation: ConfigGeneration::INITIAL,
+        };
+        let encoded = serde_json::to_string(&binding).expect("encode turn binding");
+        let decoded: Event = serde_json::from_str(&encoded).expect("decode turn binding");
+        assert_eq!(decoded, binding);
+        assert_eq!(decoded.session(), Some(session));
+
+        let projection = crate::Projection::from_events(&[
+            Envelope {
+                seq: EventSeq(1),
+                ts_millis: 1,
+                event: Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                },
+            },
+            Envelope {
+                seq: EventSeq(2),
+                ts_millis: 2,
+                event: binding,
+            },
+        ]);
+        let projected = projection
+            .session
+            .messages
+            .first()
+            .expect("projected assistant message");
+        assert_eq!(projected.config_generation, Some(ConfigGeneration::INITIAL));
+        assert!(!encoded.contains("tools"));
+        assert!(!encoded.contains("skills"));
+    }
 
     #[test]
     fn unknown_event_type_deserializes_to_unknown() {

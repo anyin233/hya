@@ -553,7 +553,7 @@ fn defer_sideplanes() -> bool {
     }
 }
 
-fn register_mcp_tools(registry: &ToolRegistry, manager: &hya_mcp::McpManager) {
+fn register_initial_mcp_tools(registry: &ToolRegistry, manager: &hya_mcp::McpManager) {
     for tool in manager.tools() {
         if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
             eprintln!("hya: skipping MCP tool ({error})");
@@ -561,12 +561,24 @@ fn register_mcp_tools(registry: &ToolRegistry, manager: &hya_mcp::McpManager) {
     }
 }
 
-fn register_plugin_tools(registry: &ToolRegistry, host: &hya_plugin::PluginHost) {
+fn register_initial_plugin_tools(registry: &ToolRegistry, host: &hya_plugin::PluginHost) {
     for tool in host.tools() {
         if let Err(error) = registry.register(tool) {
             eprintln!("hya: skipping plugin tool ({error})");
         }
     }
+}
+
+fn publish_mcp_tools(
+    engine: &SessionEngine,
+    tools: impl IntoIterator<Item = Arc<dyn hya_tool::Tool>>,
+) -> Result<hya_proto::ConfigGeneration, hya_core::RuntimeRefreshError> {
+    engine.refresh_runtime(move |candidate| {
+        for tool in tools {
+            candidate.register_tool_with_permission(tool, ToolPermission::Mcp)?;
+        }
+        Ok(())
+    })
 }
 
 pub async fn build_session_engine(
@@ -594,28 +606,21 @@ pub async fn build_session_engine(
     if !websearch.enabled {
         registry.remove("websearch");
     }
-    let tools = Arc::new(registry);
 
     // Plugins stay on the synchronous path for now (hooks must be installed before
     // the engine is sealed). MCP is the unbounded hang — defer by default.
     let plugin_host = Arc::new(hya_plugin::PluginHost::connect_all(plugins, host_info()).await);
-    register_plugin_tools(tools.as_ref(), plugin_host.as_ref());
+    register_initial_plugin_tools(&registry, plugin_host.as_ref());
 
     let defer_mcp = defer_sideplanes() && !mcp.is_empty();
-    let mcp_manager = if defer_mcp {
-        let manager = hya_mcp::McpManager::pending(&mcp);
-        let tools_bg = tools.clone();
-        let manager_bg = manager.clone();
-        tokio::spawn(async move {
-            manager_bg.connect_all_into(mcp).await;
-            register_mcp_tools(tools_bg.as_ref(), &manager_bg);
-        });
-        manager
+    let (mcp_manager, deferred_mcp) = if defer_mcp {
+        (hya_mcp::McpManager::pending(&mcp), Some(mcp))
     } else {
         let manager = hya_mcp::McpManager::connect_all(mcp).await;
-        register_mcp_tools(tools.as_ref(), &manager);
-        manager
+        register_initial_mcp_tools(&registry, &manager);
+        (manager, None)
     };
+    let tools = Arc::new(registry);
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -673,6 +678,17 @@ pub async fn build_session_engine(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
+    if let Some(mcp) = deferred_mcp {
+        let engine_bg = engine.clone();
+        let manager_bg = mcp_manager.clone();
+        tokio::spawn(async move {
+            manager_bg.connect_all_into(mcp).await;
+            let result = publish_mcp_tools(engine_bg.as_ref(), manager_bg.tools());
+            if let Err(error) = result {
+                eprintln!("hya: MCP runtime refresh rejected ({error})");
+            }
+        });
+    }
     // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
     // before the team supervisor so its bus subscription is live for the first mail.
     let resident_supervisor = ResidentSupervisor::start(engine.clone());
@@ -784,9 +800,35 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use hya_tool::PermissionModel;
+    use async_trait::async_trait;
+    use hya_proto::{ToolName, ToolSchema};
+    use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError};
+    use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct RuntimeMarker(&'static str);
+
+    #[async_trait]
+    impl Tool for RuntimeMarker {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new(self.0),
+                description: format!("{} runtime marker", self.0),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+            }
+        }
+
+        async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
+            Ok(json!({ "ok": true }))
+        }
+    }
 
     struct EnvGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -976,6 +1018,72 @@ mod tests {
                 .iter()
                 .all(|schema| schema.name.as_str() != "websearch")
         );
+    }
+
+    #[tokio::test]
+    async fn engine_snapshot_rejects_builder_bypass_and_publishes_deferred_set_atomically() {
+        let (router, _model) = offline_router(None);
+        let builder = Arc::new(ToolRegistry::builtins());
+        let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+        let engine = Arc::new(SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(router),
+            builder.clone(),
+            permission,
+            EventBus::default(),
+        ));
+
+        builder
+            .register(Arc::new(RuntimeMarker("builder_bypass")))
+            .unwrap();
+        assert!(
+            engine
+                .tool_schemas()
+                .iter()
+                .all(|schema| schema.name.as_str() != "builder_bypass"),
+            "mutating the retained candidate builder must not change the effective snapshot"
+        );
+
+        let saw_complete_old_view = Arc::new(AtomicBool::new(false));
+        let observed = saw_complete_old_view.clone();
+        let inspect_engine = engine.clone();
+        let mut next = 0;
+        let deferred_tools = std::iter::from_fn(move || {
+            let item = match next {
+                0 => Some(Arc::new(RuntimeMarker("mcp__deferred__first")) as Arc<dyn Tool>),
+                1 => {
+                    let visible = inspect_engine
+                        .tool_schemas()
+                        .into_iter()
+                        .map(|schema| schema.name.to_string())
+                        .collect::<Vec<_>>();
+                    observed.store(
+                        !visible.iter().any(|name| name == "mcp__deferred__first")
+                            && !visible.iter().any(|name| name == "mcp__deferred__second"),
+                        Ordering::SeqCst,
+                    );
+                    Some(Arc::new(RuntimeMarker("mcp__deferred__second")) as Arc<dyn Tool>)
+                }
+                _ => None,
+            };
+            next += 1;
+            item
+        });
+
+        publish_mcp_tools(engine.as_ref(), deferred_tools).unwrap();
+
+        assert!(
+            saw_complete_old_view.load(Ordering::SeqCst),
+            "the first candidate member became visible before atomic publication"
+        );
+        let visible = engine
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.to_string())
+            .collect::<Vec<_>>();
+        assert!(visible.iter().any(|name| name == "mcp__deferred__first"));
+        assert!(visible.iter().any(|name| name == "mcp__deferred__second"));
+        assert!(!visible.iter().any(|name| name == "builder_bypass"));
     }
 
     #[tokio::test]

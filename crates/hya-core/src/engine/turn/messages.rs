@@ -2,9 +2,9 @@ use hya_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
 };
 use hya_provider::CompletionRequest;
-use hya_tool::ToolRegistry;
 use serde_json::Value;
 
+use crate::TurnBinding;
 use crate::engine::AgentSpec;
 
 const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
@@ -39,11 +39,11 @@ pub(super) fn request_from_messages(
     agent: &AgentSpec,
     projection: &Projection,
     messages: Vec<Message>,
-    tools: &ToolRegistry,
+    binding: &TurnBinding,
 ) -> CompletionRequest {
     let model = active_model(agent, projection);
     CompletionRequest {
-        tools: filtered_tool_schemas(tools, &model),
+        tools: filtered_tool_schemas(binding, &model),
         model,
         system: Some(agent.system_prompt.clone()),
         messages,
@@ -54,9 +54,9 @@ pub(super) fn request_from_messages(
     }
 }
 
-fn filtered_tool_schemas(tools: &ToolRegistry, model: &ModelRef) -> Vec<hya_proto::ToolSchema> {
-    tools
-        .schemas()
+fn filtered_tool_schemas(binding: &TurnBinding, model: &ModelRef) -> Vec<hya_proto::ToolSchema> {
+    binding
+        .tool_schemas()
         .into_iter()
         .filter(|schema| include_tool(schema.name.as_str(), model.as_str()))
         .collect()

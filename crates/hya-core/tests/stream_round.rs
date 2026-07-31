@@ -246,6 +246,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
             messages: vec![MessageProjection {
                 id: MessageId::new(),
                 role: Role::Assistant,
+                config_generation: None,
                 finish: Some(FinishReason::Stop),
                 tokens: None,
                 files: Vec::new(),

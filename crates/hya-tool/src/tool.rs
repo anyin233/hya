@@ -138,16 +138,25 @@ impl Tool for NamedTool {
     }
 }
 
-/// Shared tool catalog. Uses interior mutability so callers can hot-register MCP
-/// and plugin tools after the engine has already been built (listen-before-connect).
+/// Mutable tool catalog used to assemble a complete runtime candidate.
+///
+/// A live session engine consumes an immutable [`ToolRegistrySnapshot`] instead.
+/// Mutating this builder after snapshotting does not alter an effective runtime
+/// view.
 pub struct ToolRegistry {
     inner: std::sync::RwLock<ToolRegistryInner>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ToolRegistryInner {
     tools: HashMap<String, ResolvedTool>,
     aliases: HashMap<String, ResolvedTool>,
+}
+
+/// Immutable, lock-free tool view retained by an admitted turn.
+#[derive(Clone)]
+pub struct ToolRegistrySnapshot {
+    inner: Arc<ToolRegistryInner>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,12 +248,37 @@ impl ToolRegistry {
         registry
     }
 
-    /// Register a tool. Takes `&self` so tools can be hot-added through an `Arc`.
+    /// Freeze the current builder contents into an immutable runtime view.
+    #[must_use]
+    pub fn snapshot(&self) -> ToolRegistrySnapshot {
+        ToolRegistrySnapshot {
+            inner: Arc::new(self.read().clone()),
+        }
+    }
+
+    /// Start an offline candidate builder from an immutable runtime view.
+    #[must_use]
+    pub fn from_snapshot(snapshot: &ToolRegistrySnapshot) -> Self {
+        Self {
+            inner: std::sync::RwLock::new((*snapshot.inner).clone()),
+        }
+    }
+
+    /// Compare a candidate with a frozen view by names, permission classes,
+    /// aliases, and executor identity.
+    #[must_use]
+    pub fn logically_matches(&self, snapshot: &ToolRegistrySnapshot) -> bool {
+        let candidate = self.read();
+        maps_match(&candidate.tools, &snapshot.inner.tools)
+            && maps_match(&candidate.aliases, &snapshot.inner.aliases)
+    }
+
+    /// Register a tool on this candidate builder through a shared reference.
     pub fn register(&self, tool: Arc<dyn Tool>) -> Result<(), DuplicateName> {
         self.register_with_permission(tool, ToolPermission::Tool)
     }
 
-    /// Register a tool with an explicit permission class. Hot-register safe (`&self`).
+    /// Register a candidate tool with an explicit permission class.
     pub fn register_with_permission(
         &self,
         tool: Arc<dyn Tool>,
@@ -331,6 +365,35 @@ impl ToolRegistry {
         inner
             .aliases
             .insert(legacy.to_string(), ResolvedTool { tool, permission });
+    }
+}
+
+fn maps_match(left: &HashMap<String, ResolvedTool>, right: &HashMap<String, ResolvedTool>) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|(name, left)| {
+            right.get(name).is_some_and(|right| {
+                left.permission == right.permission && Arc::ptr_eq(&left.tool, &right.tool)
+            })
+        })
+}
+
+impl ToolRegistrySnapshot {
+    #[must_use]
+    pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
+        self.inner
+            .tools
+            .get(name)
+            .or_else(|| self.inner.aliases.get(name))
+            .cloned()
+    }
+
+    #[must_use]
+    pub fn schemas(&self) -> Vec<ToolSchema> {
+        self.inner
+            .tools
+            .values()
+            .map(|resolved| resolved.tool.schema())
+            .collect()
     }
 }
 

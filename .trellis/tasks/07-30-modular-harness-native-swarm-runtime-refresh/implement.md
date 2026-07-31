@@ -2,11 +2,11 @@
 
 ## 0. Execution guard
 
-The task is `in_progress`. Release `0.34.3` is committed/pushed at
-`b8c21deeb5004e1f703b199a40de196902fadf35` and its draft-PR remote CI is
-green. Release `0.34.4` is now the only active implementation slice. Source
+The task is `in_progress`. Release `0.34.4` is committed/pushed at
+`709abafb81ba0f94656254d3ecb51b42e051a89d` and draft-PR CI run
+`30609417298` is green. Release `0.34.5` is now the only active implementation slice. Source
 edits, builds, tests, commit, push, and remote-CI monitoring are authorized only
-for that slice. Releases `0.34.5+`, tagging, merge, production activation, and
+for that slice. Releases `0.34.6+`, tagging, merge, production activation, and
 synchronization remain unauthorized.
 
 Before any future implementation:
@@ -26,7 +26,7 @@ before task creation. Those facts are provenance, not a demand that future
 phases remain on that commit. Every phase records its own starting commit and
 stops if a planned file overlaps unrecognized user work.
 
-The current `0.34.3` implementation base is fetched `origin/main`
+The isolated implementation base for the delivered stages is fetched `origin/main`
 `156d0ad3c50aea67dfac0054485eb6991e77308b`. The sole intervening commit changes
 only the README icon reference; the isolated branch was rebased and its task
 changes restored without conflict. Dirty `main` remains at the audit anchor.
@@ -129,7 +129,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
 - Admission, cancellation propagation, resource limits, binding consistency,
   crash containment, actor epochs, and effect fencing remain
   correctness/performance work.
-- AgentBundle is deferred beyond `0.34.4`. The third-round ruling fixes an
+- AgentBundle is deferred to its prerequisite-gated `0.34.8+` stages. The third-round ruling fixes an
   ABI-neutral Harness-attached catalog/flat manifest, namespace resolver,
   `none | basic | full` resource views, and the existing `PermissionPlane` as
   final authority. It does not authorize execution.
@@ -188,7 +188,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
                                           + self-update example/skill
 ```
 
-No later patch may be preimplemented in `0.34.4`. Each arrow requires the
+No later patch may be preimplemented in the active `0.34.5` slice. Each arrow requires the
 preceding patch's full gate, atomic commit/push, and remote CI green. Pro round
 six is advisory provenance; the MacBook Air coordinator's corrections above
 control. Final external execution/context/resident semantics, private Bundle
@@ -213,7 +213,7 @@ This is a starting map to revalidate with CodeGraph before each edit.
 
 ## 4. Verification commands
 
-These are the required final gates for the active `0.34.4` slice.
+These are the required final gates for the active `0.34.5` slice.
 
 ### 4.1 Rust and executable gate
 
@@ -443,7 +443,7 @@ All required local gates passed after the repair. Commit `b8c21dee` was pushed
 to the existing draft PR #24 and remote CI run `30598676183` completed green.
 This closes the `0.34.3` entry gate for `0.34.4`.
 
-## 5A. Active release — `0.34.4`
+## 5A. Delivered release — `0.34.4`
 
 ### 5A.1 Controlling identity and journal contract
 
@@ -607,8 +607,9 @@ inference, not a product formatter defect. Creating that executable fixture
 with a synchronous write passed 10/10 focused runs, then the complete workspace
 test and binary build gates.
 
-A focused follow-up commit/push and a fully green rerun of all draft PR gates
-are still required; `0.34.5` remains blocked until then.
+At that intermediate point, a focused follow-up commit/push and fully green
+draft-PR rerun were still required. Section 5A.6 records their completion and
+the resulting `0.34.5` entry gate.
 
 ### 5A.6 Browser/Pro PTY causal repair evidence
 
@@ -661,9 +662,134 @@ Verification after the final local GREEN:
 - no `crates/**`, product TUI source, workflow, dependency, timeout, version,
   or changelog file changed in this repair.
 
-One atomic test-harness commit, push to the existing branch, and a fully green
-draft-PR CI run remain required. `0.34.5` stays blocked until that terminal
-remote result.
+The atomic test-harness repair is included in green `0.34.4` HEAD
+`709abafb81ba0f94656254d3ecb51b42e051a89d`. Draft-PR run `30609417298`
+completed successfully, so the `0.34.5` entry gate is closed.
+
+## 5B. Active release — `0.34.5`
+
+### 5B.1 Exact boundary and baseline
+
+Implementation starts from green isolated HEAD
+`709abafb81ba0f94656254d3ecb51b42e051a89d` on the existing branch/worktree
+and draft PR #24. The stage implements only immutable runtime generations,
+per-turn `TurnBinding`, and source-owned atomic tool/skill/MCP publication.
+It does not implement `0.34.6` reconciliation, plugin respawn state, stable
+namespace catalogs, resident leases/effect fencing, AgentBundle, updater,
+sandbox, or a new permission framework.
+
+### 5B.2 RED evidence
+
+Four deterministic integration tests were written before product code:
+
+- `in_flight_turn_retains_generation_while_post_publish_turn_sees_next`;
+- `failed_candidate_refresh_retains_generation_and_exact_registry_view`;
+- `one_turn_cannot_mix_tool_skill_or_mcp_members_across_generations`;
+- `concurrent_publications_are_unique_monotonic_and_never_publish_a_mixed_candidate`.
+
+Each focused command exited 101 because `RuntimeRegistry`, `TurnBinding`, and
+`RuntimeRefreshError` did not exist. A second real-engine tracer,
+`admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch`, exited
+101 because `SessionEngine::refresh_runtime` and `TurnBindingRecorded` did not
+exist. These are expected missing-behavior REDs, not fixture failures.
+
+### 5B.3 Minimal GREEN and authority removal
+
+- `hya-core::RuntimeRegistry` owns one active `Arc<RuntimeSnapshot>` and one
+  serialized publication seam. Candidate construction never holds the active
+  pointer lock; bound dispatch reads only immutable maps.
+- `ToolRegistry` remains a convenient mutable candidate builder. Engine
+  construction snapshots it immediately; retaining and mutating that builder
+  cannot change the effective view.
+- Generation allocation occurs only after the candidate closure and validation
+  complete. Failed and logical no-op candidates do not consume a generation.
+- A snapshot contains one tool view (builtin/plugin/MCP) plus immutable
+  multi-workdir skill views. The same binding supplies skill prompt content and
+  the `skill` tool plane.
+- `run_turn` and direct shell bind once after admission and before assistant
+  behavior, then record exactly one lightweight binding event. All stream
+  rounds, schema filtering, resolution, dispatch, and skill execution use that
+  retained binding.
+- Fork/history copying preserves an existing message's generation audit field;
+  subsequent fork turns use the same engine owner and bind the then-current
+  snapshot. `text_complete` has no independent entry point or registry lookup;
+  it executes only inside the already-bound stream-round path.
+- `hya-app` builds plugins and synchronous MCP into one complete initial
+  builder, then discards builder authority at engine construction. Deferred MCP
+  tools are submitted as one complete candidate to `refresh_runtime`.
+- `ConfigGeneration` is dependency-light in `hya-proto`.
+  `TurnBindingRecorded` carries only the existing session routing field,
+  message ID, and generation; projection stores only the optional message
+  generation.
+
+### 5B.4 Focused proof
+
+Focused GREEN currently proves:
+
+- old bindings retain old tool/MCP/skill members and later bindings see the
+  next complete generation;
+- failed candidates preserve exact generation/view and the next success uses
+  `N+1`;
+- logically unchanged complete candidates do not advance generation;
+- eight concurrent publications receive unique consecutive generations and
+  the final active view equals one complete candidate;
+- a real multi-round turn keeps old prompt/schema/tool/skill dispatch after a
+  mid-turn publication, while the next turn sees the new view;
+- direct shell records a binding;
+- an app-level retained-builder mutation is invisible, candidate member one is
+  invisible during candidate assembly, and both deferred MCP markers appear
+  together after publication.
+
+`cargo check --workspace --all-targets` and the focused core/app/deferred-startup
+tests pass. Section 5B.6 records the completed local release gate; exact
+staging, commit/push, and remote CI remain required before `0.34.5` is complete.
+
+### 5B.5 Release/document boundary
+
+Workspace/TUI/README advance exactly `0.34.4 -> 0.34.5`; the prior root
+changelog is archived as `docs/changes/CHANGELOG_0.34.4.md`, and root
+`CHANGELOG.md` contains only `0.34.5`. Runtime/event architecture docs and ADR
+implementation notes describe the narrow snapshot contract. No new
+user-configurable surface is introduced, so this stage deliberately adds no
+example or skill.
+
+### 5B.6 Local exit-gate evidence
+
+The final local source passed:
+
+- `cargo fmt --all --check`;
+- `cargo clippy --workspace --all-targets -- -D warnings`;
+- `cargo test --workspace`;
+- `cargo build --workspace --bins`;
+- the CI-locked launcher/backend build;
+- `bash scripts/verify-no-http.sh` with zero INET sockets;
+- runnable `hya` and `hya-backend` executables reporting `0.34.5`;
+- TUI typecheck/build and the complete `CI=true` Bun suite, 44/44.
+
+One default-20-second local Bun run timed out at the 140-column root-session
+frame and a later one at the 80-column root-session frame; the complementary
+width passed in each case, an intervening default run passed 44/44, and the
+final CI-equivalent 45-second suite passed both widths. No timeout, retry,
+concurrency, product-TUI, or PTY-helper change was made.
+
+The first final workspace-test run also reproduced the pre-existing Linux
+formatter-fixture `ETXTBSY` at its generated `vendor/bin/pint`. The fixture now
+holds an explicit file handle, writes and `sync_all`s the script, and drops the
+writer before chmod/exec. The focused test passed 20/20 and the original full
+workspace command then passed. This is a test-fixture close/durability repair,
+not runtime formatter behavior.
+
+Trellis check and the two-axis local Standards/Spec review found no remaining
+hard finding after:
+
+- renaming the old hot-register test and proving a retained candidate builder
+  cannot change a frozen snapshot;
+- asserting direct shell records exactly one binding event;
+- avoiding a full catalog clone when the bound `skill` tool selects one entry;
+- adding the executable backend code-spec for the immutable generation
+  boundary.
+
+Remote draft-PR CI remains the release gate. No `0.34.6` work is included.
 
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 

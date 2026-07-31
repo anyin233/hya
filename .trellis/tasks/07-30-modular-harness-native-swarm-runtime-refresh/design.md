@@ -3,9 +3,10 @@
 ## 1. Planning status and evidence anchor
 
 This document is a **target design**, not an implementation claim. Release
-`0.34.3` is committed/pushed at
-`b8c21deeb5004e1f703b199a40de196902fadf35` with green remote CI. The user has
-now authorized only the `0.34.4` OperationId/minimal durable-admission slice.
+`0.34.4` is committed/pushed at
+`709abafb81ba0f94656254d3ecb51b42e051a89d`; remote CI run `30609417298` is
+green. The user has now authorized only the `0.34.5` immutable runtime
+generation/TurnBinding/atomic publication slice.
 Every later patch and every production/owner gate remains unauthorized until
 its recorded entry conditions are met.
 
@@ -21,8 +22,8 @@ its recorded entry conditions are met.
   is rebased to that newer implementation base, while dirty `main` remains at
   the audit commit.
 - `[workspace.package].version` at the audit anchor is `0.34.2`; delivered
-  release `0.34.3` is the current isolated HEAD and `0.34.4` is the active
-  release target.
+  releases `0.34.3` and `0.34.4` are in the isolated branch, and `0.34.5` is
+  the active release target.
 - Before this task directory was created, `git status --porcelain` contained
   exactly 19 user-owned entries. They are enumerated in
   `research/fuji1-sync-preflight.md`. The untracked task directory is the
@@ -63,7 +64,7 @@ This section overrides any broader exploratory target below:
   provenance. A/B/C execution, context transfer, and resident idle/turn
   semantics still require explicit owner selection;
 - the active patch/release sequence is authoritative in
-  `research/next-step-roadmap.md`; only `0.34.4` is active now.
+  `research/next-step-roadmap.md`; only `0.34.5` is active now.
 
 ### 1.2 Controlling native-only cutover ruling
 
@@ -88,7 +89,8 @@ cutover and no temporary old-file detector. Built-in packages are prepared
 deterministically at build time, embedded read-only with a digest-bound index,
 and merged with installed packages into one immutable generation. The
 authoritative patch order is in section 19 and
-`research/next-step-roadmap.md`. It does not broaden `0.34.3`.
+`research/next-step-roadmap.md`. That ruling did not broaden the then-active
+`0.34.3` slice and does not enter the active `0.34.5` boundary.
 
 ## 2. Five target gaps
 
@@ -97,7 +99,7 @@ authoritative patch order is in section 19 and
 | Modular coding harness | **Implementation:** `hya-app` composes mutable/process-specific managers directly; discovery has startup-static, spawn-live, and round-live visibility regimes. | Deep authorities own generation, binding, admission, actors/effects, and update; existing `PermissionPlane` remains the permission boundary. Discovery/process managers become adapters. |
 | Native 100+ subagent swarm | **Implementation:** 128 limits only depth-greater-than-zero provider streams; spawn intake and task-per-request fan-out are unbounded; a new background transient session is allocated before `run_team` reserve; resident spawn bypasses transient reserve/depth accounting; resident execution is not rehydrated after restart. | One durable bounded authority admits before every allocation and demonstrates 100 active subagent work items, 156 durably non-active items, typed overload at item 257, and restart/fault recovery. |
 | Per-agent Markdown/JS/Rust `AgentBundle` | **Implementation:** `AgentSpec` lacks bundle/catalog identity; parsed agent permissions/options and skill `allowed-tools`/`model` do not reach an enforced runtime view; plugin subprocesses are ordinary same-UID children. | One flat Harness-owned catalog manifest defines identity/extensions/resources/agents; agent views and permission overlays only narrow current Harness policy; executable code is explicitly trusted and not malicious-code isolated. |
-| Atomic runtime registry refresh | **Implementation:** `ToolRegistry` mutates per name; schemas and execution resolution are independently live; static/deferred and Compat dynamic MCP use separate control paths; plugin restart discards new initialization declarations. **Accepted ADR:** 0007/0008 require next-Turn visibility. | Desired/observed/effective reconciliation produces one verified binding set, atomically visible to newly admitted Turn attempts and pinned through every round. |
+| Atomic runtime registry refresh | **Implementation through `0.34.5`:** `RuntimeRegistry` is the single effective snapshot owner; a turn retains one `TurnBinding` for prompt skills, schemas, resolution, and dispatch; deferred MCP publishes one complete candidate. Plugin restart and Compat MCP still lack desired/observed/effective reconciliation. | `0.34.6` adds reconciliation and source-incarnation semantics without replacing the `0.34.5` publisher/binding authority. |
 | Secure Rust self-update | **Implementation:** `install.sh` already stages, smokes, backs up, and restores; release CI already emits hashes/provenance. | A separately protected verifier/activator adds canonical signatures, anti-replay/anti-rollback state, immutable runtime generations, crash-consistent activation, and forward-only rollback epochs while retaining the installer as break-glass recovery. |
 
 ## 3. Terms and non-negotiable invariants
@@ -294,6 +296,40 @@ Secret values are not copied into manifests, content digests exposed to models,
 or event logs. Manifests hold scoped references; Harness-owned existing config
 resolution supplies values only through the current authorized dispatch path.
 
+### 5.1.1 Active `0.34.5` minimal generation boundary
+
+`0.34.5` implements the narrow prerequisite, not the later reconciliation
+model:
+
+- `SessionEngine` owns exactly one `RuntimeRegistry`. `ToolRegistry` remains a
+  mutable offline candidate builder, but an engine freezes it immediately and
+  never retains it as an effective authority.
+- `RuntimeSnapshot` contains a `ConfigGeneration`, one immutable lock-free tool
+  view (including MCP-backed tools), and immutable skill catalogs keyed by
+  workdir. `TurnBinding` retains the snapshot `Arc` and selected workdir.
+- Candidate construction and publication are serialized by one publisher
+  critical section. Candidate validation completes before the next monotonic
+  generation is allocated; publication is one replacement of the active
+  snapshot `Arc`.
+- A failed or logically unchanged candidate leaves the active generation and
+  exact effective view unchanged. Concurrent successful publications receive
+  unique increasing generations and can expose only a whole candidate.
+- After admission, `run_turn` and direct shell bind once before prompt,
+  provider, schema, skill, or tool behavior. Every provider round and dispatch
+  uses the retained binding. Newly admitted turns see a later successful
+  publication; in-flight turns do not.
+- `TurnBindingRecorded` stores only session routing, message identity, and
+  generation identity. The shared projection records that optional generation
+  on the assistant message; registry contents remain outside events and no
+  parallel read model is introduced.
+- Startup plugins and synchronous MCP tools enter the complete initial
+  candidate. Deferred MCP connection publishes its full tool set through the
+  same owner; it cannot mutate an engine-visible builder.
+
+No public configuration, desired/observed/effective resource state, plugin
+respawn declaration, namespace migration, Bundle behavior, or permission
+reinterpretation is introduced in this boundary.
+
 Filesystem changes, process handshakes, and package downloads create
 candidates. They never mutate an effective generation in place. Change bursts
 are debounced/coalesced into one candidate, but every accepted activation is
@@ -388,7 +424,7 @@ Invariants:
 The effective view is the narrowing intersection of requested
 view/allow-deny/overlay and Harness policy. A bundle never expands that policy.
 
-#### Illustrative target YAML (design-only, not implemented in `0.34.3`)
+#### Illustrative target YAML (design-only, not implemented in `0.34.5`)
 
 ```yaml
 identity:
@@ -570,7 +606,7 @@ Harness policy/current PermissionPlane
 
 ## 8. Lane D — durable multi-resource admission
 
-### 8.0 Active `0.34.4` minimal journal boundary
+### 8.0 Delivered `0.34.4` minimal journal boundary
 
 The active patch is deliberately smaller than the target scheduler in the
 rest of section 8:

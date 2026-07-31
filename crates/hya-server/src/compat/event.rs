@@ -462,6 +462,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::ModelSwitched { .. }
         | Event::CommandExecuted { .. }
         | Event::MessageStarted { .. }
+        | Event::TurnBindingRecorded { .. }
         | Event::MessageFinished { .. }
         | Event::TextStart { .. }
         | Event::TextDelta { .. }

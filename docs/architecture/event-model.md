@@ -11,6 +11,7 @@ It is shared by the engine, store, provider layer, server, client, and TUI.
 - messages
 - parts
 - tool calls
+- immutable runtime configuration generations
 - team runs
 - members
 - goals
@@ -30,6 +31,7 @@ canonical runtime stream. Major event groups are:
 - session lifecycle
 - session metadata, title, archive/share, agent/model switch, and status
 - message lifecycle
+- assistant-turn runtime binding identity
 - prompt context metadata
 - message and part deletion
 - step markers
@@ -78,6 +80,8 @@ envelopes into a `Projection`:
 - `SessionCreated` sets session metadata.
 - session metadata/title/archive/share/move/switch events update session state.
 - `MessageStarted` creates a message row in memory.
+- `TurnBindingRecorded` stores the assistant message's lightweight
+  `ConfigGeneration`; registry contents remain outside the event log.
 - `UserPromptContextRecorded` preserves prompt attachment metadata.
 - text and reasoning starts create parts.
 - deltas append to existing parts.

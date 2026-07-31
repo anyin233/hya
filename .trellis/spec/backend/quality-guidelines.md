@@ -300,6 +300,89 @@ let (engine, ..) = build_session_engine(store, router, &model, mcp, plugins).awa
 
 ---
 
+## Scenario: Immutable runtime generation and per-turn binding
+
+### 1. Scope / Trigger
+
+- Trigger: changing tool, skill, MCP, prompt-discovery, or runtime-refresh
+  behavior visible to an admitted assistant or direct-shell turn.
+- Applies to `hya-core::RuntimeRegistry`, `TurnBinding`, startup/deferred
+  candidate construction in `hya-app`, and the lightweight binding event in
+  `hya-proto`.
+
+### 2. Signatures
+
+- `RuntimeRegistry::bind_turn(workdir) -> Result<TurnBinding, RuntimeRefreshError>`.
+- `RuntimeRegistry::refresh(|candidate| ...) -> Result<ConfigGeneration, RuntimeRefreshError>`.
+- `Event::TurnBindingRecorded { session, message, generation }`.
+- `MessageProjection.config_generation: Option<ConfigGeneration>`.
+
+### 3. Contracts
+
+- `ToolRegistry` is a mutable offline candidate builder. `SessionEngine`
+  snapshots it at construction and owns the sole effective
+  `RuntimeRegistry`.
+- A successful admission binds exactly once before prompt discovery, provider
+  schemas, or tool behavior. All rounds, resolution, dispatch, and skill-tool
+  reads use that retained immutable snapshot.
+- A refresh builds and validates a complete candidate under the single
+  publication owner, then allocates the next generation and replaces one
+  active `Arc`. In-flight bindings retain the prior `Arc`.
+- Failed and logically unchanged candidates preserve both the active
+  generation and exact view. Deferred MCP publishes its complete observed tool
+  set and never mutates an engine-visible builder.
+- The event stores generation identity only. Registry contents remain outside
+  events/projections; existing permission and namespace behavior is unchanged.
+
+### 4. Validation & Error Matrix
+
+- Duplicate tool or invalid candidate -> typed refresh error; no publication
+  and no generation consumption.
+- Generation overflow -> `GenerationExhausted`; active snapshot unchanged.
+- Concurrent successful refreshes -> unique monotonic generations and one
+  complete final candidate, never a merged/partial view.
+- No logical tool/skill change -> return the current generation.
+
+### 5. Good/Base/Bad Cases
+
+- Good: refresh between provider rounds leaves the current turn on generation
+  N and makes the next turn observe the complete N+1 snapshot.
+- Base: repeated discovery of the same workdir skill catalog is a no-op.
+- Bad: retaining an `Arc<ToolRegistry>` in `SessionEngine` and registering one
+  deferred MCP tool at a time into the effective view.
+
+### 6. Tests Required
+
+- Integration: an in-flight turn keeps old prompt skills, schemas, MCP/tools,
+  and dispatch while the next turn sees the new complete view.
+- Unit/integration: failed, no-op, and concurrent publications preserve the
+  generation invariants.
+- App wiring: mutating the retained initial builder is invisible and a
+  deferred multi-tool candidate appears atomically.
+- Event/replay: the binding event round-trips and folds only the generation
+  identity; direct shell records one binding.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let tools = Arc::new(ToolRegistry::builtins());
+let engine = SessionEngine::new(..., tools.clone(), ...);
+tools.register(deferred_tool)?;
+```
+
+#### Correct
+
+```rust
+let engine = SessionEngine::new(..., Arc::new(initial_candidate), ...);
+engine.refresh_runtime(|candidate| {
+    candidate.register_tool_with_permission(deferred_tool, ToolPermission::Mcp)
+})?;
+```
+
+---
+
 ## Scenario: GitHub Release Binary Workflow
 
 ### 1. Scope / Trigger

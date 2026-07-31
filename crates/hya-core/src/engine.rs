@@ -9,8 +9,8 @@ use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
     AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, ResolvedTool, SkillPlane, SpawnerPlane, TodoPlane, ToolError, ToolRegistry,
-    WebSearchPlane, discover_skills, skills_section,
+    PermissionRules, ResolvedTool, SpawnerPlane, TodoPlane, ToolError, ToolRegistry,
+    WebSearchPlane, skills_section,
 };
 use serde_json::Value;
 
@@ -18,6 +18,7 @@ use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, Summarizer};
 use crate::error::CoreError;
 use crate::hooks::HookDispatcher;
+use crate::{RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding};
 
 mod admission;
 mod fork;
@@ -70,13 +71,12 @@ pub struct AgentSpec {
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
-    tools: Arc<ToolRegistry>,
+    runtime: RuntimeRegistry,
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: SpawnerPlane,
     mailbox: MailboxPlane,
     todo: TodoPlane,
-    skills: SkillPlane,
     agents: AgentCatalogPlane,
     websearch: WebSearchPlane,
     formatter: FormatterPlane,
@@ -101,7 +101,6 @@ impl SessionEngine {
         let (spawner, _srx) = SpawnerPlane::new();
         let mailbox = MailboxPlane::disconnected();
         let todo = TodoPlane::default();
-        let skills = SkillPlane::default();
         let agents = AgentCatalogPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
@@ -109,13 +108,12 @@ impl SessionEngine {
         Self {
             store,
             providers,
-            tools,
+            runtime: RuntimeRegistry::from_snapshot(tools.snapshot()),
             permission,
             interaction,
             spawner,
             mailbox,
             todo,
-            skills,
             agents,
             websearch,
             formatter,
@@ -239,7 +237,14 @@ impl SessionEngine {
 
     #[must_use]
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
-        self.tools.schemas()
+        self.runtime.tool_schemas()
+    }
+
+    pub fn refresh_runtime(
+        &self,
+        build: impl FnOnce(&mut RuntimeCandidate) -> Result<(), RuntimeRefreshError>,
+    ) -> Result<hya_proto::ConfigGeneration, RuntimeRefreshError> {
+        self.runtime.refresh(build)
     }
 
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, CoreError> {
@@ -328,13 +333,10 @@ impl SessionEngine {
     }
 }
 
-pub(crate) fn effective_agent_for_projection(
-    agent: &AgentSpec,
-    projection: &Projection,
-) -> AgentSpec {
+pub(crate) fn effective_agent_for_binding(agent: &AgentSpec, binding: &TurnBinding) -> AgentSpec {
     let mut effective = agent.clone();
-    effective.workdir = session_workdir(agent, projection);
-    if let Some(section) = skills_section(&discover_skills(&effective.workdir)) {
+    effective.workdir = binding.workdir().to_path_buf();
+    if let Some(section) = skills_section(binding.skills()) {
         let prompt = effective.system_prompt.trim_end();
         effective.system_prompt = if prompt.is_empty() {
             section

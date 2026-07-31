@@ -10,9 +10,10 @@ central type is `SessionEngine` in
 
 - `SessionStore` for persistence.
 - `ProviderRouter` for model streaming.
-- `ToolRegistry` for model-requested tool execution.
+- `RuntimeRegistry` for one atomically published immutable tool/skill/MCP
+  snapshot. `ToolRegistry` is only an offline candidate builder.
 - `PermissionPlane` for allow/ask/deny decisions.
-- `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `SkillPlane`, `WebSearchPlane`,
+- `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `WebSearchPlane`,
   `LspPlane`, and `FormatterPlane` for cross-cutting tool services.
 - `EventBus` for live subscribers.
 - optional hook dispatcher for plugins.
@@ -49,21 +50,37 @@ is replayed through the projection and provider request builder.
 
 ## Assistant Turn Loop
 
-`run_turn` starts one assistant message and repeatedly:
+After prompt admission succeeds, `run_turn` resolves the session workdir,
+refreshes its skill candidate if the logical view changed, and captures one
+`TurnBinding`. It then records `MessageStarted` and
+`TurnBindingRecorded { generation }`. The binding retains an `Arc` to the
+complete immutable runtime snapshot for the entire assistant turn.
+
+The turn then repeatedly:
 
 1. Reads the current projection from the store.
-2. Builds a provider request from projection messages and tool schemas.
+2. Builds a provider request from projection messages plus the bound prompt
+   skills and tool schemas.
 3. Streams provider events.
 4. Appends text, reasoning, and tool-input events.
 5. Collects `ToolCallRequested` events.
-6. Executes requested tools through the registry with permission checks and
-   plugin/MCP bridges.
+6. Resolves and executes requested tools through the same binding, with
+   permission checks and plugin/MCP bridges.
 7. Runs formatter/LSP post-edit work for file mutations when configured.
 8. Appends `ToolResult` or `ToolError`.
 
 If a provider round produces tool calls, the engine starts another round with
 the updated projection. The turn continues until the provider finishes,
 cancellation is observed, or execution returns an error.
+
+Refresh builds and validates a complete candidate while the active snapshot
+remains readable, then replaces the active `Arc` once. Only a changed,
+successful candidate advances `ConfigGeneration`; failure and logical no-op
+leave both generation and effective view unchanged. New turns bind the
+published snapshot, while in-flight turns continue on their retained snapshot
+without a dispatch-path registry lock. Direct shell turns use the same binding
+and audit event. Deferred MCP connection publishes its whole tool set through
+this owner rather than mutating a shared `ToolRegistry`.
 
 ## Cancellation
 

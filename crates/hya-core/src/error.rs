@@ -8,6 +8,8 @@ pub enum CoreError {
     Tool(#[from] hya_tool::ToolError),
     #[error(transparent)]
     Store(#[from] hya_store::StoreError),
+    #[error(transparent)]
+    RuntimeRefresh(#[from] crate::RuntimeRefreshError),
     #[error("cancelled")]
     Cancelled,
     #[error("invalid: {0}")]

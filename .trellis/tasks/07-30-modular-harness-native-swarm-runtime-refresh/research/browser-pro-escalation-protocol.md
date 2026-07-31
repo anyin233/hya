@@ -635,3 +635,46 @@ Determination-level evidence:
 | The observed worker failure was missing delivery | `rejected` | Local causal trace showed the open-by-handle request/list/open/focus/render path completed and the `Ctrl+X .` bytes flushed, but the stable render focused `scroll-1`: the old test had not established `researcher-1` as worker's predecessor. The corrected flow source-verifies that predecessor before the single cycle. |
 | Drain stdout/stderr or add a product-side acknowledgement hook | `rejected` | The local trace resolved the current failure without either change; a separately authorized bounded drain experiment is considered only if remote evidence later shows backend event emission without UI observation. |
 | Local repair gate | `experimentally-verified`, remote pending | Helper regression, PTY 3/3, TUI 44/44, typecheck, Rust fmt, Clippy, workspace tests, and bins build are green. Commit/push and the resulting draft-PR CI remain required. |
+
+### `CONSULT-2026-07-31-RUNTIME-GENERATION-08`
+
+This records the MacBook Air coordinator's completed Browser/Pro decision
+round for `0.34.5` and the corrected ruling delivered to the canonical
+`fuji1 remote worker` session. Exact Browser provenance fields were not
+restated in that delivery and are not inferred from an earlier record.
+
+```text
+consultation_id: CONSULT-2026-07-31-RUNTIME-GENERATION-08
+packet_id: not supplied to fuji1
+packet_revision: 0.34.5 immutable runtime generation and TurnBinding ruling
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: not restated in coordinator delivery
+url_access_classification: no URL recorded or inferred
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: not restated in coordinator delivery
+question_summary: choose the minimum immutable runtime generation, per-turn binding, event identity, and atomic tool/skill/MCP refresh boundary for 0.34.5
+pro_conclusion: not separately quoted in the coordinator delivery; the corrected coordinator ruling below is controlling
+macbook_air_ruling: one source-owned immutable RuntimeSnapshot and single atomic publisher; bind once after admission and before prompt/provider/tool behavior; retain the binding for all rounds; failed/no-op candidates preserve generation; successful concurrent publications allocate unique monotonic generations; events record identity only
+ruling_scope: release 0.34.5 only
+permitted_next_action: implement deterministic RED/GREEN for generation retention, failure/no-op preservation, complete-view publication, concurrent publication, real turn/schema/skill/dispatch binding, shell/event audit, and source-owned deferred MCP publication; bump and deliver 0.34.5 through the existing branch/PR
+forbidden_next_action: desired-observed-effective reconciliation, plugin respawn declarations, namespace/catalog work, resident lease/effect fencing, Bundle work, updater, sandbox/new permission framework, merge, or start 0.34.6 before remote CI is green
+required_verification: focused deterministic tests; shared projection/event replay; full workspace fmt/clippy/test/build; CI-required TUI gates for the version change; local executable; exact dirty/stash accounting; pushed remote CI green
+remaining_owner_gates: every 0.34.6+ stage and all existing Bundle/key/updater/activation decisions
+head_sha_and_relevant_delta_at_ruling: 709abafb81ba0f94656254d3ecb51b42e051a89d; clean isolated 0.34.4 branch/worktree, dirty main and three stashes protected
+follow_up_of: CONSULT-2026-07-31-PTY-HARNESS-07
+supersedes: broader target-generation/reconciliation language only for the bounded 0.34.5 prerequisite
+final_disposition_and_resumption_decision: 0.34.5 may proceed in the existing isolated worktree/session/task/branch/PR; no later stage may begin before its remote CI gate
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| One engine-owned immutable snapshot and atomic publisher | `coordinator-adopted`, `source-verified`, `experimentally-verified` | `SessionEngine` owns one `RuntimeRegistry`; retained candidate-builder mutation is invisible; deferred MCP candidate members remain invisible until one publication. |
+| One binding across prompt skills, schemas, resolution, and dispatch | `coordinator-adopted`, `source-verified`, `experimentally-verified` | The gated multi-round engine tracer publishes mid-turn and proves both rounds plus tool/skill execution retain N while the next turn sees N+1. |
+| Failure/no-op preservation and concurrent monotonic publication | `coordinator-adopted`, `experimentally-verified` | Duplicate-candidate failure and logical remove/re-add no-op preserve N; eight concurrent complete candidates receive consecutive generations and never expose a mixed final view. |
+| Lightweight event-sourced audit | `coordinator-adopted`, `source-verified`, `experimentally-verified` | `TurnBindingRecorded` carries session routing, message, and generation only; the shared reducer folds the optional message generation and serialization contains no registry payload. |
+| Treat Pro as reconciliation, release, or owner approval | `rejected` | `0.34.6+`, release/merge/activation, and all Bundle/key/updater owner decisions remain independently gated. |

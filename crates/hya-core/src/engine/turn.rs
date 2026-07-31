@@ -5,7 +5,10 @@ use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine, authorize_tool_call, effective_agent_for_projection};
+use super::{
+    AgentSpec, SessionEngine, authorize_tool_call, effective_agent_for_binding, session_workdir,
+};
+use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
@@ -34,6 +37,9 @@ impl SessionEngine {
         cancel: CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
+        let projection = self.store.read_projection(session).await?;
+        let workdir = session_workdir(agent, &projection);
+        let binding = self.runtime.bind_turn(&workdir)?;
         let message = MessageId::new();
         self.emit(
             session,
@@ -44,9 +50,18 @@ impl SessionEngine {
             },
         )
         .await?;
+        self.emit(
+            session,
+            Event::TurnBindingRecorded {
+                session,
+                message,
+                generation: binding.generation(),
+            },
+        )
+        .await?;
 
         let outcome = self
-            .run_turn_rounds(session, message, agent, &cancel, external_dirs)
+            .run_turn_rounds(session, message, agent, &binding, &cancel, external_dirs)
             .await;
         if outcome.is_err() {
             // A provider/tool error after MessageStarted must still close the assistant
@@ -80,11 +95,13 @@ impl SessionEngine {
         session: SessionId,
         message: MessageId,
         agent: &AgentSpec,
+        binding: &TurnBinding,
         cancel: &CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
+        let agent = effective_agent_for_binding(agent, binding);
         // Depth in the subagent tree, derived from the parent chain. Only subagents
         // (depth > 0) are subject to the streaming-concurrency semaphore; the
         // interactive lead (depth 0) never waits behind background subagents.
@@ -113,7 +130,6 @@ impl SessionEngine {
             }
 
             let mut projection = self.store.read_projection(session).await?;
-            let mut agent = effective_agent_for_projection(agent, &projection);
             let mut messages = projection_to_messages(&agent, &projection);
             // Context protection: prefer provider `/responses/compact` when the
             // route supports it; otherwise fall back to the local model summarizer.
@@ -134,7 +150,6 @@ impl SessionEngine {
                         // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
                         if self.inject_system_message(session, body).await.is_ok() {
                             projection = self.store.read_projection(session).await?;
-                            agent = effective_agent_for_projection(&agent, &projection);
                             messages = projection_to_messages(&agent, &projection);
                         }
                     }
@@ -163,7 +178,7 @@ impl SessionEngine {
                     messages = compacted;
                 }
             }
-            let request = request_from_messages(&agent, &projection, messages, &self.tools);
+            let request = request_from_messages(&agent, &projection, messages, binding);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {
@@ -262,7 +277,7 @@ impl SessionEngine {
                 }
                 let input_for_after = self.hooks.as_ref().map(|_| tc.input.clone());
                 let started = std::time::Instant::now();
-                let result = match self.tools.resolve(&tc.name) {
+                let result = match binding.resolve_tool(&tc.name) {
                     Some(resolved) => match authorize_tool_call(
                         &resolved,
                         &tc.input,
@@ -282,12 +297,12 @@ impl SessionEngine {
                                 session: Some(session),
                                 parent_session: projection.session.parent,
                                 todo: self.todo.clone(),
-                                skills: self.skills.clone(),
+                                skills: binding.skill_plane(),
                                 agents: self.agents.clone(),
                                 websearch: self.websearch.clone(),
                                 lsp: self.lsp.clone(),
                                 formatter: self.formatter.clone(),
-                                workdir: agent.workdir.clone(),
+                                workdir: binding.workdir().to_path_buf(),
                                 cancel: cancel.clone(),
                             };
                             resolved.tool.execute(&ctx, tc.input).await

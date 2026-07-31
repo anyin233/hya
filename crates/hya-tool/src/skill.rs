@@ -22,6 +22,7 @@ pub struct SkillPlane {
 enum SkillRoots {
     DefaultForWorkdir,
     ExplicitDirs(Arc<Vec<PathBuf>>),
+    Snapshot(Arc<Vec<crate::SkillCatalogEntry>>),
 }
 
 impl Default for SkillPlane {
@@ -40,12 +41,25 @@ impl SkillPlane {
         }
     }
 
+    /// Build a plane over the exact immutable catalog captured by a turn.
+    #[must_use]
+    pub fn from_snapshot(skills: Arc<Vec<crate::SkillCatalogEntry>>) -> Self {
+        Self {
+            roots: SkillRoots::Snapshot(skills),
+        }
+    }
+
     fn require(&self, workdir: &Path, name: &str) -> Result<SkillInfo, SkillError> {
-        let skills = match &self.roots {
-            SkillRoots::DefaultForWorkdir => discover_skills(workdir),
-            SkillRoots::ExplicitDirs(dirs) => discover_skills_from_dirs(dirs),
+        let skill = match &self.roots {
+            SkillRoots::DefaultForWorkdir => discover_skills(workdir)
+                .into_iter()
+                .find(|skill| skill.name == name),
+            SkillRoots::ExplicitDirs(dirs) => discover_skills_from_dirs(dirs)
+                .into_iter()
+                .find(|skill| skill.name == name),
+            SkillRoots::Snapshot(skills) => skills.iter().find(|skill| skill.name == name).cloned(),
         };
-        let Some(skill) = skills.into_iter().find(|skill| skill.name == name) else {
+        let Some(skill) = skill else {
             return Err(SkillError::NotFound(name.to_string()));
         };
         Ok(SkillInfo {

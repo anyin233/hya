@@ -36,6 +36,17 @@ impl SessionEngine {
             },
         )
         .await?;
+        if let Some(generation) = source.config_generation {
+            self.emit(
+                session,
+                Event::TurnBindingRecorded {
+                    session,
+                    message,
+                    generation,
+                },
+            )
+            .await?;
+        }
         self.record_user_prompt_context(
             session,
             message,

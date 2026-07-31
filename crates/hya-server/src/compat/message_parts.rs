@@ -188,6 +188,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }
@@ -347,6 +348,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::MessageStarted { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }

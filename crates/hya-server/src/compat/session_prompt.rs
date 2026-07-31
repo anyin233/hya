@@ -231,6 +231,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::CommandExecuted { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::MessageStarted { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }
             | Event::PartDeleted { .. }

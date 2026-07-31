@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use hya_proto::{AgentName, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
+use hya_proto::{AgentName, Event, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
@@ -88,6 +88,9 @@ async fn direct_shell_runs_command_and_records_tool_part() {
         .find(|message| message.id == assistant)
         .expect("assistant shell message");
     assert_eq!(assistant_message.role, Role::Assistant);
+    let generation = assistant_message
+        .config_generation
+        .expect("direct shell runtime binding");
     assert_eq!(assistant_message.finish, Some(FinishReason::Stop));
     assert!(assistant_message.parts.iter().any(|part| {
         matches!(
@@ -99,6 +102,21 @@ async fn direct_shell_runs_command_and_records_tool_part() {
             } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("direct-shell-ok")
         )
     }));
+    let bindings = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::TurnBindingRecorded {
+                message,
+                generation,
+                ..
+            } if message == assistant => Some(generation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bindings, vec![generation]);
 }
 
 #[tokio::test]

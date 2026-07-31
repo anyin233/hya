@@ -37,6 +37,7 @@ impl TextPartAccumulator {
             | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
             | Event::MessageStarted { .. }
+            | Event::TurnBindingRecorded { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }

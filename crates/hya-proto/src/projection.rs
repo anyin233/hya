@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
-use crate::ids::{MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::ids::{ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId};
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
@@ -56,6 +56,8 @@ pub struct MemberProjection {
 pub struct MessageProjection {
     pub id: MessageId,
     pub role: Role,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_generation: Option<ConfigGeneration>,
     pub finish: Option<FinishReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsage>,
@@ -253,12 +255,22 @@ impl Projection {
                     self.session.messages.push(MessageProjection {
                         id: *message,
                         role: *role,
+                        config_generation: None,
                         finish: None,
                         tokens: None,
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
                     });
+                }
+            }
+            Event::TurnBindingRecorded {
+                message,
+                generation,
+                ..
+            } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message.config_generation = Some(*generation);
                 }
             }
             Event::UserPromptContextRecorded {

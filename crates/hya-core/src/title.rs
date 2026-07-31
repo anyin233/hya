@@ -147,6 +147,7 @@ mod tests {
         projection.session.messages.push(MessageProjection {
             id: MessageId::new(),
             role: Role::User,
+            config_generation: None,
             finish: None,
             tokens: None,
             files: Vec::new(),
