@@ -589,3 +589,49 @@ Determination-level evidence:
 | Add `operation_child` and preallocate child IDs | `rejected` | Current fail-closed recovery never resumes an operation. The started/terminal gate prevents redispatch without a child table; `SessionEngine::create_with_id` is not expanded for this slice. |
 | Treat restart recovery as governor refund | `rejected` | Old process-local debits disappear with the process. Recovery records only logical release state and never credits the fresh governor. |
 | Treat Pro as migration, release, or security approval | `rejected` | The coordinator ruling plus explicit user authorization bounds implementation; source/TDD/replay/CI and all owner gates remain mandatory. |
+
+### `CONSULT-2026-07-31-PTY-HARNESS-07`
+
+This records the Browser/Pro diagnosis and source-evidence follow-up for the
+three consecutive draft-PR PTY child-observation failures. The MacBook Air
+coordinator identified this as a test-harness delivery/state-observation issue,
+not authorization to alter TUI product behavior. The exact conversation URL,
+displayed model label, timestamps, and packet digest were not restated in the
+delivery to the `fuji1 remote worker` and are not inferred here.
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-HARNESS-07
+packet_id: not supplied to fuji1
+packet_revision: PTY FileSink delivery and causal observation ruling
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: not restated in coordinator delivery
+url_access_classification: existing Browser/Pro conversation identified; no URL copied or inferred
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: not restated in coordinator delivery
+question_summary: distinguish sequential PTY harness delivery/state races from concurrency, define deterministic FileSink TDD, and require causal diagnostics without product hooks
+pro_conclusion: serialize each semantic input at the FileSink delivery boundary, prove it with a test-local spy, replace causal sleeps with existing request/render observations, and capture bounded callsite-specific phase evidence
+macbook_air_ruling: adopt-with-source-evidence-corrections
+ruling_scope: 0.34.4 draft-PR PTY release-gate repair only
+permitted_next_action: preserve the focused PTY test, add one adjacent helper regression, instrument only its existing proxy/request and transcript seams, run all local release gates, then commit/push and await the same draft PR
+forbidden_next_action: change test concurrency, product focus behavior, crates, public events/protocols/APIs, workflow timeouts, dependencies, log levels, child-pipe draining, retries/repeated chords, skipped widths, or begin 0.34.5
+required_verification: deterministic RED then GREEN; unique worker callsites; bounded frame/transcript/process/phase diagnostics; TUI typecheck; PTY 3/3; complete TUI suite; full Rust fmt/clippy/test/build; remote CI green
+remaining_owner_gates: all 0.34.5+ work and the existing Bundle/key/updater/activation decisions
+head_sha_and_relevant_delta_at_ruling: d4825a8c35d86c37c19f87800c70a7eebd93a6b7; one uncommitted PTY test candidate in the isolated worktree, dirty main untouched
+follow_up_of: CONSULT-2026-07-31-OPERATION-ADMISSION-06
+supersedes: the partial stdin-flush/fixed-wait PTY repair only; no 0.34.4 product semantics
+final_disposition_and_resumption_decision: implement and verify the bounded causal harness repair, then update the existing branch and draft PR; 0.34.5 remains blocked on remote green
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| 80/140 execution is sequential and mutable resources are isolated | `Pro-advised`, `source-verified` | The tests are ordinary non-concurrent cases; logs show serial execution, while each run owns a unique temp HOME/XDG/project/SQLite database, proxy/backend port, transcript, and session set. No concurrency change is permitted. |
+| A semantic write must await both `FileSink.write` and the immediately following `FileSink.flush` | `Pro-advised`, `source-verified`, `experimentally-verified` | Bun's local type contract permits pending writes and defines flush as committing the internal pipe buffer. `semantic_input_flushes_before_next_action` deterministically RED-produced `["", "chord-a"]` instead of `["chord-a", "chord-b"]`; awaiting write before flush made it GREEN. |
+| The two worker timeouts must be independently diagnosable | `Pro-advised`, `experimentally-verified` | The callsites are now `open-by-handle/worker-1-focused-header` and `ctrl-x-dot/worker-1-focused-header`; failure output includes bounded frame/raw tail, backend/PTY PID and status, and a 64-entry monotonic phase trace. |
+| The observed worker failure was missing delivery | `rejected` | Local causal trace showed the open-by-handle request/list/open/focus/render path completed and the `Ctrl+X .` bytes flushed, but the stable render focused `scroll-1`: the old test had not established `researcher-1` as worker's predecessor. The corrected flow source-verifies that predecessor before the single cycle. |
+| Drain stdout/stderr or add a product-side acknowledgement hook | `rejected` | The local trace resolved the current failure without either change; a separately authorized bounded drain experiment is considered only if remote evidence later shows backend event emission without UI observation. |
+| Local repair gate | `experimentally-verified`, remote pending | Helper regression, PTY 3/3, TUI 44/44, typecheck, Rust fmt, Clippy, workspace tests, and bins build are green. Commit/push and the resulting draft-PR CI remain required. |

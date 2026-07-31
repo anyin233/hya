@@ -10,6 +10,38 @@ const root = path.resolve(import.meta.dir, "../../..")
 const backend = path.join(root, "target/debug/hya-backend")
 const launcher = path.join(root, "target/debug/hya-ts")
 
+type FileSinkLike = {
+  write(value: string): number | Promise<number>
+  flush(): number | Promise<number>
+}
+
+async function writeSemanticInput(stdin: FileSinkLike, value: string) {
+  await stdin.write(value)
+  await stdin.flush()
+}
+
+test("semantic_input_flushes_before_next_action", async () => {
+  let pending = ""
+  const batches: string[] = []
+  const stdin: FileSinkLike = {
+    async write(value) {
+      await Promise.resolve()
+      pending += value
+      return value.length
+    },
+    flush() {
+      batches.push(pending)
+      pending = ""
+      return 0
+    },
+  }
+
+  await writeSemanticInput(stdin, "chord-a")
+  await writeSemanticInput(stdin, "chord-b")
+
+  expect(batches).toEqual(["chord-a", "chord-b"])
+})
+
 test("Linux PTY renders home, opens a session, and restores the terminal", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-smoke-")))
   const project = path.join(temp, "project")
@@ -89,7 +121,7 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
         throw new Error("PTY did not render the response before timeout")
       }
     }
-    process.stdin.write("\x03")
+    await writeSemanticInput(process.stdin, "\x03")
     process.stdin.end()
     const status = await Promise.race([
       process.exited,
@@ -246,6 +278,19 @@ async function runChildObservation(columns: number) {
       return value.includes("(hya dev provider) You said") && value.includes(scrollChildTranscript) && value.includes(scrollChildTail)
     }, "observation scroll fixture")
 
+    const caseID = `child-observation-${columns}`
+    const phaseTrace: Array<{
+      at: number
+      callsite: string
+      caseID: string
+      detail?: string
+      phase: string
+    }> = []
+    let activeCallsite = "fixture"
+    const tracePhase = (callsite: string, phase: string, detail?: string) => {
+      phaseTrace.push({ at: Number(performance.now().toFixed(3)), callsite, caseID, detail, phase })
+      if (phaseTrace.length > 64) phaseTrace.shift()
+    }
     const requests: Array<{ method: string; path: string }> = []
     let treeUnavailable = false
     const escapeKey = "\x1b[27;1;27~"
@@ -256,6 +301,11 @@ async function runChildObservation(columns: number) {
       async fetch(request) {
         const incoming = new URL(request.url)
         requests.push({ method: request.method, path: incoming.pathname })
+        tracePhase(
+          activeCallsite,
+          "backend_request_observed",
+          `${request.method} ${incoming.pathname}${request.headers.get("x-request-id") ? ` request=${request.headers.get("x-request-id")}` : ""}`,
+        )
         if (request.method === "GET" && incoming.pathname === `/session/${childSession.id}/tree`) {
           return new Response("unavailable", { status: 503 })
         }
@@ -436,12 +486,12 @@ async function runChildObservation(columns: number) {
           }, "child read-only recovery")
           const revertPath = `/session/${childSession.id}/revert`
           const revertsBefore = requests.filter((request) => request.path === revertPath).length
-          recovery.stdin.write("\x18")
+          await writeSemanticInput(recovery.stdin, "\x18")
           await Bun.sleep(100)
-          recovery.stdin.write("u")
+          await writeSemanticInput(recovery.stdin, "u")
           await Bun.sleep(300)
           expect(requests.filter((request) => request.path === revertPath)).toHaveLength(revertsBefore)
-          recovery.stdin.write("\x03")
+          await writeSemanticInput(recovery.stdin, "\x03")
           recovery.stdin.end()
           expect(await recovery.exited).toBe(0)
         } finally {
@@ -479,10 +529,7 @@ async function runChildObservation(columns: number) {
 
       try {
         const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
-        const writeInput = async (value: string) => {
-          process.stdin.write(value)
-          await process.stdin.flush()
-        }
+        const writeInput = (value: string) => writeSemanticInput(process.stdin, value)
         await waitFor(async () => (await output()).includes(rootTranscript), "root session frame")
         await waitFor(async () => (await output()).includes("commands"), "root prompt")
         expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
@@ -492,7 +539,7 @@ async function runChildObservation(columns: number) {
         await waitFor(async () => {
           const frame = (await output()).slice(beforeDraft)
           if (frame.includes(rootDraft)) return true
-          process.stdin.write(rootDraft)
+          await writeInput(rootDraft)
           return false
         }, "root draft").catch(async (error) => {
           const frame = (await output()).slice(-5000)
@@ -509,7 +556,7 @@ async function runChildObservation(columns: number) {
           try {
             await focusMain(start, marker)
             await waitForMain(start, `${marker} Main focus`)
-            process.stdin.write(marker)
+            await writeInput(marker)
             await waitFor(async () => {
               const frame = (await output()).slice(start)
               return frame.includes(marker) && frame.includes(rootDraft)
@@ -537,14 +584,14 @@ async function runChildObservation(columns: number) {
           ).length
         const descendantGetsBefore = descendantGets()
         for (const key of ["\x1b[B", "\x1b[C", "\x1b[D", "\x1b[A"]) {
-          process.stdin.write("\x18")
+          await writeInput("\x18")
           await Bun.sleep(100)
-          process.stdin.write(key)
+          await writeInput(key)
           await Bun.sleep(100)
         }
         const legacySafe = "_LEGACY_SAFE_0eb1"
         const legacyStart = (await output()).length
-        process.stdin.write(legacySafe)
+        await writeInput(legacySafe)
         await waitFor(async () => (await output()).slice(legacyStart).includes(legacySafe), "legacy commands leave Main editable")
         expect(descendantGets()).toBe(descendantGetsBefore)
 
@@ -553,10 +600,10 @@ async function runChildObservation(columns: number) {
         const failedRefreshCount = requests.filter(
           (request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`,
         ).length
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
         const managerStart = (await output()).length
-        process.stdin.write("o")
+        await writeInput("o")
         await waitFor(async () => {
           const frame = (await output()).slice(managerStart)
           return ["Subagent roster", "worker-1", "researcher-1", "pending", "reviewer-1", "Waiting for slot"].every((value) =>
@@ -580,7 +627,7 @@ async function runChildObservation(columns: number) {
             "retained-tree error row",
           )
           treeUnavailable = false
-          process.stdin.write("r")
+          await writeInput("r")
           await waitFor(
             () =>
               requests.filter(
@@ -594,14 +641,14 @@ async function runChildObservation(columns: number) {
         expect(managerFrame.indexOf("worker-1")).toBeLessThan(managerFrame.indexOf("researcher-1"))
         expect(managerFrame.indexOf("researcher-1")).toBeLessThan(managerFrame.indexOf("pending"))
         expect(managerFrame.indexOf("pending")).toBeLessThan(managerFrame.indexOf("reviewer-1"))
-        process.stdin.write("/")
+        await writeInput("/")
         await Bun.sleep(100)
-        process.stdin.write("researcher-1")
+        await writeInput("researcher-1")
         await waitFor(async () => (await output()).slice(managerStart).includes("researcher-1"), "filtered grandchild")
-        process.stdin.write(escapeKey)
+        await writeInput(escapeKey)
         await Bun.sleep(100)
         const closeFilteredManagerStart = (await output()).length
-        process.stdin.write(escapeKey)
+        await writeInput(escapeKey)
         await waitForMain(closeFilteredManagerStart, "Main after filtered manager")
 
         for (const [command, placement] of [
@@ -609,12 +656,12 @@ async function runChildObservation(columns: number) {
           ["Open subagent in vertical split", "Vertical"],
           ["Open subagent in horizontal split", "Horizontal"],
         ]) {
-          process.stdin.write("\x10")
+          await writeInput("\x10")
           await Bun.sleep(100)
-          process.stdin.write(command)
+          await writeInput(command)
           await Bun.sleep(100)
           const directStart = (await output()).length
-          process.stdin.write("\r")
+          await writeInput("\r")
           await waitFor(
             async () => (await output()).slice(directStart).includes(`Subagent roster - ${placement}`),
             `${placement} placement manager`,
@@ -623,7 +670,7 @@ async function runChildObservation(columns: number) {
             throw new Error(`direct placement failed: ${error instanceof Error ? error.message : error}\n${frame}`)
           })
           const closePlacementManagerStart = (await output()).length
-          process.stdin.write(escapeKey)
+          await writeInput(escapeKey)
           await waitForMain(closePlacementManagerStart, `Main after ${placement} manager`)
         }
 
@@ -633,51 +680,116 @@ async function runChildObservation(columns: number) {
           `/session/${grandchildSession.id}/todo`,
           `/session/${grandchildSession.id}/diff`,
         ]
-        const waitForFocusedHeader = async (start: number, handle: string) => {
-          await waitFor(async () => {
-            const frame = (await output()).slice(start)
-            return frame.includes(handle) && frame.includes("focused") && /read-\s*only/.test(frame)
-          }, `${handle} focused header`)
+        const waitForFocusedHeader = async (start: number, handle: string, callsite: string) => {
+          try {
+            await waitFor(async () => {
+              const frame = (await output()).slice(start)
+              return frame.includes(handle) && frame.includes("focused") && /read-\s*only/.test(frame)
+            }, callsite)
+          } catch (error) {
+            tracePhase(callsite, "final_render_missing")
+            const transcriptRaw = await readFile(transcript, "utf8").catch(() => "")
+            const lastFrame = stripAnsi(transcriptRaw).slice(start).slice(-5000)
+            const children = [
+              {
+                exitCode: server.exitCode,
+                killed: server.killed,
+                name: "backend",
+                pid: server.pid,
+                signalCode: server.signalCode,
+              },
+              {
+                exitCode: process.exitCode,
+                killed: process.killed,
+                name: "pty",
+                pid: process.pid,
+                signalCode: process.signalCode,
+              },
+            ]
+            throw new Error(
+              [
+                `${callsite}: ${error instanceof Error ? error.message : error}`,
+                `last_frame=${JSON.stringify(lastFrame)}`,
+                `transcript_tail=${JSON.stringify(transcriptRaw.slice(-2000))}`,
+                `children=${JSON.stringify(children)}`,
+                `phase_trace=${JSON.stringify(phaseTrace)}`,
+              ].join("\n"),
+            )
+          }
         }
         const openSubagentByHandle = async (handle: string) => {
-          process.stdin.write("\x18")
-          await Bun.sleep(100)
-          process.stdin.write("o")
-          await Bun.sleep(100)
-          process.stdin.write("/")
-          await Bun.sleep(100)
-          process.stdin.write(handle)
-          await Bun.sleep(100)
-          const focusStart = (await output()).length
-          process.stdin.write("\r")
-          await waitForFocusedHeader(focusStart, handle)
-          await Bun.sleep(100)
+          const callsite = `open-by-handle/${handle}-focused-header`
+          const previousCallsite = activeCallsite
+          activeCallsite = callsite
+          tracePhase(callsite, "phase_start")
+          try {
+            const treePath = `/session/${rootSession.id}/tree`
+            const treeRequestsBefore = requests.filter(
+              (request) => request.method === "GET" && request.path === treePath,
+            ).length
+            const rosterStart = (await output()).length
+            tracePhase(callsite, "semantic_write", "ctrl+x o")
+            await writeInput("\x18")
+            await writeInput("o")
+            tracePhase(callsite, "flush_completed", "ctrl+x o")
+            await waitFor(
+              () =>
+                requests.filter((request) => request.method === "GET" && request.path === treePath).length >
+                treeRequestsBefore,
+              `${callsite}/backend-request`,
+            )
+            await waitFor(async () => {
+              const frame = (await output()).slice(rosterStart)
+              return frame.includes("Subagent roster") && frame.includes(handle)
+            }, `${callsite}/roster-visible`)
+            tracePhase(callsite, "ui_state_observed", `${handle} listed`)
+
+            const filterStart = (await output()).length
+            tracePhase(callsite, "semantic_write", `filter ${handle}`)
+            await writeInput("/")
+            await writeInput(handle)
+            tracePhase(callsite, "flush_completed", `filter ${handle}`)
+            await waitFor(
+              async () => (await output()).slice(filterStart).includes(handle),
+              `${callsite}/child-openable`,
+            )
+            tracePhase(callsite, "ui_state_observed", `${handle} openable`)
+
+            const focusStart = (await output()).length
+            tracePhase(callsite, "focus_write", "enter")
+            await writeInput("\r")
+            tracePhase(callsite, "flush_completed", "enter")
+            await waitForFocusedHeader(focusStart, handle, callsite)
+            tracePhase(callsite, "final_render_observed")
+          } finally {
+            activeCallsite = previousCallsite
+          }
         }
         const openGrandchild = () => openSubagentByHandle("researcher-1")
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
-        process.stdin.write("o")
+        await writeInput("o")
         await Bun.sleep(100)
-        process.stdin.write("/")
+        await writeInput("/")
         await Bun.sleep(100)
-        process.stdin.write("scroll-1")
+        await writeInput("scroll-1")
         await Bun.sleep(100)
         const scrollPaneStart = (await output()).length
-        process.stdin.write("\r")
+        await writeInput("\r")
         await waitFor(
           async () => (await output()).slice(scrollPaneStart).includes(scrollChildTail),
           "tall observation transcript",
         )
-        await waitForFocusedHeader(scrollPaneStart, "scroll-1")
+        await waitForFocusedHeader(scrollPaneStart, "scroll-1", "open-scroll/scroll-1-focused-header")
         await Bun.sleep(100)
         const scrollTopStart = (await output()).length
-        process.stdin.write("\x1b[H")
+        await writeInput("\x1b[H")
         await waitFor(
           async () => (await output()).slice(scrollTopStart).includes(scrollChildTranscript),
           "focused observation scroll to first message",
         )
         const scrollBottomStart = (await output()).length
-        process.stdin.write("\x1b[F")
+        await writeInput("\x1b[F")
         await waitFor(
           async () => (await output()).slice(scrollBottomStart).includes(scrollChildTail),
           "focused observation scroll to last message",
@@ -704,8 +816,8 @@ async function runChildObservation(columns: number) {
         const observationPromptRequests = requests.filter(
           (request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)$/.test(request.path),
         ).length
-        process.stdin.write(observationSentinel)
-        process.stdin.write("\r")
+        await writeInput(observationSentinel)
+        await writeInput("\r")
         await Bun.sleep(300)
         expect(
           requests.filter((request) => request.method === "POST" && /\/session\/[^/]+\/(?:message|prompt_async)$/.test(request.path)),
@@ -728,7 +840,7 @@ async function runChildObservation(columns: number) {
           const frame = (await output()).slice(focusMainStart).slice(-5000)
           throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
         }
-        process.stdin.write("\r")
+        await writeInput("\r")
         await shell
         await waitFor(async () => (await output()).slice(focusMainStart).includes(rootDraft), "focus Main with preserved draft")
         const observationRootEvents = await (await fetch(`${url}/sessions/${rootSession.id}/events`)).text()
@@ -737,19 +849,19 @@ async function runChildObservation(columns: number) {
         expect(observationChildEvents).not.toContain(observationSentinel)
 
         const splitStart = (await output()).length
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
-        process.stdin.write("o")
+        await writeInput("o")
         await Bun.sleep(200)
-        process.stdin.write("v")
+        await writeInput("v")
         await Bun.sleep(200)
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
-        process.stdin.write("o")
+        await writeInput("o")
         await Bun.sleep(200)
-        process.stdin.write("\x1b[B")
+        await writeInput("\x1b[B")
         await Bun.sleep(100)
-        process.stdin.write("s")
+        await writeInput("s")
         await waitFor(async () => {
           const frame = (await output()).slice(splitStart)
           return (
@@ -802,22 +914,39 @@ async function runChildObservation(columns: number) {
           async () => (await output()).slice(reviewerTabStart).includes(secondChildTranscript),
           "auxiliary reviewer tab",
         )
-        const reviewerMainStart = (await output()).length
-        await confirmMainInput(reviewerMainStart, "m81ea")
-        process.stdin.write("\x18")
-        await Bun.sleep(100)
-        process.stdin.write("w")
-        await Bun.sleep(200)
-        const workerFocusStart = (await output()).length
-        await writeInput("\x18")
-        await Bun.sleep(100)
-        await writeInput(".")
-        await waitForFocusedHeader(workerFocusStart, "worker-1")
+
+        const workerCallsite = "ctrl-x-dot/worker-1-focused-header"
+        const previousCallsite = activeCallsite
+        activeCallsite = workerCallsite
+        tracePhase(workerCallsite, "phase_start")
+        try {
+          await openGrandchild()
+          tracePhase(workerCallsite, "ui_state_observed", "researcher-1 focused predecessor")
+          await waitFor(
+            async () => (await output()).slice(-5000).includes("worker-1"),
+            `${workerCallsite}/worker-listed`,
+          )
+          tracePhase(workerCallsite, "ui_state_observed", "worker-1 listed")
+
+          const workerFocusStart = (await output()).length
+          tracePhase(workerCallsite, "focus_write", "ctrl+x .")
+          await writeInput("\x18")
+          await writeInput(".")
+          tracePhase(workerCallsite, "flush_completed", "ctrl+x .")
+          await waitForFocusedHeader(workerFocusStart, "worker-1", workerCallsite)
+          tracePhase(workerCallsite, "final_render_observed")
+        } finally {
+          activeCallsite = previousCallsite
+        }
         const closeWorkerStart = (await output()).length
         await confirmMainInput(closeWorkerStart, "m59e0")
         const researcherFocusStart = (await output()).length
         await openGrandchild()
-        await waitForFocusedHeader(researcherFocusStart, "researcher-1")
+        await waitForFocusedHeader(
+          researcherFocusStart,
+          "researcher-1",
+          "open-by-handle/researcher-1-secondary-focused-header",
+        )
         await waitFor(
           async () => {
             const frame = (await output()).slice(researcherFocusStart)
@@ -838,19 +967,23 @@ async function runChildObservation(columns: number) {
         await confirmMainInput(collapsedMainStart, "m1c54")
         const reviewerCycleStart = (await output()).length
         await openSubagentByHandle("reviewer-1")
-        await waitForFocusedHeader(reviewerCycleStart, "reviewer-1")
+        await waitForFocusedHeader(
+          reviewerCycleStart,
+          "reviewer-1",
+          "open-by-handle/reviewer-1-secondary-focused-header",
+        )
         expect((await output()).slice(reviewerCycleStart)).toContain(secondChildTranscript)
         const closeTabStart = (await output()).length
         await confirmMainInput(closeTabStart, "m763f")
 
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
-        process.stdin.write("l")
+        await writeInput("l")
         await Bun.sleep(200)
-        process.stdin.write("PTY reset root")
+        await writeInput("PTY reset root")
         await Bun.sleep(200)
         const resetStart = (await output()).length
-        process.stdin.write("\r")
+        await writeInput("\r")
         await waitFor(async () => (await output()).slice(resetStart).includes(resetRootTranscript), "fresh root workspace")
         const resetFrame = (await output()).slice(resetStart)
         expect(resetFrame).not.toContain("worker-1")
@@ -858,14 +991,14 @@ async function runChildObservation(columns: number) {
         expect(resetFrame).not.toContain("reviewer-1")
         expect(resetFrame).not.toContain("scroll-1")
         const resetSentinel = "RESET_ROOT_INPUT_d3c7"
-        process.stdin.write(resetSentinel)
-        process.stdin.write("\r")
+        await writeInput(resetSentinel)
+        await writeInput("\r")
         await waitFor(async () => {
           const events = await (await fetch(`${url}/sessions/${resetRootSession.id}/events`)).text()
           return events.includes(resetSentinel)
         }, "root B submission")
 
-        process.stdin.write("\x03")
+        await writeInput("\x03")
         process.stdin.end()
         const status = await Promise.race([
           process.exited,
