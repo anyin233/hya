@@ -84,6 +84,22 @@ impl QuestionRequests {
         self.events.subscribe()
     }
 
+    pub(crate) async fn snapshot_asked(&self) -> Vec<Value> {
+        let pending = {
+            let entries = self.inner.lock().await;
+            entries
+                .iter()
+                .filter_map(|(id, entry)| {
+                    question_view(id, entry).map(|properties| (id.clone(), properties))
+                })
+                .collect::<Vec<_>>()
+        };
+        pending
+            .into_iter()
+            .map(|(id, properties)| question_asked_event_from_view(&id, properties))
+            .collect()
+    }
+
     pub(crate) async fn list(&self) -> Vec<QuestionRequestView> {
         self.inner
             .lock()
@@ -247,11 +263,15 @@ fn question_info(info: &ToolQuestionInfo) -> QuestionInfo {
 
 fn question_asked_event(id: &str, entry: &PendingQuestion) -> Option<Value> {
     let properties = question_view(id, entry)?;
-    Some(json!({
+    Some(question_asked_event_from_view(id, properties))
+}
+
+fn question_asked_event_from_view(id: &str, properties: QuestionRequestView) -> Value {
+    json!({
         "id": format!("evt_hya_question_{id}"),
         "type": "question.asked",
         "properties": properties,
-    }))
+    })
 }
 
 fn answers_from_reply(

@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
-use hya_proto::{AgentName, ModelRef, SessionId};
+use hya_proto::{AgentName, MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
@@ -19,6 +19,8 @@ use hya_tool::{
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+const SSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
@@ -106,7 +108,7 @@ async fn wait_for_data(app: axum::Router, uri: &str) -> Value {
 }
 
 async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> Value {
-    let chunk = tokio::time::timeout(Duration::from_secs(1), stream.next())
+    let chunk = tokio::time::timeout(SSE_TIMEOUT, stream.next())
         .await
         .expect("event")
         .expect("body chunk")
@@ -117,6 +119,155 @@ async fn read_sse_json(stream: &mut axum::body::BodyDataStream) -> Value {
         .find_map(|line| line.strip_prefix("data: "))
         .expect("data line");
     serde_json::from_str(data).unwrap()
+}
+
+fn event_marker(event: &Value) -> String {
+    let payload = &event["payload"];
+    format!(
+        "{}:{}",
+        payload["type"].as_str().unwrap_or("?"),
+        payload["properties"]["id"].as_str().unwrap_or("-")
+    )
+}
+
+#[tokio::test]
+async fn compat_global_event_catches_up_pending_permission_before_live_question() {
+    let (permission, permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (interaction, question_rx) = InteractionPlane::new();
+    let (engine, agent) =
+        base_engine(permission.clone(), Some(interaction.clone()), tempdir()).await;
+    let session = create_session(&engine, &agent).await;
+    let session_id = session.parse().unwrap();
+    let scoped_permission = permission
+        .for_session(session_id)
+        .for_tool_call(MessageId::new(), ToolCallId::new());
+    let mut pending_permission =
+        Box::pin(scoped_permission.assert(Action::Bash, Resource::Command("pwd".to_string())));
+    assert!(matches!(
+        futures::poll!(pending_permission.as_mut()),
+        std::task::Poll::Pending
+    ));
+
+    let app = router(
+        AppState::new(engine, agent)
+            .with_permission_requests(permission_rx)
+            .with_question_requests(question_rx),
+    );
+    tokio::task::yield_now().await;
+    let listed = body_json(request(app.clone(), "GET", "/permission", None).await).await;
+    let pending_id = listed[0]["id"].as_str().unwrap().to_string();
+
+    let response = request(app, "GET", "/global/event", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    assert_eq!(
+        read_sse_json(&mut stream).await["payload"]["type"],
+        "server.connected"
+    );
+
+    let live_question = tokio::spawn(async move {
+        interaction
+            .for_session(session_id)
+            .ask(
+                "Live sentinel?".to_string(),
+                QuestionKind::Select {
+                    options: vec!["yes".to_string()],
+                    allow_custom: false,
+                },
+            )
+            .await
+    });
+    let mut observed = Vec::new();
+    let saw_pending_permission = tokio::time::timeout(SSE_TIMEOUT, async {
+        let mut saw_pending_permission = false;
+        loop {
+            let event = read_sse_json(&mut stream).await;
+            observed.push(event_marker(&event));
+            match event["payload"]["type"].as_str() {
+                Some("permission.asked") => {
+                    saw_pending_permission = event["payload"]["properties"]["id"] == pending_id;
+                }
+                Some("question.asked") => return saw_pending_permission,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out before live question; observed={observed:?}"));
+    assert!(
+        saw_pending_permission,
+        "pending permission {pending_id} was not caught up before the live question; observed={observed:?}"
+    );
+    live_question.abort();
+}
+
+#[tokio::test]
+async fn compat_global_event_catches_up_pending_question_before_live_permission() {
+    let (permission, permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (interaction, question_rx) = InteractionPlane::new();
+    let (engine, agent) =
+        base_engine(permission.clone(), Some(interaction.clone()), tempdir()).await;
+    let session = create_session(&engine, &agent).await;
+    let session_id = session.parse().unwrap();
+    let scoped_interaction = interaction.for_session(session_id);
+    let mut pending_question = Box::pin(scoped_interaction.ask(
+        "Pending question?".to_string(),
+        QuestionKind::Select {
+            options: vec!["yes".to_string()],
+            allow_custom: false,
+        },
+    ));
+    assert!(matches!(
+        futures::poll!(pending_question.as_mut()),
+        std::task::Poll::Pending
+    ));
+
+    let app = router(
+        AppState::new(engine, agent)
+            .with_permission_requests(permission_rx)
+            .with_question_requests(question_rx),
+    );
+    tokio::task::yield_now().await;
+    let listed = body_json(request(app.clone(), "GET", "/question", None).await).await;
+    let pending_id = listed[0]["id"].as_str().unwrap().to_string();
+
+    let response = request(app, "GET", "/global/event", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    assert_eq!(
+        read_sse_json(&mut stream).await["payload"]["type"],
+        "server.connected"
+    );
+
+    let live_permission = tokio::spawn(async move {
+        permission
+            .for_session(session_id)
+            .for_tool_call(MessageId::new(), ToolCallId::new())
+            .assert(Action::Bash, Resource::Command("printf live".to_string()))
+            .await
+    });
+    let mut observed = Vec::new();
+    let saw_pending_question = tokio::time::timeout(SSE_TIMEOUT, async {
+        let mut saw_pending_question = false;
+        loop {
+            let event = read_sse_json(&mut stream).await;
+            observed.push(event_marker(&event));
+            match event["payload"]["type"].as_str() {
+                Some("question.asked") => {
+                    saw_pending_question = event["payload"]["properties"]["id"] == pending_id;
+                }
+                Some("permission.asked") => return saw_pending_question,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out before live permission; observed={observed:?}"));
+    assert!(
+        saw_pending_question,
+        "pending question {pending_id} was not caught up before the live permission; observed={observed:?}"
+    );
+    live_permission.abort();
 }
 
 #[tokio::test]
