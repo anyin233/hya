@@ -181,9 +181,7 @@ async fn builtin_formatter_command_formats_matching_extension() {
     let bin_dir = dir.join("vendor/bin");
     tokio::fs::create_dir_all(&bin_dir).await.unwrap();
     let pint = bin_dir.join("pint");
-    tokio::fs::write(&pint, "#!/bin/sh\nprintf 'pint\\n' > \"$1\"\n")
-        .await
-        .unwrap();
+    std::fs::write(&pint, "#!/bin/sh\nprintf 'pint\\n' > \"$1\"\n").unwrap();
     std::fs::set_permissions(&pint, std::fs::Permissions::from_mode(0o755)).unwrap();
     let target = dir.join("app.php");
     tokio::fs::write(&target, "raw\n").await.unwrap();

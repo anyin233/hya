@@ -213,11 +213,13 @@ async function runChildObservation(columns: number) {
       { sessionID: resetRootSession.id, parts: [{ type: "text", text: resetRootTranscript }] },
       { throwOnError: true },
     )
+    const waitTimeout = Bun.env.CI ? 45_000 : 20_000
+    const waitPoll = Bun.env.CI ? 100 : 50
     const waitFor = async (check: () => boolean | Promise<boolean>, message: string) => {
-      const deadline = Date.now() + 20_000
+      const deadline = Date.now() + waitTimeout
       while (!(await check())) {
         if (Date.now() >= deadline) throw new Error(`timed out waiting for ${message}`)
-        await Bun.sleep(50)
+        await Bun.sleep(waitPoll)
       }
     }
     await waitFor(async () => {
@@ -477,6 +479,10 @@ async function runChildObservation(columns: number) {
 
       try {
         const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
+        const writeInput = async (value: string) => {
+          process.stdin.write(value)
+          await process.stdin.flush()
+        }
         await waitFor(async () => (await output()).includes(rootTranscript), "root session frame")
         await waitFor(async () => (await output()).includes("commands"), "root prompt")
         expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
@@ -496,7 +502,7 @@ async function runChildObservation(columns: number) {
           await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
         }
         const focusMain = async (start: number, label: string) => {
-          process.stdin.write(escapeKey)
+          await writeInput(escapeKey)
           await waitForMain(start, `${label} Main focus`)
         }
         const confirmMainInput = async (start: number, marker: string) => {
@@ -716,7 +722,7 @@ async function runChildObservation(columns: number) {
         expect((await output()).slice(permissionStart)).not.toContain("Permission required")
         const focusMainStart = (await output()).length
         try {
-          process.stdin.write(escapeKey)
+          await writeInput(escapeKey)
           await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main")
         } catch (error) {
           const frame = (await output()).slice(focusMainStart).slice(-5000)
@@ -803,9 +809,9 @@ async function runChildObservation(columns: number) {
         process.stdin.write("w")
         await Bun.sleep(200)
         const workerFocusStart = (await output()).length
-        process.stdin.write("\x18")
+        await writeInput("\x18")
         await Bun.sleep(100)
-        process.stdin.write(".")
+        await writeInput(".")
         await waitForFocusedHeader(workerFocusStart, "worker-1")
         const closeWorkerStart = (await output()).length
         await confirmMainInput(closeWorkerStart, "m59e0")
@@ -888,5 +894,5 @@ async function runChildObservation(columns: number) {
 }
 
 for (const columns of [80, 140]) {
-  test(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), 60_000)
+  test(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), Bun.env.CI ? 120_000 : 60_000)
 }

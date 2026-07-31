@@ -21,14 +21,16 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Patch 0.34.3 is committed/pushed at b8c21deeb5004e1f703b199a40de196902fadf35 and remote CI is green. Patch 0.34.4 implementation and all local Rust/TUI release gates are green: fixed-domain ToolCallId-derived OperationId, mandatory ToolCtx propagation, one narrow SessionStore admission journal, immutable fingerprint/units, accepted-started-terminal idempotency, exact-once governor debit finalization, fail-closed terminal-conflict propagation, and startup abort recovery. Commit/push and draft PR #24 remote CI are the remaining gate. The dirty main checkout and its 19 user-owned paths plus three stashes remain untouched. No 0.34.5+ work, public OperationId surface, child/effect/scheduler journal, merge, tag, or activation is authorized.",
+  "notes": "Patch 0.34.3 is committed/pushed at b8c21deeb5004e1f703b199a40de196902fadf35 and remote CI is green. Patch 0.34.4 feature commit 53a76ec12c516c9cef0cf916b83d29492d80eac9 is pushed with all local Rust/TUI release gates green: fixed-domain ToolCallId-derived OperationId, mandatory ToolCtx propagation, one narrow SessionStore admission journal, immutable fingerprint/units, accepted-started-terminal idempotency, exact-once governor debit finalization, fail-closed terminal-conflict propagation, and startup abort recovery. Remote run 30607264119 attempts 1/2 exposed fixed-timeout PTY smoke instability before Rust gates; the assertion-preserving CI polling/wait/stdin-flush repair is locally green. A separate formatter executable-fixture ETXTBSY race was fixed with synchronous close-before-exec creation and passed 10/10 focused plus full workspace gates. These focused gate repairs await one commit/push and a fully green remote rerun. The dirty main checkout and its 19 user-owned paths plus three stashes remain untouched. No 0.34.5+ work, public OperationId surface, child/effect/scheduler journal, merge, tag, or activation is authorized.",
   "meta": {
     "audit_head": "267bfc3c6c66e46fe8514e2e70657489f853b7f0",
     "implementation_base_head": "156d0ad3c50aea67dfac0054485eb6991e77308b",
     "active_stage_base_head": "b8c21deeb5004e1f703b199a40de196902fadf35",
+    "feature_commit": "53a76ec12c516c9cef0cf916b83d29492d80eac9",
     "implementation_release": "0.34.4",
     "draft_pr_url": "https://github.com/anyin233/hya/pull/24",
-    "local_gate_status": "green; commit/push/remote CI pending",
+    "remote_ci_run": "30607264119",
+    "local_gate_status": "feature gates green; PTY CI and formatter fixture repairs green; follow-up commit/push/remote CI pending",
     "protected_dirty_paths": 19,
     "pro_advisory_records": [
       "CONSULT-2026-07-31-PATCH-PLAN-01",
