@@ -286,10 +286,15 @@ async function runChildObservation(columns: number) {
       detail?: string
       phase: string
     }> = []
+    let lastSuccessfulPhase: (typeof phaseTrace)[number] | undefined
     let activeCallsite = "fixture"
     const tracePhase = (callsite: string, phase: string, detail?: string) => {
-      phaseTrace.push({ at: Number(performance.now().toFixed(3)), callsite, caseID, detail, phase })
+      const entry = { at: Number(performance.now().toFixed(3)), callsite, caseID, detail, phase }
+      phaseTrace.push(entry)
       if (phaseTrace.length > 64) phaseTrace.shift()
+      if (phase === "backend_request_observed" || phase === "flush_completed" || phase.endsWith("_observed")) {
+        lastSuccessfulPhase = entry
+      }
     }
     const requests: Array<{ method: string; path: string }> = []
     let treeUnavailable = false
@@ -530,7 +535,33 @@ async function runChildObservation(columns: number) {
       try {
         const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
         const writeInput = (value: string) => writeSemanticInput(process.stdin, value)
-        await waitFor(async () => (await output()).includes(rootTranscript), "root session frame")
+        const waitFailure = async (callsite: string, start: number, error: unknown) => {
+          tracePhase(callsite, "wait_timeout")
+          const transcriptRaw = await readFile(transcript, "utf8").catch(() => "")
+          const lastFrame = stripAnsi(transcriptRaw).slice(start).slice(-5000)
+          return new Error(
+            [
+              `${callsite}: ${error instanceof Error ? error.message : error}`,
+              `current_phase=${JSON.stringify(phaseTrace.at(-1))}`,
+              `last_successful_phase=${JSON.stringify(lastSuccessfulPhase)}`,
+              `last_frame=${JSON.stringify(lastFrame)}`,
+              `phase_trace=${JSON.stringify(phaseTrace)}`,
+            ].join("\n"),
+          )
+        }
+        const rootCallsite = `root-session-frame/${columns}`
+        const previousRootCallsite = activeCallsite
+        activeCallsite = rootCallsite
+        tracePhase(rootCallsite, "phase_start")
+        try {
+          tracePhase(rootCallsite, "ui_state_wait", rootTranscript)
+          await waitFor(async () => (await output()).includes(rootTranscript), rootCallsite)
+          tracePhase(rootCallsite, "ui_state_observed", rootTranscript)
+        } catch (error) {
+          throw await waitFailure(rootCallsite, 0, error)
+        } finally {
+          activeCallsite = previousRootCallsite
+        }
         await waitFor(async () => (await output()).includes("commands"), "root prompt")
         expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
 
@@ -554,16 +585,20 @@ async function runChildObservation(columns: number) {
         }
         const confirmMainInput = async (start: number, marker: string) => {
           try {
-            await focusMain(start, marker)
-            await waitForMain(start, `${marker} Main focus`)
+            await writeInput(escapeKey)
             await writeInput(marker)
             await waitFor(async () => {
               const frame = (await output()).slice(start)
               return frame.includes(marker) && frame.includes(rootDraft)
             }, `${marker} in Main`)
           } catch (error) {
-            const frame = (await output()).slice(-5000)
-            throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+            const frame = (await output()).slice(start)
+            const outcome = !frame.includes(marker)
+              ? "CONFIRM_MAIN_MARKER_MISSING"
+              : !frame.includes(rootDraft)
+                ? "CONFIRM_MAIN_DRAFT_MISSING"
+                : "CONFIRM_MAIN_ORACLE_TIMEOUT"
+            throw new Error(`${outcome}: ${error instanceof Error ? error.message : error}\n${frame.slice(-5000)}`)
           }
         }
         const rootFrame = await output()
@@ -832,13 +867,106 @@ async function runChildObservation(columns: number) {
         await waitFor(async () => (await client.permission.list({}, { throwOnError: true })).data?.length === 1, "grandchild permission")
         await Bun.sleep(200)
         expect((await output()).slice(permissionStart)).not.toContain("Permission required")
-        const focusMainStart = (await output()).length
+        const pendingBeforeEscape = (await client.permission.list({}, { throwOnError: true })).data ?? []
+        expect(pendingBeforeEscape).toHaveLength(1)
+        const pendingPermission = pendingBeforeEscape[0]
+        if (!pendingPermission) throw new Error("pending permission disappeared before Escape")
+        const pendingPermissionID = pendingPermission.id
+        const permissionReplyPath = `/permission/${encodeURIComponent(pendingPermissionID)}/reply`
+        const permissionRequestCursor = requests.length
+        const permissionOutputCursor = (await output()).length
+        const focusMainStart = permissionOutputCursor
+        const permissionCallsite = `grandchild-permission-in-main/${columns}`
+        const previousPermissionCallsite = activeCallsite
+        activeCallsite = permissionCallsite
+        tracePhase(permissionCallsite, "phase_start")
+        tracePhase(
+          permissionCallsite,
+          "pending_permission_locked",
+          JSON.stringify({ outputCursor: permissionOutputCursor, permissionID: pendingPermissionID, requestCursor: permissionRequestCursor }),
+        )
         try {
+          tracePhase(permissionCallsite, "focus_write", "escape")
           await writeInput(escapeKey)
-          await waitFor(async () => (await output()).slice(focusMainStart).includes("Permission required"), "grandchild permission in Main")
+          tracePhase(permissionCallsite, "flush_completed", "escape")
+          await waitFor(
+            async () => {
+              const frame = (await output()).slice(permissionOutputCursor)
+              const promptRendered = frame.includes("Permission required")
+              const matchingReplyRequests = requests
+                .slice(permissionRequestCursor)
+                .filter((request) => request.method === "POST" && request.path === permissionReplyPath)
+              const pendingNow = (await client.permission.list({}, { throwOnError: true })).data ?? []
+              const permissionStillPending = pendingNow.some((permission) => permission.id === pendingPermissionID)
+
+              if (promptRendered) {
+                if (!permissionStillPending) {
+                  throw new Error(
+                    [
+                      "PERMISSION_RENDERED_WITHOUT_PENDING_REQUEST",
+                      `permission_id=${JSON.stringify(pendingPermissionID)}`,
+                      `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                      `callsite=${permissionCallsite}`,
+                      `phase=${JSON.stringify(phaseTrace.at(-1))}`,
+                      `last_frame=${JSON.stringify(frame.slice(-5000))}`,
+                    ].join("\n"),
+                  )
+                }
+                return true
+              }
+
+              if (matchingReplyRequests.length > 0 || !permissionStillPending) {
+                tracePhase(
+                  permissionCallsite,
+                  "escape_propagated_to_new_permission_prompt",
+                  JSON.stringify({ matchingReplyRequests, permissionID: pendingPermissionID, permissionStillPending }),
+                )
+                throw new Error(
+                  [
+                    "ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT",
+                    `permission_id=${JSON.stringify(pendingPermissionID)}`,
+                    `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                    `permission_still_pending=${permissionStillPending}`,
+                    `callsite=${permissionCallsite}`,
+                    `phase=${JSON.stringify(phaseTrace.at(-1))}`,
+                    `last_frame=${JSON.stringify(frame.slice(-5000))}`,
+                  ].join("\n"),
+                )
+              }
+              return false
+            },
+            permissionCallsite,
+          )
+          tracePhase(permissionCallsite, "final_render_observed", "Permission required")
         } catch (error) {
-          const frame = (await output()).slice(focusMainStart).slice(-5000)
-          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
+          if (error instanceof Error && error.message.startsWith("ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT")) {
+            throw error
+          }
+          if (error instanceof Error && error.message.startsWith("PERMISSION_RENDERED_WITHOUT_PENDING_REQUEST")) {
+            throw error
+          }
+          const matchingReplyRequests = requests
+            .slice(permissionRequestCursor)
+            .filter((request) => request.method === "POST" && request.path === permissionReplyPath)
+          const pendingAfterFailure = (await client.permission.list({}, { throwOnError: true })).data ?? []
+          const permissionStillPending = pendingAfterFailure.some((permission) => permission.id === pendingPermissionID)
+          if (matchingReplyRequests.length === 0 && permissionStillPending) {
+            tracePhase(permissionCallsite, "event_propagation_hypothesis_disproven", pendingPermissionID)
+            throw new Error(
+              [
+                "EVENT_PROPAGATION_HYPOTHESIS_DISPROVEN",
+                `permission_id=${JSON.stringify(pendingPermissionID)}`,
+                `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                `permission_still_pending=${permissionStillPending}`,
+                `callsite=${permissionCallsite}`,
+                `phase=${JSON.stringify(phaseTrace.at(-1))}`,
+                `last_frame=${JSON.stringify((await output()).slice(permissionOutputCursor).slice(-5000))}`,
+              ].join("\n"),
+            )
+          }
+          throw await waitFailure(permissionCallsite, focusMainStart, error)
+        } finally {
+          activeCallsite = previousPermissionCallsite
         }
         await writeInput("\r")
         await shell
