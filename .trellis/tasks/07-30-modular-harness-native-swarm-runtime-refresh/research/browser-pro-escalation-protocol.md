@@ -954,3 +954,183 @@ Final evidence and disposition:
   identical command passed outside the restricted sandbox.
 - `pending`: exact staging, the new follow-up commit, push, and one fresh-SHA
   remote CI run remain release gates. No CI rerun is authorized on failure.
+
+### `CONSULT-2026-07-31-PTY-SSE-PASSTHROUGH-14`
+
+The MacBook Air coordinator returned a Browser/Pro audit after the sole fresh
+CI run for `326ec66be078d3a757cdf8011986b4814015cca2` failed at the locked
+permission observation seam. The ruling authorizes a test-only, byte-preserving
+trace only if the existing `/global/event` proxy already exposes one upstream
+reader and one downstream writer. It explicitly forbids replacing a direct
+`Response` pass-through with a transforming stream merely to create that seam.
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-SSE-PASSTHROUGH-14
+packet_revision: 0.34.7 PTY single-subscription SSE pass-through audit
+received_by_fuji1_date_utc: 2026-07-31
+requested_selection: ChatGPT Pro Model
+question_summary: determine whether exact permission P reaches and leaves the existing test proxy before introducing any deeper TUI event-decoding observation
+pro_conclusion: first inspect the existing /global/event pass-through; only an already-exposed single reader/writer may receive a rolling byte matcher that preserves chunk identity, order, and payload bytes
+macbook_air_ruling: if the proxy returns the upstream Response directly and has no lossless reader/writer seam, stop after recording the source fact; do not introduce a transform, second subscription, payload decode/re-encode, delay, product change, rerun, or 0.34.8 work
+ruling_scope: read-only 0.34.7 PTY proxy audit and existing Trellis evidence only
+head_sha_and_relevant_delta_at_ruling: 326ec66be078d3a757cdf8011986b4814015cca2; branch, upstream, and draft-PR head aligned; isolated worktree clean before evidence-only edits
+ci_evidence: run 30648248714 passed 80 columns and failed 140 columns at grandchild-permission-in-main/140 with EVENT_PROPAGATION_HYPOTHESIS_DISPROVEN; P=perm_019fb910184c7eb3b4b756e7d6915dcc; no matching reply request; P remained pending; no rerun authorized
+final_disposition_and_resumption_decision: the source stop condition fired; no RED, matcher, typecheck, focused PTY run, commit, push, CI, or product change is authorized until the MacBook Air coordinator supplies a new bounded ruling
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| The current fixture exposes the `/global/event` upstream reader and downstream writer | `rejected`, `source-verified` | `pty-smoke.test.ts` forwards unmatched routes with `response = await fetch(...)` followed by `return response`. `/global/event` has no special branch, `response.body` access, `getReader()`, `ReadableStream`, downstream writer, or `enqueue` seam. The only explicit reader in this fixture is the unrelated backend-process stdout readiness reader. |
+| A rolling byte matcher can be added without changing the pass-through architecture | `rejected`, `source-verified` | Observing chunks would require consuming `response.body` and returning a replacement body stream. That would create the reader/writer transform that the ruling says not to invent, so the requested chunk-split RED is inapplicable at this HEAD. |
+| The locked permission result proves the backend did not emit P | `rejected` | `permission.list` retaining P proves committed permission state. Because the direct pass-through has no observation seam, this run cannot distinguish backend emission, upstream subscription/cursor/filter behavior, or downstream/TUI consumption. |
+| The existing remote failure is reproducible evidence | `experimentally-verified` | The sole run `30648248714` produced `EVENT_PROPAGATION_HYPOTHESIS_DISPROVEN` with no reply and P still pending. It is evidence for the missing transcript observation only, not evidence that P was absent from the backend SSE producer. |
+| SSE chunk tracing or another focused run may proceed now | `pending` | A new coordinator ruling must first choose a source-evidenced observation seam. The next bounded audit may inspect backend-to-proxy subscription establishment, cursor/replay, and filters without changing TUI behavior; this task does not infer that design. |
+
+### `CONSULT-2026-07-31-PENDING-SNAPSHOT-CATCHUP-15`
+
+```text
+consultation_id: CONSULT-2026-07-31-PENDING-SNAPSHOT-CATCHUP-15
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: choose the smallest source-owned recovery seam for permission/question asks committed before a live /global/event subscription or lost to broadcast lag
+pro_conclusion: subscribe first, snapshot current pending asks without holding locks across stream construction, then emit connected, snapshot asks, and live events with stable-ID at-least-once semantics
+macbook_air_ruling: adopt backend pending snapshot catch-up for permission and question; reject TUI bootstrap permission-list loading and a PTY-only connected wait as the root repair
+ruling_scope: 0.34.7 CI repair only
+permitted_next_action: strict server integration RED/GREEN for initial catch-up and lag catch-up, unchanged TUI behavior, full release gates, one atomic commit/push, and one fresh-SHA CI run
+forbidden_next_action: cursor/event-log redesign, server dedup, second SSE subscription, TransformStream, TUI bootstrap change, new public Event/API, dependency/workflow/version/changelog change, retry/wait inflation, or 0.34.8
+required_verification: pending permission and question appear after connected and before a live sentinel; lagged current pending IDs use the same snapshot helper; resolved requests never replay; focused PTY/TUI and complete Rust/executable/zero-INET gates remain green
+head_sha_and_relevant_delta_at_ruling: 326ec66be078d3a757cdf8011986b4814015cca2; only this ledger and implement.md were dirty
+follow_up_of: CONSULT-2026-07-31-PTY-SSE-PASSTHROUGH-14
+final_disposition_and_resumption_decision: implement the bounded server catch-up once in the existing session/task/worktree/branch/PR; keep 0.34.8 blocked until the new SHA is fully green
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Pending state can outlive a missed live broadcast | `Pro-advised`, `coordinator-adopted`, `source-verified` | `PermissionRequests` and `QuestionRequests` insert into their pending maps before a best-effort broadcast; `/global/event` has no pending snapshot or replay on the ruling HEAD. |
+| Catch up from the backend pending owner | `Pro-advised`, `coordinator-adopted`, `experimentally-verified` | The first RED listed a stable pending permission with no SSE subscriber, connected `/global/event`, then received a live question sentinel before that permission, proving the missing behavior at the approved server seam. |
+| TUI bootstrap list or PTY connected wait is the root repair | `rejected` | Those approaches either create a second synchronization path or only narrow test timing; neither repairs live subscribers that lag after connection. |
+| Delivery is exactly once | `rejected` | Subscribe-before-snapshot intentionally permits snapshot-plus-live duplication. Stable request IDs make the contract at-least-once; the server does not deduplicate. |
+
+Implementation disposition after strict TDD:
+
+- `source-verified`: only `/global/event` is changed. It subscribes first,
+  clones current permission/question typed views under their respective short
+  mutex guards, releases the guards before JSON serialization, then emits
+  connected, snapshot asks, and the unchanged live streams.
+- `experimentally-verified`: pending-permission and pending-question tests each
+  failed on the ruling HEAD when the live opposite-type sentinel arrived
+  first, then passed with the bounded catch-up.
+- `experimentally-verified`: capacity-one permission and question streams each
+  failed because the first still-pending stable ID was absent after lag, then
+  passed after their existing `/global/event` lag branch invoked the same
+  snapshot owner. Tests use bounded scans and make no snapshot-order claim.
+- `source-verified`: capacity injection is `#[cfg(test)]`; production exposes
+  no new crate-visible control API. There is no sorting, server deduplication,
+  cursor, event-log replay, second subscription, generic SSE helper, TUI
+  bootstrap, dependency, version, changelog, or other SSE-route change.
+- `experimentally-verified`: `cargo fmt --all --check` and the focused Compat
+  permission/question integration suite pass (8/8). The broader hya-server
+  sweep passed all reached relevant tests and stopped only at a sandbox-denied
+  PTY allocation; that exact PTY test passed outside the sandbox.
+- `pending`: coordinator diff-boundary review, full release gates, one atomic
+  commit/push, and exactly one fresh-SHA CI run. 0.34.8 remains blocked.
+
+### `CONSULT-2026-07-31-PENDING-SNAPSHOT-SIMPLIFICATION-16`
+
+```text
+consultation_id: CONSULT-2026-07-31-PENDING-SNAPSHOT-SIMPLIFICATION-16
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: reduce the 771-line pending catch-up diff without weakening deterministic initial-subscription or lag recovery coverage
+pro_conclusion: retain real HTTP initial catch-up tests; replace the full capacity-injected ServerState lag fixture with one private lazy recovery helper tested through a real capacity-one tokio broadcast
+macbook_air_ruling: adopt option A; delete all production capacity seams and the 216-line fixture, keep fixed capacity 256, add overall timeouts to the two HTTP loops, and compact duplicate Trellis evidence
+ruling_scope: 0.34.7 pending snapshot catch-up simplification only
+permitted_next_action: honest mutation checkpoint against Lagged-to-empty, minimal helper GREEN, focused tests, compact evidence, and coordinator diff review
+forbidden_next_action: 257-event fixture, public API/configuration, generic SSE framework, other SSE/TUI/Event changes, dependency/version/changelog change, full gates before review, or 0.34.8
+follow_up_of: CONSULT-2026-07-31-PENDING-SNAPSHOT-CATCHUP-15
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Full ServerState lag fixture is required | `rejected`, `source-verified` | The lag contract is isolated to one `Result<Value, BroadcastStreamRecvError>` decision; app/session construction did not contribute to the invariant. |
+| Production needs configurable broadcast capacity | `rejected` | Capacity injection existed only to force the deleted tests. Production `new`/`spawn` is restored to the direct fixed capacity of 256. |
+| Private lazy helper preserves semantics | `experimentally-verified` | A real capacity-one broadcast mutation checkpoint failed with `left: []`, `right: [P1]`; GREEN snapshots once on Lagged and zero times for `Ok(P2)`. |
+| User-visible initial catch-up remains covered | `experimentally-verified` | Both HTTP/SSE tests remain and the full Compat permission/question integration target passes 8/8 with bounded whole-loop diagnostics. |
+| Cross-document evidence should remain duplicated | `rejected` | `implement.md` now keeps only a compact Consult14–16 execution index; complete rulings remain in this ledger. |
+| Release completion | `pending` | Narrow fmt/diff checks pass; coordinator review precedes full release gates, staging, commit/push, and one fresh-SHA CI run. |
+
+### `CONSULT-2026-07-31-PTY-SANDBOX-PROBE-17`
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-SANDBOX-PROBE-17
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: distinguish a sandbox-denied hya-backend loopback bind from a PTY product/startup regression without editing or rerunning the fixture blindly
+pro_conclusion: run one exact backend-start probe with the fixture binary, environment, cwd and arguments; only explicit bind EPERM permits one non-sandbox focused run
+macbook_air_ruling: choose the bounded probe option; reject assuming infrastructure failure without stderr and reject changing pty-smoke diagnostics
+ruling_scope: 0.34.7 release-gate environment classification only
+forbidden_next_action: repository edit, retry, sleep, PTY helper change, additional path, or 0.34.8
+```
+
+Evidence and disposition:
+
+- `artifact-verified`: `target/debug/hya-backend` retained SHA-256
+  `746e85099073f5f621857156ac0bb537aad641a5621ce15f7df10a9fe855f051`.
+  The exact fixture-equivalent probe exited code 1 with no signal and empty
+  stdout; stderr reported `bind 127.0.0.1:0` caused by
+  `Operation not permitted (os error 1)`. Its dedicated temporary directory
+  was inspected, removed, and confirmed absent.
+- `experimentally-verified`: the earlier restricted focused failures were
+  sandbox infrastructure failures. The one authorized non-sandbox focused
+  run reached the product interaction flow instead of failing backend startup.
+- `pending`: that run then exposed the independent 80-column
+  `CONFIRM_MAIN_MARKER_MISSING` behavior, so Consult17 did not close the
+  release gate and authorized no retry or product fix by itself.
+
+### `CONSULT-2026-07-31-ESCAPE-MAIN-PROMPT-18`
+
+```text
+consultation_id: CONSULT-2026-07-31-ESCAPE-MAIN-PROMPT-18
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: close the observation Escape-to-Main input-ownership gap exposed by the unique 80-column marker failure
+pro_conclusion: after dispatching focusMain, synchronously focus the existing Main Prompt ref only when it exists and no modal owns input; retain the reactive effect as fallback
+macbook_air_ruling: choose product option A; reject a transcript/UI barrier and test-only tracing; preserve key order, chords, layout and the unchanged PTY regression
+ruling_scope: 0.34.7 Escape-to-Main Prompt ownership only
+permitted_next_action: one package-internal callback RED/GREEN, TUI typecheck/build, one non-sandbox focused PTY run, then one full TUI run with no intervening change
+forbidden_next_action: public API/framework, new dependency, PTY/sleep/timeout/retry/marker change, backend/Event/permission/SSE change, version/changelog change, or 0.34.8
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| The callback must order workspace dispatch before Prompt focus | `source-verified`, `experimentally-verified` | RED compiled and failed with expected `[focusMain, focus, return]` versus actual `[focusMain, return]`; GREEN passes after adding only the guarded synchronous focus. |
+| Missing Prompt ref or active modal may be focused | `rejected`, `experimentally-verified` | Both unit cases pass with dispatch only and no focus call. |
+| A UI barrier or test-only trace is the selected repair | `rejected` | The coordinator selected A and explicitly forbade B/C. No such code was added. |
+| The existing PTY fixture needs modification | `rejected`, `source-verified` | `pty-smoke.test.ts` remains byte-identical to HEAD; no wait, key, marker, timeout, retry, or assertion changed. |
+
+TDD and gate evidence:
+
+- RED: `bun test test/subagent-workspace.test.ts` produced 26 pass / 1 fail;
+  the sole failure omitted `focus` between `focusMain` and `return`, while the
+  absent-ref and modal-active cases passed.
+- GREEN: the same target passed 27/27; `bun run typecheck` and
+  `bun run build` passed.
+- `experimentally-verified`: the single authorized non-sandbox focused PTY
+  command passed 4/4 (80 columns 14.956 seconds; 140 columns 12.041 seconds).
+  With no intervening edit, the single full `CI=true bun test` run passed
+  47/47, including the three new focus contracts (80 columns 15.073 seconds;
+  140 columns 12.326 seconds).
+- `pending`: coordinator boundary review, exact staging, commit/push, and one
+  fresh-SHA full CI run. Release remains 0.34.7 and 0.34.8 remains blocked.

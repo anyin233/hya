@@ -1853,3 +1853,58 @@ passes. The final code scope is `pty-smoke.test.ts` plus the two existing
 Trellis evidence files; there is no product, dependency, lock, workflow,
 version, or changelog diff. Exact staging, one semantic follow-up commit, push,
 and one fresh full remote CI run remain pending.
+
+### 17.4 Consult14–16: `/global/event` pending catch-up
+
+- Consult14 source audit found the PTY proxy was a direct SSE pass-through, so
+  byte tracing, a second subscription, and a transforming stream were rejected.
+- Consult15 identified the bounded backend gap: pending permission/question asks
+  could predate `/global/event` subscription or be skipped after broadcast lag.
+- Consult16 approved the final simplification below. Full consultation metadata
+  and determination status live only in the Browser/Pro ledger.
+
+#### Final behavior
+
+- Subscribe to engine, permission, and question live streams before taking
+  short-lock snapshots; emit `server.connected`, current pending asks, then live.
+- On permission/question `BroadcastStream` lag, one private lazy helper snapshots
+  current pending exactly once; normal values bypass snapshotting.
+- Delivery is at-least-once by stable request ID. There is no sorting, dedup,
+  cursor, history replay, second SSE route change, or TUI/bootstrap change.
+- Pending owners clone only necessary typed state under lock and serialize after
+  release. Fixed production broadcast capacity remains 256.
+
+#### TDD index
+
+- Initial HTTP REDs: pending permission/question each lost before the opposite
+  live sentinel; both GREEN after subscribe-before-snapshot publication.
+- Historical capacity-one REDs missed stable `perm_...01` / `q_...01`; both
+  GREEN after lag snapshot recovery. These fixtures were removed by Consult16.
+- Consult16 mutation checkpoint: real `broadcast::channel(1)` produced Lagged;
+  `Lagged => []` failed against `[P1]`. Final helper returns P1 with one lazy
+  snapshot call; `Ok(P2)` returns P2 with zero additional calls.
+
+#### Narrow verification and status
+
+- Helper contract: pass 1/1; Compat permission/question integration: pass 8/8.
+- `cargo fmt --all --check` and `git diff --check`: pass.
+- Full release gates, exact staging, commit/push, and one fresh-SHA CI run remain
+  pending. Version stays 0.34.7 and 0.34.8 remains blocked.
+
+### 17.5 Consult17–18: sandbox classification and synchronous Main input ownership
+
+- Consult17's exact fixture-equivalent backend probe retained binary SHA-256
+  `746e85099073f5f621857156ac0bb537aad641a5621ce15f7df10a9fe855f051`
+  and proved the restricted startup failure was loopback-bind EPERM. The first
+  non-sandbox focused run then reached an independent 80-column
+  `CONFIRM_MAIN_MARKER_MISSING` product seam.
+- Consult18 selected synchronous Prompt ownership after `focusMain` dispatch
+  when the existing ref is present and no modal owns input. The existing
+  reactive focus effect remains the fallback; chords, layout, PTY waits, keys,
+  markers, timeouts, and retries are unchanged.
+- RED: focused unit target 26/27, expected `focusMain -> focus -> return` but
+  observed `focusMain -> return`; absent-ref and modal-active cases passed.
+- GREEN: unit 27/27, typecheck and build pass; the one non-sandbox focused PTY
+  run passed 4/4, then the unchanged full TUI suite passed 47/47.
+- Pending: coordinator diff review, exact staging, commit/push, and one fresh
+  full CI run. Version remains 0.34.7; 0.34.8 remains blocked.

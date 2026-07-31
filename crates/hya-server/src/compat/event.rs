@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
@@ -13,6 +14,7 @@ use hya_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionI
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use crate::ServerState;
 
@@ -135,6 +137,11 @@ async fn subscribe_api(
 
 async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Response {
     let directory = super::location::workdir(&st).to_string_lossy().into_owned();
+    let live_rx = st.engine.bus().subscribe();
+    let permission_rx = st.permission_requests.subscribe();
+    let question_rx = st.question_requests.subscribe();
+    let permission_snapshot = st.permission_requests.snapshot_asked().await;
+    let question_snapshot = st.question_requests.snapshot_asked().await;
     let connected = json_event(&global_event_payload(
         &directory,
         EventPayload {
@@ -143,10 +150,22 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
             properties: json!({}),
         },
     ));
-    let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
+    let snapshot_directory = directory.clone();
+    let question_snapshot_directory = directory.clone();
+    let initial =
+        stream::iter(
+            std::iter::once(connected)
+                .chain(permission_snapshot.into_iter().map(move |value| {
+                    json_event(&global_event_payload(&snapshot_directory, value))
+                }))
+                .chain(question_snapshot.into_iter().map(move |value| {
+                    json_event(&global_event_payload(&question_snapshot_directory, value))
+                }))
+                .map(Ok::<_, Infallible>),
+        );
     let live_st = st.clone();
     let live_directory = directory.clone();
-    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+    let live = BroadcastStream::new(live_rx).filter_map(move |result| {
         let st = live_st.clone();
         let directory = live_directory.clone();
         async move {
@@ -160,32 +179,58 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
         }
     });
     let permission_directory = directory.clone();
-    let permissions =
-        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
+    let permission_requests = st.permission_requests.clone();
+    let permissions = BroadcastStream::new(permission_rx)
+        .then(move |result| {
+            let requests = permission_requests.clone();
             let directory = permission_directory.clone();
             async move {
-                match result {
-                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
-                    Err(_lagged) => None,
-                }
+                let values = recover_pending(result, || requests.snapshot_asked()).await;
+                values
+                    .into_iter()
+                    .map(|value| {
+                        Ok::<_, Infallible>(json_event(&global_event_payload(&directory, value)))
+                    })
+                    .collect::<Vec<_>>()
             }
-        });
+        })
+        .flat_map(stream::iter);
     let question_directory = directory.clone();
-    let questions =
-        BroadcastStream::new(st.question_requests.subscribe()).filter_map(move |result| {
+    let question_requests = st.question_requests.clone();
+    let questions = BroadcastStream::new(question_rx)
+        .then(move |result| {
+            let requests = question_requests.clone();
             let directory = question_directory.clone();
             async move {
-                match result {
-                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
-                    Err(_lagged) => None,
-                }
+                let values = recover_pending(result, || requests.snapshot_asked()).await;
+                values
+                    .into_iter()
+                    .map(|value| {
+                        Ok::<_, Infallible>(json_event(&global_event_payload(&directory, value)))
+                    })
+                    .collect::<Vec<_>>()
             }
-        });
+        })
+        .flat_map(stream::iter);
     let heartbeat_directory = directory;
     super::sse::compat(Sse::new(initial.chain(stream::select(
         stream::select(stream::select(live, permissions), questions),
         super::event_heartbeat::stream(move || global_heartbeat_event(&heartbeat_directory)),
     ))))
+}
+
+async fn recover_pending<F, Fut>(
+    result: Result<Value, BroadcastStreamRecvError>,
+    snapshot: F,
+) -> Vec<Value>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Vec<Value>>,
+{
+    match result {
+        Ok(value) => vec![value],
+        Err(BroadcastStreamRecvError::Lagged(_)) => snapshot().await,
+    }
 }
 
 fn global_event_payload<T: Serialize>(directory: &str, payload: T) -> Value {
@@ -851,4 +896,50 @@ fn event_id() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     format!("evt_{nanos}")
+}
+
+#[cfg(test)]
+mod recover_pending_tests {
+    use std::cell::Cell;
+
+    use futures::StreamExt as _;
+    use tokio::sync::broadcast;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn snapshots_once_after_lag_and_never_for_live_value() {
+        let (tx, rx) = broadcast::channel(1);
+        let mut stream = BroadcastStream::new(rx);
+        assert!(
+            tx.send(json!({"id": "discarded"})).is_ok(),
+            "broadcast receiver closed"
+        );
+        assert!(
+            tx.send(json!({"id": "live"})).is_ok(),
+            "broadcast receiver closed"
+        );
+
+        let Some(lagged) = stream.next().await else {
+            panic!("broadcast stream ended before reporting lag");
+        };
+        let calls = Cell::new(0);
+        let pending = json!({"id": "P1"});
+        let recovered = recover_pending(lagged, || async {
+            calls.set(calls.get() + 1);
+            vec![pending.clone()]
+        })
+        .await;
+        assert_eq!(recovered, vec![pending]);
+        assert_eq!(calls.get(), 1);
+
+        let live = json!({"id": "P2"});
+        let recovered = recover_pending(Ok(live.clone()), || async {
+            calls.set(calls.get() + 1);
+            Vec::new()
+        })
+        .await;
+        assert_eq!(recovered, vec![live]);
+        assert_eq!(calls.get(), 1);
+    }
 }

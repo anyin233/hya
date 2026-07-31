@@ -106,6 +106,45 @@ impl PermissionRequests {
         self.events.subscribe()
     }
 
+    pub(crate) async fn snapshot_asked(&self) -> Vec<Value> {
+        let pending = {
+            let entries = self.inner.lock().await;
+            entries
+                .iter()
+                .map(|(id, entry)| {
+                    (
+                        id.clone(),
+                        entry.session,
+                        entry.message_id,
+                        entry.call_id,
+                        entry.action,
+                        entry.resource.clone(),
+                        entry.remember.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        pending
+            .into_iter()
+            .map(
+                |(id, session, message_id, call_id, action, resource, remember)| {
+                    let properties = legacy_permission_view_from_fields(
+                        &id,
+                        session
+                            .map(|session| session.to_string())
+                            .unwrap_or_default(),
+                        message_id,
+                        call_id,
+                        action,
+                        &resource,
+                        &remember,
+                    );
+                    permission_asked_event_from_view(&id, properties)
+                },
+            )
+            .collect()
+    }
+
     fn publish_replied(&self, session: Option<SessionId>, id: &str, reply: PermissionReply) {
         let _published = self
             .events
@@ -292,21 +331,39 @@ fn legacy_permission_view(
     entry: &PendingPermission,
     session_id: String,
 ) -> LegacyPermissionRequestView {
+    legacy_permission_view_from_fields(
+        id,
+        session_id,
+        entry.message_id,
+        entry.call_id,
+        entry.action,
+        &entry.resource,
+        &entry.remember,
+    )
+}
+
+fn legacy_permission_view_from_fields(
+    id: &str,
+    session_id: String,
+    message_id: Option<MessageId>,
+    call_id: Option<ToolCallId>,
+    action: Action,
+    resource: &Resource,
+    remember: &RememberScope,
+) -> LegacyPermissionRequestView {
     LegacyPermissionRequestView {
         id: id.to_string(),
         session_id,
-        permission: action_name(entry.action),
-        patterns: vec![entry.resource.pattern()],
+        permission: action_name(action),
+        patterns: vec![resource.pattern()],
         metadata: json!({}),
-        always: vec![entry.remember.pattern().to_string()],
+        always: vec![remember.pattern().to_string()],
         tool: PermissionToolView {
-            message_id: entry
-                .message_id
+            message_id: message_id
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            call_id: entry
-                .call_id
+            call_id: call_id
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
@@ -389,14 +446,24 @@ fn input_mentions_resource(input: &Value, resource: &str) -> bool {
 }
 
 fn permission_asked_event(request_id: &str, entry: &PendingPermission) -> Value {
+    let session = entry
+        .session
+        .map(|session| session.to_string())
+        .unwrap_or_default();
+    permission_asked_event_from_view(
+        request_id,
+        legacy_permission_view(request_id, entry, session),
+    )
+}
+
+fn permission_asked_event_from_view(
+    request_id: &str,
+    properties: LegacyPermissionRequestView,
+) -> Value {
     json!({
         "id": format!("evt_hya_perm_{request_id}"),
         "type": "permission.asked",
-        "properties": legacy_permission_view(
-            request_id,
-            entry,
-            entry.session.map(|session| session.to_string()).unwrap_or_default(),
-        ),
+        "properties": properties,
     })
 }
 
