@@ -215,9 +215,10 @@ fn tail_session_does_not_run_spawn_admission_recovery() -> Result<(), Box<dyn st
                 root_session: root,
                 request_fingerprint: [31; 32],
                 admission_units: 1,
+                actor_claim: None,
             })
             .await?;
-        store.start_admission(operation).await?;
+        store.start_admission(operation, None).await?;
         Ok::<(), hya_store::StoreError>(())
     })?;
 

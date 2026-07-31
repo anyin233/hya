@@ -43,7 +43,7 @@ pub use loop_mode::{
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
 pub use prompt::{PromptEnv, build_system_prompt};
-pub use resident::ResidentSupervisor;
+pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor};
 pub use runtime_registry::{
     RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError, RuntimeRegistry,
     RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceManifest,
@@ -51,6 +51,7 @@ pub use runtime_registry::{
 };
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
-    pre_admit_team, project_envelope, run_pre_admitted_team, run_team,
+    pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_team,
+    run_pre_admitted_team_for_actor, run_team,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

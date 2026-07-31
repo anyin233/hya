@@ -1,18 +1,19 @@
 // allow: SIZE_OK — reviewed Phase 1 keeps backend bootstrap glue in this public API module.
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
 use hya_core::{
     AgentSpec, CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberSpec,
     MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine,
     SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope, build_system_prompt,
-    project_envelope, run_mailbox_service, run_pre_admitted_team,
+    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_team,
+    run_pre_admitted_team_for_actor,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
-use hya_proto::{AgentName, MemberId, ModelRef, SessionId};
+use hya_proto::{AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
 use hya_store::{AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
@@ -79,6 +80,11 @@ pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String
         router,
         model_override.unwrap_or_else(|| "offline".to_string()),
     )
+}
+
+fn process_owner_run_id() -> OwnerRunId {
+    static OWNER_RUN_ID: OnceLock<OwnerRunId> = OnceLock::new();
+    *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
 }
 
 pub fn compaction_config() -> CompactionConfig {
@@ -304,13 +310,14 @@ pub fn spawn_team_supervisor(
             };
             let admission_units = u32::try_from(req.members.len()).unwrap_or(u32::MAX);
             let operation_id = req.operation.operation_id();
+            let actor_claim = req.operation.actor_claim();
             let admission = engine
                 .begin_spawn_admission(
                     req.parent,
-                    req.operation.source_tool_call_id(),
-                    operation_id,
+                    req.operation,
                     fingerprint,
                     admission_units,
+                    actor_claim,
                     req.cancel.clone(),
                 )
                 .await;
@@ -395,10 +402,12 @@ pub fn spawn_team_supervisor(
                         .await
                         .map(|(root, _)| root)
                         .unwrap_or(parent);
-                    let _ = resident_supervisor.ensure_main(root, base.clone()).await;
+                    let _ = resident_supervisor
+                        .ensure_main(root, base.clone(), actor_claim.as_ref())
+                        .await;
                     for (member, agent, _) in resident_members {
                         match resident_supervisor
-                            .spawn_resident(parent, agent, member.prompt)
+                            .spawn_resident(parent, agent, member.prompt, actor_claim.as_ref())
                             .await
                         {
                             Ok((session, handle)) => resident_outcomes.push(MemberOutcome {
@@ -435,15 +444,17 @@ pub fn spawn_team_supervisor(
                         {
                             Some(session) => session,
                             None => {
-                                match engine
-                                    .create(CreateSession {
-                                        parent: Some(parent),
-                                        agent: agent.name.clone(),
-                                        model: agent.model.clone(),
-                                        workdir: agent.workdir.to_string_lossy().into_owned(),
-                                    })
-                                    .await
-                                {
+                                let create = CreateSession {
+                                    parent: Some(parent),
+                                    agent: agent.name.clone(),
+                                    model: agent.model.clone(),
+                                    workdir: agent.workdir.to_string_lossy().into_owned(),
+                                };
+                                let created = match actor_claim.as_ref() {
+                                    Some(claim) => engine.create_for_actor(claim, create).await,
+                                    None => engine.create(create).await,
+                                };
+                                match created {
                                     Ok(session) => session,
                                     Err(err) => {
                                         spawn_failed = true;
@@ -496,15 +507,31 @@ pub fn spawn_team_supervisor(
                 // resident spawn replies immediately with the resident handles.
                 let mut outcomes = resident_outcomes;
                 if !specs.is_empty() {
-                    let evidence =
-                        run_pre_admitted_team(engine.clone(), parent, specs, cancel).await;
+                    let evidence = match actor_claim {
+                        Some(claim) => {
+                            run_pre_admitted_team_for_actor(
+                                engine.clone(),
+                                parent,
+                                specs,
+                                cancel,
+                                claim,
+                            )
+                            .await
+                        }
+                        None => run_pre_admitted_team(engine.clone(), parent, specs, cancel).await,
+                    };
                     spawn_failed |= evidence
                         .iter()
                         .any(|member| member.status == MemberStatus::Failed);
                     let envelope = TeamEvidenceEnvelope {
                         members: evidence.clone(),
                     };
-                    let _ = project_envelope(&engine, parent, &envelope).await;
+                    let _ = match actor_claim.as_ref() {
+                        Some(claim) => {
+                            project_envelope_for_actor(&engine, parent, &envelope, claim).await
+                        }
+                        None => project_envelope(&engine, parent, &envelope).await,
+                    };
                     outcomes.extend(evidence.into_iter().map(|e| MemberOutcome {
                         member: e.member,
                         session: e.session,
@@ -523,7 +550,7 @@ pub fn spawn_team_supervisor(
                     (AdmissionTerminal::Completed, "spawn operation completed")
                 };
                 if let Err(error) = engine
-                    .finalize_spawn_admission(operation_id, terminal, reason)
+                    .finalize_spawn_admission(operation_id, terminal, reason, actor_claim.as_ref())
                     .await
                 {
                     eprintln!("hya: failed to finalize spawn admission ({error})");
@@ -607,6 +634,20 @@ async fn build_session_engine_with_mcp_defer(
     Arc<dyn hya_server::McpControl>,
     Arc<hya_plugin::PluginHost>,
 )> {
+    let owner_run_id = process_owner_run_id();
+    let mut recovered_claims = Vec::new();
+    for actor_id in store
+        .active_actor_ids()
+        .await
+        .context("list resident actors before startup recovery")?
+    {
+        recovered_claims.push(
+            store
+                .recover_claim(actor_id, owner_run_id)
+                .await
+                .context("fence resident actor before startup recovery")?,
+        );
+    }
     store
         .abort_nonterminal_admissions("startup recovery")
         .await
@@ -739,7 +780,54 @@ async fn build_session_engine_with_mcp_defer(
     }
     // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
     // before the team supervisor so its bus subscription is live for the first mail.
-    let resident_supervisor = ResidentSupervisor::start(engine.clone());
+    let resident_supervisor = ResidentSupervisor::start_with_owner(engine.clone(), owner_run_id);
+    for recovered in recovered_claims {
+        let actor_id = recovered.claim.actor_id;
+        let (root, _) = engine
+            .session_lineage(actor_id)
+            .await
+            .context("resolve recovered resident root")?;
+        let root_projection = engine
+            .read_projection(root)
+            .await
+            .context("replay recovered resident roster")?;
+        let entry = root_projection
+            .team
+            .roster
+            .values()
+            .find(|entry| entry.session == actor_id && entry.mode == SubagentMode::Resident)
+            .cloned()
+            .context("active resident claim has no durable roster entry")?;
+        let report = engine
+            .recover_resident_actor(&recovered, root, &entry.handle)
+            .await
+            .context("terminalize recovered resident work")?;
+        let actor_projection = engine
+            .read_projection(actor_id)
+            .await
+            .context("replay recovered resident session")?;
+        let workdir = actor_projection
+            .session
+            .workdir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| agent.workdir.clone());
+        let is_servable = |model: &ModelRef| spawn_router.resolve(model).is_some();
+        let resolved = hya_server::resolve_subagent(hya_server::SubagentResolve {
+            base: agent,
+            subagent_type: entry.agent_type.as_str(),
+            workdir: &workdir,
+            include_global_agents: options.include_global_agents,
+            categories: &categories,
+            spawn_model: None,
+            spawn_category: None,
+            is_servable: &is_servable,
+            inline_agent: None,
+        });
+        resident_supervisor
+            .register_recovered_resident(root, entry.handle, resolved.agent, recovered, report.work)
+            .await
+            .context("recreate recovered resident runtime owner")?;
+    }
     spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
@@ -909,12 +997,19 @@ mod tests {
 
     use super::*;
     use async_trait::async_trait;
-    use hya_proto::{ToolName, ToolSchema};
+    use hya_proto::{
+        Event, MailEndpoint, MailKind, OwnerRunId, RosterStatus, SubagentMode, ToolName, ToolSchema,
+    };
     use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError, ToolPermission};
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn resident_owner_run_id_is_stable_for_the_process() {
+        assert_eq!(process_owner_run_id(), process_owner_run_id());
+    }
 
     struct RuntimeMarker(&'static str);
 
@@ -1266,10 +1361,11 @@ for line in sys.stdin:
                 root_session,
                 request_fingerprint: [17; 32],
                 admission_units: 1,
+                actor_claim: None,
             })
             .await
             .unwrap();
-        store.start_admission(operation_id).await.unwrap();
+        store.start_admission(operation_id, None).await.unwrap();
         drop(store);
         let store = SessionStore::connect(database.to_str().unwrap())
             .await
@@ -1293,6 +1389,143 @@ for line in sys.stdin:
         assert_eq!(recovered.state, hya_store::AdmissionState::Aborted);
         assert!(recovered.logical_released);
         assert!(store.replay(root_session).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn engine_build_fences_running_resident_and_resumes_queued_mail_before_readiness() {
+        let database = tempdir().join("resident-recovery.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let queued_root = SessionId::new();
+        let queued_actor = SessionId::new();
+        let running_root = SessionId::new();
+        let running_actor = SessionId::new();
+
+        for (root, actor) in [(queued_root, queued_actor), (running_root, running_actor)] {
+            store
+                .append_event(
+                    root,
+                    &Event::SessionCreated {
+                        session: root,
+                        parent: None,
+                        agent: agent.name.clone(),
+                        model: agent.model.clone(),
+                        workdir: agent.workdir.to_string_lossy().into_owned(),
+                    },
+                )
+                .await
+                .unwrap();
+            store
+                .append_event(
+                    actor,
+                    &Event::SessionCreated {
+                        session: actor,
+                        parent: Some(root),
+                        agent: agent.name.clone(),
+                        model: agent.model.clone(),
+                        workdir: agent.workdir.to_string_lossy().into_owned(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let queued_claim = store
+            .try_claim_new(queued_actor, OwnerRunId::new())
+            .await
+            .unwrap();
+        store
+            .commit_resident_mutation(
+                &queued_claim,
+                queued_root,
+                &[Event::AgentRegistered {
+                    session: queued_root,
+                    agent_session: queued_actor,
+                    handle: "queued-1".to_string(),
+                    agent_type: agent.name.clone(),
+                    mode: SubagentMode::Resident,
+                }],
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                queued_root,
+                &Event::MailSent {
+                    session: queued_root,
+                    from: "main".to_string(),
+                    to: MailEndpoint::Handle("queued-1".to_string()),
+                    kind: MailKind::Message,
+                    body: "resume me".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let running_claim = store
+            .try_claim_new(running_actor, OwnerRunId::new())
+            .await
+            .unwrap();
+        store
+            .commit_resident_mutation(
+                &running_claim,
+                running_root,
+                &[
+                    Event::AgentRegistered {
+                        session: running_root,
+                        agent_session: running_actor,
+                        handle: "running-1".to_string(),
+                        agent_type: agent.name.clone(),
+                        mode: SubagentMode::Resident,
+                    },
+                    Event::ResidentWorkStarted {
+                        session: running_root,
+                        actor_session: running_actor,
+                        handle: "running-1".to_string(),
+                        epoch: running_claim.epoch,
+                        inbox_through: 0,
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let (_engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+            store.clone(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let running = store.read_projection(running_root).await.unwrap();
+        let running_entry = running.team.roster.get("running-1").unwrap();
+        assert_eq!(running_entry.status, RosterStatus::Failed);
+        assert!(running_entry.resident_work.is_none());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let queued = store.read_projection(queued_root).await.unwrap();
+                let entry = queued.team.roster.get("queued-1").unwrap();
+                if entry.resident_cursor == 1 || entry.resident_work.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

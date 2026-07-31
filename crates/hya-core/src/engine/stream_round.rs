@@ -1,6 +1,7 @@
 use futures::StreamExt;
 use hya_proto::{Event, FinishReason, MessageId, PartId, SessionId, TokenUsage, ToolCallId};
 use hya_provider::EventStream;
+use hya_store::ActorClaim;
 
 use super::SessionEngine;
 use super::text_complete::TextPartAccumulator;
@@ -25,6 +26,7 @@ impl SessionEngine {
         session: SessionId,
         message: MessageId,
         mut stream: EventStream,
+        actor_claim: Option<&ActorClaim>,
     ) -> Result<StreamRound, CoreError> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut durable_text_parts: Vec<(PartId, String)> = Vec::new();
@@ -32,6 +34,7 @@ impl SessionEngine {
         let mut finish = FinishReason::Stop;
         let mut tokens = None;
         while let Some(item) = stream.next().await {
+            self.validate_actor_claim(actor_claim).await?;
             let event = item?;
             if let Event::ToolCallRequested {
                 part,
@@ -89,10 +92,11 @@ impl SessionEngine {
                 }
                 continue;
             }
-            self.emit(session, event).await?;
+            self.emit_for_actor(actor_claim, session, event).await?;
         }
         for (part, text) in durable_text_parts {
-            self.emit(
+            self.emit_for_actor(
+                actor_claim,
                 session,
                 Event::TextStart {
                     session,
@@ -101,7 +105,8 @@ impl SessionEngine {
                 },
             )
             .await?;
-            self.emit(
+            self.emit_for_actor(
+                actor_claim,
                 session,
                 Event::TextReplace {
                     session,
@@ -111,7 +116,8 @@ impl SessionEngine {
                 },
             )
             .await?;
-            self.emit(
+            self.emit_for_actor(
+                actor_claim,
                 session,
                 Event::TextEnd {
                     session,

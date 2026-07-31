@@ -1,6 +1,7 @@
-use hya_proto::{Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId, ToolCallId};
+use hya_proto::{Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
 use hya_store::{
-    AdmissionClaim, AdmissionClaimOutcome, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+    ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionStartOutcome, AdmissionState,
+    AdmissionTerminal, RecoveredActorClaim,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -25,17 +26,14 @@ impl SessionEngine {
     pub async fn begin_spawn_admission(
         &self,
         parent: SessionId,
-        source_tool_call_id: ToolCallId,
-        operation_id: OperationId,
+        operation: hya_tool::ToolOperation,
         request_fingerprint: [u8; 32],
         admission_units: u32,
+        actor_claim: Option<ActorClaim>,
         cancel: CancellationToken,
     ) -> Result<SpawnAdmissionOutcome, CoreError> {
-        if operation_id != OperationId::from_tool_call(source_tool_call_id) {
-            return Err(CoreError::Invalid(
-                "operation id does not match source tool call".to_string(),
-            ));
-        }
+        let operation_id = operation.operation_id();
+        let source_tool_call_id = operation.source_tool_call_id();
         let (root, depth) = self.session_lineage(parent).await?;
         let claim = AdmissionClaim {
             operation_id,
@@ -43,6 +41,7 @@ impl SessionEngine {
             root_session: root,
             request_fingerprint,
             admission_units,
+            actor_claim,
         };
         match self.store.claim_admission(&claim).await? {
             AdmissionClaimOutcome::Existing(record) => {
@@ -56,6 +55,7 @@ impl SessionEngine {
                 operation_id,
                 AdmissionTerminal::Cancelled,
                 "cancelled before debit",
+                actor_claim.as_ref(),
             )
             .await?;
             return Ok(SpawnAdmissionOutcome::Cancelled);
@@ -66,6 +66,7 @@ impl SessionEngine {
                     operation_id,
                     AdmissionTerminal::Aborted,
                     "maximum subagent depth exceeded",
+                    actor_claim.as_ref(),
                 )
                 .await?;
                 return Ok(SpawnAdmissionOutcome::MaxDepth);
@@ -81,6 +82,7 @@ impl SessionEngine {
                         operation_id,
                         AdmissionTerminal::Aborted,
                         "spawn admission overloaded",
+                        actor_claim.as_ref(),
                     )
                     .await?;
                     return Ok(SpawnAdmissionOutcome::Overloaded);
@@ -92,7 +94,11 @@ impl SessionEngine {
             }
         }
 
-        match self.store.start_admission(operation_id).await {
+        match self
+            .store
+            .start_admission(operation_id, actor_claim.as_ref())
+            .await
+        {
             Ok(AdmissionStartOutcome::Started(_)) => Ok(SpawnAdmissionOutcome::Started),
             Ok(AdmissionStartOutcome::Existing(record)) => {
                 if let Some(governor) = &self.governor {
@@ -110,6 +116,7 @@ impl SessionEngine {
                         operation_id,
                         AdmissionTerminal::Aborted,
                         "failed to persist started state",
+                        actor_claim.as_ref(),
                     )
                     .await;
                 Err(error.into())
@@ -122,10 +129,11 @@ impl SessionEngine {
         operation_id: OperationId,
         terminal: AdmissionTerminal,
         reason: &str,
+        actor_claim: Option<&ActorClaim>,
     ) -> Result<(), CoreError> {
         let outcome = self
             .store
-            .finalize_admission(operation_id, terminal, reason)
+            .finalize_admission(operation_id, terminal, reason, actor_claim)
             .await?;
         if outcome.release_required
             && let Some(governor) = &self.governor
@@ -144,11 +152,45 @@ impl SessionEngine {
                 record.operation_id,
                 AdmissionTerminal::Cancelled,
                 "root turn cleanup",
+                None,
             )
             .await?;
         }
         if let Some(governor) = &self.governor {
             governor.release(root);
+        }
+        Ok(())
+    }
+
+    pub async fn abort_recovered_actor_operations(
+        &self,
+        recovered: &RecoveredActorClaim,
+    ) -> Result<usize, CoreError> {
+        let records = self
+            .store
+            .abort_recovered_actor_admissions(recovered, "resident actor takeover")
+            .await?;
+        if let Some(governor) = &self.governor {
+            for record in &records {
+                if record.logical_released {
+                    governor.release_operation(record.operation_id);
+                }
+            }
+        }
+        Ok(records.len())
+    }
+
+    pub(crate) async fn release_resident_actor_claim(
+        &self,
+        claim: &ActorClaim,
+    ) -> Result<(), CoreError> {
+        let records = self.store.release_claim(claim).await?;
+        if let Some(governor) = &self.governor {
+            for record in records {
+                if record.logical_released {
+                    governor.release_operation(record.operation_id);
+                }
+            }
         }
         Ok(())
     }
@@ -206,6 +248,52 @@ impl SessionEngine {
                 finish: FinishReason::Stop,
                 tokens: None,
             },
+        )
+        .await?;
+        Ok(message)
+    }
+
+    pub(crate) async fn inject_system_message_for_actor(
+        &self,
+        claim: &ActorClaim,
+        session: SessionId,
+        content: String,
+    ) -> Result<MessageId, CoreError> {
+        let message = MessageId::new();
+        let part = PartId::new();
+        self.commit_resident_mutation(
+            claim,
+            session,
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::System,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: content,
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::System,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                },
+            ],
         )
         .await?;
         Ok(message)
@@ -283,6 +371,62 @@ impl SessionEngine {
                 finish: FinishReason::Stop,
                 tokens: None,
             },
+        )
+        .await?;
+        Ok(message)
+    }
+
+    pub(crate) async fn admit_user_prompt_for_actor(
+        &self,
+        claim: &ActorClaim,
+        session: SessionId,
+        text: String,
+    ) -> Result<MessageId, CoreError> {
+        let text = if let Some(hooks) = &self.hooks {
+            match hooks
+                .message_user_before(MessageUserBeforeInput { session, text })
+                .await
+            {
+                MessageUserBeforeOutcome::Continue { text } => text,
+            }
+        } else {
+            text
+        };
+        let message = MessageId::new();
+        let part = PartId::new();
+        self.commit_resident_mutation(
+            claim,
+            session,
+            vec![
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                },
+                Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+                Event::TextDelta {
+                    session,
+                    message,
+                    part,
+                    delta: text,
+                },
+                Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                },
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::User,
+                    finish: FinishReason::Stop,
+                    tokens: None,
+                },
+            ],
         )
         .await?;
         Ok(message)
@@ -367,7 +511,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use hya_proto::{AgentName, ModelRef};
+    use hya_proto::{AgentName, ModelRef, OwnerRunId, ToolCallId};
     use hya_provider::ProviderRouter;
     use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
@@ -404,7 +548,14 @@ mod tests {
         let cancel = CancellationToken::new();
         assert_eq!(
             engine
-                .begin_spawn_admission(root, source, operation, [23; 32], 1, cancel.clone())
+                .begin_spawn_admission(
+                    root,
+                    hya_tool::ToolOperation::from_tool_call(source),
+                    [23; 32],
+                    1,
+                    None,
+                    cancel.clone(),
+                )
                 .await
                 .unwrap(),
             SpawnAdmissionOutcome::Started
@@ -453,7 +604,14 @@ mod tests {
 
         assert_eq!(
             engine
-                .begin_spawn_admission(root, source, operation, [24; 32], 1, cancel)
+                .begin_spawn_admission(
+                    root,
+                    hya_tool::ToolOperation::from_tool_call(source),
+                    [24; 32],
+                    1,
+                    None,
+                    cancel,
+                )
                 .await
                 .unwrap(),
             SpawnAdmissionOutcome::Cancelled
@@ -462,5 +620,59 @@ mod tests {
         assert_eq!(record.state, AdmissionState::Cancelled);
         assert!(!record.logical_released);
         assert_eq!(governor.remaining_budget(root), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_release_aborts_and_refunds_bound_operation_exactly_once() {
+        let store = hya_store::SessionStore::connect_memory().await.unwrap();
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let governor = SubagentGovernor::new(SubagentLimits {
+            per_run_budget: 1,
+            ..SubagentLimits::default()
+        });
+        let engine = SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new()),
+            Arc::new(ToolRegistry::builtins()),
+            permission,
+            EventBus::default(),
+        )
+        .with_governor(governor.clone());
+        let actor = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("resident"),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+            })
+            .await
+            .unwrap();
+        let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+        let source = ToolCallId::new();
+        let operation = OperationId::from_tool_call(source);
+        assert_eq!(
+            engine
+                .begin_spawn_admission(
+                    actor,
+                    hya_tool::ToolOperation::from_tool_call(source),
+                    [25; 32],
+                    1,
+                    Some(claim),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap(),
+            SpawnAdmissionOutcome::Started
+        );
+        assert_eq!(governor.remaining_budget(actor), 0);
+
+        engine.release_resident_actor_claim(&claim).await.unwrap();
+        engine.release_resident_actor_claim(&claim).await.unwrap();
+
+        assert_eq!(governor.remaining_budget(actor), 1);
+        assert_eq!(
+            store.admission(operation).await.unwrap().unwrap().state,
+            AdmissionState::Aborted
+        );
     }
 }

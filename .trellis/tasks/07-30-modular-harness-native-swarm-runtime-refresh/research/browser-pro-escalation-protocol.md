@@ -724,3 +724,68 @@ Determination-level evidence:
 | Server and manager may own effective/status state | `rejected` | `hya-server` receives only `McpControl`; the deleted HTTP state map is not replaced, and `McpManager` remains an I/O helper. Status is composed from reconciler observation plus the active runtime manifest. |
 | Add a digest dependency to hya-plugin | `rejected`, `source-verified` | The plugin crate emits deterministic canonical declaration bytes using existing `serde_json`; the app uses its pre-existing digest dependency. Crate dependency topology does not grow. |
 | Pro output authorizes release/security/later stages | `rejected` | Full local and remote gates, repository release rules, current `PermissionPlane`, and all later owner decisions remain independent requirements. |
+
+### `CONSULT-2026-07-31-RESIDENT-FENCING-10`
+
+This records the MacBook Air coordinator's completed Browser/Pro audit for
+`0.34.7` and the controlling corrections delivered to the canonical
+`fuji1 remote worker` session. The delivery authorized the bounded resident
+recovery/fencing slice only after `0.34.6` closed green. It did not restate the
+conversation URL, displayed model label, timestamps, or packet digest, so this
+record does not infer them from an earlier consultation.
+
+```text
+consultation_id: CONSULT-2026-07-31-RESIDENT-FENCING-10
+packet_id: not supplied to fuji1
+packet_revision: 0.34.7 TTL-free resident claim/epoch recovery and minimal effect-fencing audit
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: not restated in coordinator delivery
+url_access_classification: existing MacBook Air Browser/Pro consultation; no URL copied or inferred
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: not restated in coordinator delivery
+question_summary: choose the minimum persistent resident identity, non-time-based claim/epoch model, recovery ordering, operation binding, and stale-result fence for 0.34.7
+pro_conclusion: use the already durable resident identity; fence by a transactional monotonically increasing actor epoch before recovery; bind only resident-originated existing admission operations; resume queued-not-started work and abort running work; reject late old-claim commits
+macbook_air_ruling: adopt with corrections—no TTL or supervisor; ordinary claims have one winner; recovery fences before abort/refund; one narrow store commit seam checks claim and optional operation binding before canonical event/transition commit; external effects are not claimed exactly once
+ruling_scope: release 0.34.7 only
+permitted_next_action: implement the ordered deterministic RED/GREEN matrix, exact 0.34.7 release metadata/docs, full local gates, atomic commit/push, and same draft-PR remote CI
+forbidden_next_action: TTL, heartbeat, wall-clock expiry, background lease supervisor, distributed lock/consensus/HA/active-active, generic executor/outbox/effect framework, second operation journal, new permission/sandbox work, AgentBundle, 100/256 certification, updater, new dependency, merge, or 0.34.8
+required_verification: one-winner concurrent claim; epoch-increment takeover; stale tool/child commit rejection while old TurnBinding survives; abort/refund once; queued-versus-running recovery; repeatable projection/terminal recovery; unchanged transient path; full release gates and remote CI green
+remaining_owner_gates: every 0.34.8+ stage and all existing Bundle execution/key/updater/activation decisions
+head_sha_and_relevant_delta_at_ruling: 680f9fb535fc48f71f9aead64cc3d3d30161678a; 0.34.6 remote CI run 30634501761 attempt 2 green; clean isolated worktree; protected main and three stashes untouched
+follow_up_of: CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09
+supersedes: the generic P6 lease/effect-journal target only for the bounded 0.34.7 single-process resident correctness slice
+final_disposition_and_resumption_decision: implement 0.34.7 once in the existing session/task/worktree/branch/PR; do not start 0.34.8 before remote CI green and a new MacBook Air authorization
+```
+
+Determination-level evidence and authoritative-HEAD corrections:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Reuse the persisted resident actor identity | `Pro-advised`, `coordinator-adopted`, `source-verified` | Current `AgentRegistered.agent_session` is the resident's stable `SessionId` in the team-root event log and roster projection. `MemberId` belongs to the parent tree lifecycle and is not used as a second actor identity. |
+| Extend the existing operation representation rather than create an effect journal | `coordinator-adopted`, `source-verified` | `0.34.4` is a literal `admission_journal` table with `OperationId`, source call, root, immutable fingerprint, units, state, and exact-release marker. Resident-only optional actor identity/epoch belongs there; no second operation table is justified. |
+| Use one TTL-free transactional claim table | `Pro-advised`, `coordinator-adopted`, `source-verified`, `experimentally-verified` | Migration `0005_resident_actor_claim.sql` adds the sole coordination table. It does not replace the event projection, admission journal, `ResidentSupervisor`, or `RuntimeRegistry`, and has no time field, heartbeat, or lease task. Concurrent ordinary claim, takeover, and full-tuple release tests are green. |
+| Fence before abort/refund and runtime recreation | `coordinator-corrected`, `source-verified`, `experimentally-verified` | Startup increments every active actor epoch while spawn/send/wait remain closed, then performs fail-closed admission recovery, terminalizes old running tool/message/child state, and recreates the existing supervisor. The app integration test observes running termination and queued scheduling before builder readiness. |
+| Existing events already persist a resident work cursor/start boundary | `rejected`, `source-verified` | `MailSent` and `AgentActivityChanged` persist inbox and roster status, but `SlotState.cursor`, `pending`, and `initial` are memory-only and startup creates an empty team map. One minimal work-start marker is therefore permitted; no parallel resident read model or generic work journal is added. |
+| Actor epoch and runtime generation are the same fence | `rejected`, `source-verified` | `RuntimeSnapshot`/`TurnBinding` lifetime is retained by `Arc` and remains orthogonal to the per-resident execution claim. Takeover must not terminate or republish registry owners. |
+| Fencing provides arbitrary external exactly-once behavior | `rejected` | A pre-dispatch check plus result-commit fence prevents stale canonical-state advancement, but cannot reverse a file/network/API effect that completed before takeover. Running/in-flight work is aborted and never automatically retried. |
+
+Implementation follow-up evidence:
+
+- `source-verified`: `OwnerRunId` is process-stable; actor claim and operation
+  actor binding are SQLite indexed point checks; root cleanup cannot mutate a
+  resident-bound operation; old `TurnBinding` owners are untouched.
+- `experimentally-verified`: the seven ordered RED/GREEN cases plus audit REDs
+  cover repeated recovery with an already-started user turn, claim-less
+  admission-finalize rejection, and terminalization of running child/tool/
+  assistant projection state. The final authority audit additionally proves
+  that non-actor startup recovery cannot consume actor-bound rows and that
+  full-tuple claim release atomically aborts its bound admission before the
+  claim becomes reusable, with governor refund applied once.
+- `rejected`: a generic effect/outbox state machine, time lease, active-active
+  takeover, automatic retry of running effects, new permission behavior,
+  Bundle work, or a 100/256 capacity claim. None appears in `0.34.7`.
+- Full workspace and remote-CI evidence remains a delivery gate and is not
+  implied by this focused proof.

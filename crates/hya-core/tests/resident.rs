@@ -169,7 +169,10 @@ async fn quiescence_wakes_main_to_synthesize() {
     let supervisor = ResidentSupervisor::start(engine.clone());
 
     // Main-as-actor must be registered so quiescence has someone to wake.
-    supervisor.ensure_main(root, agent.clone()).await.unwrap();
+    supervisor
+        .ensure_main(root, agent.clone(), None)
+        .await
+        .unwrap();
 
     // Two residents, each with an initial directive → each runs one turn, then idles.
     let a = make_child(&engine, root).await;
@@ -258,7 +261,10 @@ async fn message_budget_kill_cancels_the_team() {
     .await;
     let root = make_root(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
-    supervisor.ensure_main(root, agent.clone()).await.unwrap();
+    supervisor
+        .ensure_main(root, agent.clone(), None)
+        .await
+        .unwrap();
 
     let a = make_child(&engine, root).await;
     let b = make_child(&engine, root).await;

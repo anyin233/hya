@@ -19,6 +19,9 @@
 - `StoreError::OperationIdConflict` is the durable immutable-request conflict
   and displays the stable code `OPERATION_ID_CONFLICT`.
 - `StoreError::AdmissionTransitionConflict` rejects terminal rewrites.
+- `StoreError::ActorAlreadyClaimed` distinguishes an ordinary competing claim;
+  `StoreError::StaleActorClaim` rejects any old epoch/owner capability at the
+  canonical mutation boundary.
 - `SpawnError` distinguishes queue/admission overload, unavailable transport,
   operation conflict, and already-handled idempotent replay.
 - `TaskTool` maps these into matching `ToolError` variants; engine tool-error
@@ -34,6 +37,10 @@
   is not mutated.
 - Startup must return an error rather than expose spawn surfaces if admission
   recovery fails.
+- Resident startup must remain closed if epoch takeover, running-work
+  terminalization, or resident re-registration fails. A stale completion is a
+  typed rejection and must not be converted to a successful no-op that wakes
+  work or advances projection state.
 - Logging is supplemental; do not log-and-continue past a failed pre-create
   safety gate.
 

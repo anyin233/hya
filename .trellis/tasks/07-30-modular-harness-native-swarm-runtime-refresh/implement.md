@@ -2,11 +2,12 @@
 
 ## 0. Execution guard
 
-The task is `in_progress`. Release `0.34.5` is committed/pushed at
-`95f4fe20b3750d376023384d869a52da1e84201f` and draft-PR CI run
-`30612919698` is green. Release `0.34.6` is now the only active implementation slice. Source
-edits, builds, tests, commit, push, and remote-CI monitoring are authorized only
-for that slice. Releases `0.34.7+`, tagging, merge, production activation, and
+The task is `in_progress`. Release `0.34.6` is committed/pushed at
+`680f9fb535fc48f71f9aead64cc3d3d30161678a` and draft-PR CI run
+`30634501761` attempt 2 is green. Release `0.34.7` is now the only active
+implementation slice. Source edits, builds, tests, commit, push, and remote-CI
+monitoring are authorized only for that slice. Releases `0.34.8+`, tagging,
+merge, production activation, and
 synchronization remain unauthorized.
 
 Before any future implementation:
@@ -189,7 +190,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
                                           + self-update example/skill
 ```
 
-No later patch may be preimplemented in the active `0.34.6` slice. Each arrow requires the
+No later patch may be preimplemented in the active `0.34.7` slice. Each arrow requires the
 preceding patch's full gate, atomic commit/push, and remote CI green. Pro round
 six is advisory provenance; the MacBook Air coordinator's corrections above
 control. Final external execution/context/resident semantics, private Bundle
@@ -214,7 +215,7 @@ This is a starting map to revalidate with CodeGraph before each edit.
 
 ## 4. Verification commands
 
-These are the required final gates for the active `0.34.6` slice.
+These are the required final gates for the active `0.34.7` slice.
 
 ### 4.1 Rust and executable gate
 
@@ -795,7 +796,7 @@ Release `0.34.5` was committed at
 `30612919698` completed successfully. No `0.34.6` work is included in that
 historical release.
 
-## 5C. Active release — `0.34.6`
+## 5C. Delivered release — `0.34.6`
 
 ### 5C.1 Exact boundary and authority
 
@@ -963,9 +964,146 @@ weakening owner-lifetime or candidate-invalidation coverage:
 
 Metadata/JSON/JSONL and `git diff --check` pass. `Cargo.lock` changes only the
 workspace package versions; every dependency list is identical and no crate
-`Cargo.toml` adds an edge. Exact staging, one atomic commit/push, and the same
-draft-PR remote CI are the remaining gates. No `0.34.7` work may begin before
-that remote run is fully green.
+`Cargo.toml` adds an edge. The stage closed at
+`680f9fb535fc48f71f9aead64cc3d3d30161678a`; draft-PR CI run `30634501761`
+attempt 2 is fully green.
+
+## 5D. Active release — `0.34.7`
+
+### 5D.1 Exact boundary and authoritative source corrections
+
+The stage starts from the clean, remote-green `0.34.6` commit above. The
+MacBook Air ruling is recorded as
+`CONSULT-2026-07-31-RESIDENT-FENCING-10`. Direct source inspection corrected
+the abstract proposal as follows:
+
+- the stable resident `ActorId` is the already-persisted
+  `AgentRegistered.agent_session`/roster `SessionId`; `MemberId` remains parent
+  tree lifecycle metadata;
+- `0.34.4` already owns a literal `admission_journal`, so resident operations
+  add nullable actor identity/epoch there rather than creating an effect
+  journal;
+- roster/mail are durable, but the resident cursor and running boundary were
+  memory-only, requiring exactly one `ResidentWorkStarted` event;
+- `RuntimeSnapshot`/`TurnBinding` lifetime is independent from actor epoch and
+  continues to drain through retained `Arc`s.
+
+`OwnerRunId` is generated once per process. The claim table contains only
+stable actor ID, monotonic epoch, process owner, and `active|released`; it has
+no TTL, time field, heartbeat, background task, or distributed/HA semantics.
+
+### 5D.2 Deterministic RED evidence
+
+The ordered RED cases failed for the expected missing behavior before their
+GREEN seams existed:
+
+```sh
+cargo test -p hya-store --test resident_claim concurrent_claims_allow_exactly_one_owner
+cargo test -p hya-store --test resident_claim restart_recovery_increments_epoch_and_invalidates_old_claim
+cargo test -p hya-core --test resident_recovery stale_tool_or_child_completion_cannot_append_or_advance_projection
+cargo test -p hya-core --test resident_recovery takeover_aborts_and_refunds_bound_operation_exactly_once
+cargo test -p hya-core --test resident_recovery queued_resident_message_resumes_but_running_message_aborts
+cargo test -p hya-core --test resident_recovery repeated_startup_recovery_produces_identical_projection_and_no_duplicate_terminal_events
+cargo test -p hya-core --test resident_recovery transient_non_resident_paths_do_not_require_actor_claim_or_change_events
+```
+
+The first failures respectively showed the missing claim API, recovery fence,
+claim-aware event commit, actor-bound admission recovery, queued/running
+marker, repeatable recovery composition, and transient characterization. The
+final audit added three focused REDs: a recovered running user turn was
+incorrectly reclassified as queued on the second startup; a claim-less
+finalizer could terminalize an actor-bound admission; and running child/tool/
+assistant projection state remained nonterminal after takeover. Each failed
+on the named assertion before the narrow fix.
+
+The final authority/lifetime pass added two more deterministic REDs:
+
+```sh
+cargo test -p hya-store --test admission startup_recovery_leaves_actor_bound_operation_for_fenced_takeover -- --nocapture
+cargo test -p hya-store --test admission release_claim_aborts_bound_operation_before_releasing_actor -- --nocapture
+```
+
+The first showed the 0.34.4 global startup abort consuming an actor-bound row
+before the recovered claim transaction could see it. The second showed claim
+release leaving a bound `started` admission orphaned. Both failed on their
+named assertions before the SQL transitions were narrowed.
+
+### 5D.3 Minimal GREEN and recovery order
+
+- Migration `0005_resident_actor_claim.sql` adds the sole claim table and
+  resident-only actor columns/index to `admission_journal`.
+- `try_claim_new`, `recover_claim`, and `release_claim` are indexed SQLite
+  compare-and-set transactions. Ordinary concurrent claims have one winner;
+  recovery advances the epoch before any runtime service becomes ready.
+  Release atomically aborts nonterminal admissions for that exact actor/epoch
+  before marking the full claim tuple released, and returns only first-release
+  rows to the existing governor refund seam.
+- Startup first fences all active claims, then performs fail-closed 0.34.4
+  admission recovery for non-actor operations. Actor-bound operations remain
+  for the current recovered-claim transaction; startup then replays roster/
+  session projections, aborts old running work, and recreates the existing
+  `ResidentSupervisor` slots. Only queued not-started mail is notified.
+- `ResidentWorkStarted` commits before provider/tool/child dispatch. Recovery
+  terminalizes in-flight tool parts, assistant messages, and child members
+  using existing events before clearing the root running marker. Repeated
+  recovery observes terminal state and emits no duplicate terminal event.
+- Resident event/mailbox/child commits and actor-bound admission transitions
+  validate the full claim in the same SQLite transaction as canonical state.
+  Tool execution checks immediately before dispatch and after the external
+  result before plugin post-processing; result publication is transactionally
+  fenced. Root-turn cleanup cannot mutate actor-bound admissions.
+- Transient work carries no claim, performs no claim-table lookup, and retains
+  its prior event shapes. Actor epoch and runtime generation remain orthogonal.
+
+### 5D.4 Claim boundary and non-goals
+
+The release claims deterministic single-process resident crash recovery and
+canonical-state fencing only. Filesystem, network, provider, and third-party
+effects that occurred before takeover are not reversible or externally
+exactly once. Running/in-flight work is never automatically retried. There is
+no TTL/time lease, HA/active-active, generic supervisor/outbox/effect system,
+new permission/sandbox behavior, AgentBundle work, or 100/256 capacity proof.
+
+No new user configuration or agent-facing self-operation is introduced, so
+`0.34.7` deliberately adds neither a runnable user example nor a built-in
+skill. Architecture, storage, event-model, ADR, changelog, and this task's
+defect/roadmap evidence are the appropriate documentation surface.
+
+### 5D.5 Focused GREEN and exit gate
+
+Focused GREEN includes the complete store claim/admission suites, all resident
+recovery cases, existing resident behavior, and the app startup test that
+observes running-work termination and queued-mail scheduling before readiness.
+It also includes release-time abort/refund-once and the proof that global
+startup recovery leaves actor rows for fenced takeover.
+
+The local exit gate is green:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --bins
+(cd packages/hya-tui-ts && bun run typecheck)
+(cd packages/hya-tui-ts && bun run build)
+(cd packages/hya-tui-ts && CI=true bun test)
+bash scripts/verify-no-http.sh
+target/debug/hya --version
+target/debug/hya-backend --version
+target/debug/hya-ts --version
+```
+
+The workspace test initially exposed only a stale README release label; after
+the required `0.34.7` alignment, the full suite passed. Existing loopback and
+strace fixtures required their normal unsandboxed CI permissions. The first
+two full TUI attempts reached 43/44 with the known 140-column PTY observation
+flake at different callsites; the focused PTY suite then passed 4/4 and the
+unchanged full suite passed 44/44 without timeout, retry logic, concurrency, or
+TUI product changes. The no-INET gate reports `OK: zero inet sockets`, and all
+three local executables report `0.34.7`.
+
+Exact staging, commit/push, and draft-PR remote CI are still required; their
+final results are appended here before delivery. `0.34.8` remains unauthorized.
 
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 
@@ -1271,49 +1409,30 @@ content.
 
 ## 11. P6 — resident reconstruction, actor epochs, and effect outcomes
 
-**Dependencies:** P5 authoritative leases, P4 `EffectGate`, P1 actor/operation
-journals.
+**Controlling release:** `0.34.7`, with the concrete implementation and proof
+recorded in section 5D. The older generalized lease/effect-journal design is
+superseded for this stage.
 
-### Slices
+### Delivered slices
 
-- [ ] **P6.1 Shadow reconstruction.** Rebuild desired actors, cursor/mail
-      ranges, wake reasons, parent dependencies, quiescence sequence, and
-      budgets from journal/projection without waking them.
-- [ ] **P6.2 Actor incarnation fence.** Transactionally increment
-      `actor_epoch`; attach it to every lease, mail acknowledgement, result, and
-      effect completion; reject stale writers.
-- [ ] **P6.3 Operation state machine.** Persist
-      `planned -> authorized -> started -> committed|failed|indeterminate` and
-      classify adapters as pure, idempotent, reversible, reconcilable, or
-      non-idempotent.
-- [ ] **P6.4 Bounded activation.** After reconciliation and epoch commit, create
-      tasks only for active admitted phases and enqueue pending resident wakes
-      through P5. Broadcast/notify becomes a cache/wake optimization only.
-- [ ] **P6.5 Quiescence/recovery.** Reconstruct main/resident actors and
-      termination counters without duplicate synthesis or mail reinjection.
+- [x] one TTL-free actor claim row per stable resident session identity;
+- [x] one-winner ordinary claim, monotonic startup recovery, and full-tuple
+      idempotent release;
+- [x] nullable actor ID/epoch on the existing admission journal only;
+- [x] one resident-work-start marker plus projected inbox cursor;
+- [x] fence-first startup, abort/no-retry running work, resume queued work, and
+      recreate the existing supervisor before readiness;
+- [x] claim-aware canonical event, mailbox, child, spawn-admission, tool
+      pre-dispatch, and result-commit paths; transient behavior unchanged.
 
-### RED/gates
+### Required exit gates
 
-- Kill after registration, cursor read, admission promotion, effect start,
-  effect commit, and before/after actor-epoch commit.
-- Recovery produces one current incarnation, preserves pending mail exactly
-  once at the cursor contract, and rejects delayed old-epoch mail/results/effects.
-- Journaled idempotent effects deduplicate by `OperationId`; reversible
-  compensation and reconcilers are exercised.
-- An indeterminate non-idempotent remote effect is visible and not blindly
-  retried.
-- Broadcast lag/restart converges from durable state even when no in-memory
-  actor slot existed.
-- **Pro checkpoint:** unresolved actor-incarnation, operation-outcome, or
-  effect-fencing semantics remain blocked across the owning package and
-  effect-consuming adapters. Pro cannot turn an indeterminate remote effect
-  into an exactly-once claim or replace stale-epoch/fault-injection proof.
-
-### Activation/rollback
-
-Do not wake reconstructed actors before fencing tests pass. Disable rehydration
-only from a quiescent state with no live/queued resident work; fence newer actor
-epochs before selecting retained runtime content.
+The deterministic matrix in section 5D must remain green together with the
+full workspace/TUI/no-INET/executable gates and same-PR remote CI. No TTL,
+generic effect state machine, remote-effect retry/reconciliation, scheduler,
+AgentBundle, or capacity certification is implied. If delivery is rolled back,
+the runtime must first be quiescent; a stale/older epoch is never selected as a
+recovery mechanism.
 
 ## 12. P7 — native AgentBundle cutover, distribution, and external execution
 

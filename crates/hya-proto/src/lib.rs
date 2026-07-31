@@ -16,8 +16,9 @@ pub mod workspace;
 
 pub use event::{Envelope, Event};
 pub use ids::{
-    ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId, OperationId, PartId,
-    PermissionRequestId, QuestionRequestId, SessionId, TeamRunId, ToolCallId,
+    ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
+    OperationId, OwnerRunId, PartId, PermissionRequestId, QuestionRequestId, SessionId, TeamRunId,
+    ToolCallId,
 };
 pub use mail::{MailEndpoint, MailKind};
 pub use message::{
@@ -27,7 +28,7 @@ pub use message::{
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
     ChannelProjection, MailMessage, MemberProjection, MessageProjection, PartProjection,
-    Projection, RosterEntry, SessionProjection, TeamProjection,
+    Projection, ResidentWorkProjection, RosterEntry, SessionProjection, TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use workspace::WorkspaceAdapterInfo;

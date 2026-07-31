@@ -486,6 +486,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::MemberFinished { .. }
         | Event::AgentRegistered { .. }
         | Event::AgentActivityChanged { .. }
+        | Event::ResidentWorkStarted { .. }
         | Event::MailSent { .. }
         | Event::ChannelJoined { .. }
         | Event::ChannelLeft { .. }

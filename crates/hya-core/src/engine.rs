@@ -6,7 +6,7 @@ use hya_proto::{
     ToolSchema, now_millis,
 };
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
-use hya_store::SessionStore;
+use hya_store::{ActorClaim, SessionStore};
 use hya_tool::{
     AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
     PermissionRules, ResolvedTool, SpawnerPlane, TodoPlane, ToolError, ToolRegistry,
@@ -291,6 +291,50 @@ impl SessionEngine {
         Ok(())
     }
 
+    pub(crate) async fn emit_for_actor(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        event: Event,
+    ) -> Result<(), CoreError> {
+        match actor_claim {
+            Some(claim) => {
+                self.commit_resident_mutation(claim, session, vec![event])
+                    .await
+            }
+            None => self.emit(session, event).await,
+        }
+    }
+
+    pub(crate) async fn validate_actor_claim(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+    ) -> Result<(), CoreError> {
+        if let Some(claim) = actor_claim {
+            self.store.validate_actor_claim(claim).await?;
+        }
+        Ok(())
+    }
+
+    /// Commit resident-owned canonical events only while the supplied actor
+    /// capability is current. Publication happens after the SQLite transaction,
+    /// so a stale completion cannot advance live observers or replay state.
+    pub async fn commit_resident_mutation(
+        &self,
+        claim: &ActorClaim,
+        session: SessionId,
+        events: Vec<Event>,
+    ) -> Result<(), CoreError> {
+        let envelopes = self
+            .store
+            .commit_resident_mutation(claim, session, &events)
+            .await?;
+        for envelope in envelopes {
+            self.publish_envelope(envelope);
+        }
+        Ok(())
+    }
+
     fn publish_live(&self, event: Event) {
         self.publish_envelope(Envelope {
             seq: EventSeq(0),
@@ -308,6 +352,28 @@ impl SessionEngine {
 
     pub async fn create(&self, spec: CreateSession) -> Result<SessionId, CoreError> {
         self.create_with_id(None, spec).await
+    }
+
+    #[doc(hidden)]
+    pub async fn create_for_actor(
+        &self,
+        claim: &ActorClaim,
+        spec: CreateSession,
+    ) -> Result<SessionId, CoreError> {
+        let id = SessionId::new();
+        self.commit_resident_mutation(
+            claim,
+            id,
+            vec![Event::SessionCreated {
+                session: id,
+                parent: spec.parent,
+                agent: spec.agent,
+                model: spec.model,
+                workdir: spec.workdir,
+            }],
+        )
+        .await?;
+        Ok(id)
     }
 
     pub async fn create_with_id(

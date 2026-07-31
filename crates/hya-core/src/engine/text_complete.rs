@@ -60,6 +60,7 @@ impl TextPartAccumulator {
             | Event::MemberFinished { .. }
             | Event::AgentRegistered { .. }
             | Event::AgentActivityChanged { .. }
+            | Event::ResidentWorkStarted { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }

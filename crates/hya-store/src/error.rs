@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use hya_proto::OperationId;
+use hya_proto::{OperationId, SessionId};
 
 #[derive(Error, Debug)]
 pub enum StoreError {
@@ -22,4 +22,12 @@ pub enum StoreError {
     },
     #[error("admission journal: {0}")]
     AdmissionData(String),
+    #[error("resident actor is already claimed: {actor_id}")]
+    ActorAlreadyClaimed { actor_id: SessionId },
+    #[error("resident actor claim is stale: {actor_id}")]
+    StaleActorClaim { actor_id: SessionId },
+    #[error("resident actor has no recoverable active claim: {actor_id}")]
+    ActorClaimUnavailable { actor_id: SessionId },
+    #[error("resident actor claim: {0}")]
+    ActorClaimData(String),
 }

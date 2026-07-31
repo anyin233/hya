@@ -34,13 +34,176 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use hya_proto::{Event, MailEndpoint, MemberId, RosterStatus, SessionId, SubagentMode};
+use hya_proto::{
+    ActorClaim, Event, FinishReason, MailEndpoint, MemberId, MemberRunStatus, OwnerRunId,
+    PartProjection, Role, RosterStatus, SessionId, SubagentMode, ToolPartState,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
 use crate::orchestrator::TeamBudget;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidentRecovery {
+    Idle,
+    Queued {
+        inbox_cursor: u64,
+    },
+    AbortedRunning {
+        inbox_cursor: u64,
+        queued_after: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResidentRecoveryReport {
+    pub work: ResidentRecovery,
+    pub aborted_operations: usize,
+}
+
+impl SessionEngine {
+    pub async fn recover_resident_actor(
+        &self,
+        recovered: &hya_store::RecoveredActorClaim,
+        root: SessionId,
+        handle: &str,
+    ) -> Result<ResidentRecoveryReport, CoreError> {
+        let aborted_operations = self.abort_recovered_actor_operations(recovered).await?;
+        let work = self.recover_resident_work(recovered, root, handle).await?;
+        Ok(ResidentRecoveryReport {
+            work,
+            aborted_operations,
+        })
+    }
+
+    /// Classify durable resident work after its claim has been fenced by takeover.
+    /// Running work is terminalized without retry; queued mail remains schedulable.
+    pub async fn recover_resident_work(
+        &self,
+        recovered: &hya_store::RecoveredActorClaim,
+        root: SessionId,
+        handle: &str,
+    ) -> Result<ResidentRecovery, CoreError> {
+        let projection = self.read_projection(root).await?;
+        let entry = projection
+            .team
+            .roster
+            .get(handle)
+            .filter(|entry| entry.session == recovered.claim.actor_id && entry.mode.is_resident())
+            .ok_or_else(|| CoreError::Invalid("resident recovery roster mismatch".to_string()))?;
+        if let Some(work) = entry.resident_work {
+            if work.epoch != recovered.previous_epoch {
+                return Err(CoreError::Invalid(
+                    "resident recovery work epoch mismatch".to_string(),
+                ));
+            }
+            self.terminalize_recovered_resident_effects(&recovered.claim)
+                .await?;
+            self.commit_resident_mutation(
+                &recovered.claim,
+                root,
+                vec![Event::AgentActivityChanged {
+                    session: root,
+                    handle: handle.to_string(),
+                    status: hya_proto::RosterStatus::Failed,
+                    current_task: Some("aborted by resident recovery".to_string()),
+                }],
+            )
+            .await?;
+            let inbox_len = projection
+                .team
+                .inboxes
+                .get(handle)
+                .map_or(0, |inbox| inbox.len() as u64);
+            return Ok(ResidentRecovery::AbortedRunning {
+                inbox_cursor: work.inbox_through,
+                queued_after: inbox_len > work.inbox_through,
+            });
+        }
+        self.store().validate_actor_claim(&recovered.claim).await?;
+        let inbox_len = projection
+            .team
+            .inboxes
+            .get(handle)
+            .map_or(0, |inbox| inbox.len() as u64);
+        let actor_projection = self.read_projection(recovered.claim.actor_id).await?;
+        let pending_user_turn = actor_projection
+            .session
+            .messages
+            .last()
+            .is_some_and(|message| message.role == hya_proto::Role::User);
+        if inbox_len > entry.resident_cursor
+            || (pending_user_turn && entry.status == RosterStatus::Idle)
+        {
+            Ok(ResidentRecovery::Queued {
+                inbox_cursor: entry.resident_cursor,
+            })
+        } else {
+            Ok(ResidentRecovery::Idle)
+        }
+    }
+
+    async fn terminalize_recovered_resident_effects(
+        &self,
+        claim: &ActorClaim,
+    ) -> Result<(), CoreError> {
+        let projection = self.read_projection(claim.actor_id).await?;
+        let mut events = Vec::new();
+        for member in &projection.session.members {
+            if matches!(
+                member.status,
+                MemberRunStatus::Spawning | MemberRunStatus::Running
+            ) {
+                events.push(Event::MemberFinished {
+                    session: claim.actor_id,
+                    member: member.member,
+                    status: MemberRunStatus::Cancelled,
+                    summary: "aborted by resident recovery".to_string(),
+                    child: member.child,
+                });
+            }
+        }
+        for message in &projection.session.messages {
+            if message.role != Role::Assistant || message.finish.is_some() {
+                continue;
+            }
+            for part in &message.parts {
+                if let PartProjection::Tool {
+                    id,
+                    call,
+                    state: ToolPartState::Pending { .. } | ToolPartState::Running { .. },
+                    ..
+                } = part
+                {
+                    events.push(Event::ToolError {
+                        session: claim.actor_id,
+                        message: message.id,
+                        part: *id,
+                        call: *call,
+                        value: Some(serde_json::json!({
+                            "code": "STALE_ACTOR_CLAIM",
+                        })),
+                        message_text: "aborted by resident recovery".to_string(),
+                    });
+                }
+            }
+            events.push(Event::MessageFinished {
+                session: claim.actor_id,
+                message: message.id,
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+            });
+        }
+        if !events.is_empty() {
+            self.commit_resident_mutation(claim, claim.actor_id, events)
+                .await?;
+        }
+        Ok(())
+    }
+}
 
 /// Injected when the team quiesces so the main agent synthesizes autonomously.
 const SYNTHESIS_DIRECTIVE: &str = "TEAM QUIESCED — every team member is idle and no mail is in flight. \
@@ -64,8 +227,8 @@ struct SlotState {
     pending: bool,
     /// (Main only) a synthesis directive is owed on the next turn.
     synth_pending: bool,
-    /// A one-shot initial directive to inject on the very first turn.
-    initial: Option<String>,
+    /// Present for resident subagents; the main/root actor remains transient.
+    claim: Option<ActorClaim>,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
     notify: Arc<Notify>,
@@ -75,7 +238,7 @@ impl SlotState {
     /// Whether this slot owes a turn (mail, a synthesis directive, or its initial
     /// directive). The single source of truth for "is there work?" under the lock.
     fn has_work(&self) -> bool {
-        self.pending || self.synth_pending || self.initial.is_some()
+        self.pending || self.synth_pending
     }
 }
 
@@ -105,8 +268,7 @@ struct RunPlan {
     cursor: usize,
     /// (Main only) inject the synthesis directive before the turn.
     synth: bool,
-    /// One-shot initial directive to inject on the first turn.
-    initial: Option<String>,
+    claim: Option<ActorClaim>,
 }
 
 /// What a resident task should do next, decided atomically under the team lock.
@@ -115,7 +277,11 @@ enum Action {
     Run(RunPlan),
     /// No work owed; the slot just transitioned to idle (`became_idle` gates the
     /// roster activity emission so it fires once per idle transition).
-    Idle { handle: String, became_idle: bool },
+    Idle {
+        handle: String,
+        claim: Option<ActorClaim>,
+        became_idle: bool,
+    },
     /// The team was killed; the resident task must exit. `killed_now` is set for
     /// the single caller that observed the transition, so kill side-effects run once.
     Stop { killed_now: bool },
@@ -137,6 +303,36 @@ impl TeamActor {
         }
     }
 
+    async fn record_activity(
+        &self,
+        claim: Option<&ActorClaim>,
+        handle: String,
+        status: RosterStatus,
+        current_task: Option<String>,
+    ) -> Result<(), CoreError> {
+        match claim {
+            Some(claim) => {
+                self.engine
+                    .commit_resident_mutation(
+                        claim,
+                        self.root,
+                        vec![Event::AgentActivityChanged {
+                            session: self.root,
+                            handle,
+                            status,
+                            current_task,
+                        }],
+                    )
+                    .await
+            }
+            None => {
+                self.engine
+                    .record_agent_activity(self.root, handle, status, current_task)
+                    .await
+            }
+        }
+    }
+
     /// Decide (atomically) what the resident on `session` does next. Charges the
     /// per-team turn budget on the way into a `Run`; a trip kills the team.
     fn next_action(&self, session: SessionId) -> Action {
@@ -149,7 +345,7 @@ impl TeamActor {
         };
         if slot.has_work() {
             let synth = slot.synth_pending;
-            let initial = slot.initial.take();
+            let claim = slot.claim;
             let cursor = slot.cursor;
             let agent = slot.agent.clone();
             let handle = slot.handle.clone();
@@ -173,10 +369,11 @@ impl TeamActor {
                 is_main,
                 cursor,
                 synth,
-                initial,
+                claim,
             })
         } else {
             let handle = slot.handle.clone();
+            let claim = slot.claim;
             let became_idle = slot.status == SlotStatus::Busy;
             if became_idle {
                 slot.status = SlotStatus::Idle;
@@ -185,8 +382,24 @@ impl TeamActor {
             }
             Action::Idle {
                 handle,
+                claim,
                 became_idle,
             }
+        }
+    }
+
+    fn finish_run(&self, session: SessionId) {
+        let mut state = self.lock();
+        let has_work = match state.residents.get_mut(&session) {
+            Some(slot) => {
+                slot.status = SlotStatus::Idle;
+                slot.has_work()
+            }
+            None => return,
+        };
+        state.busy = state.busy.saturating_sub(1);
+        if !has_work {
+            self.maybe_fire_quiescence(&mut state);
         }
     }
 
@@ -229,32 +442,38 @@ impl TeamActor {
     /// Kill the team from an async context (message-budget trip). Records the
     /// terminal `Failed` roster status for every member so observers see the reason.
     async fn kill(&self, reason: &str) {
-        let (already, handles) = {
+        let (already, residents) = {
             let mut st = self.lock();
             let already = st.killed;
             self.kill_locked(&mut st, reason);
-            let handles: Vec<String> = st.residents.values().map(|s| s.handle.clone()).collect();
-            (already, handles)
+            let residents = st
+                .residents
+                .values()
+                .map(|slot| (slot.handle.clone(), slot.claim))
+                .collect::<Vec<_>>();
+            (already, residents)
         };
         if already {
             return;
         }
-        self.emit_kill(&handles, reason).await;
+        self.emit_kill(&residents, reason).await;
     }
 
     /// Emit the terminal `Failed` roster activity + release the team's budget
     /// counters. Separated so both kill paths (turn budget, message budget) share it.
-    async fn emit_kill(&self, handles: &[String], reason: &str) {
-        for handle in handles {
+    async fn emit_kill(&self, residents: &[(String, Option<ActorClaim>)], reason: &str) {
+        for (handle, claim) in residents {
             let _ = self
-                .engine
-                .record_agent_activity(
-                    self.root,
+                .record_activity(
+                    claim.as_ref(),
                     handle.clone(),
                     RosterStatus::Failed,
                     Some(reason.to_string()),
                 )
                 .await;
+            if let Some(claim) = claim {
+                let _ = self.engine.release_resident_actor_claim(claim).await;
+            }
         }
         if let Some(gov) = self.engine.governor() {
             gov.release_team(self.root);
@@ -272,7 +491,7 @@ impl TeamActor {
             is_main,
             cursor,
             synth,
-            initial,
+            claim,
         } = plan;
         // Snapshot new inbox mail for this handle (folded before its wake, so it is
         // already visible here).
@@ -302,30 +521,62 @@ impl TeamActor {
         } else {
             "working".to_string()
         };
-        let _ = self
-            .engine
-            .record_agent_activity(
-                self.root,
-                handle.clone(),
-                RosterStatus::Busy,
-                Some(task_label),
-            )
-            .await;
-
-        if let Some(directive) = initial
-            && !directive.trim().is_empty()
-        {
-            self.engine.admit_user_prompt(session, directive).await?;
+        if let Some(claim) = claim.as_ref() {
+            self.engine
+                .commit_resident_mutation(
+                    claim,
+                    self.root,
+                    vec![
+                        Event::ResidentWorkStarted {
+                            session: self.root,
+                            actor_session: session,
+                            handle: handle.clone(),
+                            epoch: claim.epoch,
+                            inbox_through: u64::try_from(inbox_len).unwrap_or(u64::MAX),
+                        },
+                        Event::AgentActivityChanged {
+                            session: self.root,
+                            handle: handle.clone(),
+                            status: RosterStatus::Busy,
+                            current_task: Some(task_label),
+                        },
+                    ],
+                )
+                .await?;
+        } else {
+            self.record_activity(None, handle.clone(), RosterStatus::Busy, Some(task_label))
+                .await?;
         }
         if synth && is_main {
-            self.engine
-                .inject_system_message(session, SYNTHESIS_DIRECTIVE.to_string())
-                .await?;
+            match claim.as_ref() {
+                Some(claim) => {
+                    self.engine
+                        .inject_system_message_for_actor(
+                            claim,
+                            session,
+                            SYNTHESIS_DIRECTIVE.to_string(),
+                        )
+                        .await?;
+                }
+                None => {
+                    self.engine
+                        .inject_system_message(session, SYNTHESIS_DIRECTIVE.to_string())
+                        .await?;
+                }
+            }
         }
         for (from, body) in &new_mail {
-            self.engine
-                .admit_user_prompt(session, format!("[mail from {from}] {body}"))
-                .await?;
+            let prompt = format!("[mail from {from}] {body}");
+            match claim.as_ref() {
+                Some(claim) => {
+                    self.engine
+                        .admit_user_prompt_for_actor(claim, session, prompt)
+                        .await?;
+                }
+                None => {
+                    self.engine.admit_user_prompt(session, prompt).await?;
+                }
+            }
         }
         // Advance the cursor so a follow-up turn never re-injects the same mail.
         {
@@ -335,9 +586,18 @@ impl TeamActor {
             }
         }
         // Exactly one turn, under the team-wide cancel so a budget kill stops it.
-        self.engine
-            .run_turn(session, &agent, self.cancel.child_token())
-            .await?;
+        match claim.as_ref() {
+            Some(claim) => {
+                self.engine
+                    .run_turn_for_actor(session, &agent, claim, self.cancel.child_token())
+                    .await?;
+            }
+            None => {
+                self.engine
+                    .run_turn(session, &agent, self.cancel.child_token())
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -445,45 +705,53 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
             match team.next_action(session) {
                 Action::Run(plan) => {
                     let handle = plan.handle.clone();
-                    if let Err(err) = team.run_one_turn(session, plan).await {
-                        // A turn error must not wedge the actor: record it and let
-                        // the loop re-decide (it will idle if nothing else is owed).
-                        let _ = team
-                            .engine
-                            .record_agent_activity(
-                                team.root,
-                                handle,
-                                RosterStatus::Failed,
-                                Some(format!("turn error: {err}")),
-                            )
-                            .await;
+                    let claim = plan.claim;
+                    match team.run_one_turn(session, plan).await {
+                        Ok(()) => {
+                            let _ = team
+                                .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
+                                .await;
+                        }
+                        Err(err) => {
+                            // A turn error must not wedge the actor: record it and let
+                            // the loop re-decide (it will idle if nothing else is owed).
+                            let _ = team
+                                .record_activity(
+                                    claim.as_ref(),
+                                    handle,
+                                    RosterStatus::Failed,
+                                    Some(format!("turn error: {err}")),
+                                )
+                                .await;
+                        }
                     }
+                    team.finish_run(session);
                 }
                 Action::Idle {
                     handle,
+                    claim,
                     became_idle,
                 } => {
                     if became_idle {
                         let _ = team
-                            .engine
-                            .record_agent_activity(team.root, handle, RosterStatus::Idle, None)
+                            .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
                             .await;
                     }
                     break;
                 }
                 Action::Stop { killed_now } => {
                     if killed_now {
-                        let (handles, reason) = {
+                        let (residents, reason) = {
                             let st = team.lock();
                             (
                                 st.residents
                                     .values()
-                                    .map(|s| s.handle.clone())
+                                    .map(|slot| (slot.handle.clone(), slot.claim))
                                     .collect::<Vec<_>>(),
                                 st.kill_reason.clone().unwrap_or_default(),
                             )
                         };
-                        team.emit_kill(&handles, &reason).await;
+                        team.emit_kill(&residents, &reason).await;
                     }
                     return;
                 }
@@ -500,6 +768,7 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
 /// completely unaffected.
 pub struct ResidentSupervisor {
     engine: Arc<SessionEngine>,
+    owner_run_id: OwnerRunId,
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
 }
 
@@ -512,9 +781,15 @@ impl ResidentSupervisor {
     /// the listener task's startup).
     #[must_use]
     pub fn start(engine: Arc<SessionEngine>) -> Arc<Self> {
+        Self::start_with_owner(engine, OwnerRunId::new())
+    }
+
+    #[must_use]
+    pub fn start_with_owner(engine: Arc<SessionEngine>, owner_run_id: OwnerRunId) -> Arc<Self> {
         let rx = engine.bus().subscribe();
         let supervisor = Arc::new(Self {
             engine,
+            owner_run_id,
             teams: Mutex::new(HashMap::new()),
         });
         let listener = supervisor.clone();
@@ -598,8 +873,16 @@ impl ResidentSupervisor {
     /// it. Idempotent: a second call for the same root is a no-op. The root is
     /// registered on the roster as `main` (transient mode — it is the root, not a
     /// resident subagent) if not already present.
-    pub async fn ensure_main(&self, root: SessionId, agent: AgentSpec) -> Result<(), CoreError> {
-        let handle = self.engine.ensure_root_registered(root).await?;
+    pub async fn ensure_main(
+        &self,
+        root: SessionId,
+        agent: AgentSpec,
+        actor_claim: Option<&ActorClaim>,
+    ) -> Result<(), CoreError> {
+        let handle = self
+            .engine
+            .ensure_root_registered_for_actor(root, actor_claim)
+            .await?;
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());
         let spawn = {
@@ -617,7 +900,7 @@ impl ResidentSupervisor {
                         status: SlotStatus::Idle,
                         pending: false,
                         synth_pending: false,
-                        initial: None,
+                        claim: None,
                         cursor: 0, // main-as-actor injects child mail from its inbox
                         notify: notify.clone(),
                     },
@@ -643,33 +926,69 @@ impl ResidentSupervisor {
         parent: SessionId,
         agent: AgentSpec,
         directive: String,
+        parent_claim: Option<&ActorClaim>,
     ) -> Result<(SessionId, String), CoreError> {
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
-        let session = self
-            .engine
-            .create(CreateSession {
-                parent: Some(parent),
-                agent: agent.name.clone(),
-                model: agent.model.clone(),
-                workdir: agent.workdir.to_string_lossy().into_owned(),
-            })
-            .await?;
+        let session = match parent_claim {
+            Some(claim) => {
+                self.engine
+                    .create_for_actor(
+                        claim,
+                        CreateSession {
+                            parent: Some(parent),
+                            agent: agent.name.clone(),
+                            model: agent.model.clone(),
+                            workdir: agent.workdir.to_string_lossy().into_owned(),
+                        },
+                    )
+                    .await?
+            }
+            None => {
+                self.engine
+                    .create(CreateSession {
+                        parent: Some(parent),
+                        agent: agent.name.clone(),
+                        model: agent.model.clone(),
+                        workdir: agent.workdir.to_string_lossy().into_owned(),
+                    })
+                    .await?
+            }
+        };
         let handle = self.assign_handle(root, agent.name.as_str()).await;
         // Announce in the parent tree (observable), then bind the handle + resident
         // mode in the team-root log.
         let member = MemberId::new();
         let description: String = directive.chars().take(80).collect();
-        let _ = self
-            .engine
-            .record_member_spawned(
-                parent,
-                member,
-                Some(session),
-                agent.name.clone(),
-                description,
-                parent_depth.saturating_add(1),
-            )
-            .await;
+        match parent_claim {
+            Some(claim) => {
+                self.engine
+                    .commit_resident_mutation(
+                        claim,
+                        parent,
+                        vec![Event::MemberSpawned {
+                            session: parent,
+                            member,
+                            child: Some(session),
+                            subagent_type: agent.name.clone(),
+                            description,
+                            depth: parent_depth.saturating_add(1),
+                        }],
+                    )
+                    .await?;
+            }
+            None => {
+                self.engine
+                    .record_member_spawned(
+                        parent,
+                        member,
+                        Some(session),
+                        agent.name.clone(),
+                        description,
+                        parent_depth.saturating_add(1),
+                    )
+                    .await?;
+            }
+        }
         self.register_existing_resident(root, session, handle.clone(), agent, Some(directive))
             .await?;
         Ok((session, handle))
@@ -686,18 +1005,32 @@ impl ResidentSupervisor {
         agent: AgentSpec,
         initial: Option<String>,
     ) -> Result<(), CoreError> {
+        let claim = self
+            .engine
+            .store()
+            .try_claim_new(session, self.owner_run_id)
+            .await?;
         self.engine
-            .record_agent_registered(
+            .commit_resident_mutation(
+                &claim,
                 root,
-                session,
-                handle.clone(),
-                agent.name.clone(),
-                SubagentMode::Resident,
+                vec![Event::AgentRegistered {
+                    session: root,
+                    agent_session: session,
+                    handle: handle.clone(),
+                    agent_type: agent.name.clone(),
+                    mode: SubagentMode::Resident,
+                }],
             )
             .await?;
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());
         let has_initial = initial.as_ref().is_some_and(|d| !d.trim().is_empty());
+        if let Some(initial) = initial.filter(|directive| !directive.trim().is_empty()) {
+            self.engine
+                .admit_user_prompt_for_actor(&claim, session, initial)
+                .await?;
+        }
         {
             let mut st = team.lock();
             // New work exists (the initial directive), so a later quiescence fires.
@@ -709,9 +1042,9 @@ impl ResidentSupervisor {
                     agent,
                     is_main: false,
                     status: SlotStatus::Idle,
-                    pending: false,
+                    pending: has_initial,
                     synth_pending: false,
-                    initial,
+                    claim: Some(claim),
                     cursor: 0,
                     notify: notify.clone(),
                 },
@@ -719,6 +1052,63 @@ impl ResidentSupervisor {
         }
         tokio::spawn(resident_task(team.clone(), session, notify.clone()));
         if has_initial {
+            notify.notify_one();
+        }
+        Ok(())
+    }
+
+    pub async fn register_recovered_resident(
+        &self,
+        root: SessionId,
+        handle: String,
+        agent: AgentSpec,
+        recovered: hya_store::RecoveredActorClaim,
+        disposition: ResidentRecovery,
+    ) -> Result<(), CoreError> {
+        self.engine
+            .store()
+            .validate_actor_claim(&recovered.claim)
+            .await?;
+        let projection = self.engine.read_projection(root).await?;
+        let cursor = projection
+            .team
+            .roster
+            .get(&handle)
+            .filter(|entry| entry.session == recovered.claim.actor_id)
+            .map_or(0, |entry| entry.resident_cursor);
+        let pending = matches!(
+            disposition,
+            ResidentRecovery::Queued { .. }
+                | ResidentRecovery::AbortedRunning {
+                    queued_after: true,
+                    ..
+                }
+        );
+        let team = self.team_for(root);
+        let notify = Arc::new(Notify::new());
+        {
+            let mut state = team.lock();
+            state.residents.insert(
+                recovered.claim.actor_id,
+                SlotState {
+                    handle,
+                    agent,
+                    is_main: false,
+                    status: SlotStatus::Idle,
+                    pending,
+                    synth_pending: false,
+                    claim: Some(recovered.claim),
+                    cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
+                    notify: notify.clone(),
+                },
+            );
+        }
+        tokio::spawn(resident_task(
+            team,
+            recovered.claim.actor_id,
+            notify.clone(),
+        ));
+        if pending {
             notify.notify_one();
         }
         Ok(())

@@ -20,3 +20,45 @@ that wakes the main agent to synthesize.
   the transient `run_team` join model — the two spawn paths coexist.
 - User input never wakes a resident: residents wake *only* via mail. This is what lets the TUI bind
   all user input to the main agent (see ADR-0003).
+
+## Crash recovery and fencing (0.34.7)
+
+Each resident uses its already-persisted agent session ID as its stable actor
+identity. SQLite stores one active/released claim for that identity with a
+monotonic `ActorEpoch` and a random per-process `OwnerRunId`. This is a
+transactional incarnation fence, not a time lease: there is no TTL, heartbeat,
+wall-clock expiry, background lease supervisor, distributed lock, consensus,
+or active-active/HA claim.
+
+Startup stays closed to spawn/send/wait while it:
+
+1. increments every active resident epoch, invalidating old capabilities;
+2. aborts old-epoch running work and resident-bound nonterminal admissions;
+3. replays the canonical roster, inbox, and session projections;
+4. recreates the existing resident tasks and schedules only committed work that
+   had not crossed `ResidentWorkStarted`.
+
+`ResidentWorkStarted` is the single durable boundary between queued work and a
+turn that may dispatch a provider, tool, or child. A completed turn advances
+the projected inbox cursor. A crash after that marker aborts the running work
+without retry; mail committed after the marker remains queued for the new
+epoch. Repeating startup recovery may advance the epoch again, but does not
+duplicate terminal events or admission refunds.
+
+Resident event appends, mailbox mutations, child transitions, spawn admission,
+and tool-result commits validate the full actor claim in the same SQLite
+transaction as their canonical mutation. Event-bus publication happens only
+after commit. An old process may finish local computation, but its late result
+returns typed `StaleActorClaim` and cannot advance replay/projection state.
+Releasing a claim atomically aborts nonterminal admissions bound to that exact
+actor/epoch before the tuple becomes reusable, so a budget kill cannot strand
+an operation outside startup recovery.
+Transient work keeps its existing event shapes and performs no actor-claim
+lookup.
+
+This provides deterministic single-process crash recovery and canonical-state
+fencing. It does **not** make filesystem, network, or third-party API effects
+externally exactly once; effects that occurred before takeover cannot be
+reversed. It also does not provide HA/active-active operation, time leases,
+automatic retry of running/in-flight work, or proof of the planned 100-agent
+capacity boundary.

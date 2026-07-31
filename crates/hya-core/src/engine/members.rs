@@ -34,24 +34,6 @@ impl SessionEngine {
         .await
     }
 
-    /// Record a member's status transition (e.g. spawning → running).
-    pub(crate) async fn record_member_status(
-        &self,
-        parent: SessionId,
-        member: MemberId,
-        status: MemberRunStatus,
-    ) -> Result<(), CoreError> {
-        self.emit(
-            parent,
-            Event::MemberStatusChanged {
-                session: parent,
-                member,
-                status,
-            },
-        )
-        .await
-    }
-
     /// Record a member's terminal outcome plus its bounded summary.
     pub(crate) async fn record_member_finished(
         &self,

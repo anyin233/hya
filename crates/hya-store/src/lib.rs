@@ -8,6 +8,7 @@
 mod admission;
 pub mod error;
 mod permission;
+mod resident_claim;
 mod sync;
 
 use std::str::FromStr;
@@ -18,11 +19,13 @@ use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 pub use admission::{
-    AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome, AdmissionRecord,
-    AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome,
+    AdmissionRecord, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
 };
 pub use error::StoreError;
+pub use hya_proto::{ActorClaim, OwnerRunId};
 pub use permission::SavedPermission;
+pub use resident_claim::RecoveredActorClaim;
 
 #[derive(Clone)]
 pub struct SessionStore {
