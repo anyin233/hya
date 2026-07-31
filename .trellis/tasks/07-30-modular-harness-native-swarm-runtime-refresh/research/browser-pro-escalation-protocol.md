@@ -789,3 +789,168 @@ Implementation follow-up evidence:
   Bundle work, or a 100/256 capacity claim. None appears in `0.34.7`.
 - Full workspace and remote-CI evidence remains a delivery gate and is not
   implied by this focused proof.
+
+### `CONSULT-2026-07-31-PTY-CONTINUOUS-DRAIN-11`
+
+This records the MacBook Air coordinator's bounded Browser/Pro audit after
+draft-PR CI run `30643007465` failed twice in the byte-identical TypeScript PTY
+smoke fixture. The audit authorizes only a test-local continuous pipe-drain
+repair for release `0.34.7`; it does not reopen product scope or authorize a
+blind rerun.
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-CONTINUOUS-DRAIN-11
+packet_id: not supplied to fuji1
+packet_revision: 0.34.7 PTY child-stream backpressure and bounded-diagnostics audit
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: not restated in coordinator delivery
+url_access_classification: existing MacBook Air Browser/Pro consultation; no URL copied or inferred
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: not restated in coordinator delivery
+question_summary: determine the smallest deterministic repair for two 80-column PTY observation timeouts that drifted between root-frame startup and a later permission render while the fixture source remained unchanged
+pro_conclusion: continuously drain every already-piped child stream from spawn to EOF with one reader, retain only a byte-bounded tail, and make the server readiness reader keep draining after detecting a marker across chunk boundaries
+macbook_air_ruling: adopt exactly one test-only repair; first prove real stderr backpressure prevents a child from reaching stdout DONE, then add the smallest local drain/tail helper and wire server stdout/stderr plus recovery/main TUI stderr without changing product behavior, waits, retries, concurrency, or ignored stdout
+ruling_scope: release 0.34.7 CI repair only
+permitted_next_action: deterministic RED/GREEN for drains_child_stderr_while_waiting_for_stdout_marker; bounded stream diagnostics; existing TUI and full release gates; a new atomic follow-up commit; one fresh full CI run for the new SHA
+forbidden_next_action: product/Rust/workflow/dependency/lockfile/version/changelog change, timeout or sleep increase, retry/repeated input, assertion weakening, test serialization change, generic process supervisor, unbounded log collection, multiple readers, blind rerun, amend of 6f3402e, or any 0.34.8 work
+required_verification: expected behavioral RED rather than missing-helper RED; focused GREEN; typecheck/build; PTY 4/4; TUI 44/44; Rust fmt/clippy/test/build; executable and zero-INET gates; exact diff/accounting; new-SHA remote CI fully green
+remaining_owner_gates: any event-applied/focus-changed sidechannel if drains prove backend event delivery without UI observation; every 0.34.8+ stage
+head_sha_and_relevant_delta_at_ruling: 6f3402e10cd10c87a5547426df89075b2e18f1ba; clean isolated branch/worktree and PR #24; PTY fixture blob 1628cedcd840187ac22493a02b7574a658f35e30 matches green 0.34.6; only TUI package version changed
+follow_up_of: CONSULT-2026-07-31-RESIDENT-FENCING-10 and the earlier PTY harness consultation
+supersedes: the freeze on PTY edits only for this exact continuous-drain experiment; no other 0.34.7 or later scope changes
+final_disposition_and_resumption_decision: perform one bounded test-only RED/GREEN and deliver it as a separate commit; if fresh CI still fails, stop with unique phase/frame/four-tail evidence and return to Mac Browser/Pro
+```
+
+Determination-level evidence at resumption:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| The failures establish a 0.34.7 product regression | `rejected`, `source-verified` | Attempts 1 and 2 failed different 80-column observation points while both 140-column cases passed; the PTY source blob is identical to green `0.34.6`, and `0.34.7` changes only the TUI package version. |
+| Already-piped child streams may remain unread | `Pro-advised-pending-verification` | Current server, recovery PTY, and main PTY stderr are `pipe` streams with no reader. The required regression must independently demonstrate real child backpressure before this determination becomes experimental evidence. |
+| A successful new CI run alone validates the repair | `rejected` | The behavioral RED, bounded GREEN, local TUI/workspace/zero-INET gates, exact diff, and fresh-SHA full remote run all remain required. |
+
+#### Controlling correction to `CONSULT-2026-07-31-PTY-CONTINUOUS-DRAIN-11`
+
+The MacBook Air coordinator returned a second Browser/Pro ruling after the
+bounded experiment contradicted the original causal premise. This correction
+supersedes the requested subprocess/backpressure RED while preserving the
+test-harness lifecycle repair as an unproven CI-flake mitigation.
+
+```text
+correction_received_by_fuji1_date_utc: 2026-07-31
+withdrawn_claim: OS pipe backpressure was reproduced or established as the cause of either CI timeout
+source_experiment_correction: an unread Bun parent stderr JS stream still allowed 4 MiB process.stderr output and 64 MiB Bun FileSink output to reach stdout DONE; low-level fd2/node:fs attempts produced EAGAIN or sandbox errors rather than the required blocked-child behavior
+corrected_macbook_air_ruling: do not expand child payloads or use fd2/EAGAIN/poll/IPC; validate only one-reader continuous consumption, cross-chunk readiness, byte-bounded tail retention, EOF/cancel settlement, spawn/cleanup wiring, and diagnostics
+corrected_red: an injected ReadableStream splits a readiness marker across chunks, resolves readiness before later data, emits more than 64 KiB ending in a sentinel, and proves the same reader continues through EOF with a <=64 KiB byte tail and one getReader acquisition
+claim_boundary: the change is a test-harness lifecycle, bounded-buffer, and diagnostics repair; its effect on the PTY CI flake is pending a fresh full run and is not a proven root-cause fix
+forbidden_after_correction: subprocess backpressure experiment, larger payload, node:fs/fd2/EAGAIN/poll, IPC/handshake, product sidechannel, timeout/retry/concurrency change, or claim of established causality
+```
+
+Corrected determination status:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Unread Bun stderr reproduced a blocked child | `rejected`, `experimentally-verified` | The accepted 4–64 MiB experiments reached stdout `DONE`; empty captured tails did not satisfy the proposed behavioral RED. Low-level write errors were fixture failures, not evidence of a blocked child. |
+| A single reader can resolve readiness and continue bounded draining | `Pro-advised-pending-verification` | This is now the sole deterministic helper contract to prove with an injected `ReadableStream`; it makes no OS-pipe or CI-root-cause claim. |
+| Continuous drain fixes the historical PTY flake | `benchmark-unconfirmed` | Only a new-SHA full CI run may provide evidence for this fixture-lifecycle mitigation; a failure returns unique phase/frame/tails to Mac Browser without an automatic rerun. |
+
+### `CONSULT-2026-07-31-PTY-EVENT-ORDER-12`
+
+The MacBook Air coordinator returned a narrower Browser/Pro audit after the
+corrected one-reader drain contract passed but the same local focused run still
+timed out at the 80-column `grandchild-permission-in-main` render. The drain
+experiment is retained only as rejected working evidence. Product order may
+change only if one exact causal diagnostic proves that Escape replies to a
+newly pending permission before its first transcript render.
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-EVENT-ORDER-12
+packet_revision: 0.34.7 PTY permission first-render versus Escape ordering audit
+received_by_fuji1_date_utc: 2026-07-31
+requested_selection: ChatGPT Pro Model
+question_summary: distinguish a missed permission render from Escape propagating into the newly mounted permission prompt before its first visible frame
+pro_conclusion: lock the exact pending permission ID and request/output cursors before Escape, then observe transcript-first-render, the existing permission-reply POST, and pending-list disappearance together inside the existing poll budget
+macbook_air_ruling: run this causal diagnostic exactly once before any product edit; only ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT authorizes the two narrowly ordered Escape handlers in the existing session route
+ruling_scope: release 0.34.7 PTY repair only
+permitted_next_action: test-only causal probe using the existing proxy request log, transcript, permission.list API, and waitFor poll seam; conditional minimal session-route ordering fix; removal of all disproven drain code before final verification
+forbidden_next_action: product edit before exact confirmation, sidechannel, public API/Event, new timeout/sleep/retry, repeated Escape, assertion weakening, concurrency/workflow/dependency/lock/version/changelog change, generic key framework, amend, or 0.34.8 work
+required_red: permission reply POST or disappearance of locked pending ID P is observed while the transcript since the locked cursor has never contained Permission required; emit ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT with P, matching requests, callsite/phase, and last frame
+disproof_condition: the original wait times out with no matching reply and P still pending; stop without product changes or another run
+conditional_green: in the high-priority observation Escape handler, clear pending if needed, consume, then focus Main; in the fallback handler, clear pending if needed, preventDefault and stopPropagation, then focus Main
+final_cleanup: remove startBoundedDrain, its helper test, drain wiring/tails/cleanup changes, and restore original server readiness; retain only causal regression evidence, minimal diagnostics, any proven product ordering fix, and this ledger
+head_sha_and_relevant_delta_at_ruling: 6f3402e10cd10c87a5547426df89075b2e18f1ba; no repair commit/push/CI; three authorized dirty files only
+final_disposition_and_resumption_decision: exact causal RED gates every product edit; a non-matching failure freezes the branch for another Mac Browser audit
+```
+
+Determination status before the one permitted focused run:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Continuous draining fixes the 80-column timeout | `rejected`, `experimentally-verified` | The pure helper contract passed, but the local focused suite still failed at `grandchild-permission-in-main/80`; 140 columns passed and all four drained tails were empty. |
+| Escape reaches the permission prompt before its first frame | `Pro-advised-pending-verification` | This is a causal hypothesis, not a source fact. It becomes actionable only through the exact locked-P/reply/render RED above. |
+| Reordering Escape is currently authorized | `rejected` | No product edit is permitted until the exact diagnostic fires. |
+
+### `CONSULT-2026-07-31-PTY-TRANSCRIPT-ORACLE-13`
+
+The MacBook Air coordinator returned a Browser/Pro transcript-oracle audit
+after the single event-order run passed the locked-permission seam at 80
+columns but failed earlier at `m62d1 Main focus` at 140 columns. No product
+change is authorized. The existing timeout is treated as an integration RED
+against a test oracle that waited for an already-present draft to be emitted
+again before sending the input marker that could causally prove Main focus.
+
+```text
+consultation_id: CONSULT-2026-07-31-PTY-TRANSCRIPT-ORACLE-13
+packet_revision: 0.34.7 PTY confirmMainInput transcript-oracle audit
+received_by_fuji1_date_utc: 2026-07-31
+requested_selection: ChatGPT Pro Model
+question_summary: determine whether confirmMainInput blocks on a stale transcript oracle before sending the existing marker that proves focus and input delivery
+pro_conclusion: preserve one semantic Escape write/flush, remove the two pre-marker waits for rootDraft re-emission, immediately write the existing marker once, and require marker plus rootDraft together in the transcript delta
+macbook_air_ruling: modify only confirmMainInput and run the current five-test focused PTY file exactly once; only an all-green result permits cleanup and release verification
+ruling_scope: release 0.34.7 PTY test oracle only; no product change
+permitted_next_action: one confirmMainInput diagnostic edit; one focused run; on all-green only, remove all bounded-drain code, retain the oracle and locked-P regressions, run complete release gates, commit/push once, and await one fresh CI run
+forbidden_next_action: product/API/Event/key-order change, new timeout/sleep/retry, repeated Escape or marker, assertion weakening, screen emulator, dependency/concurrency/workflow/lock/version/changelog edit, amend, blind CI rerun, or 0.34.8 work
+success_condition: both widths complete and the transcript delta after one Escape plus the existing marker contains both marker and rootDraft; the locked-P permission check also remains green
+freeze_conditions: marker absent; marker present but rootDraft absent; any typed permission-order outcome; or any non-green focused result
+final_cleanup_if_green: remove startBoundedDrain, helper contract test, stream drain wiring/tails/cleanup, and restore original server readiness reader; preserve confirmMainInput oracle, locked-P regression, concise callsite/phase/last-frame diagnostics, and Trellis evidence
+head_sha_and_relevant_delta_at_ruling: 6f3402e10cd10c87a5547426df89075b2e18f1ba; no product edit, commit, push, or new CI; three authorized dirty files
+final_disposition_and_resumption_decision: the one focused run is the sole gate to cleanup and full verification; any failure freezes without a second run
+```
+
+The prior event-order run is classified as follows:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| Escape consumed the pending permission before first render at 80 columns | `rejected`, `experimentally-verified` | The 80-column case passed the locked-P check: `Permission required` appeared while P remained pending, so `ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT` did not fire. |
+| The 140-column `m62d1 Main focus` timeout proves focus/input failure | `Pro-advised-pending-verification` | The marker had not yet been sent because two pre-marker waits required rootDraft to reappear. The revised oracle must send the existing marker before classifying focus. |
+| Any TUI product change is authorized | `rejected` | This consultation is strictly test-only. |
+
+Final evidence and disposition:
+
+- `experimentally-verified`: the single permitted focused command
+  `CI=true bun test test/pty-smoke.test.ts` passed all five intermediate tests:
+  semantic-input flush, bounded-drain contract, basic PTY, 80-column workspace,
+  and 140-column workspace. The 80-column case completed in 14.893 seconds and
+  140 columns in 11.877 seconds. The revised `confirmMainInput` therefore
+  supplied its existing marker before classification and observed both marker
+  and `rootDraft`; the locked-P permission regression also remained green.
+- `rejected`, `experimentally-verified`: bounded draining is not part of the
+  repair. `startBoundedDrain`, its contract test, all stream wiring/tails, and
+  its extra cleanup were removed. Both server launch sites use the exact
+  original single readiness reader again.
+- `source-verified`: the final code diff contains no product file. It retains
+  only the `confirmMainInput` transcript oracle, the locked-P
+  reply-versus-first-render check, and narrow callsite/phase/last-frame
+  diagnostics in `pty-smoke.test.ts`, plus this task evidence.
+- `experimentally-verified`: TUI typecheck/build passed and the one permitted
+  post-cleanup full `CI=true bun test` run passed 44/44. Rust fmt, clippy,
+  workspace tests, workspace/bins and locked launcher builds passed; `hya`,
+  `hya-backend`, and `hya-ts` report `0.34.7`; the strace gate reports
+  `OK: zero inet sockets`. The first sandboxed workspace-test attempt could not
+  bind the existing OAuth loopback fixture (`Operation not permitted`); the
+  identical command passed outside the restricted sandbox.
+- `pending`: exact staging, the new follow-up commit, push, and one fresh-SHA
+  remote CI run remain release gates. No CI rerun is authorized on failure.

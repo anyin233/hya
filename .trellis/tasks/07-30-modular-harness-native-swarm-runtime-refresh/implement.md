@@ -1683,3 +1683,173 @@ Before a future implementation/check agent starts:
       second authority;
 - [ ] keep all development and verification on the `fuji1 remote worker` and
       perform no mirror/synchronizer action.
+
+## 17. `0.34.7` bounded PTY continuous-drain CI repair
+
+Draft-PR run `30643007465` failed its unchanged 80-column PTY fixture twice:
+attempt 1 timed out after 58.439 seconds at `grandchild permission in Main`,
+while attempt 2 timed out after 51.063 seconds at the earlier
+`root session frame`. Both 140-column cases passed and the fixture blob
+`1628cedcd840187ac22493a02b7574a658f35e30` is identical to green `0.34.6`.
+The MacBook Air Browser/Pro ruling in
+`CONSULT-2026-07-31-PTY-CONTINUOUS-DRAIN-11` authorizes exactly one separate,
+test-only repair without amending feature commit `6f3402e`.
+
+Execution order:
+
+1. Add `drains_child_stderr_while_waiting_for_stdout_marker` beside the narrow
+   PTY input/process helpers. Use a real Bun child that writes a fixed large
+   stderr payload ending in a sentinel before stdout `DONE`; prove waiting on
+   stdout alone remains blocked because stderr is not drained.
+2. Add one test-local, single-reader continuous drain with a 64 KiB byte-bounded
+   tail. The server stdout reader must detect readiness incrementally across
+   chunk boundaries and keep draining with that same reader.
+3. Start drains immediately for server stderr, recovery-PTY stderr, and
+   main-PTY stderr. Keep TUI stdout ignored, semantic input write/flush,
+   wait durations, assertions, widths, and concurrency unchanged.
+4. Bound cleanup and failure diagnostics: wait/callsite, monotonic phase trace,
+   last PTY frame, and applicable stream tails. Do not add a process framework,
+   product sidechannel, endpoint, retry, dependency, or version/changelog edit.
+5. Run focused RED/GREEN, TUI typecheck/build/PTTY/full tests, every existing
+   Rust/executable/zero-INET release gate, exact diff/accounting, then commit and
+   push one follow-up change and require one fresh full remote run to pass.
+
+Evidence state before RED: `Pro-advised-pending-verification`. A further
+event-applied/focus-changed test sidechannel is explicitly unauthorized unless
+the new CI trace proves the backend event was emitted, every pipe drained, and
+the corresponding UI state/render was still absent.
+
+### 17.1 Controlling corrected RED and claim boundary
+
+The second MacBook Air Browser/Pro ruling withdraws the subprocess
+backpressure/root-cause premise above. Experiments from 4 MiB
+`process.stderr.write` through 64 MiB Bun FileSink output reached stdout
+`DONE` while the parent stderr JS stream remained unread; low-level fd writes
+ended in `EAGAIN`/environment errors instead of a blocked-child RED. No larger
+payload, fd2 retry/polling, IPC, or subprocess experiment is permitted.
+
+The corrected one-slice loop supersedes steps 1–2 above:
+
+1. RED a pure injected `ReadableStream<Uint8Array>` contract for local
+   `startBoundedDrain(stream, readinessMatcher?)`: split readiness across two
+   chunks, resolve it before later chunks, consume more than 64 KiB through
+   EOF, retain a byte-bounded tail ending in a sentinel, and acquire exactly
+   one reader. The pre-GREEN stdout-only/no-tail behavior must fail a behavioral
+   assertion, not compilation.
+2. GREEN the smallest one-reader drain with streaming UTF-8 decoding,
+   cross-chunk readiness, continued EOF consumption, 64 KiB byte tail, and
+   explicit cancel/settlement. Wire only already-piped server stdout/stderr and
+   recovery/main TUI stderr immediately after spawn.
+3. Add bounded diagnostics at the two observed seams only:
+   `root-session-frame/80` and `grandchild-permission-in-main/80` (with the
+   actual width substituted by the case). Include monotonic phase, last frame,
+   relevant bounded stream tails, and child state without changing waits,
+   assertions, retries, input, or concurrency.
+
+The delivery claim is only “test-harness lifecycle, byte-bounded buffering,
+and diagnostics repair.” Whether it mitigates the CI flake remains
+`benchmark-unconfirmed` until the single fresh-SHA full CI run succeeds.
+
+### 17.2 Causal permission-render ordering gate
+
+The corrected drain helper passed its deterministic contract, but the one
+local focused integration run remained red at
+`grandchild-permission-in-main/80` while the 140-column case passed. Therefore
+the drain work is disproven as a sufficient repair and must not survive the
+final commit.
+
+The controlling `CONSULT-2026-07-31-PTY-EVENT-ORDER-12` allows one diagnostic
+run before any product edit:
+
+1. Immediately before the existing Escape, fetch and lock pending permission
+   ID `P`, the proxy request-log cursor, and transcript output cursor.
+2. After the existing semantic write/flush, use the existing `waitFor` budget
+   to compare first transcript occurrence of `Permission required`, the real
+   `POST /permission/{P}/reply`, and whether `permission.list` still contains
+   `P`.
+3. Only a reply/disappearance while no prompt has ever appeared emits the exact
+   RED `ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT`. A timeout with no reply and
+   `P` still present disproves the hypothesis and freezes product code.
+4. Only after the exact RED, reorder the two existing observation-Escape
+   handlers so propagation is consumed/prevented before `focusMain`. Do not
+   change any other key, focus, permission, SSE, layout, or wait behavior.
+5. On GREEN, remove every bounded-drain helper/test/wiring/tail/cleanup change
+   and restore the original single server-readiness reader. Retain the causal
+   regression, narrow callsite/phase/last-frame diagnostics, the minimal proven
+   product fix, and Trellis evidence only.
+
+No second focused run, full gate, product edit, commit, push, or CI is allowed
+unless the prior conditional gate succeeds exactly as specified.
+
+### 17.3 `confirmMainInput` transcript-oracle gate
+
+The one event-order run did not emit the authorized permission-order RED: its
+80-column case completed normally, while 140 columns failed earlier at
+`m62d1 Main focus`. `CONSULT-2026-07-31-PTY-TRANSCRIPT-ORACLE-13` identifies
+the integration RED as an invalid pre-marker oracle in `confirmMainInput`.
+
+Execute exactly once:
+
+1. Keep one `writeSemanticInput(Escape)` and its awaited flush inside
+   `confirmMainInput`; bypass its two calls that wait for an already-existing
+   `rootDraft` to be re-emitted before sending input.
+2. Immediately send the existing caller-supplied marker once through the same
+   semantic write/flush helper, then use the unchanged wait budget to require
+   both marker and `rootDraft` in the transcript delta since `start`.
+3. Do not alter `focusMain`, any other `waitForMain` callsite, product code,
+   wait duration, sleep, retry, key count, marker, width, or concurrency.
+4. Run the current five-test focused file once. Marker absence, draft absence,
+   a typed permission-order failure, or any other non-green result freezes the
+   branch without another run. Only all-green permits final cleanup.
+5. If green, remove every bounded-drain experiment by patch while preserving
+   this oracle correction, the locked-P reply/render regression, concise
+   callsite/phase/last-frame diagnostics, and the full consultation record.
+   Then run one full TUI suite plus every required Rust/executable/zero-INET
+   gate before an exact atomic test commit and one fresh-SHA CI run.
+
+#### 17.3.1 Local completion evidence
+
+The one permitted intermediate focused run passed 5/5:
+
+```text
+semantic_input_flushes_before_next_action                         pass
+bounded drain continues after readiness with one reader          pass
+Linux PTY renders home, opens a session, and restores terminal   pass
+Linux PTY 80-column subagent workspace                            pass (14.893s)
+Linux PTY 140-column subagent workspace                           pass (11.877s)
+```
+
+This confirmed the transcript-oracle correction without authorizing or
+requiring a product change. Cleanup then removed the bounded-drain helper,
+contract test, stream wiring/tails, and extra cleanup, and restored both server
+readiness paths to the exact original single reader. No standalone focused run
+was made after cleanup, as required.
+
+Final local gates:
+
+```sh
+cd packages/hya-tui-ts
+bun run typecheck                         # pass
+bun run build                             # pass
+CI=true bun test                          # pass, 44/44
+
+cd ../..
+cargo fmt --all --check                   # pass
+cargo clippy --workspace --all-targets -- -D warnings  # pass
+cargo test --workspace                    # pass outside restricted sandbox
+cargo build --workspace --bins            # pass
+cargo build --workspace                   # pass
+cargo build --locked -p hya -p hya-backend -p hya-ts --bins  # pass
+target/debug/hya --version                # hya 0.34.7
+target/debug/hya-backend --version        # hya-backend 0.34.7
+target/debug/hya-ts --version             # hya-ts 0.34.7
+bash scripts/verify-no-http.sh             # OK: zero inet sockets
+```
+
+The first sandboxed workspace-test attempt failed only because the existing
+OAuth callback fixture could not bind loopback (`Operation not permitted`);
+the identical full command passed outside that sandbox. `git diff --check`
+passes. The final code scope is `pty-smoke.test.ts` plus the two existing
+Trellis evidence files; there is no product, dependency, lock, workflow,
+version, or changelog diff. Exact staging, one semantic follow-up commit, push,
+and one fresh full remote CI run remain pending.
