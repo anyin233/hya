@@ -8,9 +8,9 @@ use tokio::sync::mpsc;
 use crate::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
-use crate::messages::{HookName, HookPosture, HostInfo, PROTOCOL_VERSION};
+use crate::messages::{HookName, HookPosture, HostInfo};
 
-use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn};
+use super::{EVENT_CHANNEL_CAP, LiveClient, PluginConn, canonical_initialize, validate_initialize};
 
 pub(super) async fn connect_one(
     spec: PluginSpec,
@@ -23,12 +23,8 @@ pub(super) async fn connect_one(
     let spawn_env = (!spec.env.is_empty()).then_some(&spec.env);
     let (client, guard) = PluginClient::spawn(&spec.command, spawn_env)?;
     let init = client.initialize(host.clone()).await?;
-    if init.protocol_version != PROTOCOL_VERSION {
-        return Err(PluginError::ProtocolMismatch {
-            expected: PROTOCOL_VERSION,
-            got: init.protocol_version,
-        });
-    }
+    validate_initialize(&spec.id, &init)?;
+    let canonical_declaration = Arc::<[u8]>::from(canonical_initialize(&init)?);
     let mut hooks = HashMap::new();
     for registration in &init.hooks {
         let default = registration.name.default_posture();
@@ -45,6 +41,7 @@ pub(super) async fn connect_one(
         hooks,
         tools: init.tools,
         workspace_adapters: init.workspace_adapters,
+        canonical_declaration,
         timeout,
         command: spec.command,
         env: spec.env,
@@ -55,6 +52,7 @@ pub(super) async fn connect_one(
         })),
         restarts: tokio::sync::Mutex::new(Vec::new()),
         disabled: std::sync::atomic::AtomicBool::new(false),
+        declaration_drift: std::sync::atomic::AtomicBool::new(false),
         event_tx,
         event_drops: std::sync::atomic::AtomicU64::new(0),
     });

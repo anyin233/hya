@@ -3,10 +3,10 @@
 ## 1. Planning status and evidence anchor
 
 This document is a **target design**, not an implementation claim. Release
-`0.34.4` is committed/pushed at
-`709abafb81ba0f94656254d3ecb51b42e051a89d`; remote CI run `30609417298` is
-green. The user has now authorized only the `0.34.5` immutable runtime
-generation/TurnBinding/atomic publication slice.
+`0.34.5` is committed/pushed at
+`95f4fe20b3750d376023384d869a52da1e84201f`; remote CI run `30612919698` is
+green. The user has now authorized only the `0.34.6` MCP/plugin
+desired-observed-effective reconciliation and stable-source slice.
 Every later patch and every production/owner gate remains unauthorized until
 its recorded entry conditions are met.
 
@@ -22,7 +22,7 @@ its recorded entry conditions are met.
   is rebased to that newer implementation base, while dirty `main` remains at
   the audit commit.
 - `[workspace.package].version` at the audit anchor is `0.34.2`; delivered
-  releases `0.34.3` and `0.34.4` are in the isolated branch, and `0.34.5` is
+  releases `0.34.3` through `0.34.5` are in the isolated branch, and `0.34.6` is
   the active release target.
 - Before this task directory was created, `git status --porcelain` contained
   exactly 19 user-owned entries. They are enumerated in
@@ -64,7 +64,7 @@ This section overrides any broader exploratory target below:
   provenance. A/B/C execution, context transfer, and resident idle/turn
   semantics still require explicit owner selection;
 - the active patch/release sequence is authoritative in
-  `research/next-step-roadmap.md`; only `0.34.5` is active now.
+  `research/next-step-roadmap.md`; only `0.34.6` is active now.
 
 ### 1.2 Controlling native-only cutover ruling
 
@@ -90,7 +90,7 @@ deterministically at build time, embedded read-only with a digest-bound index,
 and merged with installed packages into one immutable generation. The
 authoritative patch order is in section 19 and
 `research/next-step-roadmap.md`. That ruling did not broaden the then-active
-`0.34.3` slice and does not enter the active `0.34.5` boundary.
+`0.34.3` slice and does not broaden the active `0.34.6` boundary.
 
 ## 2. Five target gaps
 
@@ -99,7 +99,7 @@ authoritative patch order is in section 19 and
 | Modular coding harness | **Implementation:** `hya-app` composes mutable/process-specific managers directly; discovery has startup-static, spawn-live, and round-live visibility regimes. | Deep authorities own generation, binding, admission, actors/effects, and update; existing `PermissionPlane` remains the permission boundary. Discovery/process managers become adapters. |
 | Native 100+ subagent swarm | **Implementation:** 128 limits only depth-greater-than-zero provider streams; spawn intake and task-per-request fan-out are unbounded; a new background transient session is allocated before `run_team` reserve; resident spawn bypasses transient reserve/depth accounting; resident execution is not rehydrated after restart. | One durable bounded authority admits before every allocation and demonstrates 100 active subagent work items, 156 durably non-active items, typed overload at item 257, and restart/fault recovery. |
 | Per-agent Markdown/JS/Rust `AgentBundle` | **Implementation:** `AgentSpec` lacks bundle/catalog identity; parsed agent permissions/options and skill `allowed-tools`/`model` do not reach an enforced runtime view; plugin subprocesses are ordinary same-UID children. | One flat Harness-owned catalog manifest defines identity/extensions/resources/agents; agent views and permission overlays only narrow current Harness policy; executable code is explicitly trusted and not malicious-code isolated. |
-| Atomic runtime registry refresh | **Implementation through `0.34.5`:** `RuntimeRegistry` is the single effective snapshot owner; a turn retains one `TurnBinding` for prompt skills, schemas, resolution, and dispatch; deferred MCP publishes one complete candidate. Plugin restart and Compat MCP still lack desired/observed/effective reconciliation. | `0.34.6` adds reconciliation and source-incarnation semantics without replacing the `0.34.5` publisher/binding authority. |
+| Atomic runtime registry refresh | **Implementation through `0.34.5`:** `RuntimeRegistry` is the single effective snapshot owner; a turn retains one `TurnBinding` for prompt skills, schemas, resolution, and dispatch; deferred MCP publishes one complete candidate. | `0.34.6` adds dynamic MCP desired/observed/effective reconciliation and plugin startup/crash re-handshake consistency for tool exports plus RPC binding, without replacing the `0.34.5` publisher/binding authority or claiming plugin hot reload. |
 | Secure Rust self-update | **Implementation:** `install.sh` already stages, smokes, backs up, and restores; release CI already emits hashes/provenance. | A separately protected verifier/activator adds canonical signatures, anti-replay/anti-rollback state, immutable runtime generations, crash-consistent activation, and forward-only rollback epochs while retaining the installer as break-glass recovery. |
 
 ## 3. Terms and non-negotiable invariants
@@ -330,10 +330,62 @@ No public configuration, desired/observed/effective resource state, plugin
 respawn declaration, namespace migration, Bundle behavior, or permission
 reinterpretation is introduced in this boundary.
 
-Filesystem changes, process handshakes, and package downloads create
-candidates. They never mutate an effective generation in place. Change bursts
-are debounced/coalesced into one candidate, but every accepted activation is
-durably journaled.
+### 5.1.2 Active `0.34.6` reconciliation boundary
+
+`0.34.6` consumes the `0.34.5` publisher without creating another effective
+authority:
+
+```text
+validated desired MCP/plugin set
+  -> app RuntimeReconciler { revision, per-source ticket, observed outcome }
+  -> I/O outside reconciler state lock
+  -> complete PreparedSource set for the current revision
+  -> RuntimeRegistry current-snapshot candidate + atomic publication
+  -> RuntimeSnapshot { source ID, declaration digest, exports/resources, owner }
+  -> TurnBinding resolve/dispatch
+```
+
+- `SourceId = (mcp|plugin, configured_id)` is canonical and independent of PID,
+  task completion order, or generation. A source export retains its declared ID
+  beside the compatible external canonical name and aliases.
+- Desired is the latest validated declarative set. Observed records the desired
+  revision/ticket and `connecting|ready|failed|removed`, optional declaration
+  digest, and typed error. Effective is composed only from the active
+  `RuntimeRegistry` source manifest/generation; the reconciler caches no
+  effective tool set.
+- A stale success never publishes and its unpublished owner is released after
+  the state lock. A stale failure is discarded. A current failure marks the
+  atomic attempt failed, releases every staged owner, and keeps the previous
+  generation and view.
+- Removal/disable is safety-priority: it publishes a drop-only complete
+  candidate before unrelated additions are prepared. Old bindings retain their
+  old source owner; new bindings immediately lack the removed source.
+- Candidate publication always begins from the registry's current snapshot in
+  its single publication critical section. This acts as the required
+  current-base closure and cannot overwrite an intervening skill refresh.
+- Candidate validation rejects duplicate sources, same-source declared export
+  IDs, configured/handshake plugin ID mismatch, canonical collisions, alias
+  collisions, and alias/canonical cross-collisions before generation
+  allocation. External names remain unchanged and insertion order never wins.
+- Plugin consistency covers tool exports plus their existing RPC binding.
+  Respawn canonicalizes and compares the complete initialize declaration,
+  including plugin metadata, tools, command/permission hooks, and workspace
+  adapters. Drift closes the replacement and subsequent calls fail closed.
+- Existing hooks/commands/permission callbacks remain on `PluginHost` and the
+  existing `PermissionPlane`. There is no dynamic hook plane, plugin watcher,
+  plugin hot-reload claim, new permission framework, or sandbox.
+- Compat MCP routes receive only an app-supplied `McpControl` trait. The server
+  owns no desired/status/effective map; its status is composed on demand from
+  reconciler state and the registry manifest.
+- MCP/plugin startup uses existing configuration. No user-facing field or
+  command is introduced, so updated configuration documentation is the runnable
+  example and no new skill is warranted.
+
+In the later target architecture, filesystem changes, process handshakes, and
+package downloads create candidates rather than mutating an effective
+generation in place; a later owning stage may debounce bursts and durably
+journal activation. `0.34.6` adds no watcher, debounce layer, or activation
+journal.
 
 ### 5.2 `AgentBundle` graph
 
@@ -897,7 +949,7 @@ limits must not contaminate the internal harness result.
 | Provider classes | 100 general streams plus pressure against 28 root/control/recovery reservations | Never exceeds 128; general work cannot consume reserved slots; control traffic remains bounded |
 | Histories/storage | 1k, 10k, and 100k event histories; SQLite contention, busy timeout, bounded disk-full, checkpoint off/on only if introduced | Report measured replay/write constraint; no speculative storage replacement |
 | Restart | Kill at exact 100-active/156-queued state and at every admission/activation/operation transition | Same accepted set converges; no duplicate promotion, actor, lease, cursor advance, or committed journaled effect |
-| Refresh churn | Change skills/agents/AGENTS, static/deferred and Compat MCP, plugin restart/add/remove, invalid/partial candidates during provider rounds and dispatch | One attempt keeps one binding; next attempt sees only a complete verified generation |
+| Refresh churn | Change skills/agents/AGENTS, static/deferred and Compat MCP, plugin crash/re-handshake, invalid/partial candidates during provider rounds and dispatch | One attempt keeps one binding; next attempt sees only a complete verified generation |
 | Permission dispatch | Harness allow/ask/deny, bundle narrowing overlays, direct dispatch, unavailable policy, and concurrent binding change | Bundle/plugin input never expands Harness policy; current `PermissionPlane` failure propagates closed |
 | Actor/effect | Delayed messages/results from old epochs; idempotent/reversible/reconcilable/non-idempotent outcomes | Stale writes rejected; uncertain remote outcome is visible and not blindly retried |
 | Bundles | Build-time preparation, unknown-field/reference rejection, stable-ID/bundle-ID collision, namespace/alias conflict, missing/ambiguous resources, `none/basic/full`, `can_spawn`, hook qualification, package/runner crash/timeout/cancellation/resource pressure | `0.34.8` atomically cuts built-ins to one native catalog and removes old loaders; `0.34.9` packages without external execution; `0.34.10`/`0.34.11` reuse SessionEngine/current PermissionPlane for external transient/resident execution; trusted same-UID code is never described as malicious-code isolated |

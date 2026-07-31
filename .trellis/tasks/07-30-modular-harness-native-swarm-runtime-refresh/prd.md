@@ -25,9 +25,9 @@ implementation/remote base.
 
 ### Current-cycle owner scope
 
-Release `0.34.4` is committed/pushed at
-`709abafb81ba0f94656254d3ecb51b42e051a89d` with green draft-PR CI run
-`30609417298`. The owner has now authorized only release `0.34.5`. The patch sequence does not
+Release `0.34.5` is committed/pushed at
+`95f4fe20b3750d376023384d869a52da1e84201f` with green draft-PR CI run
+`30612919698`. The owner has now authorized only release `0.34.6`. The patch sequence does not
 build or research sandbox/seccomp/container isolation, a capability broker,
 escrow delegation, or an independent `SecurityEpoch`. Explicitly installed
 JS/Rust AgentBundle and plugin code is trusted same-UID extension code; the
@@ -44,7 +44,7 @@ coordinator's sixth-round ruling fixes native-Bundle-only bootstrapping,
 build-time prepared immutable built-ins, and the dependency-ordered patch map
 below. Final external execution semantics, private-key ownership, context
 transfer, and resident idle/turn semantics still require explicit owner
-selection and cannot block or enter `0.34.5`.
+selection and cannot block or enter `0.34.6`.
 
 ### Emergency native-only AgentBundle supersession
 
@@ -68,7 +68,7 @@ packages prepared at build time, embedded read-only, and merged with the
 installed registry into one immutable generation. This avoids both an install
 bootstrap cycle and a temporary old-file detector. The corrected future patch
 sequence is recorded in `research/next-step-roadmap.md`; it is planning-only
-until each preceding release has green remote CI. Only `0.34.5` is active.
+until each preceding release has green remote CI. Only `0.34.6` is active.
 
 ## Product outcomes
 
@@ -349,8 +349,8 @@ not made green by silently redefining the workload.
   build on the `fuji1 remote worker`.
 - Every verified feature/fix slice updates `[workspace.package].version` and the
   newest-only root changelog as required, then commits and pushes atomically.
-  Only the `0.34.5` slice is currently authorized; its immutable-generation
-  scope is fixed by the controlling coordinator ruling and section 5.1.1 of
+  Only the `0.34.6` slice is currently authorized; its reconciliation scope is
+  fixed by the controlling coordinator ruling and section 5.1.2 of
   `design.md`.
 
 ## Non-goals until evidence or prerequisites exist
@@ -379,8 +379,11 @@ not made green by silently redefining the workload.
       every round while the next Turn sees the verified new generation.
 - [ ] Permission tests prove bundle/plugin declarations never broaden Harness
       config/current `PermissionPlane`, including direct dispatch.
-- [ ] Static/deferred and Compat dynamic MCP plus plugin restart declarations
-      converge through one desired/observed/effective binding pipeline.
+- [ ] Static/deferred and Compat dynamic MCP converge through one
+      desired/observed/effective binding pipeline; plugin startup/crash
+      re-handshake preserves consistent tool exports plus their RPC binding
+      and rejects complete-declaration drift without claiming plugin hot
+      add/remove/reload or whole-plugin snapshotting.
 - [ ] Agent permissions/options and skill policy metadata produce an explicit,
       tested effective capability/model view.
 - [ ] Resident and transient work use the same durable bounded admission
@@ -417,7 +420,7 @@ not made green by silently redefining the workload.
 
 ## Planning decisions still requiring an owner
 
-These do not block the active `0.34.5` slice, but their owning phase cannot
+These do not block the active `0.34.6` slice, but their owning phase cannot
 activate until decided:
 
 1. update signing-key custody, threshold/rotation/revocation policy, and

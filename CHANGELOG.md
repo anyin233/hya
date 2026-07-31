@@ -1,11 +1,14 @@
-# 0.34.5
+# 0.34.6
 
-- Pin each admitted assistant or direct-shell turn to one immutable runtime
-  generation across prompt skills, model-visible schemas, and tool dispatch.
-- Build complete tool, skill, and MCP candidates off the active path and
-  publish them with one atomic snapshot replacement; failed and no-op
-  candidates preserve the current generation.
-- Record the lightweight generation identity on each assistant message while
-  keeping registry contents out of the event log and projection.
-- Route deferred MCP tools through the single runtime publisher so candidate
-  builders can no longer mutate an engine-visible registry.
+- Reconcile startup, deferred, and Compat-controlled MCP sources through one
+  desired/observed coordinator and publish only complete validated runtime
+  snapshots.
+- Preserve the prior effective generation on failed handshakes or collisions,
+  reject stale async results, and make removals visible atomically to the next
+  turn while retained turns keep their old source bindings.
+- Give MCP and plugin contributions stable source identities, reject canonical
+  and alias collisions before publication, and retain source clients in the
+  immutable runtime snapshot.
+- Validate configured plugin identity and the complete deterministic initialize
+  declaration on respawn; declaration drift closes the new process and fails
+  subsequent calls closed without claiming plugin hot reload.

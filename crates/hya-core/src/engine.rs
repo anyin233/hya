@@ -71,7 +71,7 @@ pub struct AgentSpec {
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
-    runtime: RuntimeRegistry,
+    runtime: Arc<RuntimeRegistry>,
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: SpawnerPlane,
@@ -108,7 +108,7 @@ impl SessionEngine {
         Self {
             store,
             providers,
-            runtime: RuntimeRegistry::from_snapshot(tools.snapshot()),
+            runtime: Arc::new(RuntimeRegistry::from_snapshot(tools.snapshot())),
             permission,
             interaction,
             spawner,
@@ -238,6 +238,11 @@ impl SessionEngine {
     #[must_use]
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.runtime.tool_schemas()
+    }
+
+    #[must_use]
+    pub fn runtime_registry(&self) -> Arc<RuntimeRegistry> {
+        self.runtime.clone()
     }
 
     pub fn refresh_runtime(

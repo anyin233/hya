@@ -18,14 +18,17 @@ use hya_store::{AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
-    SpawnMember, SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry, WebSearchConfig,
-    WebSearchPlane,
+    SpawnMember, SpawnRequest, SpawnerPlane, ToolRegistry, WebSearchConfig, WebSearchPlane,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use crate::config;
+use crate::runtime_reconcile::{
+    DesiredSource, PreparedFailure, PreparedResult, RuntimeMcpControl, RuntimeReconciler, SourceId,
+    prepare_desired_source, prepared_plugin_source,
+};
 use crate::{formatter_config, plugins};
 
 pub fn today() -> String {
@@ -553,32 +556,10 @@ fn defer_sideplanes() -> bool {
     }
 }
 
-fn register_initial_mcp_tools(registry: &ToolRegistry, manager: &hya_mcp::McpManager) {
-    for tool in manager.tools() {
-        if let Err(error) = registry.register_with_permission(tool, ToolPermission::Mcp) {
-            eprintln!("hya: skipping MCP tool ({error})");
-        }
-    }
-}
-
-fn register_initial_plugin_tools(registry: &ToolRegistry, host: &hya_plugin::PluginHost) {
-    for tool in host.tools() {
-        if let Err(error) = registry.register(tool) {
-            eprintln!("hya: skipping plugin tool ({error})");
-        }
-    }
-}
-
-fn publish_mcp_tools(
-    engine: &SessionEngine,
-    tools: impl IntoIterator<Item = Arc<dyn hya_tool::Tool>>,
-) -> Result<hya_proto::ConfigGeneration, hya_core::RuntimeRefreshError> {
-    engine.refresh_runtime(move |candidate| {
-        for tool in tools {
-            candidate.register_tool_with_permission(tool, ToolPermission::Mcp)?;
-        }
-        Ok(())
-    })
+#[derive(Clone, Copy)]
+struct EngineBuildOptions {
+    include_global_agents: bool,
+    defer_mcp: bool,
 }
 
 pub async fn build_session_engine(
@@ -593,7 +574,37 @@ pub async fn build_session_engine(
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
     tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
-    hya_mcp::McpManager,
+    Arc<dyn hya_server::McpControl>,
+    Arc<hya_plugin::PluginHost>,
+)> {
+    build_session_engine_with_mcp_defer(
+        store,
+        router,
+        agent,
+        mcp,
+        plugins,
+        tool_config,
+        EngineBuildOptions {
+            include_global_agents,
+            defer_mcp: defer_sideplanes(),
+        },
+    )
+    .await
+}
+
+async fn build_session_engine_with_mcp_defer(
+    store: SessionStore,
+    router: ProviderRouter,
+    agent: &AgentSpec,
+    mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
+    tool_config: (WebSearchConfig, InvocationPolicy),
+    options: EngineBuildOptions,
+) -> anyhow::Result<(
+    Arc<SessionEngine>,
+    tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
+    tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
+    Arc<dyn hya_server::McpControl>,
     Arc<hya_plugin::PluginHost>,
 )> {
     store
@@ -607,19 +618,18 @@ pub async fn build_session_engine(
         registry.remove("websearch");
     }
 
-    // Plugins stay on the synchronous path for now (hooks must be installed before
-    // the engine is sealed). MCP is the unbounded hang — defer by default.
-    let plugin_host = Arc::new(hya_plugin::PluginHost::connect_all(plugins, host_info()).await);
-    register_initial_plugin_tools(&registry, plugin_host.as_ref());
-
-    let defer_mcp = defer_sideplanes() && !mcp.is_empty();
-    let (mcp_manager, deferred_mcp) = if defer_mcp {
-        (hya_mcp::McpManager::pending(&mcp), Some(mcp))
-    } else {
-        let manager = hya_mcp::McpManager::connect_all(mcp).await;
-        register_initial_mcp_tools(&registry, &manager);
-        (manager, None)
-    };
+    // Plugin hooks remain startup-bound. Their tool declarations are prepared
+    // here but become effective only through RuntimeReconciler publication.
+    let plugin_specs = plugins.clone();
+    let (plugin_host, plugin_failures) =
+        hya_plugin::PluginHost::connect_all_observed(plugins, host_info()).await;
+    let plugin_host = Arc::new(plugin_host);
+    let prepared_plugins = plugin_host
+        .prepared_plugins()
+        .into_iter()
+        .map(|plugin| (plugin.id().to_string(), plugin))
+        .collect::<BTreeMap<_, _>>();
+    let defer_mcp = options.defer_mcp && !mcp.is_empty();
     let tools = Arc::new(registry);
 
     let rules = PermissionRules::new(vec![
@@ -655,7 +665,7 @@ pub async fn build_session_engine(
     // `hya-server`; wiring it from here (which depends on both) keeps `hya-tool`
     // free of a `hya-server` dependency.
     let agents = hya_tool::AgentCatalogPlane::new(move |workdir| {
-        hya_server::agent_definitions(workdir, include_global_agents)
+        hya_server::agent_definitions(workdir, options.include_global_agents)
             .into_iter()
             .map(|def| hya_tool::AgentDef {
                 name: def.name,
@@ -678,16 +688,54 @@ pub async fn build_session_engine(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
-    if let Some(mcp) = deferred_mcp {
-        let engine_bg = engine.clone();
-        let manager_bg = mcp_manager.clone();
+    let reconciler = Arc::new(RuntimeReconciler::new(engine.runtime_registry()));
+    let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
+    let plugin_desired = plugin_specs
+        .into_iter()
+        .map(|spec| DesiredSource::plugin(SourceId::plugin(spec.id.clone()), spec))
+        .collect::<Vec<_>>();
+    let mcp_desired = mcp
+        .iter()
+        .map(|(name, config)| DesiredSource::mcp(SourceId::mcp(name.clone()), config.clone()))
+        .collect::<Vec<_>>();
+
+    if defer_mcp {
+        let plugin_plan = reconciler
+            .replace_desired(plugin_desired.clone())
+            .context("plan startup plugin reconciliation")?;
+        let plugin_results =
+            prepared_plugin_results(plugin_plan.sources(), &prepared_plugins, &plugin_failures);
+        if let Err(error) = reconciler.finish_revision(&plugin_plan, plugin_results) {
+            eprintln!("hya: plugin tool reconciliation rejected ({error})");
+        }
+
+        let mut desired = plugin_desired;
+        desired.extend(mcp_desired);
+        let deferred_plan = reconciler
+            .replace_desired(desired)
+            .context("plan deferred MCP reconciliation")?;
+        let control_bg = mcp_control.clone();
         tokio::spawn(async move {
-            manager_bg.connect_all_into(mcp).await;
-            let result = publish_mcp_tools(engine_bg.as_ref(), manager_bg.tools());
-            if let Err(error) = result {
+            if let Err(error) = control_bg.reconcile_plan(deferred_plan).await {
                 eprintln!("hya: MCP runtime refresh rejected ({error})");
             }
         });
+    } else {
+        let mut desired = plugin_desired;
+        desired.extend(mcp_desired);
+        let plan = reconciler
+            .replace_desired(desired)
+            .context("plan startup runtime reconciliation")?;
+        let mut results =
+            prepared_plugin_results(plan.sources(), &prepared_plugins, &plugin_failures);
+        results.extend(
+            prepare_mcp_results(plan.sources())
+                .await
+                .context("prepare startup MCP reconciliation")?,
+        );
+        if let Err(error) = reconciler.finish_revision(&plan, results) {
+            eprintln!("hya: startup runtime reconciliation rejected ({error})");
+        }
     }
     // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
     // before the team supervisor so its bus subscription is live for the first mail.
@@ -696,7 +744,7 @@ pub async fn build_session_engine(
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        include_global_agents,
+        options.include_global_agents,
         spawn_router,
         categories,
         resident_supervisor,
@@ -704,7 +752,67 @@ pub async fn build_session_engine(
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
-    Ok((engine, asks, questions, mcp_manager, plugin_host))
+    Ok((engine, asks, questions, mcp_control, plugin_host))
+}
+
+fn prepared_plugin_results(
+    desired: &[DesiredSource],
+    prepared: &BTreeMap<String, hya_plugin::PreparedPlugin>,
+    failures: &BTreeMap<String, hya_plugin::PluginError>,
+) -> Vec<PreparedResult> {
+    desired
+        .iter()
+        .filter(|source| source.id().kind() == hya_core::RuntimeSourceKind::Plugin)
+        .map(|source| {
+            let id = source.id().configured_id();
+            if let Some(plugin) = prepared.get(id) {
+                PreparedResult::from(prepared_plugin_source(plugin.clone()))
+            } else {
+                let error = failures.get(id).map_or_else(
+                    || "PLUGIN_START_FAILED: no observed result".to_string(),
+                    |error| format!("PLUGIN_START_FAILED: {error}"),
+                );
+                PreparedResult::from(PreparedFailure::new(source.id().clone(), error))
+            }
+        })
+        .collect()
+}
+
+async fn prepare_mcp_results(
+    desired: &[DesiredSource],
+) -> Result<Vec<PreparedResult>, crate::runtime_reconcile::ReconcileError> {
+    let mut set = tokio::task::JoinSet::new();
+    let mut tasks = BTreeMap::new();
+    for source in desired
+        .iter()
+        .filter(|source| source.id().kind() == hya_core::RuntimeSourceKind::Mcp)
+        .cloned()
+    {
+        let id = source.id().clone();
+        let handle = set.spawn(prepare_desired_source(source));
+        tasks.insert(handle.id(), id);
+    }
+    let mut results = Vec::new();
+    while let Some(joined) = set.join_next_with_id().await {
+        match joined {
+            Ok((id, result)) => {
+                tasks.remove(&id);
+                results.push(result);
+            }
+            Err(error) => {
+                let Some(source) = tasks.remove(&error.id()) else {
+                    return Err(crate::runtime_reconcile::ReconcileError::InvalidPrepared(
+                        format!("MCP preparation task {} had no source ticket", error.id()),
+                    ));
+                };
+                results.push(PreparedResult::from(PreparedFailure::new(
+                    source,
+                    format!("MCP_PREPARE_TASK_FAILED: {error}"),
+                )));
+            }
+        }
+    }
+    Ok(results)
 }
 
 pub struct RuntimeOptions {
@@ -753,7 +861,7 @@ impl HyaRuntime {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
         let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
-        let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
+        let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
             store,
             runtime.router,
             agent.as_ref(),
@@ -765,7 +873,7 @@ impl HyaRuntime {
         .await?;
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
-            .with_mcp_manager(mcp_manager)
+            .with_mcp_control(mcp_control)
             .with_workspace_adapters(plugin_host.workspace_adapters())
             .with_default_agent(runtime.default_agent.clone())
             .with_global_agents(opts.include_global_agents);
@@ -802,13 +910,62 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_proto::{ToolName, ToolSchema};
-    use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError};
+    use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError, ToolPermission};
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct RuntimeMarker(&'static str);
+
+    fn mcp_fixture() -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    if req["method"] == "initialize":
+        result = {"capabilities": {}}
+    elif req["method"] == "tools/list":
+        result = {"tools": [{"name":"ping","description":"Ping","inputSchema":{"type":"object"}}]}
+    else:
+        result = {"content":{"ok":True},"isError":False}
+    print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":result}), flush=True)
+"#
+            .to_string(),
+        ]
+    }
+
+    fn plugin_fixture(id: &str) -> Vec<String> {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            format!(
+                r#"
+import json, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if req.get("method") == "initialize":
+        result = {{
+            "protocol_version":1,
+            "plugin":{{"id":"{id}","version":"1","kind":"rust"}},
+            "hooks":[],
+            "tools":[{{"name":"plugin_ping","description":"Ping","inputSchema":{{"type":"object"}}}}]
+        }}
+        print(json.dumps({{"jsonrpc":"2.0","id":req["id"],"result":result}}), flush=True)
+    elif req.get("method") == "shutdown":
+        print(json.dumps({{"jsonrpc":"2.0","id":req["id"],"result":{{}}}}), flush=True)
+        sys.exit(0)
+    elif "id" in req:
+        print(json.dumps({{"jsonrpc":"2.0","id":req["id"],"result":{{"ok":True,"output":{{}}}}}}), flush=True)
+"#
+            ),
+        ]
+    }
 
     #[async_trait]
     impl Tool for RuntimeMarker {
@@ -1070,7 +1227,14 @@ mod tests {
             item
         });
 
-        publish_mcp_tools(engine.as_ref(), deferred_tools).unwrap();
+        engine
+            .refresh_runtime(|candidate| {
+                for tool in deferred_tools {
+                    candidate.register_tool_with_permission(tool, ToolPermission::Mcp)?;
+                }
+                Ok(())
+            })
+            .unwrap();
 
         assert!(
             saw_complete_old_view.load(Ordering::SeqCst),
@@ -1133,12 +1297,6 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_mcp_returns_before_slow_child_handshake() {
-        let previous = {
-            let _env_lock = ENV_LOCK.lock().unwrap();
-            let previous = std::env::var_os("HYA_DEFER_SIDEPLANES");
-            unsafe { std::env::set_var("HYA_DEFER_SIDEPLANES", "1") };
-            previous
-        };
         let store = SessionStore::connect_memory().await.unwrap();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -1152,32 +1310,134 @@ mod tests {
             },
         );
         let started = std::time::Instant::now();
-        let result = build_session_engine(
+        let result = build_session_engine_with_mcp_defer(
             store,
             router,
             &agent,
             mcp,
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            false,
+            EngineBuildOptions {
+                include_global_agents: false,
+                defer_mcp: true,
+            },
         )
         .await;
-        {
-            let _env_lock = ENV_LOCK.lock().unwrap();
-            match previous {
-                Some(value) => unsafe { std::env::set_var("HYA_DEFER_SIDEPLANES", value) },
-                None => unsafe { std::env::remove_var("HYA_DEFER_SIDEPLANES") },
-            }
-        }
-        let (_engine, _asks, _questions, mcp_manager, _plugins) = result.unwrap();
+        let (_engine, _asks, _questions, mcp_control, _plugins) = result.unwrap();
         let elapsed = started.elapsed();
         assert!(
             elapsed < std::time::Duration::from_secs(2),
             "build_session_engine blocked on MCP for {elapsed:?}"
         );
         assert_eq!(
-            mcp_manager.status().get("slow"),
+            mcp_control.status().await.get("slow"),
             Some(&hya_mcp::McpStatus::Connecting)
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_mixed_mcp_plugin_publishes_one_complete_generation() {
+        let mut mcp = BTreeMap::new();
+        mcp.insert(
+            "mixed".to_string(),
+            McpServerConfig {
+                command: mcp_fixture(),
+                timeout_ms: Some(1_000),
+                ..McpServerConfig::default()
+            },
+        );
+        let plugins = vec![PluginSpec {
+            id: "mixed-plugin".to_string(),
+            kind: hya_plugin::messages::PluginKindWire::Rust,
+            command: plugin_fixture("mixed-plugin"),
+            timeout_ms: Some(1_000),
+            env: BTreeMap::new(),
+            posture_overrides: BTreeMap::new(),
+        }];
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let result = build_session_engine_with_mcp_defer(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            mcp,
+            plugins,
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            EngineBuildOptions {
+                include_global_agents: false,
+                defer_mcp: false,
+            },
+        )
+        .await;
+        let (engine, _, _, _, _) = result.unwrap();
+        let manifest = engine.runtime_registry().effective_manifest();
+        assert_eq!(
+            manifest.generation.get(),
+            hya_proto::ConfigGeneration::INITIAL.get() + 1
+        );
+        assert!(manifest.sources.contains_key(&SourceId::mcp("mixed")));
+        assert!(
+            manifest
+                .sources
+                .contains_key(&SourceId::plugin("mixed-plugin"))
+        );
+        let names = engine
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"mcp__mixed__ping".to_string()));
+        assert!(names.contains(&"plugin_ping".to_string()));
+    }
+
+    #[tokio::test]
+    async fn compat_mcp_control_publishes_and_removes_through_one_runtime_registry() {
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let (engine, _, _, control, _) = build_session_engine(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+            false,
+        )
+        .await
+        .unwrap();
+        let workdir = tempdir();
+        let before = engine.runtime_registry().bind_turn(&workdir).unwrap();
+        control
+            .upsert(
+                "dynamic".to_string(),
+                McpServerConfig {
+                    command: mcp_fixture(),
+                    timeout_ms: Some(1_000),
+                    ..McpServerConfig::default()
+                },
+            )
+            .await
+            .unwrap();
+        let connected = engine.runtime_registry().bind_turn(&workdir).unwrap();
+        assert!(before.resolve_tool("mcp__dynamic__ping").is_none());
+        assert!(connected.resolve_tool("mcp__dynamic__ping").is_some());
+        assert_eq!(
+            control.status().await.get("dynamic"),
+            Some(&hya_mcp::McpStatus::Connected)
+        );
+
+        assert!(
+            control
+                .set_enabled("dynamic".to_string(), false)
+                .await
+                .unwrap()
+        );
+        let removed = engine.runtime_registry().bind_turn(&workdir).unwrap();
+        assert!(removed.resolve_tool("mcp__dynamic__ping").is_none());
+        assert!(connected.resolve_tool("mcp__dynamic__ping").is_some());
+        assert_eq!(
+            control.status().await.get("dynamic"),
+            Some(&hya_mcp::McpStatus::Disabled)
         );
     }
 

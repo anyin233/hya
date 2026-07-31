@@ -128,8 +128,8 @@ async fn bootstrap(
     } else {
         st.formatter_status.clone()
     };
-    let mcp = st.mcp_http.status(&st.mcp_manager).await;
-    let mcp_resource = st.mcp_http.resources(&st.mcp_manager).await;
+    let mcp = st.mcp_control.status().await;
+    let mcp_resource = st.mcp_control.resources().await;
     let vcs = json!({
         "branch": super::instance::vcs::git::branch(&workdir),
         "default_branch": super::instance::vcs::git::default_branch(&workdir),

@@ -47,16 +47,37 @@ pub struct McpManager {
 
 #[derive(Default)]
 struct McpInner {
-    servers: Vec<McpServer>,
+    servers: Vec<Arc<PreparedMcpServer>>,
     status: BTreeMap<String, McpStatus>,
 }
 
-struct McpServer {
-    _name: String,
+pub struct PreparedMcpServer {
+    name: String,
     _client: McpClient,
     _guard: ChildGuard,
     tools: Vec<Arc<dyn Tool>>,
     resources: ResourceMap,
+}
+
+impl PreparedMcpServer {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools.clone()
+    }
+
+    #[must_use]
+    pub fn resources(&self) -> ResourceMap {
+        self.resources.clone()
+    }
+}
+
+pub async fn prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError> {
+    connect_server(name, config).await
 }
 
 impl McpManager {
@@ -114,7 +135,7 @@ impl McpManager {
                 Ok((name, Ok(server))) => {
                     let mut inner = self.write();
                     inner.status.insert(name, McpStatus::Connected);
-                    inner.servers.push(server);
+                    inner.servers.push(Arc::new(server));
                 }
                 Ok((name, Err(error))) => {
                     tracing::warn!(%error, "mcp server unavailable");
@@ -154,7 +175,10 @@ impl McpManager {
     }
 }
 
-async fn connect_server(name: String, config: McpServerConfig) -> Result<McpServer, McpError> {
+async fn connect_server(
+    name: String,
+    config: McpServerConfig,
+) -> Result<PreparedMcpServer, McpError> {
     let timeout = config
         .timeout_ms
         .map(Duration::from_millis)
@@ -176,8 +200,8 @@ async fn connect_server(name: String, config: McpServerConfig) -> Result<McpServ
         .filter_map(|tool| McpTool::try_new(&name, tool, client.clone(), timeout))
         .collect();
     let resources = load_resources(&client, &name, timeout).await;
-    Ok(McpServer {
-        _name: name,
+    Ok(PreparedMcpServer {
+        name,
         _client: client,
         _guard: guard,
         tools,

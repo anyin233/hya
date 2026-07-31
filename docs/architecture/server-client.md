@@ -11,13 +11,15 @@ Compat-compatible HTTP/SSE route groups.
 - shared `SessionEngine`
 - process-level `AgentSpec`
 - pending permission/question queues
-- configured MCP manager
+- a dependency-inverted MCP control handle supplied by `hya-app`
 - workspace adapter metadata
 - formatter status
 
 The router wraps it into internal `ServerState`, which adds run tokens for
-busy/abort behavior plus process-local global, MCP HTTP, project, PTY, and TUI
-state used by compatibility routes. The native routes run prompts through
+busy/abort behavior plus process-local global, project, PTY, and TUI state used
+by compatibility routes. MCP routes do not own a manager or status map: the
+control handle mutates app-owned desired state and composes status from
+desired/observed state plus the effective registry manifest. The native routes run prompts through
 the server's configured `AgentSpec`. Compat-compatible routes translate
 Compat-shaped request/response bodies to the same engine, event log,
 projection, run registry, and pending queues.
@@ -88,7 +90,7 @@ include:
 | Catalogs/metadata | `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill` | built-in catalog sources, prompt directories, local skills, formatter/LSP planes |
 | Provider/auth | `/config`, `/config/providers`, `/provider`, `/provider/auth`, `/auth/:providerID`, `/api/provider`, `/api/model`, credential/integration routes | resolved hya provider catalog and local auth token store |
 | Permissions/questions | `/permission`, `/question`, `/api/permission/*`, `/api/question/*`, session-scoped pending queues | hya ask/question channels and SQLite-backed saved permissions |
-| MCP | `/mcp`, `/mcp/:name/connect`, `/mcp/:name/disconnect`, auth routes | configured MCP manager plus dynamic in-process status compatibility |
+| MCP | `/mcp`, `/mcp/:name/connect`, `/mcp/:name/disconnect`, auth routes | narrow app-supplied reconciliation control handle; one runtime effective registry |
 | PTY | `/pty/*`, `/api/pty/*` | in-process PTY metadata and websocket shell attach lifecycle |
 | VCS/project/worktree | `/vcs/*`, `/project/*`, `/experimental/project/*/copy`, `/experimental/worktree/*` | git commands, project state, git worktree helpers |
 | TUI/global/sync/experimental | `/tui/*`, `/global/*`, `/sync/*`, `/experimental/*` | process-local compatibility queues/state and event-log-backed sync history |

@@ -15,7 +15,7 @@ pub(crate) async fn cmd_serve(
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
-    let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
+    let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
         store,
         runtime.router,
         agent.as_ref(),
@@ -27,7 +27,7 @@ pub(crate) async fn cmd_serve(
     .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
-        .with_mcp_manager(mcp_manager)
+        .with_mcp_control(mcp_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_global_agents(true);
@@ -104,7 +104,7 @@ pub(crate) async fn cmd_tui_hya(
         notice.emit();
     }
     let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
-    let (engine, asks, questions, mcp_manager, plugin_host) = build_session_engine(
+    let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
         store,
         runtime.router,
         agent.as_ref(),
@@ -116,7 +116,7 @@ pub(crate) async fn cmd_tui_hya(
     .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
-        .with_mcp_manager(mcp_manager)
+        .with_mcp_control(mcp_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_global_agents(true);
