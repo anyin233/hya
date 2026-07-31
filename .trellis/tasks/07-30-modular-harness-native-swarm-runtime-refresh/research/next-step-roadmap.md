@@ -676,23 +676,26 @@ native-only sequencing controls.
 - AgentBundle is an extension/catalog attached to the Harness, not an
   independently callable tool.
 - One bundle may export one or more agents.
-- A main agent may be selected in the hya TUI. Bundle subagents are not
-  directly TUI-selectable and are reached only through a main-agent spawn.
+- `role=main` entries may be selected in the hya TUI; `role=subagent` entries
+  are excluded there. Internal and agent-facing rosters use the current
+  caller's `can_spawn` reachable set, independently of role.
 - The flat top level is `identity`, `extensions`, `resources`, and `agents[]`.
   `identity` holds namespaced ID/version/publisher; `extensions` holds JS and
   Rust-sidecar references; `resources` defines tools/skills/MCP/hooks.
-- Each agent entry contains `id`, `role: main|subagent`,
-  an explicit stable agent ID, `spawn_lifecycle: transient|resident`, prompt,
-  model policy,
-  `resource_view`, a declarative/narrowing `permission_overlay`,
-  `resource_profile`, and optional `can_spawn`/hooks.
+- Each agent entry contains a local ID, explicit stable agent ID,
+  `role: main|subagent`, `spawn_lifecycle: transient|resident`, prompt, model
+  policy, workdir, `harness_access`, narrowing `resource_view`, and
+  `can_spawn`. The `0.34.8` prepared IR has no second `hidden` flag and rejects
+  unconsumed `resource_profile`, permission-overlay, executable tool/MCP/hook,
+  and JS/Rust extension declarations with a typed unsupported-feature error.
 - `role` controls TUI visibility only; `spawn_lifecycle` controls behavior only
   when Harness native spawn invokes that definition. Harness owns root Session
   lifetime. Bundles define resources and agents only reference them; no
   inheritance or nested overlay is allowed.
 - Bundle-local tool/skill/MCP identifiers are namespaced; an unqualified short
   name resolves bundle-local before global.
-- Harness access uses the owner vocabulary `none | basic | full`.
+- Harness access uses `none | basic | full`; `resource_view` separately narrows
+  and aliases the resulting resource candidates.
 - A bundle does not enforce permissions. Harness configuration and the
   existing `PermissionPlane` make the final ask/allow/deny decision.
 - Explicitly installed JS/Rust code is trusted same-UID extension code. This

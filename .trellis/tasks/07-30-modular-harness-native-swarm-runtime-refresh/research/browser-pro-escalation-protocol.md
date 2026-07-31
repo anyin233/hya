@@ -1134,3 +1134,70 @@ TDD and gate evidence:
   140 columns 12.326 seconds).
 - `pending`: coordinator boundary review, exact staging, commit/push, and one
   fresh-SHA full CI run. Release remains 0.34.7 and 0.34.8 remains blocked.
+
+### `CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19`
+
+```text
+consultation_id: CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: close the native-only 0.34.8 built-in Bundle preparation/cutover plan after the 0.34.3-0.34.7 runtime prerequisites became remote-green
+pro_conclusion: use one deterministic build-time prepared built-in catalog, retain stable agent identities and historical replay bytes, and cut runtime resolution over atomically without a legacy loader or second runtime
+macbook_air_ruling: adopt the native-only two-commit plan with the corrections below; omitted agent alone selects general, explicit unknown IDs fail typed, role controls only TUI visibility, can_spawn alone controls reachability, and harness_access is separate from the narrowing resource_view
+ruling_scope: release 0.34.8 only; commit 1 prepares but does not activate native built-ins, and commit 2 performs the one-authority runtime cutover and legacy deletion
+permitted_next_action: implement exactly the two authorized atomic commits with strict RED/GREEN, full local gates, one push and green remote CI after each commit
+forbidden_next_action: installed-package registry or empty installed slice, .hyabundle/CLI/7z/private envelope, JS/Rust runner, external Bundle execution, dynamic watcher, compatibility adapter/scanner/migration, dual catalog/runtime authority, new permission framework, sandbox/crypto/license work, 0.34.9+ API, or mutation of protected main/stashes
+follow_up_of: CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05
+final_disposition_and_resumption_decision: 0.34.8 is authorized on the existing canonical session/task/worktree/branch/PR after the green 0.34.7 tip 064ede0b4fe4601b84ccbe912c75980449527d2c
+```
+
+Determination-level evidence and coordinator corrections:
+
+| Determination | Status | Required independent disposition |
+| --- | --- | --- |
+| Omitted agent resolves to stable ID `general`; an explicitly supplied unknown ID returns typed `UNKNOWN_AGENT_ID` | `Pro-advised`, coordinator-adopted; source characterization pending | RED/GREEN the explicit/omitted split. Preserve historical `AgentName` bytes; only continue operations that require a missing definition return `AGENT_DEFINITION_MISSING`. |
+| The seven product agents and eight tracked development agents become two repo-native, immutable built-in Bundles | `Pro-advised`, coordinator-adopted; source verification pending | Freeze exact HEAD fields and behavior before preparation, then prove prepared sources match those fixtures and delete `.hya/agents` only in the cutover commit. |
+| `crates/hya-bundle` solely owns v1 parsing, flat IR, validation, canonical bytes/digest/index, and prepared-catalog decode | `Pro-advised`, coordinator-adopted; TDD pending | Keep it dependency-light and free of core/app/server/runtime authority; app build-time preparation and runtime prepared decoding use the same canonical format. |
+| `role` controls spawn permission or agent-facing roster visibility | `rejected` | `role` filters only the TUI selector. `can_spawn` is the sole catalog reachability edge; internal/model-facing rosters retain eligible subagents. |
+| `none|basic|full` is a role or authorization policy | `rejected` | `harness_access` selects the Harness candidate set, then `resource_view` deterministically narrows/aliases/namespaces it; the existing PermissionPlane/plugin decisions remain final and cannot be broadened by a Bundle. |
+| Runtime scans examples, ordinary Markdown, or old agent files | `rejected` | Runtime consumes embedded prepared bytes only. The preparer recognizes only exact `bundle.hya.md` inputs carrying both v1 frontmatter markers; the example claims prepare-validity, not installability or runtime discovery. |
+| Executable JS/Rust/tool/MCP references without a current consumer may be accepted and ignored | `rejected` | Metadata may be prepared only where explicitly supported; an executable feature lacking a current consumer returns typed `UNSUPPORTED_BUNDLE_FEATURE`. Runner work remains 0.34.10. |
+| One release implementation commit is sufficient | `rejected` by coordinator risk correction | Commit 1 prepares inert native sources and must pass remote CI before commit 2 activates the catalog, deletes old loaders, bumps 0.34.8, and ships docs/example/skill. There is no third or fourth commit. |
+
+Consult19 is advisory provenance, not owner/security approval and not a
+substitute for HEAD characterization, deterministic RED/GREEN evidence,
+PermissionPlane verification, full gates, or remote CI. The MacBook Air
+coordinator supplied the controlling corrections and routine implementation
+authorization; every delivered claim remains `pending` until verified on the
+fuji1 remote worker.
+
+### `CONSULT-2026-07-31-RESERVED-SYSTEM-AGENTS-20`
+
+```text
+consultation_id: CONSULT-2026-07-31-RESERVED-SYSTEM-AGENTS-20
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: map the effective hidden native compaction/title/summary definitions into the role-only Bundle schema without exposing accidental ordinary spawn reachability
+pro_conclusion: classify all three as subagent-role catalog entries but reserve their reachability to fixed Harness system operations; exclude them from every ordinary can_spawn graph
+macbook_air_ruling: adopt option 1; ordinary explicit spawn returns typed AGENT_SPAWN_NOT_ALLOWED with no child and no general fallback, while existing fixed system callsites resolve the exact stable ID from the current TurnBinding catalog
+ruling_scope: release 0.34.8 built-in source mapping and native cutover only
+follow_up_of: CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19
+```
+
+Determination-level evidence and controlling disposition:
+
+| Determination | Status | Required independent disposition |
+| --- | --- | --- |
+| Preserve a second `hidden` field in Bundle IR | `rejected` | `role=subagent` is the sole selector-visibility mapping for `compaction`, `title`, and `summary`; no hidden boolean survives preparation. |
+| Ordinary agents may spawn the three system definitions | `rejected`, coordinator-adopted security/correctness tightening | Exclude all three stable IDs from every ordinary `can_spawn`; Commit 2 returns typed `AGENT_SPAWN_NOT_ALLOWED`, creates no child, and never falls back to `general`. |
+| Agent-facing roster/listing is role-filtered | `rejected` | It is the caller's `can_spawn`-reachable set. The three reserved definitions remain absent because they are unreachable, not because their role grants or denies spawning. |
+| Harness needs a generic unchecked spawn API | `rejected` | Only the existing compaction/title/summary system callsites may resolve their compile-time fixed stable ID directly from the same TurnBinding snapshot. This is not agent spawn and exposes no arbitrary-ID bypass. |
+| Historical identity must be rewritten | `rejected` | Event/projection `AgentName` bytes remain unchanged. Resume/continue resolves the same stable ID from the current snapshot without a caller `can_spawn` check; a missing definition remains typed `AGENT_DEFINITION_MISSING`. |
+
+Commit 1 may now prepare the two native built-in source manifests with this
+mapping. Runtime rejection, selector/eligible-roster behavior, fixed system
+lookups, and replay/resume proofs remain Commit 2 RED/GREEN work. This ruling
+supersedes only the Consult19 ambiguity; all other Consult19 constraints remain
+in force.

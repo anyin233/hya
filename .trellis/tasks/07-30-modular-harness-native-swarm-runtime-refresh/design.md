@@ -416,27 +416,36 @@ The manifest is flat rather than an inheritance/runtime tree:
 
 | Level | Required shape |
 | --- | --- |
-| Bundle | `identity`, `extensions`, `resources`, `agents[]` |
+| Bundle | `identity`, `resources`, `extensions`, `agents[]` |
 | `identity` | namespaced ID, version, publisher |
-| `extensions` | JS references and Rust-sidecar references |
-| `resources` | bundle-defined tools, skills, MCP, and hooks |
-| Agent entry | explicit stable agent ID, `id`, `role: main|subagent`, `spawn_lifecycle: transient|resident`, prompt, model policy, `resource_view`, declarative/narrowing `permission_overlay`, `resource_profile`, optional `can_spawn`, optional hooks |
+| `resources` | canonical static skill payloads in `0.34.8`; executable tool/MCP/hook declarations are typed unsupported until their consumers ship |
+| `extensions` | JS and Rust references are typed unsupported in `0.34.8`; the runner is deferred to `0.34.10` |
+| Agent entry | explicit stable agent ID, local ID, `role: main|subagent`, `spawn_lifecycle: transient|resident`, prompt, model policy, workdir, `harness_access`, narrowing `resource_view`, and `can_spawn` |
 
 Invariants:
 
 - `role` controls TUI/catalog visibility only; it does not encode root Session
-  lifetime or grant spawn authority;
+  lifetime or grant spawn authority. It is the sole selector-visibility field;
+  the prepared IR has no second `hidden` flag;
 - `spawn_lifecycle` controls transient/resident behavior only when Harness
   native spawn invokes the definition;
 - a bundle defines resources once and agents reference them; no inheritance or
   nested overlay exists;
 - a main may be TUI-selectable only when its complete resource view is
-  executable; subagents stay hidden and are reached only through native spawn;
+  executable; subagents are excluded from the TUI selector. Internal and
+  agent-facing rosters use the caller's `can_spawn` graph, not `role`;
 - `can_spawn` is a catalog reachability allow-list with default deny, not a new
-  permission system;
-- bundle declarations, `resource_view`, allow/deny, and
-  `permission_overlay` can only narrow Harness config/current
-  `PermissionPlane`; they never expand it;
+  permission system. `compaction`, `title`, and `summary` are reserved Harness
+  system-operation agents and have no ordinary inbound `can_spawn` edge;
+- `harness_access` selects `none | basic | full` Harness-owned candidates;
+  `resource_view` then narrows and aliases that candidate set. Neither can
+  expand the existing `PermissionPlane`;
+- a source `resource_profile` or permission overlay is rejected in `0.34.8`
+  until a complete typed consumer exists; no unconstrained string or silently
+  ignored policy metadata enters prepared IR;
+- the only system bypass is the existing fixed compaction/title/summary call
+  sites, which exact-lookup their compile-time stable IDs in the current
+  `TurnBinding` catalog. There is no general unchecked spawn API;
 - explicitly installed JS/Rust code is trusted same-UID extension code. This
   design does not isolate malicious plugins or bundles.
 
@@ -466,89 +475,55 @@ Invariants:
 - Bundle-local wins a short-name collision with Harness, but never overwrites or
   aliases over either stable ID.
 
-#### Harness resource views
+#### Harness access and resource views
 
-- `none`: bundle-local tool/skill/MCP only.
-- `basic`: bundle-local plus the Harness-defined builtin basic set.
-- `full`: bundle-local plus all tool/skill/MCP resources loaded in the current
-  active binding.
+- `harness_access: none`: no Harness-owned resources enter the candidate set.
+- `harness_access: basic`: only the Harness-defined builtin basic set enters.
+- `harness_access: full`: every tool/skill/MCP resource in the current bound
+  RuntimeSnapshot enters.
+- Bundle-local prepared resources are catalog candidates independently of this
+  Harness-access level. `resource_view.allow/deny/aliases/namespace` narrows
+  and resolves the combined candidate set; a bundle-local short name wins over
+  a Harness short name, while every qualified ID remains exact.
 
-The effective view is the narrowing intersection of requested
-view/allow-deny/overlay and Harness policy. A bundle never expands that policy.
+The effective view is the narrowing intersection of access, view, and Harness
+policy. A Bundle never expands the final `PermissionPlane` decision.
 
-#### Illustrative target YAML (design-only, not implemented in `0.34.5`)
+#### Illustrative prepare-valid `0.34.8` YAML
 
 ```yaml
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
 identity:
   id: acme/research-suite
   version: 1.0.0
   publisher: acme
 
-extensions:
-  js:
-    - id: fact-tools
-      ref: ./extensions/fact-tools.js
-  rust_sidecars:
-    - id: audit-hook
-      ref: ./extensions/audit-hook
-
-resources:
-  tools:
-    - id: fact_lookup
-      extension: bundle:tool/fact-tools
-  skills:
-    - id: evidence
-      markdown: ./skills/evidence.md
-  mcp:
-    - id: sources
-      config: ./mcp/sources.yaml
-  hooks:
-    - id: audit
-      extension: bundle:hook/audit-hook
-
 agents:
-  - id: lead
+  - local_id: lead
+    stable_id: acme-lead
     role: main
     spawn_lifecycle: transient
     prompt: ./agents/lead.md
-    model_policy: inherit
-    resource_view: full
-    permission_overlay:
+    harness_access: full
+    resource_view:
       deny: []
-    resource_profile: interactive
     can_spawn:
-      - bundle:agent/fact-checker
-      - bundle:agent/monitor
-    hooks:
-      - bundle:acme/research-suite/hook/audit
+      - acme-fact-checker
 
-  - id: fact-checker
+  - local_id: fact-checker
+    stable_id: acme-fact-checker
     role: subagent
     spawn_lifecycle: transient
     prompt: ./agents/fact-checker.md
-    model_policy: inherit
-    resource_view: basic
-    permission_overlay:
-      allow:
-        - bundle:tool/fact_lookup
-        - bundle:skill/evidence
-    resource_profile: short
-
-  - id: monitor
-    role: subagent
-    spawn_lifecycle: resident
-    prompt: ./agents/monitor.md
-    model_policy: inherit
-    resource_view: none
-    permission_overlay:
-      allow:
-        - bundle:mcp/sources
-    resource_profile: resident
+    harness_access: basic
 ```
 
-The YAML illustrates required content and flat ownership; exact serialization
-must remain compatible with the parser tests. It does not make these agents
-executable now.
+This is build-time input only. It does not make an agent executable until the
+`0.34.8` cutover consumes the prepared catalog. Static skills may carry their
+canonical content in prepared bytes. Tool/MCP/hook/JS/Rust declarations and
+`resource_profile` are `UNSUPPORTED_BUNDLE_FEATURE` in this release rather than
+path-only or parse-and-ignore entries.
 
 #### Owner-gated external execution ABI
 
@@ -641,12 +616,12 @@ The effective resource view is a narrowing intersection:
 ```text
 Harness policy/current PermissionPlane
 ∩ active binding resources
-∩ AgentBundle requested none|basic|full view
-∩ agent allow/deny aliases and permission_overlay
+∩ AgentBundle `harness_access: none|basic|full`
+∩ agent `resource_view` allow/deny/aliases/namespace
 ```
 
-- bundle/plugin policy declarations are input to Harness evaluation and cannot
-  grant beyond Harness policy;
+- Bundle resource declarations cannot grant beyond Harness policy. Unsupported
+  policy overlays fail preparation until an effective typed consumer exists;
 - ask/allow/deny interaction, logging, minimum protocol validation, and
   fail-closed dispatch errors reuse current planes;
 - model/resource constraints are resolved in the binding or rejected as

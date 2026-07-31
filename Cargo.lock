@@ -811,6 +811,7 @@ dependencies = [
  "axum",
  "base64",
  "http-body-util",
+ "hya-bundle",
  "hya-core",
  "hya-mcp",
  "hya-plugin",
@@ -848,6 +849,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "hya-bundle"
+version = "0.34.7"
+dependencies = [
+ "hya-proto",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
