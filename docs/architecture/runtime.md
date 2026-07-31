@@ -100,6 +100,34 @@ plugin watcher, or plugin hot-reload API. A respawn must reproduce the complete
 canonical initialize declaration or the new child is closed and calls fail
 closed.
 
+## Resident recovery and actor fencing
+
+Resident subagents retain the immutable runtime `TurnBinding` behavior above,
+but additionally carry an internal `ActorClaim` containing their stable session
+identity, current monotonic epoch, and per-process owner identity. Actor epochs
+and runtime configuration generations are independent: takeover does not
+terminate old snapshot owners, and a runtime refresh does not take over an
+actor.
+
+Before runtime readiness, `hya-app` advances all active resident claims, aborts
+non-actor admissions through the existing startup seam, folds the canonical
+projections, terminalizes each old epoch's actor-bound admissions and running
+work through the recovered claim, and recreates the existing
+`ResidentSupervisor` slots.
+Committed queued mail resumes under the new epoch; work that crossed the
+durable start marker is aborted and never automatically retried. Provider/tool
+events, mailbox writes, spawn admissions, and child transitions use the same
+claim-aware store commit seam and publish only after SQLite commit. A stale
+claim returns `StaleActorClaim` without appending or waking successful work.
+Full-tuple claim release atomically aborts any still-bound admission before the
+claim becomes reusable; only the first logical release refunds a live governor.
+
+The claim is TTL-free and local to one harness process incarnation. There is no
+heartbeat, wall-clock expiry, lease daemon, distributed coordination, HA, or
+active-active behavior. Canonical-state fencing cannot promise exactly-once
+filesystem/network/API side effects, and this release does not certify the
+future 100/256 workload envelope.
+
 ## Cancellation
 
 `run_turn` receives a `CancellationToken`. If cancellation is observed before a

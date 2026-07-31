@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::{
-    MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
+    Event, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
 };
+use hya_store::ActorClaim;
 use serde::Serialize;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -153,18 +154,37 @@ async fn run_member(
     spec: MemberSpec,
     handle: String,
     cancel: CancellationToken,
+    actor_claim: Option<ActorClaim>,
 ) -> Result<(SessionId, String), CoreError> {
+    engine.validate_actor_claim(actor_claim.as_ref()).await?;
     let child = if let Some(session) = spec.session {
         session
     } else {
-        engine
-            .create(CreateSession {
-                parent: Some(lead),
-                agent: spec.agent.name.clone(),
-                model: spec.agent.model.clone(),
-                workdir: spec.agent.workdir.to_string_lossy().into_owned(),
-            })
-            .await?
+        match actor_claim.as_ref() {
+            Some(claim) => {
+                engine
+                    .create_for_actor(
+                        claim,
+                        CreateSession {
+                            parent: Some(lead),
+                            agent: spec.agent.name.clone(),
+                            model: spec.agent.model.clone(),
+                            workdir: spec.agent.workdir.to_string_lossy().into_owned(),
+                        },
+                    )
+                    .await?
+            }
+            None => {
+                engine
+                    .create(CreateSession {
+                        parent: Some(lead),
+                        agent: spec.agent.name.clone(),
+                        model: spec.agent.model.clone(),
+                        workdir: spec.agent.workdir.to_string_lossy().into_owned(),
+                    })
+                    .await?
+            }
+        }
     };
     // Resume (task_id) reuses the child session; keep the original member id so
     // MemberSpawned upserts rather than listing the same agent twice.
@@ -174,34 +194,62 @@ async fn run_member(
     // can match and display status the way OpenCode does.
     let (root, depth) = engine.session_lineage(child).await.unwrap_or((child, 0));
     let description = member_ui_description(&spec);
-    let _ = engine
-        .record_member_spawned(
+    engine
+        .emit_for_actor(
+            actor_claim.as_ref(),
             lead,
-            member,
-            Some(child),
-            spec.agent.name.clone(),
-            description,
-            depth,
+            Event::MemberSpawned {
+                session: lead,
+                member,
+                child: Some(child),
+                subagent_type: spec.agent.name.clone(),
+                description,
+                depth,
+            },
         )
-        .await;
+        .await?;
     // Bind the member's session to its stable, team-scoped handle in the team-root
     // log (ADR-0001). The roster is then read from the projection, never disk.
     // run_team is the transient (blocking-join) path by construction; resident
     // members are spawned non-blocking through the ResidentSupervisor instead.
-    let _ = engine
-        .record_agent_registered(
+    engine
+        .emit_for_actor(
+            actor_claim.as_ref(),
             root,
-            child,
-            handle,
-            spec.agent.name.clone(),
-            SubagentMode::Transient,
+            Event::AgentRegistered {
+                session: root,
+                agent_session: child,
+                handle,
+                agent_type: spec.agent.name.clone(),
+                mode: SubagentMode::Transient,
+            },
         )
-        .await;
-    let _ = engine
-        .record_member_status(lead, member, MemberRunStatus::Running)
-        .await;
-    engine.admit_user_prompt(child, spec.directive).await?;
-    engine.run_turn(child, &spec.agent, cancel).await?;
+        .await?;
+    engine
+        .emit_for_actor(
+            actor_claim.as_ref(),
+            lead,
+            Event::MemberStatusChanged {
+                session: lead,
+                member,
+                status: MemberRunStatus::Running,
+            },
+        )
+        .await?;
+    match actor_claim.as_ref() {
+        Some(claim) => {
+            engine
+                .admit_user_prompt_for_actor(claim, child, spec.directive)
+                .await?;
+            engine
+                .run_turn_for_actor(child, &spec.agent, claim, cancel)
+                .await?;
+        }
+        None => {
+            engine.admit_user_prompt(child, spec.directive).await?;
+            engine.run_turn(child, &spec.agent, cancel).await?;
+        }
+    }
     let projection = engine.read_projection(child).await?;
     Ok((child, summarize_member(&projection)))
 }
@@ -256,7 +304,7 @@ pub async fn run_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, true).await
+    run_team_inner(engine, lead, specs, cancel, true, None).await
 }
 
 /// Run a team whose complete member set was reserved by [`pre_admit_team`].
@@ -269,7 +317,17 @@ pub async fn run_pre_admitted_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, false).await
+    run_team_inner(engine, lead, specs, cancel, false, None).await
+}
+
+pub async fn run_pre_admitted_team_for_actor(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    specs: Vec<MemberSpec>,
+    cancel: CancellationToken,
+    actor_claim: ActorClaim,
+) -> Vec<MemberEvidence> {
+    run_team_inner(engine, lead, specs, cancel, false, Some(actor_claim)).await
 }
 
 async fn run_team_inner(
@@ -278,6 +336,7 @@ async fn run_team_inner(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
     reserve_admission: bool,
+    actor_claim: Option<ActorClaim>,
 ) -> Vec<MemberEvidence> {
     let mut rejected: Vec<MemberEvidence> = Vec::new();
     let specs: Vec<MemberSpec> = if !reserve_admission {
@@ -325,7 +384,9 @@ async fn run_team_inner(
     // spawn so concurrent members cannot race to the same ordinal. The main agent
     // is registered first so it appears in the roster and is addressable.
     let (root, _) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
-    let _ = engine.ensure_root_registered(root).await;
+    let _ = engine
+        .ensure_root_registered_for_actor(root, actor_claim.as_ref())
+        .await;
     // Resume (existing child session): reuse member id + roster handle so finish /
     // tree events upsert the original row instead of appending a duplicate.
     let mut specs = specs;
@@ -341,8 +402,9 @@ async fn run_team_inner(
         let engine = engine.clone();
         let child_cancel = cancel.child_token();
         let id = spec.id;
-        let task =
-            tokio::spawn(async move { run_member(engine, lead, spec, handle, child_cancel).await });
+        let task = tokio::spawn(async move {
+            run_member(engine, lead, spec, handle, child_cancel, actor_claim).await
+        });
         member_tasks.push((id, task));
     }
 
@@ -388,7 +450,17 @@ async fn run_team_inner(
             }
         };
         let _ = engine
-            .record_member_finished(lead, id, member_status, entry.summary.clone(), child)
+            .emit_for_actor(
+                actor_claim.as_ref(),
+                lead,
+                Event::MemberFinished {
+                    session: lead,
+                    member: id,
+                    status: member_status,
+                    summary: entry.summary.clone(),
+                    child,
+                },
+            )
             .await;
         evidence.push(entry);
     }
@@ -406,6 +478,23 @@ pub async fn project_envelope(
     let json = serde_json::to_string(envelope).unwrap_or_else(|_| "{}".to_string());
     engine
         .inject_system_message(lead, format!("TEAM EVIDENCE ENVELOPE\n{json}"))
+        .await?;
+    Ok(())
+}
+
+pub async fn project_envelope_for_actor(
+    engine: &SessionEngine,
+    lead: SessionId,
+    envelope: &TeamEvidenceEnvelope,
+    actor_claim: &ActorClaim,
+) -> Result<(), CoreError> {
+    let json = serde_json::to_string(envelope).unwrap_or_else(|_| "{}".to_string());
+    engine
+        .inject_system_message_for_actor(
+            actor_claim,
+            lead,
+            format!("TEAM EVIDENCE ENVELOPE\n{json}"),
+        )
         .await?;
     Ok(())
 }

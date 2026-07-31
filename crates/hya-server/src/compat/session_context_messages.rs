@@ -368,6 +368,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::MemberFinished { .. }
             | Event::AgentRegistered { .. }
             | Event::AgentActivityChanged { .. }
+            | Event::ResidentWorkStarted { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
@@ -428,6 +429,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::MemberFinished { .. }
             | Event::AgentRegistered { .. }
             | Event::AgentActivityChanged { .. }
+            | Event::ResidentWorkStarted { .. }
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }

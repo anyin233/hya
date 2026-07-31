@@ -208,6 +208,8 @@ mod tests {
             mode: SubagentMode::Transient,
             status: RosterStatus::Busy,
             current_task: Some("inspect tree".to_string()),
+            resident_cursor: 0,
+            resident_work: None,
         };
         let roster = HashMap::from([(child, entry.clone())]);
 

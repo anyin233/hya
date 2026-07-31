@@ -31,35 +31,38 @@ pub async fn run_mailbox_service(
             match req {
                 MailboxRequest::Send {
                     from,
+                    actor_claim,
                     to,
                     kind,
                     body,
                     reply,
                 } => {
                     let result = engine
-                        .mail_send(from, to, kind, body)
+                        .mail_send_for_actor(from, to, kind, body, actor_claim.as_ref())
                         .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
                 MailboxRequest::Join {
                     session,
+                    actor_claim,
                     channel,
                     reply,
                 } => {
                     let result = engine
-                        .channel_join(session, channel)
+                        .channel_join(session, channel, actor_claim.as_ref())
                         .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
                 MailboxRequest::Leave {
                     session,
+                    actor_claim,
                     channel,
                     reply,
                 } => {
                     let result = engine
-                        .channel_leave(session, channel)
+                        .channel_leave(session, channel, actor_claim.as_ref())
                         .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);

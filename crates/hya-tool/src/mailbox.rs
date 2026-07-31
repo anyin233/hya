@@ -11,7 +11,9 @@
 //! so an agent can only see/address its own team (decision 6).
 
 use async_trait::async_trait;
-use hya_proto::{MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, ToolSchema};
+use hya_proto::{
+    ActorClaim, MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, ToolSchema,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -42,6 +44,7 @@ pub struct ChannelInfo {
 pub enum MailboxRequest {
     Send {
         from: SessionId,
+        actor_claim: Option<ActorClaim>,
         to: MailEndpoint,
         kind: MailKind,
         body: String,
@@ -49,11 +52,13 @@ pub enum MailboxRequest {
     },
     Join {
         session: SessionId,
+        actor_claim: Option<ActorClaim>,
         channel: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
     Leave {
         session: SessionId,
+        actor_claim: Option<ActorClaim>,
         channel: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -84,6 +89,7 @@ pub enum MailboxError {
 pub struct MailboxPlane {
     tx: Option<mpsc::UnboundedSender<MailboxRequest>>,
     session: Option<SessionId>,
+    actor_claim: Option<ActorClaim>,
 }
 
 impl MailboxPlane {
@@ -95,6 +101,7 @@ impl MailboxPlane {
             Self {
                 tx: Some(tx),
                 session: None,
+                actor_claim: None,
             },
             rx,
         )
@@ -109,8 +116,18 @@ impl MailboxPlane {
     /// Bind the plane to the acting agent's session (set when building `ToolCtx`).
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
+        self.for_session_with_actor(session, None)
+    }
+
+    #[must_use]
+    pub fn for_session_with_actor(
+        &self,
+        session: SessionId,
+        actor_claim: Option<ActorClaim>,
+    ) -> Self {
         let mut plane = self.clone();
         plane.session = Some(session);
+        plane.actor_claim = actor_claim;
         plane
     }
 
@@ -135,6 +152,7 @@ impl MailboxPlane {
         let from = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::Send {
             from,
+            actor_claim: self.actor_claim,
             to,
             kind,
             body,
@@ -149,6 +167,7 @@ impl MailboxPlane {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::Join {
             session,
+            actor_claim: self.actor_claim,
             channel,
             reply,
         })
@@ -161,6 +180,7 @@ impl MailboxPlane {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::Leave {
             session,
+            actor_claim: self.actor_claim,
             channel,
             reply,
         })
@@ -474,6 +494,8 @@ mod tests {
             mode: SubagentMode::Resident,
             status: RosterStatus::Busy,
             current_task: Some("reviewing auth.rs".to_string()),
+            resident_cursor: 0,
+            resident_work: None,
         };
         let value = render_roster(std::slice::from_ref(&entry));
         let member = &value["members"][0];

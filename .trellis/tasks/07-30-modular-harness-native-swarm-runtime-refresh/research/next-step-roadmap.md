@@ -1,10 +1,35 @@
 # Architecture audit closure and next-step roadmap
 
-## 2026-07-31 controlling `0.34.6` execution ruling
+## 2026-07-31 controlling `0.34.7` execution ruling
+
+Release `0.34.6` is committed at
+`680f9fb535fc48f71f9aead64cc3d3d30161678a`; draft-PR CI run `30634501761`
+attempt 2 is green. `0.34.7` is the only active implementation stage:
+
+- reuse the persisted resident agent-session `SessionId` as `ActorId` and add
+  one TTL-free SQLite claim row with monotonic epoch and process owner;
+- extend only the existing `admission_journal` for resident actor binding;
+- fence all active actors before readiness, abort running/in-flight work with
+  no retry, and reschedule only durable queued-not-started work;
+- add one `ResidentWorkStarted` marker and projected inbox cursor, while using
+  existing terminal tool/message/member/activity events;
+- claim-check resident canonical events, mailbox writes, child transitions,
+  spawn admissions, tool dispatch, and result commits; keep transient paths
+  unchanged and runtime `TurnBinding` lifetime orthogonal;
+- explicitly deny TTL/heartbeat/time lease, HA/active-active, generic effect
+  framework, external exactly-once, AgentBundle, and 100/256 claims.
+
+Exact RED/GREEN and implementation evidence is in `implement.md` section 5D;
+Browser/Pro advisory provenance and controlling corrections are in
+`CONSULT-2026-07-31-RESIDENT-FENCING-10`. No user configuration or
+agent-facing self-operation is added, so no example or built-in skill belongs
+in this stage.
+
+## 2026-07-31 delivered `0.34.6` execution ruling
 
 Release `0.34.5` is committed at
 `95f4fe20b3750d376023384d869a52da1e84201f`; draft-PR CI run `30612919698`
-is green. `0.34.6` is now the only active implementation stage:
+is green. The delivered `0.34.6` implementation stage established:
 
 - one app-owned `RuntimeReconciler` coordinates validated desired MCP/plugin
   sources, revision-scoped preparation tickets, and typed observed outcomes;
@@ -73,7 +98,8 @@ below.
 - `0.34.3` delivered pre-create background transient/resident admission,
   bounded spawn transport, and typed overload. `0.34.4` delivered the durable
   operation/admission seam; `0.34.5` delivered generation/TurnBinding; `0.34.6`
-  is active under the preceding ruling.
+  delivered runtime reconciliation; `0.34.7` is active under the preceding
+  ruling.
 - The owner has dropped all old agent-file support. There will be no adapter,
   synthetic representation, old-source bundle list/info, or parser/discovery/
   execution fallback.
@@ -96,17 +122,17 @@ below.
 - All prepared sources flow through
   `AgentBundleIR -> immutable Generation/catalog -> TurnBinding -> AgentSpec ->
   SessionEngine`. TUI and spawn consume the same generation snapshot.
-- The final patch map below is controlling planning. Only `0.34.6` is active;
+- The final patch map below is controlling planning. Only `0.34.7` is active;
   every arrow requires the preceding patch's commit/push and full remote CI
   green.
 
-The native-only future plan does not delay or broaden `0.34.6`.
+The native-only future plan does not delay or broaden `0.34.7`.
 
 ## Status
 
 This roadmap is executable planning for the existing Trellis task
 `modular-harness-native-swarm-runtime-refresh`. The user has authorized
-`0.34.6` after the committed/pushed/remote-green `0.34.5` gate. Every later
+`0.34.7` after the committed/pushed/remote-green `0.34.6` gate. Every later
 patch remains planning-only and cannot begin merely because it appears here.
 
 The roadmap is anchored to:
@@ -117,7 +143,7 @@ The roadmap is anchored to:
   `156d0ad3c50aea67dfac0054485eb6991e77308b`; the only intervening change is
   the README icon reference, so no audited product-source finding changed;
 - workspace/root changelog version `0.34.2` at the audit, delivered isolated
-  releases `0.34.3` through `0.34.5`, and active target version `0.34.6`;
+  releases `0.34.3` through `0.34.6`, and active target version `0.34.7`;
 - 19 protected pre-existing user-owned dirty entries plus this task directory
   (20 status entries total) and three protected stashes.
 
@@ -130,7 +156,7 @@ The authoritative evidence and detailed defects are:
 - `research/browser-pro-escalation-protocol.md`.
 
 The protocol ledger records the consultation/ruling chain through
-`CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09`. Its Pro output is advisory only.
+`CONSULT-2026-07-31-RESIDENT-FENCING-10`. Its Pro output is advisory only.
 The MacBook Air rulings control plan placement; current source inspection
 independently verifies only the claims explicitly marked source-confirmed.
 
@@ -591,40 +617,53 @@ selecting retained verified content.
 
 ## R6 — resident reconstruction, actor epochs, and effect fencing
 
-**Purpose:** make restart recovery safe rather than merely replayable.
+**Status:** active `0.34.7`; focused RED/GREEN is complete and full
+release/remote gates remain.
+
+**Purpose:** make single-process resident restart recovery safe rather than
+merely replayable, without creating a time lease or general effect framework.
 
 **Entry gate**
 
-- R4 EffectGate is effective;
-- R5 leases/queue are authoritative;
-- actor/cursor/operation journals from R2 are replayable.
+- `0.34.4` durable operation admission is remote green;
+- `0.34.5` immutable generation/TurnBinding is remote green;
+- `0.34.6` desired-observed-effective registry ownership is remote green;
+- exact resident identities, roster/mail projection, and operation seams have
+  been re-audited at the `0.34.6` HEAD.
 
 **Actions**
 
-- reconstruct resident identities, queued/suspended work, mail ranges/cursors,
-  acknowledgements, dependencies, and leases before new mail consumption;
-- durably advance the actor epoch before starting a recovered incarnation;
-- attach actor epoch and stable operation ID to claims, mail/cursor transitions,
-  results, and effects;
-- treat event-bus/broadcast delivery as a wake optimization, not recovery
-  authority;
-- reconcile indeterminate remote effects instead of automatic exactly-once
-  claims.
+- use stable resident session identity plus one indexed
+  `resident_actor_claim` row; ordinary claims have one winner and startup
+  recovery transactionally advances epoch before readiness;
+- bind only resident-originated existing admission records to actor ID/epoch;
+- persist one work-start boundary before dispatch and terminalize running tool,
+  message, child, and admission state without retry;
+- resume mail beyond the durable consumed/running boundary exactly once through
+  the existing resident task owner;
+- claim-check canonical resident events, mailbox mutations, child transitions,
+  spawn admission, and tool result commit; keep transient event/API behavior
+  unchanged;
+- treat event-bus notification as a wake optimization and retained
+  `TurnBinding` `Arc`s as an independent lifetime mechanism.
 
 **Exit gate**
 
-- crash at registration-before-spawn, active Turn, suspension, cursor,
-  operation intent, local effect, result, and promotion boundaries yields one
-  effective actor incarnation;
-- an older actor epoch cannot claim work, send/ack mail, publish terminal state,
-  or linearize an effect;
-- local operation deduplication is conclusive by `OperationId`;
-- unsupported remote outcomes remain visible and do not auto-retry.
+- one-winner claim, monotonic takeover, stale event/tool/child rejection,
+  refund-once, queued/running classification, repeated startup, and transient
+  characterization tests are green;
+- running child/tool/message state reaches existing typed terminal projections
+  before the root running marker is cleared;
+- full workspace, TUI, no-INET, local executable, version/changelog/JSONL, exact
+  staging, push, and remote CI gates are green.
 
-**Parallel work:** R7 and R8 can finish independently; R10 waits for all.
+**Parallel work:** none in this canonical turn. `0.34.8` remains blocked until
+the same draft PR is remote green and MacBook Air explicitly authorizes it.
 
-**Rollback seam:** rehydration may be disabled only from a quiescent state after
-fencing all actors and reconciling every lease/outcome.
+**Rollback seam:** rehydration may be disabled only from a quiescent state.
+Never roll back by selecting an older epoch. External effects are not claimed
+exactly once, HA/active-active and time leases are absent, and running work is
+not automatically retried.
 
 ## R7 — Markdown/JS/Rust `AgentBundle` and policy enforcement
 

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage};
+use hya_store::ActorClaim;
 use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,13 @@ mod messages;
 
 use messages::{projection_to_messages, request_from_messages};
 
+struct TurnExecution<'a> {
+    binding: &'a TurnBinding,
+    cancel: &'a CancellationToken,
+    external_dirs: &'a [PathBuf],
+    actor_claim: Option<&'a ActorClaim>,
+}
+
 impl SessionEngine {
     pub async fn run_turn(
         &self,
@@ -26,7 +34,18 @@ impl SessionEngine {
         agent: &AgentSpec,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs(session, agent, cancel, &[])
+        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, &[], None)
+            .await
+    }
+
+    pub(crate) async fn run_turn_for_actor(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        claim: &ActorClaim,
+        cancel: CancellationToken,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, &[], Some(claim))
             .await
     }
 
@@ -37,11 +56,25 @@ impl SessionEngine {
         cancel: CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, external_dirs, None)
+            .await
+    }
+
+    async fn run_turn_with_external_dirs_and_claim(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        external_dirs: &[PathBuf],
+        actor_claim: Option<&ActorClaim>,
+    ) -> Result<FinishReason, CoreError> {
+        self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
         let binding = self.runtime.bind_turn(&workdir)?;
         let message = MessageId::new();
-        self.emit(
+        self.emit_for_actor(
+            actor_claim,
             session,
             Event::MessageStarted {
                 session,
@@ -50,7 +83,8 @@ impl SessionEngine {
             },
         )
         .await?;
-        self.emit(
+        self.emit_for_actor(
+            actor_claim,
             session,
             Event::TurnBindingRecorded {
                 session,
@@ -61,13 +95,24 @@ impl SessionEngine {
         .await?;
 
         let outcome = self
-            .run_turn_rounds(session, message, agent, &binding, &cancel, external_dirs)
+            .run_turn_rounds(
+                session,
+                message,
+                agent,
+                TurnExecution {
+                    binding: &binding,
+                    cancel: &cancel,
+                    external_dirs,
+                    actor_claim,
+                },
+            )
             .await;
         if outcome.is_err() {
             // A provider/tool error after MessageStarted must still close the assistant
             // message, else UI clients (e.g. the hya TUI) wait forever for a finish event.
             let _ = self
-                .emit(
+                .emit_for_actor(
+                    actor_claim,
                     session,
                     Event::MessageFinished {
                         session,
@@ -95,10 +140,14 @@ impl SessionEngine {
         session: SessionId,
         message: MessageId,
         agent: &AgentSpec,
-        binding: &TurnBinding,
-        cancel: &CancellationToken,
-        external_dirs: &[PathBuf],
+        execution: TurnExecution<'_>,
     ) -> Result<FinishReason, CoreError> {
+        let TurnExecution {
+            binding,
+            cancel,
+            external_dirs,
+            actor_claim,
+        } = execution;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
         let agent = effective_agent_for_binding(agent, binding);
@@ -114,8 +163,10 @@ impl SessionEngine {
             None => 0,
         };
         loop {
+            self.validate_actor_claim(actor_claim).await?;
             if cancel.is_cancelled() {
-                self.emit(
+                self.emit_for_actor(
+                    actor_claim,
                     session,
                     Event::MessageFinished {
                         session,
@@ -148,7 +199,14 @@ impl SessionEngine {
                         let body = hya_provider::format_responses_compact_system(&window.items);
                         // Persist so subsequent rounds re-inject the compact window
                         // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
-                        if self.inject_system_message(session, body).await.is_ok() {
+                        let injected = match actor_claim {
+                            Some(claim) => {
+                                self.inject_system_message_for_actor(claim, session, body)
+                                    .await
+                            }
+                            None => self.inject_system_message(session, body).await,
+                        };
+                        if injected.is_ok() {
                             projection = self.store.read_projection(session).await?;
                             messages = projection_to_messages(&agent, &projection);
                         }
@@ -201,9 +259,11 @@ impl SessionEngine {
                 (true, Some(gov)) => gov.acquire_stream().await,
                 _ => None,
             };
+            self.validate_actor_claim(actor_claim).await?;
             let stream = self.providers.stream(request, session, message).await?;
             let step = rounds;
-            self.emit(
+            self.emit_for_actor(
+                actor_claim,
                 session,
                 Event::StepStarted {
                     session,
@@ -212,9 +272,12 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let stream_round = self.collect_stream_round(session, message, stream).await?;
+            let stream_round = self
+                .collect_stream_round(session, message, stream, actor_claim)
+                .await?;
             add_tokens(&mut total_tokens, stream_round.tokens);
-            self.emit(
+            self.emit_for_actor(
+                actor_claim,
                 session,
                 Event::StepFinished {
                     session,
@@ -229,7 +292,8 @@ impl SessionEngine {
             drop(stream_permit);
 
             if stream_round.tool_calls.is_empty() {
-                self.emit(
+                self.emit_for_actor(
+                    actor_claim,
                     session,
                     Event::MessageFinished {
                         session,
@@ -244,6 +308,7 @@ impl SessionEngine {
             }
 
             for mut tc in stream_round.tool_calls {
+                self.validate_actor_claim(actor_claim).await?;
                 if let Some(hooks) = &self.hooks {
                     let input = std::mem::take(&mut tc.input);
                     match hooks
@@ -259,7 +324,8 @@ impl SessionEngine {
                         ToolExecuteBeforeOutcome::Continue { input } => tc.input = input,
                         ToolExecuteBeforeOutcome::Veto { reason } => {
                             let message_text = format!("blocked by plugin: {reason}");
-                            self.emit(
+                            self.emit_for_actor(
+                                actor_claim,
                                 session,
                                 Event::ToolError {
                                     session,
@@ -292,8 +358,11 @@ impl SessionEngine {
                                 permission,
                                 interaction: self.interaction.for_session(session),
                                 spawner: self.spawner.for_session(session),
-                                operation: hya_tool::ToolOperation::from_tool_call(tc.call),
-                                mailbox: self.mailbox.for_session(session),
+                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                    .with_actor_claim(actor_claim.copied()),
+                                mailbox: self
+                                    .mailbox
+                                    .for_session_with_actor(session, actor_claim.copied()),
                                 session: Some(session),
                                 parent_session: projection.session.parent,
                                 todo: self.todo.clone(),
@@ -305,6 +374,10 @@ impl SessionEngine {
                                 workdir: binding.workdir().to_path_buf(),
                                 cancel: cancel.clone(),
                             };
+                            // Permission and plugin hooks can await. Recheck at the
+                            // actual dispatch boundary so takeover cannot turn a
+                            // previously valid resident into an unfenced launch.
+                            self.validate_actor_claim(actor_claim).await?;
                             resolved.tool.execute(&ctx, tc.input).await
                         }
                         Err(error) => Err(error),
@@ -312,6 +385,7 @@ impl SessionEngine {
                     None => Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
                 };
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                self.validate_actor_claim(actor_claim).await?;
                 let result = if let Some(hooks) = &self.hooks {
                     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
                     let native = match &result {
@@ -364,7 +438,7 @@ impl SessionEngine {
                         message_text: e.to_string(),
                     },
                 };
-                self.emit(session, event).await?;
+                self.emit_for_actor(actor_claim, session, event).await?;
             }
 
             rounds += 1;

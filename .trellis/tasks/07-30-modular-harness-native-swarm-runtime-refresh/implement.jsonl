@@ -27,3 +27,13 @@
 {"file": "crates/hya-plugin/src/host.rs", "reason": "Validate configured identity and canonical complete initialize declarations across startup/crash re-handshake without adding plugin hot reload or a hook/permission plane."}
 {"file": "crates/hya-server/src/mcp_control.rs", "reason": "Expose the narrow dependency-inverted desired mutation/status/resources handle supplied by app assembly; server owns no second MCP map."}
 {"file": "docs/configuration.md", "reason": "Provide the minimal runnable actual-route dynamic MCP add/status/disconnect/connect example and state the plugin claim boundary."}
+{"file": "crates/hya-proto/src/ids.rs", "reason": "Define dependency-light ActorEpoch plus non-wire process owner/actor claim identities; keep actor epoch orthogonal to ConfigGeneration."}
+{"file": "crates/hya-proto/src/event.rs", "reason": "Add only the minimal ResidentWorkStarted canonical boundary needed to distinguish queued from running resident work."}
+{"file": "crates/hya-store/migrations/0005_resident_actor_claim.sql", "reason": "Add the sole TTL-free actor claim coordination table and resident-only binding columns on the existing admission journal."}
+{"file": "crates/hya-store/src/resident_claim.rs", "reason": "Own one-winner claim, monotonic recovery, full-tuple release, indexed claim validation, and transactional resident event append."}
+{"file": "crates/hya-store/src/admission.rs", "reason": "Bind only resident-originated existing admissions to actor ID/epoch and reject claim-less or stale state transitions without double release."}
+{"file": "crates/hya-core/src/resident.rs", "reason": "Fence first, terminalize running tool/message/child work, preserve post-marker queued mail, recreate the existing supervisor, and never auto-retry running work."}
+{"file": "crates/hya-core/src/engine/turn.rs", "reason": "Carry the resident claim through one retained TurnBinding, check immediately before tool dispatch/after result, and commit canonical outcomes through the actor fence."}
+{"file": "crates/hya-app/src/runtime.rs", "reason": "Generate one process owner identity and complete actor fencing/recovery/re-registration before spawn, send, or wait readiness."}
+{"file": "docs/adr/0002-resident-actor-model-and-autonomous-main-agent.md", "reason": "Document the delivered TTL-free single-process recovery/fencing contract and explicit external-exactly-once/HA/capacity exclusions."}
+{"file": "README.md", "reason": "Keep the repository-visible workspace version aligned with the 0.34.7 release metadata gate."}

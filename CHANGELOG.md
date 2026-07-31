@@ -1,14 +1,13 @@
-# 0.34.6
+# 0.34.7
 
-- Reconcile startup, deferred, and Compat-controlled MCP sources through one
-  desired/observed coordinator and publish only complete validated runtime
-  snapshots.
-- Preserve the prior effective generation on failed handshakes or collisions,
-  reject stale async results, and make removals visible atomically to the next
-  turn while retained turns keep their old source bindings.
-- Give MCP and plugin contributions stable source identities, reject canonical
-  and alias collisions before publication, and retain source clients in the
-  immutable runtime snapshot.
-- Validate configured plugin identity and the complete deterministic initialize
-  declaration on respawn; declaration drift closes the new process and fails
-  subsequent calls closed without claiming plugin hot reload.
+- Recover durable resident actors before spawn/mail readiness by atomically
+  advancing a TTL-free actor epoch, aborting old running work, and rescheduling
+  only committed queued messages.
+- Fence resident event, tool-result, mailbox, child, and spawn transitions with
+  the current actor claim so late old-incarnation commits fail typed-closed and
+  never advance replay or live projection state.
+- Bind resident-originated durable admissions to actor identity and epoch, then
+  converge takeover, cancellation, completion, and refund on idempotent
+  terminal transitions without crediting a fresh governor after restart.
+- Persist one minimal resident-work-started marker and durable inbox cursor so
+  repeated recovery is projection-stable and does not retry in-flight effects.

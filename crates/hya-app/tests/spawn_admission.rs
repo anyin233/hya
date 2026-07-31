@@ -312,6 +312,7 @@ async fn conflicting_terminal_finalize_fails_closed_to_foreground_caller() {
             operation.operation_id(),
             AdmissionTerminal::Cancelled,
             "test terminal conflict",
+            None,
         )
         .await
         .expect("test terminal transition");

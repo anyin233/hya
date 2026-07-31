@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{OperationId, SessionId, ToolCallId, ToolName, ToolSchema};
+use hya_proto::{ActorClaim, OperationId, SessionId, ToolCallId, ToolName, ToolSchema};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -85,6 +85,7 @@ pub struct ToolCtx {
 pub struct ToolOperation {
     source_tool_call_id: ToolCallId,
     operation_id: OperationId,
+    actor_claim: Option<ActorClaim>,
 }
 
 impl ToolOperation {
@@ -93,7 +94,14 @@ impl ToolOperation {
         Self {
             source_tool_call_id,
             operation_id: OperationId::from_tool_call(source_tool_call_id),
+            actor_claim: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_actor_claim(mut self, actor_claim: Option<ActorClaim>) -> Self {
+        self.actor_claim = actor_claim;
+        self
     }
 
     #[must_use]
@@ -104,6 +112,11 @@ impl ToolOperation {
     #[must_use]
     pub fn operation_id(self) -> OperationId {
         self.operation_id
+    }
+
+    #[must_use]
+    pub const fn actor_claim(self) -> Option<ActorClaim> {
+        self.actor_claim
     }
 }
 

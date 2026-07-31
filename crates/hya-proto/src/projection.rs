@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
-use crate::ids::{ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::ids::{
+    ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId,
+};
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
@@ -165,6 +167,22 @@ pub struct RosterEntry {
     /// A short human-facing description of what the member is currently doing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_task: Option<String>,
+    /// Number of inbox messages durably consumed by terminal resident turns.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub resident_cursor: u64,
+    /// Present only after work starts and before it reaches a terminal/idle state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resident_work: Option<ResidentWorkProjection>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResidentWorkProjection {
+    pub epoch: ActorEpoch,
+    pub inbox_through: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -508,6 +526,8 @@ impl Projection {
                         mode: *mode,
                         status: RosterStatus::default(),
                         current_task: None,
+                        resident_cursor: 0,
+                        resident_work: None,
                     });
                 entry.session = *agent_session;
                 entry.agent_type = agent_type.clone();
@@ -524,6 +544,28 @@ impl Projection {
                     if current_task.is_some() {
                         entry.current_task = current_task.clone();
                     }
+                    if *status != RosterStatus::Busy
+                        && let Some(work) = entry.resident_work.take()
+                    {
+                        entry.resident_cursor = entry.resident_cursor.max(work.inbox_through);
+                    }
+                }
+            }
+            Event::ResidentWorkStarted {
+                actor_session,
+                handle,
+                epoch,
+                inbox_through,
+                ..
+            } => {
+                if let Some(entry) = self.team.roster.get_mut(handle)
+                    && entry.session == *actor_session
+                    && entry.mode.is_resident()
+                {
+                    entry.resident_work = Some(ResidentWorkProjection {
+                        epoch: *epoch,
+                        inbox_through: *inbox_through,
+                    });
                 }
             }
             Event::ChannelJoined {

@@ -42,6 +42,22 @@ The current runtime read path is event-log based. Tables such as `message` and
 `part` exist in the schema, but `read_projection` currently folds from
 `event_log` rather than querying materialized message rows.
 
+Migration `0005_resident_actor_claim.sql` adds one narrow coordination table,
+`resident_actor_claim`, keyed by the stable resident session identity. It holds
+only a monotonic epoch, the current per-process owner identity, and
+`active|released` state. The existing `admission_journal` gains nullable
+`actor_id`/`actor_epoch` columns only for resident-originated operations; no
+second operation/effect journal is introduced.
+
+Claim acquisition, takeover, release, resident event append, and actor-bound
+admission transitions use indexed point checks inside SQLite transactions.
+Release terminalizes the exact actor/epoch's nonterminal admission rows before
+marking the full claim tuple reusable. Startup enumerates active resident
+claims once, advances their epochs before runtime readiness, runs the existing
+global abort only for non-actor rows, then aborts old actor rows through each
+recovered claim. A logical release recorded during restart never credits the
+new process's empty in-memory governor.
+
 ## Event Log
 
 `append_event` inserts:
@@ -56,6 +72,11 @@ SQLite assigns the monotonic `seq`, which becomes `Envelope.seq`.
 This is a full replay log, not a rendered transcript cache. Persisted events can
 include prompts, tool-call inputs, tool outputs, reasoning deltas, command
 metadata, context file paths, absolute workdir paths, and token usage data.
+
+`ResidentWorkStarted` is the only added resident recovery marker. It records
+the stable actor session, epoch, handle, and inbox boundary, but no tool output
+or external-effect payload. The shared reducer clears it and advances the
+durable inbox cursor when the resident reaches an idle/terminal activity state.
 
 `replay(session)` loads all rows for one session ordered by `seq` and deserializes
 each payload into an `Envelope`.

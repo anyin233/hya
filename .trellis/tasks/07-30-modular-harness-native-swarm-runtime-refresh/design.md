@@ -2,11 +2,11 @@
 
 ## 1. Planning status and evidence anchor
 
-This document is a **target design**, not an implementation claim. Release
-`0.34.5` is committed/pushed at
-`95f4fe20b3750d376023384d869a52da1e84201f`; remote CI run `30612919698` is
-green. The user has now authorized only the `0.34.6` MCP/plugin
-desired-observed-effective reconciliation and stable-source slice.
+This document combines future target design with explicitly marked delivered
+contracts. Release `0.34.6` is committed/pushed at
+`680f9fb535fc48f71f9aead64cc3d3d30161678a`; remote CI run `30634501761`
+attempt 2 is green. The user has now authorized only the `0.34.7` resident
+recovery, TTL-free actor claim/epoch, and minimal correctness-fencing slice.
 Every later patch and every production/owner gate remains unauthorized until
 its recorded entry conditions are met.
 
@@ -22,7 +22,7 @@ its recorded entry conditions are met.
   is rebased to that newer implementation base, while dirty `main` remains at
   the audit commit.
 - `[workspace.package].version` at the audit anchor is `0.34.2`; delivered
-  releases `0.34.3` through `0.34.5` are in the isolated branch, and `0.34.6` is
+  releases `0.34.3` through `0.34.6` are in the isolated branch, and `0.34.7` is
   the active release target.
 - Before this task directory was created, `git status --porcelain` contained
   exactly 19 user-owned entries. They are enumerated in
@@ -64,7 +64,7 @@ This section overrides any broader exploratory target below:
   provenance. A/B/C execution, context transfer, and resident idle/turn
   semantics still require explicit owner selection;
 - the active patch/release sequence is authoritative in
-  `research/next-step-roadmap.md`; only `0.34.6` is active now.
+  `research/next-step-roadmap.md`; only `0.34.7` is active now.
 
 ### 1.2 Controlling native-only cutover ruling
 
@@ -90,7 +90,7 @@ deterministically at build time, embedded read-only with a digest-bound index,
 and merged with installed packages into one immutable generation. The
 authoritative patch order is in section 19 and
 `research/next-step-roadmap.md`. That ruling did not broaden the then-active
-`0.34.3` slice and does not broaden the active `0.34.6` boundary.
+`0.34.3` slice and does not broaden the active `0.34.7` boundary.
 
 ## 2. Five target gaps
 
@@ -330,7 +330,7 @@ No public configuration, desired/observed/effective resource state, plugin
 respawn declaration, namespace migration, Bundle behavior, or permission
 reinterpretation is introduced in this boundary.
 
-### 5.1.2 Active `0.34.6` reconciliation boundary
+### 5.1.2 Delivered `0.34.6` reconciliation boundary
 
 `0.34.6` consumes the `0.34.5` publisher without creating another effective
 authority:
@@ -782,49 +782,64 @@ replayable.
 
 ## 9. Lane E — actor and effect fencing
 
-### 9.1 Durable actor state
+### 9.1 Delivered `0.34.7` resident claim
 
-For every logical actor persist:
-
-- `ActorId`, current `actor_epoch`, root/session/handle and agent identity;
-- desired mode, pinned bundle/binding, admission class, and current lease;
-- inbox/mail range, durable cursor/acknowledgement, pending wake reason;
-- parent/child wait dependencies, quiescence sequence, budgets, cancellation,
-  and terminal reason.
-
-Startup sequence:
-
-1. replay authoritative actor/team/admission state;
-2. reconcile uncertain leases and operations before admitting new work;
-3. allocate and commit a higher `actor_epoch` for each resumed incarnation;
-4. rebuild in-memory caches/tasks only for admitted active phases;
-5. schedule pending mail/wakes through `AdmissionAuthority`;
-6. enable notifications after durable state and fences agree.
-
-Broadcast/notify and in-memory maps are wake optimizations only. Lag recovery
-replays durable state; it does not assume an actor already exists in memory.
-
-### 9.2 Operation journal
-
-An operation record contains its stable ID, actor and actor epoch, Turn attempt,
-binding/declaration, effect class, input digest, the applicable existing
-PermissionPlane decision evidence, and one of:
+`ActorId` is the resident's already-persisted agent-session `SessionId`, not a
+PID, `MemberId`, or runtime generation. One narrow SQLite table stores:
 
 ```text
-planned -> authorized -> started
-  -> committed | failed | indeterminate
+resident_actor_claim(
+  actor_id PRIMARY KEY,
+  epoch INTEGER NOT NULL,
+  owner_run_id NOT NULL,
+  state active|released
+)
 ```
 
-Adapters declare effects as pure, idempotent, reversible, reconcilable, or
-non-idempotent. Recovery rules are class-specific:
+The in-memory `ActorClaim { actor_id, epoch, owner_run_id }` is an internal
+execution capability. `OwnerRunId` is generated once per harness process and
+is persisted only in claim rows/diagnostics. `try_claim_new` succeeds only for
+a never-claimed or released actor; simultaneous ordinary claims have exactly
+one winner. `recover_claim` is a startup-only takeover that transactionally
+increments epoch. `release_claim` requires the full tuple and is idempotent.
 
-- pure/idempotent journaled work may replay under the same `OperationId`;
-- reversible work records and tests its compensation;
-- reconcilable work queries the authoritative external state before retry;
-- an indeterminate non-idempotent effect stops for explicit reconciliation.
+This is an incarnation fence, not a time lease. There is no TTL, heartbeat,
+wall-clock expiry, background lease supervisor, distributed lock, consensus,
+HA, or active-active behavior.
 
-All actor writes, mail acknowledgements, results, and effect completions carry
-the current `actor_epoch`. Stale incarnations cannot advance durable state.
+### 9.2 Delivered recovery and mutation boundary
+
+Startup remains closed to spawn/send/wait while it:
+
+1. advances all active actor epochs, invalidating every old capability;
+2. fail-closed aborts old nonterminal `admission_journal` rows without
+   crediting the fresh process governor;
+3. replays the canonical roster, inbox, actor-session, and member projection;
+4. terminalizes running tool parts, assistant messages, children, and the
+   root resident-work marker without retry;
+5. recreates the existing `ResidentSupervisor` task owner and notifies only
+   committed queued-not-started work.
+
+`ResidentWorkStarted` is committed before a resident may dispatch a provider,
+tool, or child. Its inbox boundary lets recovery consume the aborted running
+batch while preserving mail committed after that boundary. Existing
+`ToolError`, `MessageFinished`, `MemberFinished`, and activity events record
+the terminal state; no second resident read model or effect event family is
+introduced.
+
+Resident canonical event/mailbox/child commits use one store fence-and-append
+transaction. Resident-originated entries in the existing `admission_journal`
+carry nullable actor ID/epoch and its existing transitions perform the same
+claim check. Tool dispatch checks the claim at the actual dispatch boundary;
+the result is checked again and can enter canonical state only through the
+transactional fence. Old `TurnBinding` snapshots remain alive independently of
+actor takeover.
+
+The guarantee ends at canonical local state. External filesystem/network/API
+effects completed before takeover cannot be reversed or made exactly once.
+Running/in-flight work is aborted and never automatically retried. A future
+effect taxonomy, remote reconciliation framework, durable multi-resource
+scheduler, and 100/256 certification remain outside `0.34.7`.
 
 ## 10. Lane F — independent update TCB
 

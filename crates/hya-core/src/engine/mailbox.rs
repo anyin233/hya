@@ -30,31 +30,6 @@ impl SessionEngine {
         Ok(self.session_lineage(session).await?.0)
     }
 
-    /// Append an `AgentRegistered` binding `handle` (+ its type + scheduling
-    /// `mode`) to `agent_session` in the team-root log. Idempotent-friendly: the
-    /// reducer keys the roster by handle, so re-registering the same handle
-    /// refreshes the binding without dropping its live status.
-    pub(crate) async fn record_agent_registered(
-        &self,
-        root: SessionId,
-        agent_session: SessionId,
-        handle: String,
-        agent_type: AgentName,
-        mode: SubagentMode,
-    ) -> Result<(), CoreError> {
-        self.emit(
-            root,
-            Event::AgentRegistered {
-                session: root,
-                agent_session,
-                handle,
-                agent_type,
-                mode,
-            },
-        )
-        .await
-    }
-
     /// Append an `AgentActivityChanged` updating a member's live roster status
     /// (idle ⇄ busy / done / failed) and optional current-task label. Appended to
     /// the team-root log by the resident supervisor (ADR-0002).
@@ -83,6 +58,14 @@ impl SessionEngine {
         &self,
         root: SessionId,
     ) -> Result<String, CoreError> {
+        self.ensure_root_registered_for_actor(root, None).await
+    }
+
+    pub(crate) async fn ensure_root_registered_for_actor(
+        &self,
+        root: SessionId,
+        actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<String, CoreError> {
         let projection = self.read_projection(root).await?;
         if let Some(entry) = projection
             .team
@@ -100,12 +83,16 @@ impl SessionEngine {
         // The main/root agent is registered as transient: it is the team root, not
         // a resident subagent. Its actor behaviour (woken by child mail /
         // quiescence) is driven by the resident supervisor, not this flag.
-        self.record_agent_registered(
+        self.emit_for_actor(
+            actor_claim,
             root,
-            root,
-            MAIN_HANDLE.to_string(),
-            agent_type,
-            SubagentMode::Transient,
+            Event::AgentRegistered {
+                session: root,
+                agent_session: root,
+                handle: MAIN_HANDLE.to_string(),
+                agent_type,
+                mode: SubagentMode::Transient,
+            },
         )
         .await?;
         Ok(MAIN_HANDLE.to_string())
@@ -152,6 +139,18 @@ impl SessionEngine {
         kind: MailKind,
         body: String,
     ) -> Result<MailReceipt, CoreError> {
+        self.mail_send_for_actor(from_session, to, kind, body, None)
+            .await
+    }
+
+    pub(crate) async fn mail_send_for_actor(
+        &self,
+        from_session: SessionId,
+        to: MailEndpoint,
+        kind: MailKind,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
         // Count recipients from the membership snapshot BEFORE the append; a direct
@@ -166,7 +165,8 @@ impl SessionEngine {
                 .get(channel)
                 .map_or(0, |ch| ch.members.len()),
         };
-        self.emit(
+        self.emit_for_actor(
+            actor_claim,
             root,
             Event::MailSent {
                 session: root,
@@ -189,10 +189,12 @@ impl SessionEngine {
         &self,
         session: SessionId,
         channel: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
     ) -> Result<(), CoreError> {
         let root = self.team_root(session).await?;
         let member = self.resolve_handle(root, session).await?;
-        self.emit(
+        self.emit_for_actor(
+            actor_claim,
             root,
             Event::ChannelJoined {
                 session: root,
@@ -208,10 +210,12 @@ impl SessionEngine {
         &self,
         session: SessionId,
         channel: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
     ) -> Result<(), CoreError> {
         let root = self.team_root(session).await?;
         let member = self.resolve_handle(root, session).await?;
-        self.emit(
+        self.emit_for_actor(
+            actor_claim,
             root,
             Event::ChannelLeft {
                 session: root,
@@ -316,22 +320,30 @@ mod tests {
             .await
             .unwrap();
         engine
-            .record_agent_registered(
+            .emit_for_actor(
+                None,
                 root,
-                reviewer_1,
-                "reviewer-1".to_string(),
-                AgentName::new("reviewer"),
-                SubagentMode::Resident,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: reviewer_1,
+                    handle: "reviewer-1".to_string(),
+                    agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Resident,
+                },
             )
             .await
             .unwrap();
         engine
-            .record_agent_registered(
+            .emit_for_actor(
+                None,
                 root,
-                reviewer_2,
-                "reviewer-2".to_string(),
-                AgentName::new("reviewer"),
-                SubagentMode::Resident,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: reviewer_2,
+                    handle: "reviewer-2".to_string(),
+                    agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Resident,
+                },
             )
             .await
             .unwrap();
@@ -339,11 +351,11 @@ mod tests {
         // Both members subscribe using their own child session (handle resolved
         // from the roster), and the MAIN agent posts to the channel.
         engine
-            .channel_join(reviewer_1, "build".to_string())
+            .channel_join(reviewer_1, "build".to_string(), None)
             .await
             .unwrap();
         engine
-            .channel_join(reviewer_2, "build".to_string())
+            .channel_join(reviewer_2, "build".to_string(), None)
             .await
             .unwrap();
         let receipt = engine

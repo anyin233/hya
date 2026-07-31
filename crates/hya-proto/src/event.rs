@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ConfigGeneration, EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId};
+use crate::ids::{
+    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId,
+};
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
@@ -274,6 +276,16 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_task: Option<String>,
     },
+    /// Durable boundary between queued resident work and a turn that may dispatch
+    /// tools, children, or provider requests. Appended before those effects.
+    ResidentWorkStarted {
+        session: SessionId,
+        actor_session: SessionId,
+        handle: String,
+        epoch: ActorEpoch,
+        /// Inbox length covered by this coalesced resident turn.
+        inbox_through: u64,
+    },
     /// A message from one handle to another handle or a `#channel`. Channel sends
     /// fan out to every current subscriber in the deterministic reducer, so no
     /// recipient set is baked into the event.
@@ -364,6 +376,7 @@ impl Event {
             | Event::MemberFinished { session, .. } => Some(*session),
             Event::AgentRegistered { session, .. }
             | Event::AgentActivityChanged { session, .. }
+            | Event::ResidentWorkStarted { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. } => Some(*session),
@@ -465,6 +478,13 @@ mod tests {
                 handle: "reviewer-3".to_string(),
                 status: RosterStatus::Busy,
                 current_task: Some("reviewing".to_string()),
+            },
+            Event::ResidentWorkStarted {
+                session: root,
+                actor_session: agent,
+                handle: "reviewer-3".to_string(),
+                epoch: ActorEpoch::INITIAL,
+                inbox_through: 2,
             },
             Event::MailSent {
                 session: root,

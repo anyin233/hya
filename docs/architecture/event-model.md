@@ -11,6 +11,7 @@ It is shared by the engine, store, provider layer, server, client, and TUI.
 - messages
 - parts
 - tool calls
+- resident actor epochs
 - immutable runtime configuration generations
 - team runs
 - members
@@ -41,6 +42,7 @@ canonical runtime stream. Major event groups are:
 - tool input and tool result lifecycle
 - tool-part state updates
 - runtime errors
+- resident work-started fencing markers
 
 An `Envelope` wraps an event with:
 
@@ -90,6 +92,9 @@ envelopes into a `Projection`:
 - tool results, errors, and `ToolPartUpdated` finalize or replace tool state.
 - delete events remove messages or parts from the projected view.
 - `MessageFinished` records finish reason.
+- `ResidentWorkStarted` records the epoch and inbox boundary before a resident
+  turn may dispatch; a later idle/terminal activity clears it and advances the
+  roster's durable resident cursor.
 
 The reducer is idempotent by sequence number:
 

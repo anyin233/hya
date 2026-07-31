@@ -253,6 +253,75 @@ impl ConfigGeneration {
     }
 }
 
+/// Monotonic incarnation number for one persisted resident actor identity.
+///
+/// This is deliberately independent from [`ConfigGeneration`]: a runtime
+/// refresh does not take over an actor, and an actor takeover does not replace a
+/// turn's retained runtime snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ActorEpoch(u64);
+
+impl ActorEpoch {
+    pub const INITIAL: Self = Self(1);
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn checked_next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(next) => Some(Self(next)),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_storage(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+/// Per-process diagnostic identity for resident claim ownership.
+///
+/// This type is intentionally not serializable: it is an internal execution
+/// capability component, not part of the public event or API wire protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct OwnerRunId(Uuid);
+
+impl OwnerRunId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    #[must_use]
+    pub const fn from_storage(value: Uuid) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for OwnerRunId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Internal, non-wire capability for one resident actor incarnation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActorClaim {
+    pub actor_id: SessionId,
+    pub epoch: ActorEpoch,
+    pub owner_run_id: OwnerRunId,
+}
+
 /// Internal durable-admission identity derived from the persisted tool call.
 ///
 /// The fixed namespace separates admission identities from every other UUID

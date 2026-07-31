@@ -87,10 +87,10 @@ Gate abbreviations:
 | --- | --- | --- | --- | --- | --- |
 | `MSR-ADM-001` | P0 | `source-confirmed` | spawn ingress | Unbounded spawn intake creates one Tokio task per request. | CHAR, TDD, BENCH |
 | `MSR-ADM-002` | P0 | `source-confirmed` | admission | Background transient sessions are created before reserve; residents bypass the transient reserve/depth/per-run path. | CHAR, TDD, FAULT |
-| `MSR-RCV-001` | P0 | `source-confirmed` | resident recovery | Durable roster/mail state does not reconstruct executable resident actors after restart. | CHAR, TDD, FAULT |
+| `MSR-RCV-001` | P0 | `source-confirmed`; `0.34.7` focused closure `experimentally-verified`, remote pending | resident recovery | Audit HEAD did not reconstruct residents; `0.34.7` now fences, replays, terminalizes running work, and recreates queued actors before readiness. | CHAR, TDD, FAULT, remote CI |
 | `MSR-BND-001` | P0 | `source-confirmed` | ToolRegistry / Turn | Schemas and resolution read a mutable registry independently; a Turn attempt pins no whole binding. | CHAR, TDD, FAULT |
 | `MSR-SEC-001` | P2 | `target-gap` | permission claims | No monotonic live-security view exists; the owner has explicitly removed that target from the current cycle. | documentation, current PermissionPlane TDD |
-| `MSR-FEN-001` | P0 | `target-gap` | actor/effect fencing | Stable operation identity and binding/actor epoch correctness fences are absent. | CHAR, TDD, FAULT |
+| `MSR-FEN-001` | P0 | `target-gap`; local operation/actor closure `experimentally-verified`, remote pending | actor/effect fencing | `0.34.4` delivered OperationId/admission and `0.34.7` adds TTL-free actor-epoch canonical-state fences; arbitrary external exactly-once remains explicitly unsupported. | CHAR, TDD, FAULT, remote CI |
 | `MSR-HAR-001` | P1 | `target-gap` | modular harness | No deterministic cross-lane harness controls provider, process, clock, crash, and store boundaries. | TDD |
 | `MSR-CFG-001` | P1 | `source-confirmed` | configuration | Runtime composition directly makes independently discovered managers and planes effective. | CHAR, TDD |
 | `MSR-REF-001` | P1 | `target-gap` | runtime refresh | No one immutable generation and atomic activation lifecycle spans tools, MCP, plugins, agents, skills, and instructions. | TDD, FAULT |
@@ -169,6 +169,14 @@ Gate abbreviations:
 ### `MSR-RCV-001` — resident execution is not rehydrated
 
 - **Evidence status:** `source-confirmed`.
+- **`0.34.7` closure status:** `source-verified` and focused
+  `experimentally-verified`; full workspace/remote CI pending. Startup now
+  advances every active actor claim before readiness, fail-closed aborts old
+  admissions/running projections, recreates the existing resident task owner,
+  and notifies only durable queued-not-started work. One running marker plus
+  the projected inbox cursor distinguishes retryable queue from aborted work.
+  Repeated recovery, running child/tool/message terminalization, and unchanged
+  transient paths have deterministic tests.
 - **Source and symbols:** `crates/hya-core/src/resident.rs::ResidentSupervisor`
   owns an in-memory `teams` map. `ResidentSupervisor::start` begins without
   reconstructed teams, and `ResidentSupervisor::team_for` creates an empty
@@ -256,6 +264,14 @@ Gate abbreviations:
 ### `MSR-FEN-001` — missing stable operation and actor/effect fences
 
 - **Evidence status:** `target-gap`.
+- **`0.34.4`/`0.34.7` closure status:** internal `OperationId`, durable
+  admission idempotency, one-winner resident claim, monotonic actor epoch,
+  actor-bound admission transitions, and claim-aware canonical event/mail/
+  child/tool-result commits are `source-verified` and focused
+  `experimentally-verified`; full workspace/remote CI pending. The guarantee is
+  deliberately limited to canonical local state. Filesystem/network/API
+  effects already performed before takeover remain non-reversible and are not
+  claimed exactly once.
 - **Source and symbols:** current identity types in
   `crates/hya-proto/src/ids.rs` do not include the planned binding, operation,
   or actor-incarnation identities. Resident execution in
