@@ -610,6 +610,61 @@ test and binary build gates.
 A focused follow-up commit/push and a fully green rerun of all draft PR gates
 are still required; `0.34.5` remains blocked until then.
 
+### 5A.6 Browser/Pro PTY causal repair evidence
+
+Gate-repair commit `d4825a8c35d86c37c19f87800c70a7eebd93a6b7`
+was pushed to draft PR #24. Remote run `30607763589` then passed the
+80-column case but timed out at the still-ambiguous
+`worker-1 focused header` in the 140-column case before every Rust step. The
+MacBook Air coordinator returned
+`CONSULT-2026-07-31-PTY-HARNESS-07`, rejecting a concurrency/serialization
+change and constraining the repair to the existing PTY test helper, proxy, and
+observable transcript boundaries.
+
+The resulting TDD and causal evidence is:
+
+- `semantic_input_flushes_before_next_action` uses a test-local `FileSinkLike`
+  whose asynchronous write remains pending until awaited. RED received
+  `["", "chord-a"]` instead of `["chord-a", "chord-b"]`; GREEN awaits
+  `write` and then the immediately following `flush`.
+- Every semantic input in this PTY spec now uses that narrow helper. Flush is
+  recorded only as delivery-boundary evidence, never as proof that the TUI
+  consumed the input.
+- The ambiguous waits are now
+  `open-by-handle/worker-1-focused-header` and
+  `ctrl-x-dot/worker-1-focused-header`.
+- The bounded diagnostic contains a stripped last frame, raw transcript tail,
+  backend and PTY PID/exit/signal status, and the most recent 64 monotonic
+  phase records. The existing proxy records request observations with the
+  active case/callsite and request path; no endpoint, event, acknowledgement,
+  product hook, or pipe drain was added.
+- Roster opening now waits for the existing tree request, visible roster, and
+  filtered openable child before Enter/final-render observation. The
+  worker-cycle path establishes `researcher-1` as the visible focused
+  predecessor before the single `Ctrl+X .` action.
+- A diagnostic local run proved the open-by-handle worker path fully reached
+  final render, while the old `Ctrl+X .` precondition stably rendered
+  `scroll-1`; this rejected missing delivery and exposed the old
+  Main-to-first-observation assumption. No TUI focus/product behavior changed.
+
+Verification after the final local GREEN:
+
+- `bun run typecheck` passed;
+- the helper regression passed;
+- focused CI-mode PTY tests passed 3/3 at 80 and 140 columns;
+- the complete CI-mode TUI suite passed 44/44 (the original 43 plus the new
+  deterministic helper regression);
+- `cargo fmt --all --check` passed;
+- `cargo clippy --workspace --all-targets -- -D warnings` passed;
+- `cargo test --workspace` passed;
+- `cargo build --workspace --bins` passed;
+- no `crates/**`, product TUI source, workflow, dependency, timeout, version,
+  or changelog file changed in this repair.
+
+One atomic test-harness commit, push to the existing branch, and a fully green
+draft-PR CI run remain required. `0.34.5` stays blocked until that terminal
+remote result.
+
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 
 The sections below preserve the original audit decomposition. They are not
