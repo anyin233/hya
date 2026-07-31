@@ -59,25 +59,37 @@ pub struct SpawnRequest {
     pub members: Vec<SpawnMember>,
     pub cancel: CancellationToken,
     pub background: bool,
-    pub reply: oneshot::Sender<Vec<MemberOutcome>>,
+    pub reply: oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>,
 }
 
-#[derive(Error, Debug)]
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum SpawnError {
     #[error("spawner channel unavailable")]
     Unavailable,
+    #[error("spawn admission overloaded")]
+    Overloaded,
 }
 
 #[derive(Clone)]
 pub struct SpawnerPlane {
-    tx: mpsc::UnboundedSender<SpawnRequest>,
+    tx: mpsc::Sender<SpawnRequest>,
     session: Option<SessionId>,
 }
 
 impl SpawnerPlane {
+    /// Build a minimally buffered plane for disconnected engines and focused tests.
+    ///
+    /// Product runtime wiring should use [`Self::with_capacity`] with its existing
+    /// configured subagent budget.
     #[must_use]
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<SpawnRequest>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub fn new() -> (Self, mpsc::Receiver<SpawnRequest>) {
+        Self::with_capacity(1)
+    }
+
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> (Self, mpsc::Receiver<SpawnRequest>) {
+        let capacity = capacity.clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
+        let (tx, rx) = mpsc::channel(capacity);
         (Self { tx, session: None }, rx)
     }
 
@@ -119,8 +131,11 @@ impl SpawnerPlane {
             background,
             reply: tx,
         };
-        self.tx.send(req).map_err(|_| SpawnError::Unavailable)?;
-        rx.await.map_err(|_| SpawnError::Unavailable)
+        self.tx.try_send(req).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => SpawnError::Overloaded,
+            mpsc::error::TrySendError::Closed(_) => SpawnError::Unavailable,
+        })?;
+        rx.await.map_err(|_| SpawnError::Unavailable)?
     }
 }
 
@@ -153,12 +168,12 @@ mod tests {
         let req = rx.recv().await.expect("request");
         assert_eq!(req.members.len(), 1);
         req.reply
-            .send(vec![MemberOutcome {
+            .send(Ok(vec![MemberOutcome {
                 member: "m1".to_string(),
                 session: "s1".to_string(),
                 status: "done".to_string(),
                 summary: "ok".to_string(),
-            }])
+            }]))
             .expect("reply");
         let outcomes = task.await.expect("join").expect("outcomes");
         assert_eq!(outcomes.len(), 1);
@@ -170,5 +185,55 @@ mod tests {
         let (plane, _rx) = SpawnerPlane::new();
         let result = plane.spawn(Vec::new(), CancellationToken::new()).await;
         assert!(matches!(result, Err(SpawnError::Unavailable)));
+    }
+
+    #[tokio::test]
+    async fn bound_spawn_with_closed_receiver_is_unavailable() {
+        let (plane, rx) = SpawnerPlane::new();
+        drop(rx);
+
+        let result = plane
+            .for_session(SessionId::new())
+            .spawn(vec![SpawnMember::default()], CancellationToken::new())
+            .await;
+
+        assert!(matches!(result, Err(SpawnError::Unavailable)));
+    }
+
+    #[test]
+    fn spawn_queue_capacity_is_clamped_to_tokio_limit() {
+        let (_plane, rx) = SpawnerPlane::with_capacity(usize::MAX);
+        assert_eq!(rx.max_capacity(), tokio::sync::Semaphore::MAX_PERMITS);
+    }
+
+    #[tokio::test]
+    async fn full_spawn_queue_fails_fast_with_overload() {
+        let (plane, rx) = SpawnerPlane::new();
+        let queued_plane = plane.for_session(SessionId::new());
+        let queued = tokio::spawn(async move {
+            queued_plane
+                .spawn(vec![SpawnMember::default()], CancellationToken::new())
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while rx.len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first request was not queued");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            plane
+                .for_session(SessionId::new())
+                .spawn(vec![SpawnMember::default()], CancellationToken::new()),
+        )
+        .await
+        .expect("full spawn queue must fail fast");
+
+        queued.abort();
+        assert!(matches!(result, Err(SpawnError::Overloaded)));
+        assert_eq!(rx.len(), 1, "overloaded request must not enter the queue");
     }
 }

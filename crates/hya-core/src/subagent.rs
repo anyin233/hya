@@ -5,6 +5,7 @@ use hya_proto::{
     MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
 };
 use serde::Serialize;
+use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
@@ -101,6 +102,14 @@ pub struct MemberEvidence {
 #[derive(Clone, Debug, Serialize)]
 pub struct TeamEvidenceEnvelope {
     pub members: Vec<MemberEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum TeamAdmissionError {
+    #[error("max recursion depth reached")]
+    MaxDepth,
+    #[error("run agent budget exhausted")]
+    BudgetExhausted,
 }
 
 pub struct MemberSpec {
@@ -206,6 +215,31 @@ fn rejected_evidence(id: MemberId, reason: &str) -> MemberEvidence {
     }
 }
 
+/// Reserve an entire team before any child session or request-owned task exists.
+///
+/// Background spawns need an all-or-nothing decision because their caller gets
+/// one request-level typed result. Foreground batches retain [`run_team`]'s
+/// historical partial-admission evidence.
+pub async fn pre_admit_team(
+    engine: &SessionEngine,
+    lead: SessionId,
+    members: usize,
+) -> Result<(), TeamAdmissionError> {
+    let Some(governor) = engine.governor() else {
+        return Ok(());
+    };
+    let (root, lead_depth) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
+    if lead_depth.saturating_add(1) > governor.max_depth() {
+        return Err(TeamAdmissionError::MaxDepth);
+    }
+    let want = u64::try_from(members).unwrap_or(u64::MAX);
+    if governor.try_reserve_exact(root, want) {
+        Ok(())
+    } else {
+        Err(TeamAdmissionError::BudgetExhausted)
+    }
+}
+
 /// Spawn each member as a supervised task in its own child session, run them in
 /// parallel, and collect evidence. A panicking or failing member becomes a
 /// `Failed` entry; it never takes down the supervisor or its peers.
@@ -222,8 +256,33 @@ pub async fn run_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
+    run_team_inner(engine, lead, specs, cancel, true).await
+}
+
+/// Run a team whose complete member set was reserved by [`pre_admit_team`].
+///
+/// This is the background continuation path; using it without a successful
+/// pre-admission would bypass the governor.
+pub async fn run_pre_admitted_team(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    specs: Vec<MemberSpec>,
+    cancel: CancellationToken,
+) -> Vec<MemberEvidence> {
+    run_team_inner(engine, lead, specs, cancel, false).await
+}
+
+async fn run_team_inner(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    specs: Vec<MemberSpec>,
+    cancel: CancellationToken,
+    reserve_admission: bool,
+) -> Vec<MemberEvidence> {
     let mut rejected: Vec<MemberEvidence> = Vec::new();
-    let specs: Vec<MemberSpec> = if let Some(gov) = engine.governor() {
+    let specs: Vec<MemberSpec> = if !reserve_admission {
+        specs
+    } else if let Some(gov) = engine.governor() {
         let (root, lead_depth) = engine.session_lineage(lead).await.unwrap_or((lead, 0));
         if lead_depth.saturating_add(1) > gov.max_depth() {
             let mut out = Vec::new();

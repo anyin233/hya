@@ -1,4 +1,9 @@
-# 0.34.2
+# 0.34.3
 
-- Fix home-screen tagline overlapping the 8-bit Hya logo by reserving full
-  logo row height and padding under the art.
+- Reject overloaded background transient and resident spawns before creating
+  child sessions or lifecycle events.
+- Bound the spawn request queue from the existing per-run admission budget and
+  return a typed overload immediately when admission or queue capacity is
+  exhausted.
+- Align the startup benchmark helper with the workspace formatting and lint
+  gates.

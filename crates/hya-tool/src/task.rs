@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::permission::{Action, Resource};
-use crate::spawn::{InlineAgent, SpawnMember};
+use crate::spawn::{InlineAgent, SpawnError, SpawnMember};
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 
 pub struct TaskTool;
@@ -277,7 +277,10 @@ impl Tool for TaskTool {
         } else {
             ctx.spawner.spawn(members.clone(), ctx.cancel.clone()).await
         }
-        .map_err(|e| ToolError::Other(e.to_string()))?;
+        .map_err(|error| match error {
+            SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
+            SpawnError::Unavailable => ToolError::Other(error.to_string()),
+        })?;
         if members.len() == 1 && outcomes.len() == 1 {
             let member = members.remove(0);
             let Some(outcome) = outcomes.into_iter().next() else {

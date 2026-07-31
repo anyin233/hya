@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry,
+    WebSearchPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -89,12 +90,12 @@ async fn subagent_can_spawn_nested_task() {
         "nested spawn is parented at the subagent"
     );
     req.reply
-        .send(vec![MemberOutcome {
+        .send(Ok(vec![MemberOutcome {
             member: "mbr_n".to_string(),
             session: "ses_grandchild".to_string(),
             status: "done".to_string(),
             summary: "nested done".to_string(),
-        }])
+        }]))
         .unwrap();
     let out = handle.await.unwrap().unwrap();
     assert_eq!(out["metadata"]["sessionId"], "ses_grandchild");
@@ -144,12 +145,12 @@ async fn task_foreground_result_uses_open_code_output_shape() {
     assert_eq!(req.members[0].prompt, "Find the routing entry points");
     assert_eq!(req.members[0].subagent_type, "explore");
     req.reply
-        .send(vec![MemberOutcome {
+        .send(Ok(vec![MemberOutcome {
             member: "mbr_1".to_string(),
             session: "ses_child".to_string(),
             status: "done".to_string(),
             summary: "routing summary".to_string(),
-        }])
+        }]))
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();
@@ -190,12 +191,12 @@ async fn task_empty_or_sentinel_task_id_creates_fresh_spawn() {
             "sentinel/empty task_id must not resume"
         );
         req.reply
-            .send(vec![MemberOutcome {
+            .send(Ok(vec![MemberOutcome {
                 member: "mbr_1".to_string(),
                 session: "ses_child".to_string(),
                 status: "done".to_string(),
                 summary: "ok".to_string(),
-            }])
+            }]))
             .unwrap();
         handle.await.unwrap().unwrap();
     }
@@ -256,12 +257,12 @@ async fn task_forwards_task_id_to_spawner_for_resume() {
     let req = rx.recv().await.unwrap();
     assert_eq!(req.members[0].task_id.as_deref(), Some(child.as_str()));
     req.reply
-        .send(vec![MemberOutcome {
+        .send(Ok(vec![MemberOutcome {
             member: "mbr_1".to_string(),
             session: child.clone(),
             status: "done".to_string(),
             summary: "continued".to_string(),
-        }])
+        }]))
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();
@@ -314,7 +315,7 @@ async fn task_batch_ignores_invalid_top_level_task_id() {
     assert_eq!(req.members.len(), 2);
     assert!(req.members.iter().all(|member| member.task_id.is_none()));
     req.reply
-        .send(vec![
+        .send(Ok(vec![
             MemberOutcome {
                 member: "mbr_1".to_string(),
                 session: SessionId::new().to_string(),
@@ -327,7 +328,7 @@ async fn task_batch_ignores_invalid_top_level_task_id() {
                 status: "done".to_string(),
                 summary: "runtime inspected".to_string(),
             },
-        ])
+        ]))
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();
@@ -363,6 +364,43 @@ async fn task_rejects_invalid_task_id() {
 }
 
 #[tokio::test]
+async fn task_preserves_typed_spawn_overload() {
+    let parent = SessionId::new();
+    let (spawner, rx) = SpawnerPlane::new();
+    let queued_plane = spawner.for_session(parent);
+    let queued = tokio::spawn(async move {
+        queued_plane
+            .spawn(vec![SpawnMember::default()], CancellationToken::new())
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while rx.len() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("first request was not queued");
+
+    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let error = tool
+        .execute(
+            &ctx,
+            json!({
+                "description": "Overloaded spawn",
+                "prompt": "must not queue",
+                "subagent_type": "explore"
+            }),
+        )
+        .await
+        .unwrap_err();
+
+    queued.abort();
+    assert!(matches!(error, ToolError::Overloaded(message) if message.contains("overloaded")));
+    assert_eq!(rx.len(), 1, "overloaded task must not enter the queue");
+}
+
+#[tokio::test]
 async fn task_background_returns_running_task_result() {
     let parent = SessionId::new();
     let child = SessionId::new().to_string();
@@ -386,12 +424,12 @@ async fn task_background_returns_running_task_result() {
     let req = rx.recv().await.unwrap();
     assert!(req.background);
     req.reply
-        .send(vec![MemberOutcome {
+        .send(Ok(vec![MemberOutcome {
             member: "mbr_1".to_string(),
             session: child.clone(),
             status: "running".to_string(),
             summary: "The task is working in the background.".to_string(),
-        }])
+        }]))
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();

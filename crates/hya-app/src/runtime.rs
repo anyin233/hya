@@ -6,8 +6,8 @@ use anyhow::Context as _;
 use hya_core::{
     AgentSpec, CategoryRegistry, CompactionConfig, CreateSession, EventBus, MemberSpec,
     MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine, SubagentGovernor,
-    Summarizer, TeamEvidenceEnvelope, build_system_prompt, project_envelope, run_mailbox_service,
-    run_team,
+    Summarizer, TeamEvidenceEnvelope, build_system_prompt, pre_admit_team, project_envelope,
+    run_mailbox_service, run_pre_admitted_team, run_team,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
@@ -17,8 +17,9 @@ use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnMember,
-    SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry, WebSearchConfig, WebSearchPlane,
+    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
+    SpawnMember, SpawnRequest, SpawnerPlane, ToolPermission, ToolRegistry, WebSearchConfig,
+    WebSearchPlane,
 };
 use std::collections::BTreeMap;
 
@@ -260,7 +261,7 @@ pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
 }
 
 pub fn spawn_team_supervisor(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<SpawnRequest>,
+    mut rx: tokio::sync::mpsc::Receiver<SpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
     include_global_agents: bool,
@@ -270,6 +271,14 @@ pub fn spawn_team_supervisor(
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
+            if req.background
+                && pre_admit_team(engine.as_ref(), req.parent, req.members.len())
+                    .await
+                    .is_err()
+            {
+                let _ = req.reply.send(Err(SpawnError::Overloaded));
+                continue;
+            }
             let engine = engine.clone();
             let base = base.clone();
             let router = router.clone();
@@ -403,7 +412,7 @@ pub fn spawn_team_supervisor(
                         });
                     }
                     if let Some(reply) = reply.take() {
-                        let _ = reply.send(started);
+                        let _ = reply.send(Ok(started));
                     }
                     specs
                 } else {
@@ -426,7 +435,11 @@ pub fn spawn_team_supervisor(
                 // resident spawn replies immediately with the resident handles.
                 let mut outcomes = resident_outcomes;
                 if !specs.is_empty() {
-                    let evidence = run_team(engine.clone(), parent, specs, cancel).await;
+                    let evidence = if background {
+                        run_pre_admitted_team(engine.clone(), parent, specs, cancel).await
+                    } else {
+                        run_team(engine.clone(), parent, specs, cancel).await
+                    };
                     let envelope = TeamEvidenceEnvelope {
                         members: evidence.clone(),
                     };
@@ -442,7 +455,7 @@ pub fn spawn_team_supervisor(
                     }));
                 }
                 if !background && let Some(reply) = reply.take() {
-                    let _ = reply.send(outcomes);
+                    let _ = reply.send(Ok(outcomes));
                 }
             });
         }
@@ -539,12 +552,16 @@ pub async fn build_session_engine(
         )))
     };
     let (interaction, questions) = InteractionPlane::new();
-    let (spawner, spawn_rx) = SpawnerPlane::new();
+    let subagent_limits = crate::config::load_subagent_limits();
+    let spawn_queue_capacity = usize::try_from(subagent_limits.per_run_budget)
+        .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
+        .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
+    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
-    let governor = SubagentGovernor::new(crate::config::load_subagent_limits());
+    let governor = SubagentGovernor::new(subagent_limits);
     // Clone the router before it is moved into the engine so the team supervisor
     // can test category-candidate servability against the same live providers.
     let spawn_router = router.clone();

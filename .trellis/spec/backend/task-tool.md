@@ -69,3 +69,112 @@ if members.is_empty() {
     }
 }
 ```
+
+## Scenario: Bounded Background Spawn Admission
+
+### 1. Scope / Trigger
+
+- Trigger: changes to `SpawnerPlane`, background `task` dispatch, subagent
+  governor reservation, or resident/transient spawn supervision.
+- This is the `0.34.3` in-memory contract. Durable queueing, cancellation
+  refund, and recovery are separate future work.
+
+### 2. Signatures
+
+- `SpawnerPlane::with_capacity(capacity: usize)` returns a bounded Tokio
+  channel-backed plane and receiver.
+- `SpawnerPlane::spawn_background(...)` uses non-blocking `try_send`.
+- Full transport returns `SpawnError::Overloaded`; closed transport returns
+  `SpawnError::Unavailable`.
+- `TaskTool` preserves overload as `ToolError::Overloaded`, and the engine
+  serializes that typed tool failure as `"overloaded"`.
+- `pre_admit_team(engine, parent, member_count)` makes one all-or-none
+  depth/per-run-budget decision for a background request.
+
+### 3. Contracts
+
+- Runtime queue capacity derives from the existing resolved
+  `SubagentLimits::per_run_budget`, clamped to
+  `1..=tokio::sync::Semaphore::MAX_PERMITS` before constructing the channel.
+  Do not introduce `100`, `128`, or `256` as queue defaults.
+- Queue full fails immediately. The rejected request never enters the
+  supervisor, so it cannot create a request-owned task, child Session, or child
+  event.
+- Background transient and resident requests use the same pre-admission
+  boundary before the request-owned Tokio task,
+  `SessionEngine::create`, `ResidentSupervisor::ensure_main`, or
+  `spawn_resident`.
+- A pre-admitted transient continuation must not call the governor reserve a
+  second time.
+- Foreground batch partial-grant/depth evidence remains unchanged.
+- A rejected child may still produce the normal parent Turn's typed tool-error
+  event. “No event” applies to rejected child/session/member/roster state.
+
+### 4. Validation & Error Matrix
+
+- Queue has capacity -> request enters the supervisor.
+- Queue is full -> typed overload, immediate return, no enqueued request.
+- Queue receiver is closed -> typed unavailable.
+- Background request exceeds depth or exact remaining run budget -> typed
+  overload before child allocation.
+- Exact reservation cannot grant the whole request -> grant none; a later
+  fitting request still sees the unconsumed budget.
+- Admitted background transient -> child creation and execution proceed once;
+  budget is charged once.
+- Background resident denial -> no main/resident registration or child state.
+
+### 5. Good / Base / Bad Cases
+
+- Good: one queued request occupies a capacity-one transport; a second
+  background task immediately returns typed overload and never reaches the
+  receiver.
+- Base: one background transient fits the run budget, creates one child, and a
+  later request after budget exhaustion returns overload.
+- Bad: enqueue on an unbounded channel and create a Tokio task/child Session
+  before checking the governor.
+- Bad: pre-admit a background transient and then call the normal reserving
+  `run_team` path, consuming the run budget twice.
+
+### 6. Tests Required
+
+- `hya-tool` unit: fill a capacity-one `SpawnerPlane`; assert the next request
+  fails fast with `SpawnError::Overloaded` and receiver length stays one.
+- `hya-tool` unit: assert an explicitly bound plane whose receiver is closed
+  returns `SpawnError::Unavailable`, and an extreme requested capacity is
+  clamped without panicking.
+- `hya-tool/tests/task.rs`: assert `TaskTool` returns
+  `ToolError::Overloaded` without rewriting it as unavailable or input error.
+- `hya-core` unit: assert exact reservation is all-or-none.
+- `hya-app/tests/spawn_admission.rs`: zero-budget background transient and
+  resident requests return overload with no child Session, parent
+  event/projection, resident-supervisor, or provider-call delta.
+- The same integration suite must prove one admitted background transient is
+  counted exactly once and one admitted resident reaches registration and its
+  provider turn through the shared boundary.
+- Keep `nested_spawn_tree` and foreground subagent suites green to protect
+  existing foreground semantics.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+tokio::spawn(async move {
+    let child = engine.create(create).await?;
+    let _ = governor.reserve(root, 1);
+    run_child(child).await
+});
+```
+
+#### Correct
+
+```rust
+tx.try_send(request).map_err(|error| match error {
+    tokio::sync::mpsc::error::TrySendError::Full(_) => SpawnError::Overloaded,
+    tokio::sync::mpsc::error::TrySendError::Closed(_) => SpawnError::Unavailable,
+})?;
+
+pre_admit_team(engine.as_ref(), parent, member_count).await?;
+tokio::spawn(run_pre_admitted_background(...));
+```
