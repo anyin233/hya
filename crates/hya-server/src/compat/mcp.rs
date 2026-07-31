@@ -21,7 +21,7 @@ pub(super) fn router() -> Router<ServerState> {
 }
 
 async fn status(State(st): State<ServerState>) -> Json<BTreeMap<String, McpStatus>> {
-    Json(st.mcp_http.status(&st.mcp_manager).await)
+    Json(st.mcp_control.status().await)
 }
 
 async fn add(
@@ -34,9 +34,12 @@ async fn add(
         .ok_or_else(|| ApiError::bad_request("missing MCP config"))?;
     let config = parse_config(config)?;
 
-    st.mcp_http.add_config(name, config).await;
+    st.mcp_control
+        .upsert(name, config)
+        .await
+        .map_err(ApiError::service_unavailable)?;
 
-    Ok(Json(st.mcp_http.status(&st.mcp_manager).await))
+    Ok(Json(st.mcp_control.status().await))
 }
 
 async fn auth_start(State(st): State<ServerState>, AxumPath(name): AxumPath<String>) -> Response {
@@ -78,23 +81,23 @@ async fn auth_remove(State(st): State<ServerState>, AxumPath(name): AxumPath<Str
 }
 
 async fn connect(State(st): State<ServerState>, AxumPath(name): AxumPath<String>) -> Response {
-    if st.mcp_http.connect_config(&name).await.is_some() || is_known(&st, &name).await {
-        Json(json!(true)).into_response()
-    } else {
-        not_found(&name).into_response()
+    match st.mcp_control.set_enabled(name.clone(), true).await {
+        Ok(true) => Json(json!(true)).into_response(),
+        Ok(false) => not_found(&name).into_response(),
+        Err(error) => ApiError::service_unavailable(error).into_response(),
     }
 }
 
 async fn disconnect(State(st): State<ServerState>, AxumPath(name): AxumPath<String>) -> Response {
-    if st.mcp_http.disconnect_config(&name).await || is_known(&st, &name).await {
-        Json(json!(true)).into_response()
-    } else {
-        not_found(&name).into_response()
+    match st.mcp_control.set_enabled(name.clone(), false).await {
+        Ok(true) => Json(json!(true)).into_response(),
+        Ok(false) => not_found(&name).into_response(),
+        Err(error) => ApiError::service_unavailable(error).into_response(),
     }
 }
 
 async fn is_known(st: &ServerState, name: &str) -> bool {
-    st.mcp_http.status(&st.mcp_manager).await.contains_key(name)
+    st.mcp_control.status().await.contains_key(name)
 }
 
 fn required_string(payload: &Value, field: &str) -> Result<String, ApiError> {

@@ -445,12 +445,85 @@ mcp:
     command: [node, server.js]
 ```
 
-Enabled servers are started during runtime composition. Their tools are
-registered as `mcp__<server>__<tool>` and use the normal permission plane.
-`GET /mcp` reports connected, disabled, and failed servers in an
-Compat-shaped status response. Dynamic HTTP MCP add/connect/disconnect routes
-exist for compatibility, but they do not durably rewrite `config.yaml` or hot-plug
-new tools into an already running engine.
+Enabled servers are prepared during runtime composition. Their tools keep the
+external name `mcp__<server>__<tool>` and use the existing permission plane.
+`GET /mcp` composes connected, disabled, and failed status from the current
+desired revision, observed handshake result, and effective runtime generation.
+Compat HTTP MCP add/connect/disconnect updates that same in-process desired
+state. A complete successful observation is published atomically for the next
+turn; a failed handshake or name collision leaves the prior effective view
+unchanged, and disconnect removes the source for the next turn while an
+already-running turn retains its old binding. These routes do not durably
+rewrite `config.yaml`.
+
+### Runnable dynamic MCP control example
+
+The following local fixture implements only the MCP calls needed by this
+example. Save it as `/tmp/hya-mcp-ping.py`:
+
+```python
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    if request["method"] == "initialize":
+        result = {"capabilities": {}}
+    elif request["method"] == "tools/list":
+        result = {
+            "tools": [
+                {
+                    "name": "ping",
+                    "description": "Return pong",
+                    "inputSchema": {"type": "object"},
+                }
+            ]
+        }
+    else:
+        result = {"content": {"text": "pong"}, "isError": False}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+```
+
+The equivalent persistent startup configuration is:
+
+```yaml
+mcp:
+  live-demo:
+    command: [python3, /tmp/hya-mcp-ping.py]
+    timeout_ms: 1000
+    enabled: false
+```
+
+Start the server, then exercise the actual Compat control routes:
+
+```sh
+cargo run -p hya-backend -- serve --bind 127.0.0.1:8080 --db /tmp/hya-mcp-demo.db
+
+# Status: initially absent unless it came from config.yaml.
+curl -sS http://127.0.0.1:8080/mcp
+
+# Add to in-process desired state and connect. The HTTP schema uses
+# type=local, environment, timeout, and enabled.
+curl -sS -X POST http://127.0.0.1:8080/mcp \
+  -H 'content-type: application/json' \
+  --data '{"name":"live-demo","config":{"type":"local","command":["python3","/tmp/hya-mcp-ping.py"],"environment":{},"timeout":1000,"enabled":true}}'
+
+# Observe desired/observed/effective status.
+curl -sS http://127.0.0.1:8080/mcp
+
+# Disable and atomically remove its tools from the next TurnBinding.
+curl -sS -X POST http://127.0.0.1:8080/mcp/live-demo/disconnect
+curl -sS http://127.0.0.1:8080/mcp
+
+# Re-enable the retained in-process desired entry.
+curl -sS -X POST http://127.0.0.1:8080/mcp/live-demo/connect
+```
+
+`disconnect` is the current remove-from-effective-view operation. There is no
+general MCP config-delete route in `0.34.6`, and dynamic changes are not written
+back to `config.yaml`.
 
 ### Compat migration into hya
 
@@ -562,6 +635,16 @@ If Bun is not available, that plugin is skipped.
 The plugin host supports registered tools, command/message/text/chat hooks,
 event notifications, permission hooks, shell/tool hooks, and workspace adapter
 metadata.
+
+Plugin tools from the startup handshake are published through the same
+immutable runtime registry as builtins and MCP tools. The configured plugin ID
+must match the handshake ID. If a crashed plugin respawns, hya compares a
+deterministic encoding of the complete initialize declaration (plugin metadata,
+tools, hooks including command/permission hooks, and workspace adapters). A
+changed declaration closes the replacement process and future calls fail
+closed. Version `0.34.6` does not add plugin watching, hot add/remove, or a
+plugin reload command; existing hook and `PermissionPlane` behavior is
+unchanged.
 
 ## Formatter
 

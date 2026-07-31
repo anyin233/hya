@@ -19,6 +19,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod compat;
+mod mcp_control;
 mod pending;
 mod runs;
 mod state;
@@ -29,6 +30,7 @@ pub use compat::subagent_resolve::{
 };
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
+pub use mcp_control::McpControl;
 pub use state::AppState;
 pub(crate) use state::ServerState;
 

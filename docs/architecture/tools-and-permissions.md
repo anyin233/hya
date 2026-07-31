@@ -119,7 +119,9 @@ carry session, message, and tool-call correlation.
 
 ## External Tool Sources
 
-`hya-backend` registers MCP tools from `hya-mcp` after connecting configured
-servers. Those tools are named `mcp__<server>__<tool>`. It then registers plugin
-tools from `hya-plugin`. Both sources use the same registry, permission plane,
-tool result events, and projection replay as builtin tools.
+`hya-app` prepares configured MCP and startup plugin sources, then submits their
+complete declarations to one `RuntimeReconciler`. Only `RuntimeRegistry`
+publishes the effective immutable view. MCP tools keep the external name
+`mcp__<server>__<tool>`; plugin tool names remain as declared. Both sources use
+the existing permission plane, tool result events, and projection replay as
+builtin tools. Source metadata never becomes a second dispatch registry.

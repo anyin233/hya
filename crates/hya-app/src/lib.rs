@@ -11,6 +11,7 @@ pub mod oauth;
 pub mod permission;
 pub mod plugins;
 pub mod runtime;
+mod runtime_reconcile;
 
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use runtime::{

@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
+#[path = "support/mcp.rs"]
+mod mcp_support;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -7,7 +10,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
-use hya_mcp::{McpManager, McpServerConfig};
+use hya_mcp::McpServerConfig;
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
@@ -15,6 +18,8 @@ use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use mcp_support::TestMcpControl;
 
 const WORKDIR: &str = "/tmp/hya-compat-experimental-resource-api";
 
@@ -57,6 +62,7 @@ async fn state() -> AppState {
             ..McpServerConfig::default()
         },
     );
+    let control = TestMcpControl::new(configs).await;
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -67,7 +73,7 @@ async fn state() -> AppState {
             reasoning: None,
         }),
     )
-    .with_mcp_manager(McpManager::connect_all(configs).await)
+    .with_mcp_control(control)
 }
 
 async fn request_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {

@@ -26,6 +26,12 @@ pub enum PluginError {
     /// The plugin announced a protocol version the host does not speak.
     #[error("plugin protocol version {got} != host {expected}")]
     ProtocolMismatch { expected: u32, got: u32 },
+    /// The child identity must match the stable configured source identity.
+    #[error("plugin handshake id {got} != configured id {expected}")]
+    IdentityMismatch { expected: String, got: String },
+    /// A respawned child changed its complete initialize declaration.
+    #[error("plugin declaration drift for {plugin}")]
+    DeclarationDrift { plugin: String },
     /// A request exceeded its per-call timeout.
     #[error("plugin call timed out: {method}")]
     Timeout { method: String },

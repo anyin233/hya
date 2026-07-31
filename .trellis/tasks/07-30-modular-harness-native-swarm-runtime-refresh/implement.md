@@ -2,11 +2,11 @@
 
 ## 0. Execution guard
 
-The task is `in_progress`. Release `0.34.4` is committed/pushed at
-`709abafb81ba0f94656254d3ecb51b42e051a89d` and draft-PR CI run
-`30609417298` is green. Release `0.34.5` is now the only active implementation slice. Source
+The task is `in_progress`. Release `0.34.5` is committed/pushed at
+`95f4fe20b3750d376023384d869a52da1e84201f` and draft-PR CI run
+`30612919698` is green. Release `0.34.6` is now the only active implementation slice. Source
 edits, builds, tests, commit, push, and remote-CI monitoring are authorized only
-for that slice. Releases `0.34.6+`, tagging, merge, production activation, and
+for that slice. Releases `0.34.7+`, tagging, merge, production activation, and
 synchronization remain unauthorized.
 
 Before any future implementation:
@@ -158,7 +158,8 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
         -> 0.34.5 immutable config generation + TurnBinding
           + source-owned atomic registry snapshot/refresh
           -> remote CI green
-            -> 0.34.6 MCP/plugin desired-observed-effective reconciliation
+            -> 0.34.6 dynamic MCP desired-observed-effective reconciliation
+                      + plugin tool/RPC startup-crash re-handshake consistency
               + respawn declarations + generation binding
               + current PermissionPlane propagation
               + generic stable-ID/namespace seams only
@@ -188,7 +189,7 @@ or owner gate. Reproducible source/experimental evidence wins on conflict.
                                           + self-update example/skill
 ```
 
-No later patch may be preimplemented in the active `0.34.5` slice. Each arrow requires the
+No later patch may be preimplemented in the active `0.34.6` slice. Each arrow requires the
 preceding patch's full gate, atomic commit/push, and remote CI green. Pro round
 six is advisory provenance; the MacBook Air coordinator's corrections above
 control. Final external execution/context/resident semantics, private Bundle
@@ -213,7 +214,7 @@ This is a starting map to revalidate with CodeGraph before each edit.
 
 ## 4. Verification commands
 
-These are the required final gates for the active `0.34.5` slice.
+These are the required final gates for the active `0.34.6` slice.
 
 ### 4.1 Rust and executable gate
 
@@ -789,7 +790,182 @@ hard finding after:
 - adding the executable backend code-spec for the immutable generation
   boundary.
 
-Remote draft-PR CI remains the release gate. No `0.34.6` work is included.
+Release `0.34.5` was committed at
+`95f4fe20b3750d376023384d869a52da1e84201f`; draft-PR CI run
+`30612919698` completed successfully. No `0.34.6` work is included in that
+historical release.
+
+## 5C. Active release — `0.34.6`
+
+### 5C.1 Exact boundary and authority
+
+Implementation starts from the green `0.34.5` commit and existing draft PR
+#24. One app-owned `RuntimeReconciler` records the latest desired MCP/plugin
+revision, preparation tickets, and observed outcomes. It has no dispatch API or
+effective-tool cache. `hya-core::RuntimeRegistry` remains the sole effective
+authority and owns each published source's tool exports, resources,
+declaration digest, and client/child handle inside the immutable snapshot.
+
+Stable source identity is `(mcp|plugin, configured_id)`. External tool names
+remain unchanged. The complete candidate rejects duplicate source IDs,
+same-source exports, configured/handshake plugin-ID mismatch, and any
+canonical/alias collision before generation allocation. Current
+`PermissionPlane` and hook behavior are unchanged.
+
+### 5C.2 Deterministic RED evidence
+
+The strict sequence produced expected missing-behavior failures for:
+
+- stale preparation success closing without overwriting a newer revision;
+- safety-priority drop-only removal despite an unrelated connection failure,
+  including retained old/new `TurnBinding` behavior;
+- current partial failure preserving generation and closing staged owners;
+- duplicate source/export/canonical/alias and plugin handshake-ID rejection;
+- one complete mixed MCP/plugin publication rather than partial visibility;
+- plugin respawn declaration drift closing the replacement and failing calls
+  closed.
+
+An additional hardening RED showed candidate collision status remained
+`Connecting`; the GREEN marks every ticket in that failed atomic revision with
+a typed observed failure and invalidates the attempt without consuming a
+generation.
+
+The focused tests were introduced and run one at a time before their product
+seams existed with these commands (each RED failed on the named missing
+invariant, rather than setup or compilation unrelated to that invariant):
+
+```sh
+cargo test -p hya-app stale_success_is_closed_and_cannot_publish_over_newer_ticket
+cargo test -p hya-app explicit_removal_publishes_drop_only_despite_unrelated_connect_failure
+cargo test -p hya-app current_failure_keeps_generation_and_closes_partial_successes
+cargo test -p hya-core --test runtime_sources
+cargo test -p hya-plugin --test configured_id_mismatch
+cargo test -p hya-app mixed_mcp_plugin_revision_publishes_exactly_once_only_when_complete
+cargo test -p hya-plugin --test respawn_declaration_drift
+cargo test -p hya-app candidate_rejection_records_failure_and_invalidates_attempt
+```
+
+The corresponding RED observations were, in order: no reconciler/ticket seam;
+removal could not publish independently of failed addition; partial owners and
+generation were not governed by one attempt; source/canonical/alias collision
+validation was absent; configured and handshake plugin IDs could differ; mixed
+sources lacked one atomic revision; respawn accepted declaration drift; and a
+candidate rejection left observation in `Connecting`.
+
+### 5C.3 Minimal GREEN and lifecycle rules
+
+- Startup, deferred MCP, and Compat MCP control all mutate the same reconciler.
+  `hya-server` receives a narrow dependency-inverted `McpControl`; the deleted
+  `McpHttpState` no longer owns configs, managers, status, or effective tools.
+- Handshake/start work occurs before the reconciler lock. A prepared success
+  owns its client/child but is not effective until publication. Stale and
+  failed staged owners are dropped after releasing the app state lock.
+- Explicit disable/removal first publishes a complete candidate that removes
+  exactly those sources. Preparation of unrelated additions follows; its
+  failure cannot restore the removed source.
+- Additions/replacements publish only when every current ticket succeeds.
+  Publication derives from the registry's current snapshot, so it preserves
+  intervening skill refreshes rather than overwriting from a stale base.
+- Old snapshots retain source owners through old `TurnBinding` Arcs. The next
+  binding sees removal/replacement atomically; the owner drains when its last
+  snapshot reference is dropped.
+- Plugin startup validates configured identity. Respawn compares a canonical
+  encoding of the complete initialize declaration: plugin metadata, tools,
+  hooks (including command/permission declarations), and workspace adapters.
+  Declaration drift closes the new process and makes later calls fail closed.
+- This release adds no plugin watcher, hot-add/remove/reload command, dynamic
+  hook/control plane, permission interceptor, lease/fence, Bundle behavior, or
+  new dependency.
+
+### 5C.4 Focused proof and dependency audit
+
+Focused GREEN covers the six required reconciliation cases, typed candidate
+failure, no-generation-on-failure, old-owner lifetime, complete plugin
+declaration order independence, configured plugin identity, startup mixed
+publication, and Compat MCP add/remove callability through the same registry.
+The new explicit test-only defer seam removed an environment-variable race
+between synchronous and deferred MCP startup tests without changing production
+defaults or test serialization.
+
+GREEN was re-run with the same commands above plus these integration commands:
+
+```sh
+cargo test -p hya-app runtime_reconcile::tests
+cargo test -p hya-app startup_mixed_mcp_plugin_publishes_one_complete_generation
+cargo test -p hya-app compat_mcp_control_publishes_and_removes_through_one_runtime_registry
+cargo test -p hya-plugin initialize_declaration_is_order_independent_and_complete
+cargo test -p hya-server --test compat_mcp_api
+cargo test -p hya-server --test compat_mcp_dynamic_api
+cargo test -p hya-server --test compat_experimental_resource_api
+```
+
+`crates/hya-plugin/Cargo.toml` and `Cargo.lock` had an empty before/after diff
+before the version bump. Declaration hashing uses `hya-app`'s pre-existing
+workspace `sha2` dependency; `hya-plugin` only emits deterministic canonical
+bytes using its existing `serde_json` dependency. No dependency edge was added.
+
+### 5C.5 Release/document boundary
+
+Workspace/TUI/README advance exactly `0.34.5 -> 0.34.6`; the old root
+changelog is archived as `docs/changes/CHANGELOG_0.34.5.md`, and root
+`CHANGELOG.md` contains only `0.34.6`. Existing MCP/plugin configuration is
+reused, and `docs/configuration.md` contains a minimal runnable local MCP
+fixture plus the actual add/status/disconnect/connect route and payload flow.
+No new user-configurable field, command, or agent-facing self-operation is
+added, so no separate example framework or built-in skill is warranted; no
+placeholder skill is added.
+
+The documentation claim is deliberately narrow: dynamic MCP
+desired-observed-effective reconciliation is supported. Plugin support is only
+startup/crash re-handshake consistency for tool exports plus their RPC binding,
+not plugin hot add/remove/reload or whole-plugin snapshotting. The controlling
+MacBook Air correction and advisory provenance are recorded in
+`research/browser-pro-escalation-protocol.md` as
+`CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09`.
+
+### 5C.6 Exit gate
+
+All local release gates are green:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --bins
+cargo build --workspace
+cargo build --locked -p hya -p hya-backend -p hya-ts --bins
+(cd packages/hya-tui-ts && bun run typecheck)
+(cd packages/hya-tui-ts && bun run build)
+(cd packages/hya-tui-ts && CI=true bun test)
+bash scripts/verify-no-http.sh
+target/debug/hya --version
+target/debug/hya-backend --version
+target/debug/hya-ts --version
+```
+
+The CI-mode TUI result is 44/44, zero-INET reports `OK`, and all three native
+executables report `0.34.6`. The sandboxed first passes could not bind loopback
+sockets/use ptrace or download an isolated Bun runtime; the identical commands
+passed outside that sandbox. No product exception was added.
+
+The full workspace gate exposed and then closed two test-observer races without
+weakening owner-lifetime or candidate-invalidation coverage:
+
+- `cargo test --workspace --test respawn_declaration_drift -- --nocapture`
+  deterministically observed the close marker file between create and write;
+  the test now waits for the exact `2\n` marker, with the same timeout and
+  product shutdown path.
+- The mixed-source test used a second `bind_turn` as if it were a read-only
+  snapshot accessor. Parallel test HOME changes could legitimately make that
+  call publish a skill view. It now compares the reconciliation outcome to the
+  effective source manifest and current schemas; the separate explicit-removal
+  test still proves old/new `TurnBinding` behavior unchanged.
+
+Metadata/JSON/JSONL and `git diff --check` pass. `Cargo.lock` changes only the
+workspace package versions; every dependency list is identical and no crate
+`Cargo.toml` adds an edge. Exact staging, one atomic commit/push, and the same
+draft-PR remote CI are the remaining gates. No `0.34.7` work may begin before
+that remote run is fully green.
 
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 

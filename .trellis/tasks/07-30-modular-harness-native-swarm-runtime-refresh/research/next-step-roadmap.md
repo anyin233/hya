@@ -1,27 +1,35 @@
 # Architecture audit closure and next-step roadmap
 
-## 2026-07-31 controlling `0.34.5` execution ruling
+## 2026-07-31 controlling `0.34.6` execution ruling
 
-Release `0.34.4` is committed at
-`709abafb81ba0f94656254d3ecb51b42e051a89d`; draft-PR CI run `30609417298`
-is green. `0.34.5` is now the only active implementation stage:
+Release `0.34.5` is committed at
+`95f4fe20b3750d376023384d869a52da1e84201f`; draft-PR CI run `30612919698`
+is green. `0.34.6` is now the only active implementation stage:
 
-- one source-owned `RuntimeRegistry` publishes complete immutable
-  tool/skill/MCP snapshots;
-- a successfully admitted turn binds once before prompt/provider/tool behavior
-  and retains that snapshot across every round;
-- failed and logically unchanged candidates preserve the current generation;
-  concurrent successful publications allocate unique monotonic generations and
-  replace one complete `Arc`;
-- events/projection record only the lightweight generation identity associated
-  with an assistant message;
-- startup plugins/synchronous MCP form the complete initial candidate;
-  deferred MCP publishes one complete replacement through the same owner;
-- no desired/observed/effective reconciliation, plugin respawn state,
-  AgentBundle, resident fencing, updater, sandbox, or new permission framework
-  enters this patch.
+- one app-owned `RuntimeReconciler` coordinates validated desired MCP/plugin
+  sources, revision-scoped preparation tickets, and typed observed outcomes;
+  it has no resolve/dispatch API and caches no effective tool view;
+- `RuntimeRegistry` remains the only effective authority. A successful current
+  revision publishes one complete immutable source snapshot, while a failed or
+  stale attempt neither publishes nor consumes a generation;
+- explicit MCP removal/disable publishes a safety-priority drop-only candidate
+  before unrelated additions. Old `TurnBinding` Arcs retain their source owner
+  and new bindings see the atomic removal;
+- stable source/export identities and complete candidate collision validation
+  are internal seams; compatible external tool names remain unchanged;
+- dynamic MCP desired-observed-effective control is supported through the
+  existing config/Compat routes. Plugin scope is only startup/crash
+  re-handshake consistency for tool exports and their RPC binding, with full
+  initialize-declaration drift detection—not plugin hot add/remove/reload or
+  whole-plugin snapshotting;
+- hooks and the existing `PermissionPlane` remain unchanged. No AgentBundle,
+  resident fencing, updater, sandbox, new permission framework, watcher, or
+  generic hook/control plane enters this patch.
 
-Exact TDD and implementation evidence is in `implement.md` section 5B.
+Exact TDD and implementation evidence is in `implement.md` section 5C;
+Browser/Pro advisory provenance and the controlling MacBook Air corrections
+are in `research/browser-pro-escalation-protocol.md` entry
+`CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09`.
 
 ## 2026-07-31 delivered `0.34.4` execution ruling
 
@@ -64,7 +72,8 @@ below.
 
 - `0.34.3` delivered pre-create background transient/resident admission,
   bounded spawn transport, and typed overload. `0.34.4` delivered the durable
-  operation/admission seam; `0.34.5` is active under the preceding ruling.
+  operation/admission seam; `0.34.5` delivered generation/TurnBinding; `0.34.6`
+  is active under the preceding ruling.
 - The owner has dropped all old agent-file support. There will be no adapter,
   synthetic representation, old-source bundle list/info, or parser/discovery/
   execution fallback.
@@ -87,17 +96,17 @@ below.
 - All prepared sources flow through
   `AgentBundleIR -> immutable Generation/catalog -> TurnBinding -> AgentSpec ->
   SessionEngine`. TUI and spawn consume the same generation snapshot.
-- The final patch map below is controlling planning. Only `0.34.5` is active;
+- The final patch map below is controlling planning. Only `0.34.6` is active;
   every arrow requires the preceding patch's commit/push and full remote CI
   green.
 
-The native-only future plan does not delay or broaden `0.34.5`.
+The native-only future plan does not delay or broaden `0.34.6`.
 
 ## Status
 
 This roadmap is executable planning for the existing Trellis task
 `modular-harness-native-swarm-runtime-refresh`. The user has authorized
-`0.34.5` after the committed/pushed/remote-green `0.34.4` gate. Every later
+`0.34.6` after the committed/pushed/remote-green `0.34.5` gate. Every later
 patch remains planning-only and cannot begin merely because it appears here.
 
 The roadmap is anchored to:
@@ -108,8 +117,9 @@ The roadmap is anchored to:
   `156d0ad3c50aea67dfac0054485eb6991e77308b`; the only intervening change is
   the README icon reference, so no audited product-source finding changed;
 - workspace/root changelog version `0.34.2` at the audit, delivered isolated
-  releases `0.34.3`/`0.34.4`, and active target version `0.34.5`;
-- 19 protected pre-existing user-owned dirty entries plus this task directory.
+  releases `0.34.3` through `0.34.5`, and active target version `0.34.6`;
+- 19 protected pre-existing user-owned dirty entries plus this task directory
+  (20 status entries total) and three protected stashes.
 
 The authoritative evidence and detailed defects are:
 
@@ -120,7 +130,7 @@ The authoritative evidence and detailed defects are:
 - `research/browser-pro-escalation-protocol.md`.
 
 The protocol ledger records the consultation/ruling chain through
-`CONSULT-2026-07-31-OPERATION-ADMISSION-06`. Its Pro output is advisory only.
+`CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09`. Its Pro output is advisory only.
 The MacBook Air rulings control plan placement; current source inspection
 independently verifies only the claims explicitly marked source-confirmed.
 
@@ -241,7 +251,7 @@ repo-native built-in sources + installed package artifacts
 | `0.34.3` | Existing-governor pre-create admission for background transient/resident, explicit bounded spawn transport, typed fail-fast overload | Delivered at `b8c21dee` with remote CI green; no durability, permit/lease, OperationId, 100/256 default, bundle, refresh, updater, or deletion |
 | `0.34.4` | `OperationId` and minimal durable admission/cancel/finalize/recovery | Requires `0.34.3` remote CI green |
 | `0.34.5` | Immutable config generation, `TurnBinding`, source-owned atomic registry refresh | Requires durable identity/recovery seam |
-| `0.34.6` | MCP/plugin desired-observed-effective state, incarnation declarations, generation binding, current `PermissionPlane` propagation, and generic stable-ID/namespace seams | No Bundle loader, manifest, catalog, ABI, TUI selection, spawn, sandbox, or new permission framework |
+| `0.34.6` | Dynamic MCP desired-observed-effective state; plugin startup/crash re-handshake consistency for tool exports plus RPC binding; generation binding and generic stable-ID/namespace seams | No plugin hot add/remove/reload, whole-plugin snapshot, hook/permission plane, Bundle loader, catalog, ABI, sandbox, or new permission framework |
 | `0.34.7` | Resident durable recovery, actor lease/epoch, minimal effect fencing | Correctness/fault scope; no independent `SecurityEpoch` |
 | `0.34.8` | Capability matrix/fixtures, minimal Bundle IR/catalog/namespace/resource view, deterministic embedded built-ins, startup/TUI/spawn cutover, all old agent-file code removed, simple repo-native Markdown example and authoring skill | One atomic native built-in cutover; boots without install; preserves stable IDs/event replay; no adapter/migration/detector |
 | `0.34.9` | `.hyabundle` public 7z/private envelope inspection, four-command CLI, authoritative registry, single-active version, atomic activation, built-in list/info/immutable semantics | No external Bundle execution or private decrypt/activation |
@@ -736,41 +746,55 @@ ABI. The updater remains a separate TCB and may not consume bundle code.
 higher epoch. Never restore removed agent-file loaders or create a second
 catalog/runtime authority.
 
-## R8 — MCP/plugin desired-observed-effective reconciliation
+## R8 — MCP reconciliation and plugin tool-binding consistency
 
-**Purpose:** eliminate split activation authorities and stale process
-declarations.
+**Purpose:** eliminate split MCP activation authorities and prevent plugin tool
+exports from silently binding to a respawned process with a different complete
+initialize declaration.
 
 **Entry gate**
 
-- R3 candidate/binding protocol and R4 security broadening/removal rules pass;
-- official MCP/plugin protocol constraints and conformance fixtures are known;
-- executable trust policy is explicit.
+- `0.34.5` candidate/binding protocol and source-owned publication are remote
+  green;
+- current MCP/plugin protocol and initialize declarations are characterized;
+- same-UID executable trust and unchanged `PermissionPlane` authority are
+  explicit.
 
 **Actions**
 
-- feed static, deferred, and Compat dynamic MCP into one desired state;
-- treat server/process declarations as untrusted observed state;
+- feed startup, deferred, and Compat dynamic MCP mutations into one app-owned
+  desired/observed reconciler;
+- treat server/process declarations as observed state bound to a desired
+  revision and preparation ticket;
 - re-run plugin initialize/protocol/declaration processing for every
   incarnation;
-- validate collisions, compatibility, permissions/capability broadening,
-  resource identity, and health before effective activation;
+- validate stable source/export identity, configured/handshake plugin identity,
+  canonical names, aliases, declaration compatibility, and health before
+  effective activation;
 - atomically publish a complete generation or retain the previous effective
   generation;
-- make removals/revocations fail closed and additions next-Turn-only.
+- publish explicit MCP removal/disable as a drop-only candidate before
+  unrelated additions, and make additions next-Turn-only;
+- compare the complete plugin initialize declaration after a respawn; drift
+  closes the new process, preserves the old effective contribution, and makes
+  later calls fail closed.
 
 **Exit gate**
 
 - Compat dynamic MCP status and engine callability converge through one
   reconciler;
 - failed/partial MCP observation never becomes effective;
-- plugin restart removal/change/broadening is processed as a new candidate;
-- old pinned Turns return typed-unavailable if their process generation dies;
+- an old pinned Turn retains its source owner after replacement/removal, while
+  a new Turn observes only the newly published complete snapshot;
+- plugin startup/crash re-handshake consistently binds tool exports to the RPC
+  client, and declaration drift is rejected; this is not plugin hot
+  add/remove/reload or whole-plugin snapshotting;
 - reconnect, timeout, crash, collision, protocol mismatch, removal, and
-  broadening fault tests pass.
+  stale-ticket fault tests pass.
 
-**Parallel work:** MCP and plugin adapters can be implemented in parallel once
-the common observation/candidate interfaces are frozen.
+**Non-goals:** hooks, commands, and permission callbacks keep their existing
+lifecycle and authority. This stage adds no watcher, generic hook/control
+plane, permission interceptor, sandbox, lease, or fencing system.
 
 **Rollback seam:** retain the last validated effective immutable generation;
 never restore a stale process declaration into a new incarnation by name.

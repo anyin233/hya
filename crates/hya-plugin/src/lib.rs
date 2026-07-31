@@ -22,6 +22,6 @@ pub mod protocol;
 
 pub use client::{ChildGuard, DEFAULT_CALL_TIMEOUT, INITIALIZE_TIMEOUT, PluginClient};
 pub use error::PluginError;
-pub use host::{PluginHost, PluginStatus};
+pub use host::{PluginHost, PluginStatus, PreparedPlugin};
 pub use messages::{HostInfo, PROTOCOL_VERSION};
 pub use permission_bridge::PermissionBridge;

@@ -33,7 +33,6 @@ mod json_merge;
 mod jsonc;
 mod location;
 mod mcp;
-mod mcp_state;
 mod message_context_parts;
 mod message_parts;
 mod message_projection;
@@ -98,7 +97,6 @@ mod worktree_git_info;
 mod worktree_git_lookup;
 
 pub(crate) use global::GlobalState;
-pub(crate) use mcp_state::McpHttpState;
 pub(crate) use project::ProjectState;
 pub(crate) use pty_state::PtyState;
 pub(in crate::compat) use session_legacy::load_session;

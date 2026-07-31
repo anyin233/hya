@@ -480,9 +480,11 @@ running team, and LSP reports when no server supports a file type.
 
 ### MCP tools
 
-At startup, hya connects enabled MCP servers and adapts tools returned by
-`tools/list`. Disabled or failed servers contribute no tools. Only MCP tools
-whose input schema has `type: "object"` are accepted.
+At startup or through the Compat MCP control routes, hya prepares enabled MCP
+servers and adapts tools returned by `tools/list`. Disabled or failed servers
+contribute no new tools. A complete current-revision candidate is published for
+the next turn; an older bound turn keeps its retained source client and view.
+Only MCP tools whose input schema has `type: "object"` are accepted.
 ([crates/hya-mcp/src/manager.rs:49-89](../../crates/hya-mcp/src/manager.rs#L49-L89),
 [crates/hya-mcp/src/manager.rs:105-133](../../crates/hya-mcp/src/manager.rs#L105-L133),
 [crates/hya-mcp/src/bridge.rs:21-43](../../crates/hya-mcp/src/bridge.rs#L21-L43))
@@ -506,8 +508,11 @@ owning plugin. They are registered as general `ToolPermission::Tool` tools.
 [crates/hya-plugin/src/host.rs:240-250](../../crates/hya-plugin/src/host.rs#L240-L250),
 [crates/hya-app/src/runtime.rs:469-474](../../crates/hya-app/src/runtime.rs#L469-L474))
 
-Registry names are unique across builtins, MCP tools, and plugin tools. A
-collision is rejected; runtime startup logs and skips that extension tool.
+Registry names are unique across builtins, MCP tools, plugin tools, and their
+aliases. Any duplicate source, configured/handshake plugin-ID mismatch,
+same-source duplicate export, or canonical/alias collision rejects the whole
+candidate before generation allocation; the previous effective snapshot stays
+active. There is no insertion-order overwrite.
 MCP namespacing reduces MCP collisions, while unnamespaced plugin declarations
 can collide directly with a builtin or another plugin.
 ([crates/hya-tool/src/tool.rs:186-200](../../crates/hya-tool/src/tool.rs#L186-L200),

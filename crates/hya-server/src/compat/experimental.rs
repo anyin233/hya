@@ -71,7 +71,7 @@ async fn console_orgs() -> Json<Value> {
 }
 
 async fn resource(State(st): State<ServerState>) -> Json<Value> {
-    Json(json!(st.mcp_http.resources(&st.mcp_manager).await))
+    Json(json!(st.mcp_control.resources().await))
 }
 
 async fn ok_true() -> Json<bool> {

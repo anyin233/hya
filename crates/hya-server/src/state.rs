@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use hya_core::{AgentSpec, SessionEngine};
-use hya_mcp::McpManager;
 use hya_proto::WorkspaceAdapterInfo;
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use tokio::sync::mpsc;
 
+use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::{compat, pending, runs};
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub struct AppState {
     pub agent: Arc<AgentSpec>,
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
-    mcp_manager: Arc<McpManager>,
+    mcp_control: Arc<dyn McpControl>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
@@ -30,7 +30,7 @@ impl AppState {
             agent,
             permission_requests,
             question_requests: Default::default(),
-            mcp_manager: Default::default(),
+            mcp_control: Arc::new(EmptyMcpControl),
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
             default_agent: None,
@@ -67,8 +67,8 @@ impl AppState {
     }
 
     #[must_use]
-    pub fn with_mcp_manager(mut self, manager: McpManager) -> Self {
-        self.mcp_manager = Arc::new(manager);
+    pub fn with_mcp_control(mut self, control: Arc<dyn McpControl>) -> Self {
+        self.mcp_control = control;
         self
     }
 
@@ -93,8 +93,7 @@ pub(crate) struct ServerState {
     pub(crate) permission_requests: pending::PermissionRequests,
     pub(crate) question_requests: pending::QuestionRequests,
     pub(crate) global: compat::GlobalState,
-    pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) mcp_http: compat::McpHttpState,
+    pub(crate) mcp_control: Arc<dyn McpControl>,
     pub(crate) project: compat::ProjectState,
     pub(crate) pty: compat::PtyState,
     pub(crate) tui: compat::TuiState,
@@ -113,8 +112,7 @@ impl ServerState {
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
             global: compat::GlobalState::new(),
-            mcp_manager: app.mcp_manager,
-            mcp_http: compat::McpHttpState::new(),
+            mcp_control: app.mcp_control,
             project: compat::ProjectState::new(),
             pty: compat::PtyState::new(),
             tui: compat::TuiState::new(),

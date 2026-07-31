@@ -678,3 +678,49 @@ Determination-level evidence:
 | Failure/no-op preservation and concurrent monotonic publication | `coordinator-adopted`, `experimentally-verified` | Duplicate-candidate failure and logical remove/re-add no-op preserve N; eight concurrent complete candidates receive consecutive generations and never expose a mixed final view. |
 | Lightweight event-sourced audit | `coordinator-adopted`, `source-verified`, `experimentally-verified` | `TurnBindingRecorded` carries session routing, message, and generation only; the shared reducer folds the optional message generation and serialization contains no registry payload. |
 | Treat Pro as reconciliation, release, or owner approval | `rejected` | `0.34.6+`, release/merge/activation, and all Bundle/key/updater owner decisions remain independently gated. |
+
+### `CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09`
+
+This records the MacBook Air coordinator's Browser/Pro proposal audit for
+`0.34.6`, including the follow-up dependency and documentation corrections.
+Pro remains advisory evidence; the coordinator ruling below controls the
+implementation boundary and cannot approve release, security, or later-stage
+owner decisions.
+
+```text
+consultation_id: CONSULT-2026-07-31-RUNTIME-RECONCILIATION-09
+packet_id: not supplied to fuji1
+packet_revision: 0.34.6 MCP/plugin desired-observed-effective proposal audit
+packet_digest: not supplied
+submitted_at_utc: not supplied
+returned_at_utc: not supplied
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+url_access_classification: existing MacBook Air in-app Browser conversation; fuji1 did not open it
+requested_selection: ChatGPT Pro Model
+displayed_model_label_exact: Pro
+question_summary: audit the smallest source-owned MCP/plugin reconciliation seam, stale child cleanup, plugin declaration/lifecycle boundary, and deterministic TDD order for 0.34.6
+pro_conclusion: use one app desired/observed reconciler feeding the existing RuntimeRegistry; keep I/O outside locks; close stale/unpublished owners; publish explicit removals before additions; retain old effective owners through TurnBinding; validate stable identities and the complete plugin initialize declaration
+macbook_air_ruling: adopt with corrections—RuntimeReconciler has no effective cache/dispatch; RuntimeSnapshot alone owns effective manifests and clients; current-base publication must preserve unrelated skill changes; hya-server receives a narrow MCP control handle; plugin scope is tools plus RPC binding and re-handshake drift only; hooks and PermissionPlane remain unchanged; no new dependency
+ruling_scope: release 0.34.6 only
+permitted_next_action: deterministic RED/GREEN in the specified order; dynamic MCP configuration/control documentation; exact version/changelog/Trellis evidence; full local gates; atomic commit/push and same draft-PR remote CI
+forbidden_next_action: plugin watcher or hot add/remove/reload claim, whole-plugin snapshot, generic hook/control plane, permission interceptor/framework, lock-held I/O, second effective/status authority, early owner termination, partial addition publication, lease/fencing, Bundle work, new dependency, merge, or 0.34.7
+required_verification: stale-success close; drop-only removal with old/new binding; current-failure cleanup/no generation; identity/collision rejection; complete mixed MCP/plugin publication; plugin declaration-drift fail-closed; source-owner lifetime; app/server authority audit; zero-new-dependency proof; full release gates and remote CI green
+remaining_owner_gates: every 0.34.7+ stage and all existing Bundle execution/key/updater/activation decisions
+head_sha_and_relevant_delta_at_ruling: 95f4fe20b3750d376023384d869a52da1e84201f; clean isolated 0.34.5 baseline before the single 0.34.6 change set, dirty main and three stashes protected
+follow_up_of: CONSULT-2026-07-31-RUNTIME-GENERATION-08
+supersedes: broader plugin reconciliation/hot-reload wording for the bounded 0.34.6 stage
+final_disposition_and_resumption_decision: implement 0.34.6 once in the existing session/task/worktree/branch/PR; do not start 0.34.7 before remote CI green
+```
+
+Determination-level evidence:
+
+| Determination | Status | Independent disposition |
+| --- | --- | --- |
+| App reconciler coordinates desired/observed only | `Pro-advised`, `coordinator-adopted`, `source-verified`, `experimentally-verified` | The reconciler stores revision/ticket/outcome state and delegates complete publication to the one `RuntimeRegistry`; it has no resolver, dispatcher, or effective tool cache. |
+| I/O and owner lifetime remain outside reconciliation locks | `Pro-advised`, `coordinator-adopted`, `experimentally-verified` | Stale/current failed staging owners are released after unlocking; published owners transfer into immutable snapshots and survive old `TurnBinding` Arcs. |
+| Explicit removal is safety-priority drop-only | `Pro-advised`, `coordinator-adopted`, `experimentally-verified` | Removal publishes from the current effective snapshot before unrelated preparation; a later failure cannot restore it, and no generation is consumed by the failed addition. |
+| Plugin consistency claim is tools plus RPC binding only | `coordinator-corrected`, `source-verified`, `experimentally-verified` | Complete initialize declaration drift closes the respawned process and calls fail closed; no watcher, plugin hot add/remove/reload, dynamic hook plane, or whole-plugin effective snapshot is claimed. |
+| Server and manager may own effective/status state | `rejected` | `hya-server` receives only `McpControl`; the deleted HTTP state map is not replaced, and `McpManager` remains an I/O helper. Status is composed from reconciler observation plus the active runtime manifest. |
+| Add a digest dependency to hya-plugin | `rejected`, `source-verified` | The plugin crate emits deterministic canonical declaration bytes using existing `serde_json`; the app uses its pre-existing digest dependency. Crate dependency topology does not grow. |
+| Pro output authorizes release/security/later stages | `rejected` | Full local and remote gates, repository release rules, current `PermissionPlane`, and all later owner decisions remain independent requirements. |

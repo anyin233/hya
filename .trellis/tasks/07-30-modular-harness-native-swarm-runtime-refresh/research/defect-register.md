@@ -4,7 +4,8 @@
 
 This register closes the source audit for the existing Trellis task
 `modular-harness-native-swarm-runtime-refresh`. The audit classifications remain
-evidence; the user has since authorized implementation of `0.34.3` only.
+historical HEAD evidence; releases `0.34.3` through `0.34.5` are remote-green
+on the isolated branch and the user has authorized only `0.34.6` now.
 
 - Authoritative workspace: the saved project on the `fuji1 remote worker`.
 - Branch: `main`.
@@ -17,7 +18,7 @@ evidence; the user has since authorized implementation of `0.34.3` only.
   checkout tag set has no `v0.34.2`; its latest present release tag is
   `v0.33.14`. This says nothing about remote publication state.
 - Dirty baseline: 19 pre-existing user-owned status entries plus the untracked
-  task directory. The 19 entries are frozen in
+  task directory (20 status entries total) and three protected stashes. The 19 entries are frozen in
   `research/fuji1-sync-preflight.md` and are outside this audit's write scope.
 - Task state at audit: `planning`; `.trellis/scripts/task.py current --source`
   reported `none`. Implementation is isolated on
@@ -31,10 +32,9 @@ The role identities and host/session IDs are defined once in
 `research/browser-pro-escalation-protocol.md`. This document uses only
 `MacBook Air coordinator` and `fuji1 remote worker`.
 
-The Browser protocol ledger now records the MacBook Air patch-plan,
-AgentBundle, distribution, capability-parity, and native-bootstrap
-consultations from the same displayed `Pro` session. They are advisory
-provenance only; the coordinator/owner corrections and
+The Browser protocol ledger now also records the MacBook Air runtime-generation
+and runtime-reconciliation consultations. They are advisory provenance only;
+the coordinator/owner corrections and
 source/TDD/benchmark/CI gates remain authoritative.
 
 Current-cycle owner disposition:
@@ -196,9 +196,10 @@ Gate abbreviations:
 ### `MSR-BND-001` — no whole-Turn immutable binding
 
 - **Evidence status:** `source-confirmed`.
-- **`0.34.5` closure status:** local `source-verified` and
-  `experimentally-verified`, pending the patch's full local/remote release
-  gates. `RuntimeRegistry`/`TurnBinding` now pin prompt skills, schemas,
+- **`0.34.5` closure status:** remote-green `source-verified` and
+  `experimentally-verified` at commit
+  `95f4fe20b3750d376023384d869a52da1e84201f`, CI run `30612919698`.
+  `RuntimeRegistry`/`TurnBinding` now pin prompt skills, schemas,
   resolution, and dispatch for every round; the deterministic mid-turn
   publication tracer proves old/new visibility. This does not close later
   process-death/reconciliation fault cases.
@@ -312,11 +313,14 @@ Gate abbreviations:
 ### `MSR-CFG-001` — direct composition and inconsistent discovery visibility
 
 - **Evidence status:** `source-confirmed`.
-- **`0.34.5` closure status:** partially closed locally, pending release gates.
+- **Closure status through `0.34.6`:** `0.34.5` remotely closed the immutable
+  initial/deferred publication seam. `0.34.6` locally routes startup, deferred,
+  and Compat MCP through one app reconciler and the same `RuntimeRegistry`;
+  its full local/remote release gates remain pending.
   Tool/plugin/synchronous-MCP construction now freezes one initial snapshot;
   deferred MCP can only publish through the engine owner; workdir skill
-  discovery enters the same snapshot. Agent/AGENTS sources and `0.34.6`
-  desired/observed/effective reconciliation remain open.
+  discovery enters the same snapshot. Agent/AGENTS sources remain future work;
+  the bounded MCP/plugin reconciliation scope is the active `0.34.6` closure.
 - **Source and symbols:** `crates/hya-app/src/runtime.rs::build_session_engine`
   directly constructs and registers tools, plugin host, deferred/static MCP,
   permission, interaction, spawner, mailbox, agent catalog, governor, resident
@@ -339,8 +343,11 @@ Gate abbreviations:
 ### `MSR-REF-001` — no unified atomic runtime refresh lifecycle
 
 - **Evidence status:** `target-gap`.
-- **`0.34.5` closure status:** the in-process immutable snapshot/publication
-  prerequisite is locally `experimentally-verified`, pending release gates.
+- **Closure status through `0.34.6`:** the `0.34.5` in-process immutable
+  snapshot/publication prerequisite is remote green. `0.34.6` locally verifies
+  current-revision all-or-nothing MCP/plugin-source publication, stale-attempt
+  rejection, drop-only removal, and retained old owners; full release gates
+  remain pending.
   Failure/no-op preservation, unique monotonic concurrent publication, complete
   candidate visibility, and retained old bindings are covered. Durable
   activation, resource incarnation reconciliation, quiesce/drain/retire, and
@@ -369,6 +376,11 @@ Gate abbreviations:
 ### `MSR-MCP-001` — split native/deferred and Compat HTTP MCP authorities
 
 - **Evidence status:** `source-confirmed`.
+- **`0.34.6` closure status:** locally `source-verified` and
+  `experimentally-verified`, pending full release gates. Startup, deferred, and
+  Compat mutations enter `hya_app::runtime_reconcile::RuntimeReconciler`;
+  `hya-server::McpControl` is a dependency-inverted handle, and the former
+  `compat/mcp_state.rs` authority is deleted.
 - **Source and symbols:** `crates/hya-mcp/src/manager.rs::McpManager` stores
   server clients, tools/resources, and status; `McpManager::connect_all_into`
   mutates the shared manager as connections finish.
@@ -398,6 +410,11 @@ Gate abbreviations:
 ### `MSR-MCP-002` — desired/observed/effective state is absent
 
 - **Evidence status:** `target-gap`.
+- **`0.34.6` closure status:** the bounded MCP state model is locally
+  `experimentally-verified`, pending full release gates. Desired revision,
+  per-source preparation tickets, and typed observed outcomes are app-owned;
+  effective source manifest/generation and binding owners exist only in
+  `RuntimeRegistry`. The reconciler owns no effective cache or dispatch API.
 - **Source and symbols:** `crates/hya-mcp/src/manager.rs::{McpManager,McpStatus}`
   represents connection status and collected resources, not separate desired,
   observed, validated, and effective generations.
@@ -421,6 +438,12 @@ Gate abbreviations:
 ### `MSR-PLG-001` — plugin respawn retains stale declarations
 
 - **Evidence status:** `source-confirmed`.
+- **`0.34.6` closure status:** locally `source-verified` and
+  `experimentally-verified`, pending full release gates. Startup validates
+  configured/handshake identity; a respawn compares a deterministic canonical
+  encoding of the complete initialize declaration and closes the replacement
+  on drift. The claim is limited to tool exports plus their RPC binding; no
+  plugin hot add/remove/reload or whole-plugin snapshot is implemented.
 - **Source and symbols:** `crates/hya-plugin/src/host/connection.rs::connect_one`
   validates the initial protocol version and stores `init.hooks`, `init.tools`,
   and `init.workspace_adapters`. On restart,
@@ -667,6 +690,10 @@ Gate abbreviations:
 ### `MSR-DOC-001` — next-Turn ADRs are ahead of implementation
 
 - **Evidence status:** `source-confirmed`.
+- **Closure status:** `0.34.5` made next-Turn immutable binding remote green;
+  `0.34.6` narrows ADR 0008 to the implemented plugin startup/crash
+  re-handshake tool-binding guarantee and explicitly disclaims plugin hot
+  reload. Final `0.34.6` release gates remain pending.
 - **Source and symbols:** `docs/adr/0007-hot-skill-reload-visibility.md` states
   that an in-flight Turn keeps its skill snapshot;
   `docs/adr/0008-hot-plugin-reload-visibility.md` states the same for

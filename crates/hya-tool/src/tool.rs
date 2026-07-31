@@ -284,12 +284,39 @@ impl ToolRegistry {
         tool: Arc<dyn Tool>,
         permission: ToolPermission,
     ) -> Result<(), DuplicateName> {
+        self.register_with_permission_and_aliases(tool, permission, &[])
+    }
+
+    /// Register one canonical tool plus aliases after validating the entire
+    /// name set. Candidate builders use this before an immutable publication.
+    pub fn register_with_permission_and_aliases(
+        &self,
+        tool: Arc<dyn Tool>,
+        permission: ToolPermission,
+        aliases: &[String],
+    ) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
         let mut inner = self.write();
         if inner.tools.contains_key(&name) || inner.aliases.contains_key(&name) {
             return Err(DuplicateName { name });
         }
-        inner.tools.insert(name, ResolvedTool { tool, permission });
+        let mut pending = std::collections::BTreeSet::new();
+        for alias in aliases {
+            if alias == &name
+                || !pending.insert(alias.as_str())
+                || inner.tools.contains_key(alias)
+                || inner.aliases.contains_key(alias)
+            {
+                return Err(DuplicateName {
+                    name: alias.clone(),
+                });
+            }
+        }
+        let resolved = ResolvedTool { tool, permission };
+        inner.tools.insert(name, resolved.clone());
+        for alias in aliases {
+            inner.aliases.insert(alias.clone(), resolved.clone());
+        }
         Ok(())
     }
 

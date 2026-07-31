@@ -383,6 +383,58 @@ engine.refresh_runtime(|candidate| {
 
 ---
 
+## Scenario: MCP/plugin desired-observed-effective reconciliation
+
+### 1. Scope / Trigger
+
+- Trigger: startup/deferred/Compat MCP changes, startup plugin tool
+  declarations, or plugin crash/respawn declaration validation.
+- Applies to the app-owned reconciler, `RuntimeRegistry` source manifests,
+  MCP preparation, plugin initialize validation, and the server's narrow MCP
+  control trait.
+
+### 2. Contracts
+
+- `hya-app::RuntimeReconciler` owns desired revision/tickets and observed
+  results only. It has no resolve/dispatch surface and no effective-tool cache.
+- `RuntimeRegistry` remains the sole effective authority. A snapshot owns each
+  source's client/child, declaration digest, resources, and tool exports.
+- Source identity is `(mcp|plugin, configured_id)`. External tool names remain
+  compatible; duplicate IDs, exports, canonical names, or aliases reject the
+  complete candidate before generation allocation.
+- Process I/O completes before reconciliation state is locked. Stale prepared
+  successes are closed after releasing the state lock; stale failures are
+  discarded.
+- Current additions publish only when the whole revision succeeds. Failure
+  records typed observed state, closes every unpublished success, and preserves
+  the prior effective generation exactly.
+- Explicit removal publishes a drop-only candidate before unrelated additions.
+  Old `TurnBinding` snapshots retain their source owner until the last binding
+  is dropped.
+- Candidate publication always derives from the registry's current snapshot;
+  it must not overwrite a newer skill or source publication with an old base.
+- Plugin respawn compares a deterministic encoding of the full initialize
+  declaration. Drift closes the replacement and future calls fail closed.
+  This is not plugin hot reload; hooks and `PermissionPlane` remain unchanged.
+- Server routes receive only a dependency-inverted MCP control trait. They own
+  no manager, desired map, status map, or effective registry.
+
+### 3. Required tests
+
+- Stale success closes and cannot publish over a newer ticket.
+- Explicit removal reaches the next binding despite unrelated connect failure;
+  the old binding remains callable until dropped.
+- Current partial failure closes unpublished owners and preserves generation.
+- Duplicate source/export/canonical/alias and plugin handshake-ID mismatch fail
+  before publication and consume no generation.
+- Mixed MCP/plugin startup publishes one complete snapshot exactly once.
+- Compat MCP add/remove changes callability through the same registry.
+- Reordered equivalent plugin initialize declarations compare equal; changing
+  tool, command/permission hook, or workspace declarations detects drift.
+- Cargo manifests and `Cargo.lock` add no dependency for declaration hashing.
+
+---
+
 ## Scenario: GitHub Release Binary Workflow
 
 ### 1. Scope / Trigger

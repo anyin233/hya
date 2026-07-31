@@ -11,7 +11,8 @@ central type is `SessionEngine` in
 - `SessionStore` for persistence.
 - `ProviderRouter` for model streaming.
 - `RuntimeRegistry` for one atomically published immutable tool/skill/MCP
-  snapshot. `ToolRegistry` is only an offline candidate builder.
+  snapshot, including source ownership metadata for MCP/plugin tool
+  contributions. `ToolRegistry` is only an offline candidate builder.
 - `PermissionPlane` for allow/ask/deny decisions.
 - `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `WebSearchPlane`,
   `LspPlane`, and `FormatterPlane` for cross-cutting tool services.
@@ -79,8 +80,25 @@ successful candidate advances `ConfigGeneration`; failure and logical no-op
 leave both generation and effective view unchanged. New turns bind the
 published snapshot, while in-flight turns continue on their retained snapshot
 without a dispatch-path registry lock. Direct shell turns use the same binding
-and audit event. Deferred MCP connection publishes its whole tool set through
-this owner rather than mutating a shared `ToolRegistry`.
+and audit event.
+
+`hya-app::RuntimeReconciler` owns only desired/observed coordination for MCP
+and startup plugin declarations. It has no resolve or dispatch API and caches
+no effective tool set. Stable source IDs are `(mcp|plugin, configured_id)`;
+the effective source manifest, declaration digest, client/child owner, and
+exports live only in `RuntimeSnapshot`. Startup, deferred MCP, and Compat MCP
+control all submit to this reconciler. Complete current-revision candidates
+publish through `RuntimeRegistry`; stale successes are dropped, failures leave
+the prior generation unchanged, and explicit removals publish before unrelated
+additions. The publication closure always starts from the current snapshot, so
+it cannot overwrite a concurrent skill refresh with an older candidate.
+
+Plugin reconciliation in `0.34.6` covers startup tool exports and their RPC
+binding. Plugin hook/command/permission callback lifecycle remains owned by the
+existing `PluginHost` and `PermissionPlane`; there is no dynamic hook plane,
+plugin watcher, or plugin hot-reload API. A respawn must reproduce the complete
+canonical initialize declaration or the new child is closed and calls fail
+closed.
 
 ## Cancellation
 

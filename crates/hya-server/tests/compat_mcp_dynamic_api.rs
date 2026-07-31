@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/mcp.rs"]
+mod mcp_support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +18,8 @@ use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use mcp_support::TestMcpControl;
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
@@ -68,6 +73,7 @@ async fn state() -> AppState {
             reasoning: None,
         }),
     )
+    .with_mcp_control(TestMcpControl::new(Default::default()).await)
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {

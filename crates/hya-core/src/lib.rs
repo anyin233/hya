@@ -44,7 +44,11 @@ pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
 pub use prompt::{PromptEnv, build_system_prompt};
 pub use resident::ResidentSupervisor;
-pub use runtime_registry::{RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding};
+pub use runtime_registry::{
+    RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError, RuntimeRegistry,
+    RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceManifest,
+    RuntimeSourceOwner, TurnBinding,
+};
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
     pre_admit_team, project_envelope, run_pre_admitted_team, run_team,

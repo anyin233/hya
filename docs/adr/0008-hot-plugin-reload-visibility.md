@@ -1,13 +1,21 @@
-# Hot plugin reload visibility
+# Plugin declaration refresh visibility
 
-Status: accepted
+Status: amended
 
 The `0.34.5` `RuntimeRegistry`/`TurnBinding` seam implements the required
 atomic, next-turn visibility primitive for tools and deferred MCP results.
-Plugin restart and desired/observed/effective reconciliation remain a
-separate `0.34.6` responsibility; plugins loaded at startup are part of the
-complete initial snapshot.
+Release `0.34.6` adds desired/observed/effective reconciliation for MCP and
+stable source ownership for startup plugin tools. It also validates the full
+initialize declaration after a plugin crash/respawn. A drifted respawn is
+closed and calls fail closed; it is not activated as a new declaration.
 
-Hot plugin reload uses next-turn tool visibility: an in-flight Turn keeps the tool registry it started with, while the next admitted Turn resolves the current plugin and tool catalog. This keeps tool calls deterministic, matches hot skill reload visibility, and lets a running runtime pick up plugin changes without forcing a new Session.
+Any future explicitly supported plugin declaration replacement uses next-turn
+tool visibility: an in-flight turn keeps its retained source owner and tool
+view, while the next admitted turn resolves a successfully published complete
+candidate. This keeps dispatch deterministic and matches skill visibility.
 
-Considered alternatives: new-session-only visibility would be simpler but would make runtime plugin reload less useful; immediate visibility would make mid-turn tool availability nondeterministic; configurable visibility would add policy surface before hya has evidence that multiple policies are needed.
+This ADR does not claim that `0.34.6` implements plugin watching, hot add/remove,
+or a reload command. Hooks, commands, and permission callbacks remain on the
+existing `PluginHost` lifecycle rather than entering a new dynamic control
+plane. Immediate mid-turn replacement remains rejected; configurable
+visibility would add policy surface without evidence.

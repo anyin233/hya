@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -7,6 +7,7 @@ use hya_tool::{
     DuplicateName, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool, ToolPermission, ToolRegistry,
     ToolRegistrySnapshot, discover_skills,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 /// A complete immutable configuration view. Turns retain its `Arc` for their
@@ -15,6 +16,7 @@ struct RuntimeSnapshot {
     generation: ConfigGeneration,
     tools: ToolRegistrySnapshot,
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
+    sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
 }
 
 /// The sole owner and publisher of the effective tool/skill/MCP runtime view.
@@ -32,6 +34,55 @@ pub struct RuntimeRegistry {
 pub struct RuntimeCandidate {
     tools: ToolRegistry,
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
+    sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RuntimeSourceKind {
+    Mcp,
+    Plugin,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeSourceId {
+    kind: RuntimeSourceKind,
+    configured_id: String,
+}
+
+pub trait RuntimeSourceOwner: Send + Sync {}
+
+impl<T: Send + Sync> RuntimeSourceOwner for T {}
+
+#[derive(Clone)]
+pub struct RuntimeSourceExport {
+    declared_id: String,
+    canonical_name: String,
+    aliases: Vec<String>,
+    tool: Arc<dyn Tool>,
+    permission: ToolPermission,
+}
+
+#[derive(Clone)]
+pub struct RuntimeSource {
+    id: RuntimeSourceId,
+    declaration_digest: [u8; 32],
+    owner: Arc<dyn RuntimeSourceOwner>,
+    exports: Vec<RuntimeSourceExport>,
+    resources: Arc<BTreeMap<String, Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeSourceManifest {
+    pub id: RuntimeSourceId,
+    pub declaration_digest: [u8; 32],
+    pub exports: Vec<String>,
+    pub resources: Arc<BTreeMap<String, Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeEffectiveManifest {
+    pub generation: ConfigGeneration,
+    pub sources: BTreeMap<RuntimeSourceId, RuntimeSourceManifest>,
 }
 
 /// One admitted turn's immutable runtime binding.
@@ -65,6 +116,7 @@ impl RuntimeRegistry {
                 generation: ConfigGeneration::INITIAL,
                 tools,
                 skills: BTreeMap::new(),
+                sources: BTreeMap::new(),
             })),
         }
     }
@@ -122,6 +174,33 @@ impl RuntimeRegistry {
         self.active().tools.schemas()
     }
 
+    #[must_use]
+    pub fn effective_manifest(&self) -> RuntimeEffectiveManifest {
+        let active = self.active();
+        RuntimeEffectiveManifest {
+            generation: active.generation,
+            sources: active
+                .sources
+                .iter()
+                .map(|(id, source)| {
+                    (
+                        id.clone(),
+                        RuntimeSourceManifest {
+                            id: id.clone(),
+                            declaration_digest: source.declaration_digest,
+                            exports: source
+                                .exports
+                                .iter()
+                                .map(|export| export.canonical_name.clone())
+                                .collect(),
+                            resources: source.resources.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
     fn active(&self) -> Arc<RuntimeSnapshot> {
         self.active
             .read()
@@ -144,6 +223,7 @@ impl RuntimeRegistry {
             generation,
             tools,
             skills,
+            sources: candidate.sources,
         });
         *self
             .active
@@ -158,6 +238,7 @@ impl RuntimeCandidate {
         Self {
             tools: ToolRegistry::from_snapshot(&snapshot.tools),
             skills: snapshot.skills.clone(),
+            sources: snapshot.sources.clone(),
         }
     }
 
@@ -184,6 +265,65 @@ impl RuntimeCandidate {
         self.replace_skills(workdir, discover_skills(workdir));
     }
 
+    pub fn upsert_sources(
+        &mut self,
+        sources: Vec<RuntimeSource>,
+    ) -> Result<(), RuntimeRefreshError> {
+        let mut ids = BTreeSet::new();
+        for source in &sources {
+            if !ids.insert(source.id.clone()) {
+                return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                    "duplicate runtime source {}",
+                    source.id
+                )));
+            }
+        }
+
+        for source in &sources {
+            if let Some(previous) = self.sources.remove(&source.id) {
+                for export in previous.exports {
+                    self.tools.remove(&export.canonical_name);
+                }
+            }
+        }
+        for source in sources {
+            let mut declared = BTreeSet::new();
+            for export in &source.exports {
+                if !declared.insert(export.declared_id.as_str()) {
+                    return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                        "duplicate export {} for source {}",
+                        export.declared_id, source.id
+                    )));
+                }
+                if export.tool.name() != export.canonical_name {
+                    return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                        "export {} canonical name {} does not match tool name {}",
+                        export.declared_id,
+                        export.canonical_name,
+                        export.tool.name()
+                    )));
+                }
+                self.tools.register_with_permission_and_aliases(
+                    export.tool.clone(),
+                    export.permission,
+                    &export.aliases,
+                )?;
+            }
+            self.sources.insert(source.id.clone(), source);
+        }
+        Ok(())
+    }
+
+    pub fn remove_sources(&mut self, removed: &BTreeSet<RuntimeSourceId>) {
+        for id in removed {
+            if let Some(source) = self.sources.remove(id) {
+                for export in source.exports {
+                    self.tools.remove(&export.canonical_name);
+                }
+            }
+        }
+    }
+
     fn replace_skills(&mut self, workdir: &Path, skills: Vec<SkillCatalogEntry>) {
         let existing = self
             .skills
@@ -200,8 +340,124 @@ impl RuntimeCandidate {
     }
 
     fn logically_matches(&self, snapshot: &RuntimeSnapshot) -> bool {
-        self.tools.logically_matches(&snapshot.tools) && self.skills == snapshot.skills
+        self.tools.logically_matches(&snapshot.tools)
+            && self.skills == snapshot.skills
+            && sources_match(&self.sources, &snapshot.sources)
     }
+}
+
+impl RuntimeSourceId {
+    #[must_use]
+    pub fn new(kind: RuntimeSourceKind, configured_id: impl Into<String>) -> Self {
+        Self {
+            kind,
+            configured_id: configured_id.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn mcp(configured_id: impl Into<String>) -> Self {
+        Self::new(RuntimeSourceKind::Mcp, configured_id)
+    }
+
+    #[must_use]
+    pub fn plugin(configured_id: impl Into<String>) -> Self {
+        Self::new(RuntimeSourceKind::Plugin, configured_id)
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> RuntimeSourceKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn configured_id(&self) -> &str {
+        &self.configured_id
+    }
+}
+
+impl std::fmt::Display for RuntimeSourceId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self.kind {
+            RuntimeSourceKind::Mcp => "mcp",
+            RuntimeSourceKind::Plugin => "plugin",
+        };
+        write!(formatter, "{kind}:{}", self.configured_id)
+    }
+}
+
+impl RuntimeSourceExport {
+    #[must_use]
+    pub fn tool(
+        declared_id: impl Into<String>,
+        canonical_name: impl Into<String>,
+        aliases: Vec<String>,
+        tool: Arc<dyn Tool>,
+        permission: ToolPermission,
+    ) -> Self {
+        Self {
+            declared_id: declared_id.into(),
+            canonical_name: canonical_name.into(),
+            aliases,
+            tool,
+            permission,
+        }
+    }
+}
+
+impl RuntimeSource {
+    #[must_use]
+    pub fn new(
+        id: RuntimeSourceId,
+        declaration_digest: [u8; 32],
+        owner: Arc<dyn RuntimeSourceOwner>,
+        exports: Vec<RuntimeSourceExport>,
+    ) -> Self {
+        Self {
+            id,
+            declaration_digest,
+            owner,
+            exports,
+            resources: Arc::new(BTreeMap::new()),
+        }
+    }
+
+    #[must_use]
+    pub fn with_resources(mut self, resources: BTreeMap<String, Value>) -> Self {
+        self.resources = Arc::new(resources);
+        self
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &RuntimeSourceId {
+        &self.id
+    }
+}
+
+fn sources_match(
+    left: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+    right: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|(id, left)| {
+            right.get(id).is_some_and(|right| {
+                left.declaration_digest == right.declaration_digest
+                    && Arc::ptr_eq(&left.owner, &right.owner)
+                    && left.resources == right.resources
+                    && left.exports.len() == right.exports.len()
+                    && left
+                        .exports
+                        .iter()
+                        .zip(&right.exports)
+                        .all(|(left, right)| {
+                            left.declared_id == right.declared_id
+                                && left.canonical_name == right.canonical_name
+                                && left.aliases == right.aliases
+                                && left.permission == right.permission
+                                && Arc::ptr_eq(&left.tool, &right.tool)
+                        })
+            })
+        })
 }
 
 impl TurnBinding {

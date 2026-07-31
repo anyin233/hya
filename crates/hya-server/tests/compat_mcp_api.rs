@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/mcp.rs"]
+mod mcp_support;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,7 +12,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
-use hya_mcp::{McpManager, McpServerConfig};
+use hya_mcp::McpServerConfig;
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
@@ -17,6 +20,8 @@ use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use mcp_support::TestMcpControl;
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
@@ -70,6 +75,7 @@ async fn state() -> AppState {
             reasoning: None,
         }),
     )
+    .with_mcp_control(TestMcpControl::new(BTreeMap::new()).await)
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {
@@ -120,8 +126,8 @@ async fn compat_mcp_status_reports_configured_servers() {
             ..McpServerConfig::default()
         },
     );
-    let mcp = McpManager::connect_all(configs).await;
-    let app = router(state().await.with_mcp_manager(mcp));
+    let control = TestMcpControl::new(configs).await;
+    let app = router(state().await.with_mcp_control(control));
 
     let response = request(app, Method::GET, "/mcp", None).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -143,8 +149,8 @@ async fn compat_mcp_add_accepts_disabled_local_server() {
             ..McpServerConfig::default()
         },
     );
-    let mcp = McpManager::connect_all(configs).await;
-    let app = router(state().await.with_mcp_manager(mcp));
+    let control = TestMcpControl::new(configs).await;
+    let app = router(state().await.with_mcp_control(control));
 
     let response = request(
         app.clone(),

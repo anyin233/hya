@@ -5,4 +5,4 @@ pub mod protocol;
 mod resource;
 
 pub use client::{McpClient, McpError};
-pub use manager::{McpManager, McpServerConfig, McpStatus};
+pub use manager::{McpManager, McpServerConfig, McpStatus, PreparedMcpServer, prepare};
