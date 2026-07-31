@@ -585,8 +585,30 @@ Local exit gates after the last GREEN:
 - `bun test` passed 43/43 in `packages/hya-tui-ts`;
 - Trellis JSON/JSONL parsing and `git diff --check` passed before staging.
 
-Commit, push, and draft PR #24 remote-CI results are the remaining release
-gate; `0.34.5` remains blocked until they are green.
+Feature commit `53a76ec12c516c9cef0cf916b83d29492d80eac9` was pushed
+to draft PR #24. Remote CI run `30607264119` attempts 1 and 2 both stopped in
+the unchanged PTY smoke before any Rust gate: fixed 20-second waits timed out
+at different interaction stages on the slower runner, while the 80-column
+permission-focus wait was the only repeated location. The repair preserves
+every narrow/wide behavior assertion and changes only the test harness:
+
+- CI transcript polling is reduced from every 50 ms to every 100 ms so repeated
+  whole-transcript reads do not starve the PTY process;
+- local waits remain 20 seconds, while CI waits allow 45 seconds and the
+  enclosing CI test allows 120 seconds;
+- the two observed keyboard boundaries explicitly flush the Bun child stdin.
+
+After that repair, `bun run typecheck`, the focused `CI=true` PTY suite (3/3),
+and the complete `CI=true` Bun suite (43/43) passed locally. The repeated Rust
+gate then exposed a separate fixture race: the built-in formatter test
+received Linux `ETXTBSY` while executing an asynchronously created
+`vendor/bin/pint`. A close-before-exec timing race is the source-supported
+inference, not a product formatter defect. Creating that executable fixture
+with a synchronous write passed 10/10 focused runs, then the complete workspace
+test and binary build gates.
+
+A focused follow-up commit/push and a fully green rerun of all draft PR gates
+are still required; `0.34.5` remains blocked until then.
 
 ## 6. Deferred semantic audit lanes (`P0`–`P9`)
 
