@@ -131,6 +131,21 @@ impl SubagentGovernor {
         granted
     }
 
+    /// Atomically reserve all `want` member slots or none of them.
+    ///
+    /// The background spawn boundary uses this before creating a child session,
+    /// because a partial reservation cannot be represented by its request-level
+    /// typed overload response.
+    pub fn try_reserve_exact(&self, root: SessionId, want: u64) -> bool {
+        let mut budgets = self.lock_budgets();
+        let remaining = budgets.entry(root).or_insert(self.limits.per_run_budget);
+        if *remaining < want {
+            return false;
+        }
+        *remaining -= want;
+        true
+    }
+
     /// Release a completed root's budget entry so long-lived roots do not leak.
     pub fn release(&self, root: SessionId) {
         self.lock_budgets().remove(&root);
@@ -217,6 +232,28 @@ mod tests {
         // Release lets a root be reused with a fresh budget.
         gov.release(root);
         assert_eq!(gov.reserve(root, 3), 3, "released root reseeds budget");
+    }
+
+    #[test]
+    fn exact_reserve_is_all_or_none() {
+        let gov = SubagentGovernor::new(SubagentLimits {
+            per_run_budget: 3,
+            ..SubagentLimits::default()
+        });
+        let root = SessionId::new();
+
+        assert!(
+            !gov.try_reserve_exact(root, 4),
+            "oversized request must be rejected"
+        );
+        assert!(
+            gov.try_reserve_exact(root, 3),
+            "failed exact reserve must not consume any budget"
+        );
+        assert!(
+            !gov.try_reserve_exact(root, 1),
+            "successful exact reserve consumes the requested budget"
+        );
     }
 
     #[tokio::test]

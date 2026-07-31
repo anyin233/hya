@@ -25,10 +25,7 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--mode" => {
                 i += 1;
-                mode = args
-                    .get(i)
-                    .context("--mode requires a value")?
-                    .clone();
+                mode = args.get(i).context("--mode requires a value")?.clone();
             }
             "--runs" => {
                 i += 1;
@@ -75,7 +72,10 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
                 Some(path) => parse_marks_file(&path)?,
                 None => parse_marks_reader(std::io::stdin().lock())?,
             };
-            println!("{}", serde_json::to_string_pretty(&summarize_marks(&marks))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summarize_marks(&marks))?
+            );
         }
         other => bail!("unknown mode {other}; use backend|parse"),
     }
@@ -174,11 +174,14 @@ fn run_backend_bench(
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let p50 = percentile(&samples, 0.50);
     let p95 = percentile(&samples, 0.95);
-    println!("backend_ready p50={p50:.1}ms p95={p95:.1}ms n={runs} bin={}", bin.display());
-    if let Some(budget) = budget_ms {
-        if p95 > budget as f64 {
-            bail!("backend_ready p95 {p95:.1}ms exceeds budget {budget}ms");
-        }
+    println!(
+        "backend_ready p50={p50:.1}ms p95={p95:.1}ms n={runs} bin={}",
+        bin.display()
+    );
+    if let Some(budget) = budget_ms
+        && p95 > budget as f64
+    {
+        bail!("backend_ready p95 {p95:.1}ms exceeds budget {budget}ms");
     }
     Ok(())
 }
@@ -223,19 +226,18 @@ fn time_backend_ready(bin: &Path) -> anyhow::Result<BackendSample> {
                 if ready_ms.is_none() && line.contains("listening on http://") {
                     ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
                 }
-                if let Some(mark) = parse_mark_line(&line) {
-                    if mark.mark == "backend_listen" {
-                        mark_delta_ms = Some(mark.wall_ms.saturating_sub(t0_wall) as f64);
-                        if ready_ms.is_none() {
-                            ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
-                        }
+                if let Some(mark) = parse_mark_line(&line)
+                    && mark.mark == "backend_listen"
+                {
+                    mark_delta_ms = Some(mark.wall_ms.saturating_sub(t0_wall) as f64);
+                    if ready_ms.is_none() {
+                        ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
                     }
                 }
                 // Prefer capturing the trace mark shortly after listen without padding every run.
                 if ready_ms.is_some()
                     && (mark_delta_ms.is_some()
-                        || t0.elapsed().as_secs_f64() * 1000.0
-                            > ready_ms.unwrap_or(0.0) + 50.0)
+                        || t0.elapsed().as_secs_f64() * 1000.0 > ready_ms.unwrap_or(0.0) + 50.0)
                 {
                     break;
                 }
@@ -312,10 +314,7 @@ fn wall_ms() -> u128 {
 }
 
 fn tempfile_dir() -> anyhow::Result<PathBuf> {
-    let base = std::env::temp_dir().join(format!(
-        "hya-startup-bench-{}",
-        std::process::id()
-    ));
+    let base = std::env::temp_dir().join(format!("hya-startup-bench-{}", std::process::id()));
     // Unique per call
     let dir = base.join(format!(
         "{}",
@@ -333,12 +332,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_mark_line_accepts_trace_json() {
+    fn parse_mark_line_accepts_trace_json() -> anyhow::Result<()> {
         let line = r#"{"hya_startup":true,"mark":"backend_listen","wall_ms":1000,"detail":"http://127.0.0.1:9"}"#;
-        let mark = parse_mark_line(line).expect("mark");
+        let mark =
+            parse_mark_line(line).ok_or_else(|| anyhow::anyhow!("expected startup trace mark"))?;
         assert_eq!(mark.mark, "backend_listen");
         assert_eq!(mark.wall_ms, 1000);
         assert_eq!(mark.detail.as_deref(), Some("http://127.0.0.1:9"));
+        Ok(())
     }
 
     #[test]

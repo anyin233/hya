@@ -1,0 +1,42 @@
+{
+  "id": "modular-harness-native-swarm-runtime-refresh",
+  "name": "modular-harness-native-swarm-runtime-refresh",
+  "title": "Architect modular hya harness, native 100+ subagent swarm, per-agent Markdown/JS/Rust bundles, atomic runtime refresh, and secure Rust self-update",
+  "description": "HEAD-anchored architecture audit and executable evolution plan for a modular harness, native 100+/256-agent scheduling, per-agent Markdown/JS/Rust bundles, atomically refreshed tool/MCP/skill bindings, and an independently secured Rust self-update path.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-07-30",
+  "completedAt": null,
+  "branch": "codex/modular-harness-native-swarm-runtime-refresh",
+  "base_branch": "main",
+  "worktree_path": "/chivier-disk/yanweiye/Projects/yaca/.worktrees/modular-harness-native-swarm-runtime-refresh",
+  "commit": "156d0ad3c50aea67dfac0054485eb6991e77308b",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Only patch 0.34.3 is active: shared pre-create background transient/resident admission, bounded spawn transport, and typed overload. Independent Standards/Spec closure reviews report zero hard findings after TDD-closing extreme-capacity clamping, closed-receiver typing, denial side-effect snapshots, and accepted resident coverage. The isolated branch is rebased to current origin/main 156d0ad3; its only post-audit upstream change is the README icon reference. The owner-authorized minimal xtask gate repair and all required local Rust/TUI gates are green; exact staging, commit/push, and remote CI remain. Two unchanged PTY smoke-test runs timed out at different fixed waits before focused and full-suite reruns passed without weakening the gate. The MacBook Air coordinator has resolved native AgentBundle bootstrap/order for planning; later patches remain blocked on 0.34.3 remote CI and their own owner gates.",
+  "meta": {
+    "audit_head": "267bfc3c6c66e46fe8514e2e70657489f853b7f0",
+    "implementation_base_head": "156d0ad3c50aea67dfac0054485eb6991e77308b",
+    "implementation_release": "0.34.3",
+    "protected_dirty_paths": 19,
+    "pro_advisory_records": [
+      "CONSULT-2026-07-31-PATCH-PLAN-01",
+      "CONSULT-2026-07-31-AGENTBUNDLE-02",
+      "CONSULT-2026-07-31-BUNDLE-DISTRIBUTION-03",
+      "CONSULT-2026-07-31-AGENT-PARITY-04",
+      "CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05"
+    ],
+    "agent_capability_matrix": "research/agent-capability-parity-matrix.md",
+    "agent_source_policy": "native-bundle-only; no old agent-file support or adapter",
+    "native_bundle_bootstrap": "deterministic build-time preparation; embedded immutable built-ins; boot without install; one AgentBundleIR/generation/AgentSpec/SessionEngine path",
+    "future_release_map": "owner-corrected 0.34.3-0.34.13 native-only sequence; every patch waits for the previous remote CI green"
+  }
+}

@@ -44,6 +44,7 @@ pub use orchestrator::{SubagentGovernor, SubagentLimits, TeamBudget};
 pub use prompt::{PromptEnv, build_system_prompt};
 pub use resident::ResidentSupervisor;
 pub use subagent::{
-    MemberEvidence, MemberSpec, MemberStatus, TeamEvidenceEnvelope, project_envelope, run_team,
+    MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
+    pre_admit_team, project_envelope, run_pre_admitted_team, run_team,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

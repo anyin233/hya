@@ -21,6 +21,7 @@ fn tool_error_type(error: &ToolError) -> &'static str {
         ToolError::Io(_) => "io",
         ToolError::Json(_) => "json",
         ToolError::Cancelled => "cancelled",
+        ToolError::Overloaded(_) => "overloaded",
         ToolError::Other(_) => "unknown",
     }
 }

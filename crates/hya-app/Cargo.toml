@@ -32,5 +32,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }

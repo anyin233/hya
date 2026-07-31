@@ -46,6 +46,8 @@ pub enum ToolError {
     Json(#[from] serde_json::Error),
     #[error("cancelled")]
     Cancelled,
+    #[error("overloaded: {0}")]
+    Overloaded(String),
     #[error("{0}")]
     Other(String),
 }
