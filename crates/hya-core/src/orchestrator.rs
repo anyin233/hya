@@ -11,8 +11,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use hya_proto::SessionId;
+use hya_proto::{OperationId, SessionId};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio_util::sync::CancellationToken;
 
 /// Configurable caps for nested/parallel subagent execution.
 ///
@@ -61,6 +62,26 @@ pub enum TeamBudget {
     Exceeded,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationReservation {
+    Acquired,
+    Existing,
+    Conflict,
+    Overloaded,
+}
+
+#[derive(Default)]
+struct BudgetState {
+    remaining: HashMap<SessionId, u64>,
+    operations: HashMap<OperationId, OperationDebit>,
+}
+
+struct OperationDebit {
+    root: SessionId,
+    units: u64,
+    cancel: CancellationToken,
+}
+
 /// Enforces [`SubagentLimits`] at runtime.
 ///
 /// - `acquire_stream` hands out a permit from a global semaphore sized to
@@ -76,7 +97,7 @@ pub enum TeamBudget {
 pub struct SubagentGovernor {
     limits: SubagentLimits,
     stream_sem: Arc<Semaphore>,
-    budgets: Arc<Mutex<HashMap<SessionId, u64>>>,
+    budgets: Arc<Mutex<BudgetState>>,
     /// Per-team running totals of resident turns and mail messages, keyed by the
     /// team-root session. Separate from `budgets` (which is per-run spawn count)
     /// because these guard runaway *activity*, not fan-out.
@@ -91,7 +112,7 @@ impl SubagentGovernor {
         Self {
             limits,
             stream_sem: Arc::new(Semaphore::new(permits)),
-            budgets: Arc::new(Mutex::new(HashMap::new())),
+            budgets: Arc::new(Mutex::new(BudgetState::default())),
             team_turns: Arc::new(Mutex::new(HashMap::new())),
             team_messages: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -125,7 +146,10 @@ impl SubagentGovernor {
     /// actually granted (`0` when the budget is exhausted).
     pub fn reserve(&self, root: SessionId, want: u64) -> u64 {
         let mut budgets = self.lock_budgets();
-        let remaining = budgets.entry(root).or_insert(self.limits.per_run_budget);
+        let remaining = budgets
+            .remaining
+            .entry(root)
+            .or_insert(self.limits.per_run_budget);
         let granted = want.min(*remaining);
         *remaining -= granted;
         granted
@@ -138,7 +162,10 @@ impl SubagentGovernor {
     /// typed overload response.
     pub fn try_reserve_exact(&self, root: SessionId, want: u64) -> bool {
         let mut budgets = self.lock_budgets();
-        let remaining = budgets.entry(root).or_insert(self.limits.per_run_budget);
+        let remaining = budgets
+            .remaining
+            .entry(root)
+            .or_insert(self.limits.per_run_budget);
         if *remaining < want {
             return false;
         }
@@ -146,9 +173,92 @@ impl SubagentGovernor {
         true
     }
 
+    /// Debit one durable operation exactly once.
+    pub fn try_reserve_operation(
+        &self,
+        root: SessionId,
+        operation: OperationId,
+        units: u64,
+        cancel: CancellationToken,
+    ) -> OperationReservation {
+        let mut budgets = self.lock_budgets();
+        if let Some(existing) = budgets.operations.get(&operation) {
+            return if existing.root == root && existing.units == units {
+                OperationReservation::Existing
+            } else {
+                OperationReservation::Conflict
+            };
+        }
+        let remaining = budgets
+            .remaining
+            .entry(root)
+            .or_insert(self.limits.per_run_budget);
+        if units == 0 || *remaining < units {
+            return OperationReservation::Overloaded;
+        }
+        *remaining -= units;
+        budgets.operations.insert(
+            operation,
+            OperationDebit {
+                root,
+                units,
+                cancel,
+            },
+        );
+        OperationReservation::Acquired
+    }
+
+    /// Release a recorded operation debit. A repeated release is a no-op.
+    pub fn release_operation(&self, operation: OperationId) -> bool {
+        let mut budgets = self.lock_budgets();
+        let Some(debit) = budgets.operations.remove(&operation) else {
+            return false;
+        };
+        if let Some(remaining) = budgets.remaining.get_mut(&debit.root) {
+            *remaining = remaining
+                .saturating_add(debit.units)
+                .min(self.limits.per_run_budget);
+        }
+        true
+    }
+
+    /// Cancel all live operations for a root without releasing their debit.
+    /// Durable finalization remains the sole authority for release.
+    pub fn cancel_operations(&self, root: SessionId) -> Vec<OperationId> {
+        let budgets = self.lock_budgets();
+        let mut operations = Vec::new();
+        for (operation, debit) in &budgets.operations {
+            if debit.root == root {
+                debit.cancel.cancel();
+                operations.push(*operation);
+            }
+        }
+        operations
+    }
+
+    #[must_use]
+    pub fn remaining_budget(&self, root: SessionId) -> u64 {
+        self.lock_budgets()
+            .remaining
+            .get(&root)
+            .copied()
+            .unwrap_or(self.limits.per_run_budget)
+    }
+
     /// Release a completed root's budget entry so long-lived roots do not leak.
     pub fn release(&self, root: SessionId) {
-        self.lock_budgets().remove(&root);
+        let mut budgets = self.lock_budgets();
+        budgets.remaining.remove(&root);
+        let operations: Vec<OperationId> = budgets
+            .operations
+            .iter()
+            .filter_map(|(operation, debit)| (debit.root == root).then_some(*operation))
+            .collect();
+        for operation in operations {
+            if let Some(debit) = budgets.operations.remove(&operation) {
+                debit.cancel.cancel();
+            }
+        }
     }
 
     /// Charge one resident turn against `root`'s per-team turn budget. Returns
@@ -176,7 +286,7 @@ impl SubagentGovernor {
         lock(&self.team_messages).remove(&root);
     }
 
-    fn lock_budgets(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, u64>> {
+    fn lock_budgets(&self) -> std::sync::MutexGuard<'_, BudgetState> {
         lock(&self.budgets)
     }
 }
@@ -198,7 +308,7 @@ fn charge(map: &Arc<Mutex<HashMap<SessionId, u64>>>, root: SessionId, budget: u6
     }
 }
 
-fn lock<K, V>(m: &Arc<Mutex<HashMap<K, V>>>) -> std::sync::MutexGuard<'_, HashMap<K, V>> {
+fn lock<T>(m: &Arc<Mutex<T>>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -210,6 +320,8 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use hya_proto::{OperationId, ToolCallId};
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn reserve_grants_up_to_budget_then_stops() {
@@ -254,6 +366,30 @@ mod tests {
             !gov.try_reserve_exact(root, 1),
             "successful exact reserve consumes the requested budget"
         );
+    }
+
+    #[test]
+    fn operation_debit_and_release_are_exactly_once() {
+        let gov = SubagentGovernor::new(SubagentLimits {
+            per_run_budget: 3,
+            ..SubagentLimits::default()
+        });
+        let root = SessionId::new();
+        let operation = OperationId::from_tool_call(ToolCallId::new());
+
+        assert_eq!(
+            gov.try_reserve_operation(root, operation, 2, CancellationToken::new()),
+            OperationReservation::Acquired
+        );
+        assert_eq!(
+            gov.try_reserve_operation(root, operation, 2, CancellationToken::new()),
+            OperationReservation::Existing
+        );
+        assert_eq!(gov.remaining_budget(root), 1);
+        assert!(gov.release_operation(operation));
+        assert_eq!(gov.remaining_budget(root), 3);
+        assert!(!gov.release_operation(operation));
+        assert_eq!(gov.remaining_budget(root), 3);
     }
 
     #[tokio::test]

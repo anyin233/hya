@@ -25,7 +25,8 @@ implementation/remote base.
 
 ### Current-cycle owner scope
 
-The owner has authorized only release `0.34.3` now. The patch sequence does not
+Release `0.34.3` is committed/pushed with green remote CI. The owner has now
+authorized only release `0.34.4`. The patch sequence does not
 build or research sandbox/seccomp/container isolation, a capability broker,
 escrow delegation, or an independent `SecurityEpoch`. Explicitly installed
 JS/Rust AgentBundle and plugin code is trusted same-UID extension code; the
@@ -42,7 +43,7 @@ coordinator's sixth-round ruling fixes native-Bundle-only bootstrapping,
 build-time prepared immutable built-ins, and the dependency-ordered patch map
 below. Final external execution semantics, private-key ownership, context
 transfer, and resident idle/turn semantics still require explicit owner
-selection and cannot block or enter `0.34.3`.
+selection and cannot block or enter `0.34.4`.
 
 ### Emergency native-only AgentBundle supersession
 
@@ -66,7 +67,7 @@ packages prepared at build time, embedded read-only, and merged with the
 installed registry into one immutable generation. This avoids both an install
 bootstrap cycle and a temporary old-file detector. The corrected future patch
 sequence is recorded in `research/next-step-roadmap.md`; it is planning-only
-until each preceding release has green remote CI. Only `0.34.3` is active.
+until each preceding release has green remote CI. Only `0.34.4` is active.
 
 ## Product outcomes
 
@@ -347,7 +348,9 @@ not made green by silently redefining the workload.
   build on the `fuji1 remote worker`.
 - Every verified feature/fix slice updates `[workspace.package].version` and the
   newest-only root changelog as required, then commits and pushes atomically.
-  Only the `0.34.3` slice is currently authorized.
+  Only the `0.34.4` slice is currently authorized; its identity/journal scope is
+  fixed by `CONSULT-2026-07-31-OPERATION-ADMISSION-06` and section 8.0 of
+  `design.md`.
 
 ## Non-goals until evidence or prerequisites exist
 
@@ -413,7 +416,7 @@ not made green by silently redefining the workload.
 
 ## Planning decisions still requiring an owner
 
-These do not block the active `0.34.3` slice, but their owning phase cannot
+These do not block the active `0.34.4` slice, but their owning phase cannot
 activate until decided:
 
 1. update signing-key custody, threshold/rotation/revocation policy, and

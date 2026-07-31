@@ -49,6 +49,8 @@ async fn authorize_tool_call(
         .map_err(ToolError::from)
 }
 
+pub use admission::SpawnAdmissionOutcome;
+
 pub struct CreateSession {
     pub parent: Option<SessionId>,
     pub agent: AgentName,

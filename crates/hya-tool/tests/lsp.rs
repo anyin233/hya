@@ -61,6 +61,7 @@ fn ctx_with(rules: Vec<Rule>, lsp: LspPlane, workdir: PathBuf) -> ToolCtx {
         permission: permission.for_session(session),
         interaction: interaction.for_session(session),
         spawner,
+        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,

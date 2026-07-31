@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_proto::SessionId;
+use hya_proto::{OperationId, SessionId, ToolCallId};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry,
-    WebSearchPlane,
+    Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolOperation,
+    ToolRegistry, WebSearchPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -32,10 +32,12 @@ fn tempdir() -> PathBuf {
 fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
     let (interaction, _irx) = InteractionPlane::new();
+    let operation = ToolOperation::from_tool_call(ToolCallId::new());
     ToolCtx {
         permission,
         interaction,
         spawner: spawner.for_session(session),
+        operation,
         mailbox: hya_tool::MailboxPlane::disconnected(),
         session: Some(session),
         parent_session: None,
@@ -99,6 +101,38 @@ async fn subagent_can_spawn_nested_task() {
         .unwrap();
     let out = handle.await.unwrap().unwrap();
     assert_eq!(out["metadata"]["sessionId"], "ses_grandchild");
+}
+
+#[tokio::test]
+async fn task_preserves_the_persisted_tool_call_operation_identity() {
+    let parent = SessionId::new();
+    let source_tool_call_id = ToolCallId::new();
+    let operation = ToolOperation::from_tool_call(source_tool_call_id);
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let mut ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    ctx.operation = operation;
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Preserve identity",
+                "prompt": "keep the durable operation identity",
+                "subagent_type": "explore"
+            }),
+        )
+        .await
+    });
+
+    let req = rx.recv().await.unwrap();
+    assert_eq!(req.operation.source_tool_call_id(), source_tool_call_id);
+    assert_eq!(
+        req.operation.operation_id(),
+        OperationId::from_tool_call(source_tool_call_id)
+    );
+    req.reply.send(Ok(Vec::new())).unwrap();
+    let _ = handle.await.unwrap();
 }
 
 #[test]
@@ -370,7 +404,11 @@ async fn task_preserves_typed_spawn_overload() {
     let queued_plane = spawner.for_session(parent);
     let queued = tokio::spawn(async move {
         queued_plane
-            .spawn(vec![SpawnMember::default()], CancellationToken::new())
+            .spawn(
+                ToolOperation::from_tool_call(ToolCallId::new()),
+                vec![SpawnMember::default()],
+                CancellationToken::new(),
+            )
             .await
     });
     tokio::time::timeout(std::time::Duration::from_secs(1), async {

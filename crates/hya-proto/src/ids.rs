@@ -230,6 +230,45 @@ fn fill_os_random(dest: &mut [u8]) {
 uuid_id!(MessageId, "msg");
 uuid_id!(PartId, "part");
 uuid_id!(ToolCallId, "tc");
+
+/// Internal durable-admission identity derived from the persisted tool call.
+///
+/// The fixed namespace separates admission identities from every other UUID
+/// domain. There is exactly one operation identity for a given tool call; it
+/// is never minted independently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct OperationId(Uuid);
+
+const OPERATION_ID_NAMESPACE: Uuid = Uuid::from_u128(0x8b2f_3e1c_ec18_5a5f_8d8d_95f3_d6e3_c1b7);
+
+impl OperationId {
+    #[must_use]
+    pub fn from_tool_call(source: ToolCallId) -> Self {
+        Self(Uuid::new_v5(
+            &OPERATION_ID_NAMESPACE,
+            source.as_uuid().as_bytes(),
+        ))
+    }
+
+    #[must_use]
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+
+    /// Rehydrate an operation identity previously written by
+    /// [`Self::from_tool_call`] to durable storage.
+    #[must_use]
+    pub fn from_storage_uuid(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Display for OperationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "op_{}", self.0.simple())
+    }
+}
+
 uuid_id!(TeamRunId, "team");
 uuid_id!(MemberId, "mbr");
 uuid_id!(GoalId, "goal");
@@ -306,6 +345,21 @@ mod tests {
         let id: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
 
         assert_eq!(id.storage_key(), b"hysec_ABCDEFGHIJKLMNOPQRST".to_vec());
+    }
+
+    #[test]
+    fn operation_id_is_domain_separated_and_deterministic_from_tool_call() {
+        let source =
+            ToolCallId::from_uuid(Uuid::parse_str("018f032a-3d2f-7a21-a05c-2e61fc57dced").unwrap());
+
+        let operation = OperationId::from_tool_call(source);
+
+        assert_eq!(
+            operation.as_uuid(),
+            Uuid::parse_str("ae7328b6-077c-513b-aa80-f92ade328fb5").unwrap()
+        );
+        assert_eq!(OperationId::from_tool_call(source), operation);
+        assert_ne!(operation.as_uuid(), source.as_uuid());
     }
 }
 

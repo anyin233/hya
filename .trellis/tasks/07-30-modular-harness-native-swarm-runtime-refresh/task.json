@@ -16,27 +16,32 @@
   "base_branch": "main",
   "worktree_path": "/chivier-disk/yanweiye/Projects/yaca/.worktrees/modular-harness-native-swarm-runtime-refresh",
   "commit": "156d0ad3c50aea67dfac0054485eb6991e77308b",
-  "pr_url": null,
+  "pr_url": "https://github.com/anyin233/hya/pull/24",
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Only patch 0.34.3 is active: shared pre-create background transient/resident admission, bounded spawn transport, and typed overload. Independent Standards/Spec closure reviews report zero hard findings after TDD-closing extreme-capacity clamping, closed-receiver typing, denial side-effect snapshots, and accepted resident coverage. The isolated branch is rebased to current origin/main 156d0ad3; its only post-audit upstream change is the README icon reference. The owner-authorized minimal xtask gate repair and all required local Rust/TUI gates are green; exact staging, commit/push, and remote CI remain. Two unchanged PTY smoke-test runs timed out at different fixed waits before focused and full-suite reruns passed without weakening the gate. The MacBook Air coordinator has resolved native AgentBundle bootstrap/order for planning; later patches remain blocked on 0.34.3 remote CI and their own owner gates.",
+  "notes": "Patch 0.34.3 is committed/pushed at b8c21deeb5004e1f703b199a40de196902fadf35 and remote CI is green. Patch 0.34.4 implementation and all local Rust/TUI release gates are green: fixed-domain ToolCallId-derived OperationId, mandatory ToolCtx propagation, one narrow SessionStore admission journal, immutable fingerprint/units, accepted-started-terminal idempotency, exact-once governor debit finalization, fail-closed terminal-conflict propagation, and startup abort recovery. Commit/push and draft PR #24 remote CI are the remaining gate. The dirty main checkout and its 19 user-owned paths plus three stashes remain untouched. No 0.34.5+ work, public OperationId surface, child/effect/scheduler journal, merge, tag, or activation is authorized.",
   "meta": {
     "audit_head": "267bfc3c6c66e46fe8514e2e70657489f853b7f0",
     "implementation_base_head": "156d0ad3c50aea67dfac0054485eb6991e77308b",
-    "implementation_release": "0.34.3",
+    "active_stage_base_head": "b8c21deeb5004e1f703b199a40de196902fadf35",
+    "implementation_release": "0.34.4",
+    "draft_pr_url": "https://github.com/anyin233/hya/pull/24",
+    "local_gate_status": "green; commit/push/remote CI pending",
     "protected_dirty_paths": 19,
     "pro_advisory_records": [
       "CONSULT-2026-07-31-PATCH-PLAN-01",
       "CONSULT-2026-07-31-AGENTBUNDLE-02",
       "CONSULT-2026-07-31-BUNDLE-DISTRIBUTION-03",
       "CONSULT-2026-07-31-AGENT-PARITY-04",
-      "CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05"
+      "CONSULT-2026-07-31-NATIVE-BUNDLE-BOOTSTRAP-05",
+      "CONSULT-2026-07-31-OPERATION-ADMISSION-06"
     ],
     "agent_capability_matrix": "research/agent-capability-parity-matrix.md",
     "agent_source_policy": "native-bundle-only; no old agent-file support or adapter",
     "native_bundle_bootstrap": "deterministic build-time preparation; embedded immutable built-ins; boot without install; one AgentBundleIR/generation/AgentSpec/SessionEngine path",
-    "future_release_map": "owner-corrected 0.34.3-0.34.13 native-only sequence; every patch waits for the previous remote CI green"
+    "future_release_map": "0.34.3 delivered; owner-corrected 0.34.4-0.34.13 native-only sequence; every patch waits for the previous remote CI green",
+    "active_release_boundary": "0.34.4 OperationId plus minimal durable spawn admission/cancel/finalize/recovery only"
   }
 }

@@ -158,6 +158,7 @@ impl SessionEngine {
                         permission,
                         interaction: self.interaction.for_session(session),
                         spawner: self.spawner.for_session(session),
+                        operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
                         mailbox: self.mailbox.for_session(session),
                         session: Some(session),
                         parent_session: projection.session.parent,

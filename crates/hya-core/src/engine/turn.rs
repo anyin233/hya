@@ -67,10 +67,10 @@ impl SessionEngine {
         // A completed top-level (depth-0) turn ends the "run": release its per-run
         // subagent budget so long-lived root sessions do not leak budget entries and
         // the next top-level turn starts with a fresh budget.
-        if let Some(gov) = &self.governor
+        if self.governor.is_some()
             && let Ok((root, 0)) = self.session_lineage(session).await
         {
-            gov.release(root);
+            self.finalize_root_spawn_admissions(root).await?;
         }
         outcome
     }
@@ -277,6 +277,7 @@ impl SessionEngine {
                                 permission,
                                 interaction: self.interaction.for_session(session),
                                 spawner: self.spawner.for_session(session),
+                                operation: hya_tool::ToolOperation::from_tool_call(tc.call),
                                 mailbox: self.mailbox.for_session(session),
                                 session: Some(session),
                                 parent_session: projection.session.parent,

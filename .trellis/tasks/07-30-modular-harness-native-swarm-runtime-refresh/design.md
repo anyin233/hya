@@ -2,10 +2,12 @@
 
 ## 1. Planning status and evidence anchor
 
-This document is a **target design**, not an implementation claim. The user has
-authorized only the `0.34.3` admission slice to leave planning after isolated
-worktree validation. Every later patch and every production/owner gate remains
-unauthorized until its recorded entry conditions are met.
+This document is a **target design**, not an implementation claim. Release
+`0.34.3` is committed/pushed at
+`b8c21deeb5004e1f703b199a40de196902fadf35` with green remote CI. The user has
+now authorized only the `0.34.4` OperationId/minimal durable-admission slice.
+Every later patch and every production/owner gate remains unauthorized until
+its recorded entry conditions are met.
 
 - Authoritative development workspace: the saved project on the
   `fuji1 remote worker` at
@@ -18,8 +20,9 @@ unauthorized until its recorded entry conditions are met.
   commit changes only the README icon reference. The isolated feature branch
   is rebased to that newer implementation base, while dirty `main` remains at
   the audit commit.
-- `[workspace.package].version` at the audit anchor is `0.34.2`; the active
-  isolated release candidate is `0.34.3`.
+- `[workspace.package].version` at the audit anchor is `0.34.2`; delivered
+  release `0.34.3` is the current isolated HEAD and `0.34.4` is the active
+  release target.
 - Before this task directory was created, `git status --porcelain` contained
   exactly 19 user-owned entries. They are enumerated in
   `research/fuji1-sync-preflight.md`. The untracked task directory is the
@@ -60,7 +63,7 @@ This section overrides any broader exploratory target below:
   provenance. A/B/C execution, context transfer, and resident idle/turn
   semantics still require explicit owner selection;
 - the active patch/release sequence is authoritative in
-  `research/next-step-roadmap.md`; only `0.34.3` is active now.
+  `research/next-step-roadmap.md`; only `0.34.4` is active now.
 
 ### 1.2 Controlling native-only cutover ruling
 
@@ -115,7 +118,7 @@ authority or persistence keys.
 | `BindingSetId` | Content identity of the complete immutable structural view for a Turn attempt: tools, aliases, schemas, executors, model route, skills, instructions, bundle revision, and structural capability ceilings. |
 | `TurnId` | Stable logical admitted user/team turn. |
 | `TurnAttemptId` | Durable identity of one execution attempt. Transport/model retries and crash recovery of that attempt keep its binding; an explicitly restarted terminal attempt receives a new ID. |
-| `OperationId` | Allocated before an effect attempt and reused for retry/recovery of the same semantic operation. It is not the provider `ToolCallId`. |
+| `OperationId` | For the `0.34.4` tool-call admission slice, derived deterministically and domain-separately by fixed-namespace UUIDv5 from the already-persisted UUID-backed `ToolCallId`. It has no independent random constructor and is not exposed through Event/HTTP/CLI surfaces. Later non-tool-call effects require a separate owner-approved identity rule. |
 | `ActorId` | Stable logical root/resident/transient actor identity across process incarnations. |
 
 Collision or ambiguous ownership fails the whole candidate. Builtins, static
@@ -566,6 +569,60 @@ Harness policy/current PermissionPlane
   brokered tool calls, so malicious-code isolation is explicitly not claimed.
 
 ## 8. Lane D — durable multi-resource admission
+
+### 8.0 Active `0.34.4` minimal journal boundary
+
+The active patch is deliberately smaller than the target scheduler in the
+rest of section 8:
+
+```text
+persist immutable accepted claim
+  -> acquire current in-memory governor debit
+  -> persist started
+  -> create/dispatch through the existing spawn path
+  -> completed | cancelled | aborted
+```
+
+One `SessionStore`-owned additive journal contains only:
+
+- `operation_id` primary key and unique source `tool_call_id`;
+- source/root session storage key needed for cancellation/root cleanup;
+- a versioned SHA-256 request fingerprint;
+- admission units;
+- state, creation/update timestamps, terminal reason, and a logical
+  released marker.
+
+The fingerprint covers parent identity, background mode, ordered normalized
+members, and every dispatch-affecting member/inline/model/category/resident/
+task-id field. It excludes cancellation tokens, reply channels, resolved
+provider/agent objects, and presentation-only output.
+
+State invariants:
+
+1. `accepted` is the durable claim before in-memory debit.
+2. `started` means the current process acquired the governor debit; no child or
+   effect may be created before this transition commits.
+3. `completed`, `cancelled`, and `aborted` are irreversible terminals.
+4. Identical claim replay returns the existing state and cannot debit or
+   dispatch. Any immutable-field mismatch is typed
+   `OPERATION_ID_CONFLICT` without mutation.
+5. An accepted overload becomes terminal without a governor release.
+6. A store compare-and-set chooses the one winning terminalizer. Only a winner
+   whose prior state was `started` may remove the operation-keyed governor
+   debit. Same-terminal replay is a no-op; a different terminal is a typed
+   transition conflict.
+7. Completion, explicit cancellation, child/create infrastructure failure,
+   and root cleanup call the same finalizer. The process-local governor stores
+   debit units by `OperationId`; callers never supply a refund amount.
+8. Startup atomically marks all `accepted`/`started` rows `aborted` before
+   constructing or starting resident/team spawn supervisors. Old process-local
+   debits disappeared with that process, so recovery records logical release
+   only and does not credit the fresh governor.
+
+No `operation_child`, durable runnable queue, scheduler, member/effect journal,
+public Event variant, lease/epoch/resource map, or result cache is part of
+`0.34.4`. Session events/projection remain canonical for session behavior and
+replay independently of this control-plane journal.
 
 ### 8.1 Work state machine
 

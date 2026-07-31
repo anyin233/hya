@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{SessionId, ToolName, ToolSchema};
+use hya_proto::{OperationId, SessionId, ToolCallId, ToolName, ToolSchema};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -48,6 +48,10 @@ pub enum ToolError {
     Cancelled,
     #[error("overloaded: {0}")]
     Overloaded(String),
+    #[error("OPERATION_ID_CONFLICT")]
+    OperationIdConflict,
+    #[error("operation already handled")]
+    OperationAlreadyHandled,
     #[error("{0}")]
     Other(String),
 }
@@ -62,6 +66,7 @@ pub struct ToolCtx {
     pub permission: PermissionPlane,
     pub interaction: InteractionPlane,
     pub spawner: SpawnerPlane,
+    pub operation: ToolOperation,
     pub mailbox: MailboxPlane,
     pub session: Option<SessionId>,
     pub parent_session: Option<SessionId>,
@@ -73,6 +78,33 @@ pub struct ToolCtx {
     pub formatter: FormatterPlane,
     pub workdir: PathBuf,
     pub cancel: CancellationToken,
+}
+
+/// Immutable identity of the persisted tool invocation and its admission operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolOperation {
+    source_tool_call_id: ToolCallId,
+    operation_id: OperationId,
+}
+
+impl ToolOperation {
+    #[must_use]
+    pub fn from_tool_call(source_tool_call_id: ToolCallId) -> Self {
+        Self {
+            source_tool_call_id,
+            operation_id: OperationId::from_tool_call(source_tool_call_id),
+        }
+    }
+
+    #[must_use]
+    pub fn source_tool_call_id(self) -> ToolCallId {
+        self.source_tool_call_id
+    }
+
+    #[must_use]
+    pub fn operation_id(self) -> OperationId {
+        self.operation_id
+    }
 }
 
 const SEARCH_LIMIT: usize = 100;

@@ -272,14 +272,18 @@ impl Tool for TaskTool {
 
         let outcomes = if background {
             ctx.spawner
-                .spawn_background(members.clone(), ctx.cancel.clone())
+                .spawn_background(ctx.operation, members.clone(), ctx.cancel.clone())
                 .await
         } else {
-            ctx.spawner.spawn(members.clone(), ctx.cancel.clone()).await
+            ctx.spawner
+                .spawn(ctx.operation, members.clone(), ctx.cancel.clone())
+                .await
         }
         .map_err(|error| match error {
             SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
             SpawnError::Unavailable => ToolError::Other(error.to_string()),
+            SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
+            SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
         })?;
         if members.len() == 1 && outcomes.len() == 1 {
             let member = members.remove(0);
