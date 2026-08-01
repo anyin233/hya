@@ -13,11 +13,11 @@ use hya_bundle::{
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
-    AgentSpec, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor, RuntimeRegistry,
-    SessionEngine, SubagentGovernor, SubagentLimits,
+    AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
+    RuntimeRegistry, SessionEngine, SubagentGovernor, SubagentLimits,
 };
 use hya_proto::{
-    AgentName, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, ModelRef,
+    AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, ModelRef,
     SessionId, SubagentMode, ToolCallId,
 };
 use hya_provider::{
@@ -314,7 +314,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         "*",
         Mode::Allow,
     )]));
-    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(2);
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(2);
     let engine = Arc::new(
         SessionEngine::new(
             store,
@@ -331,7 +331,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone()),
+        .with_spawn_sender(spawn_sender.clone()),
     );
     let base = AgentSpec {
         name: AgentName::new("build"),
@@ -361,6 +361,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
 
     let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
     let root_agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     let outcome = spawner
         .for_session_with_agents(parent, root_agents)
         .spawn(
@@ -876,7 +877,7 @@ async fn admission_fixture_with_gate(
         gate,
     })));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
-    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(2);
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(2);
     let engine = Arc::new(
         SessionEngine::new(
             store,
@@ -892,7 +893,7 @@ async fn admission_fixture_with_gate(
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone())
+        .with_spawn_sender(spawn_sender.clone())
         .with_governor(SubagentGovernor::new(SubagentLimits {
             per_run_budget,
             ..SubagentLimits::default()
@@ -926,6 +927,7 @@ async fn admission_fixture_with_gate(
         .unwrap();
     let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
     let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     AdmissionFixture {
         engine,
         spawner,
@@ -981,6 +983,177 @@ impl Provider for CaptureSystemsProvider {
     }
 }
 
+#[tokio::test]
+async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
+    const OLD_QUICK_PROMPT: &str = "quick prompt";
+    const NEW_CATALOG_CHILD_PROMPT: &str = "NEW_CATALOG_CHILD_PROMPT";
+
+    let systems = Arc::new(Mutex::new(Vec::new()));
+    let by_session = Arc::new(Mutex::new(Vec::new()));
+    let tools_by_session = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(CaptureSystemsProvider {
+        systems,
+        by_session: by_session.clone(),
+        tools_by_session,
+        inner: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
+    })));
+    let runtime = support::test_runtime(
+        Arc::new(ToolRegistry::builtins()),
+        &[
+            ("build", AgentRole::Main, &["quick"]),
+            ("general", AgentRole::Main, &[]),
+            ("quick", AgentRole::Subagent, &[]),
+        ],
+    );
+    let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+    let (spawn_sender, mut queued_rx) = BoundSpawnSender::with_capacity(1);
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            router.clone(),
+            runtime.clone(),
+            permission,
+            EventBus::default(),
+        )
+        .with_spawn_sender(spawn_sender.clone()),
+    );
+    let workdir = temp_child_workdir("queued-parent-binding");
+    let base = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "parent base".to_string(),
+        workdir: workdir.clone(),
+        reasoning: None,
+    };
+    let parent = engine
+        .create(CreateSession {
+            parent: None,
+            agent: base.name.clone(),
+            model: base.model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    let old_binding = runtime.bind_turn(&workdir).unwrap();
+    let old_generation = old_binding.generation();
+    let old_roster = engine
+        .agent_roster_for_binding(&old_binding, "build")
+        .unwrap();
+    let spawner = spawn_sender.for_binding(&old_binding);
+    let queued_spawn = tokio::spawn({
+        let scoped = spawner.for_session_with_agents(parent, old_roster);
+        async move {
+            scoped
+                .spawn(
+                    operation(),
+                    vec![SpawnMember {
+                        description: "queued quick".to_string(),
+                        prompt: "run with the parent binding".to_string(),
+                        subagent_type: "quick".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    Default::default(),
+                )
+                .await
+        }
+    });
+    let queued_request = queued_rx.recv().await.expect("queued spawn request");
+
+    let mut published_bundles = old_binding.agent_catalog().bundles().to_vec();
+    let quick = published_bundles
+        .iter_mut()
+        .flat_map(|bundle| &mut bundle.agents)
+        .find(|agent| agent.stable_id.as_str() == "quick")
+        .expect("quick agent in old prepared catalog");
+    assert_eq!(quick.prompt.as_deref(), Some(OLD_QUICK_PROMPT));
+    quick.prompt = Some(NEW_CATALOG_CHILD_PROMPT.to_string());
+    let published_catalog =
+        BundleCatalog::from_prepared(&published_bundles).expect("complete replacement catalog");
+    runtime
+        .publish_catalog(Arc::new(published_catalog))
+        .expect("publish replacement catalog");
+
+    assert_eq!(
+        old_binding
+            .resolve_agent("quick")
+            .and_then(|agent| agent.prompt.as_deref()),
+        Some(OLD_QUICK_PROMPT),
+        "the parent TurnBinding must remain pinned"
+    );
+    let fresh_binding = runtime.bind_turn(&workdir).unwrap();
+    let fresh_generation = fresh_binding.generation();
+    assert_ne!(
+        fresh_generation, old_generation,
+        "catalog publication must advance the runtime generation"
+    );
+    assert_eq!(
+        fresh_binding
+            .resolve_agent("quick")
+            .and_then(|agent| agent.prompt.as_deref()),
+        Some(NEW_CATALOG_CHILD_PROMPT),
+        "a fresh TurnBinding must observe the published catalog"
+    );
+
+    let (forward_tx, forward_rx) = tokio::sync::mpsc::channel(1);
+    forward_tx
+        .send(queued_request)
+        .await
+        .expect("forward retained queued request");
+    drop(forward_tx);
+    let resident = ResidentSupervisor::start(engine.clone());
+    spawn_team_supervisor(
+        forward_rx,
+        engine.clone(),
+        base,
+        router,
+        Arc::new(CategoryRegistry::default()),
+        resident,
+    );
+
+    let outcomes = queued_spawn
+        .await
+        .expect("queued spawn task")
+        .expect("queued foreground spawn");
+    let child: SessionId = outcomes[0].session.parse().expect("child session id");
+    let child_binding_generations: Vec<_> = engine
+        .replay(child)
+        .await
+        .expect("replay child binding events")
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::TurnBindingRecorded { generation, .. } => Some(generation),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        child_binding_generations.len(),
+        1,
+        "child execution must record exactly one turn binding: {child_binding_generations:?}"
+    );
+    assert_eq!(
+        child_binding_generations[0], old_generation,
+        "child execution must record the parent turn's retained generation"
+    );
+    assert_ne!(
+        child_binding_generations[0], fresh_generation,
+        "child execution must not record the post-publication generation"
+    );
+    let captures = by_session.lock().unwrap();
+    let child_system = captures
+        .iter()
+        .find_map(|(session, system)| (*session == child).then_some(system))
+        .expect("child provider system prompt");
+    assert!(
+        child_system.contains(OLD_QUICK_PROMPT),
+        "queued child must use the parent binding's OLD prompt: {child_system}"
+    );
+    assert!(
+        !child_system.contains(NEW_CATALOG_CHILD_PROMPT),
+        "queued child must not rebind to the NEW catalog prompt: {child_system}"
+    );
+}
+
 fn temp_child_workdir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1022,7 +1195,7 @@ async fn guidance_spawn_fixture(
         Rule::new(Action::Task, "*", Mode::Allow),
         Rule::new(Action::Read, "*", Mode::Allow),
     ]));
-    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(4);
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(4);
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
@@ -1031,7 +1204,7 @@ async fn guidance_spawn_fixture(
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone())
+        .with_spawn_sender(spawn_sender.clone())
         .with_governor(SubagentGovernor::new(SubagentLimits {
             per_run_budget: 16,
             ..SubagentLimits::default()
@@ -1067,6 +1240,7 @@ async fn guidance_spawn_fixture(
         .unwrap();
     let binding = engine.bind_runtime(&workdir).unwrap();
     let roster = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     GuidanceSpawnFixture {
         engine,
         spawner,
@@ -1784,7 +1958,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         Rule::new(Action::Task, "*", Mode::Allow),
         Rule::new(Action::Read, "*", Mode::Allow),
     ]));
-    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(4);
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(4);
     let tools = Arc::new(ToolRegistry::builtins());
     let engine = Arc::new(
         SessionEngine::new(
@@ -1794,7 +1968,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone())
+        .with_spawn_sender(spawn_sender.clone())
         .with_governor(SubagentGovernor::new(SubagentLimits {
             per_run_budget: 16,
             ..SubagentLimits::default()
@@ -1839,6 +2013,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         .unwrap();
 
     let binding = engine.bind_runtime(&workdir).unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     let nested_roster = engine
         .agent_roster_for_binding(&binding, "planner")
         .unwrap();
@@ -1972,7 +2147,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         Rule::new(Action::Task, "*", Mode::Allow),
         Rule::new(Action::Read, "*", Mode::Allow),
     ]));
-    let (spawner, spawn_rx) = SpawnerPlane::with_capacity(4);
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(4);
     // Catalog has nested + resident targets, but deliberately omits the root
     // session's stable AgentName so root main activation cannot resolve.
     let runtime = {
@@ -2030,7 +2205,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone())
+        .with_spawn_sender(spawn_sender.clone())
         .with_governor(SubagentGovernor::new(SubagentLimits {
             per_run_budget: 16,
             ..SubagentLimits::default()
@@ -2079,6 +2254,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
     let nested_events_before = engine.replay(nested).await.unwrap();
     let operation = operation();
     let binding = engine.bind_runtime(&workdir).unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     let nested_roster = engine
         .agent_roster_for_binding(&binding, "planner")
         .unwrap();

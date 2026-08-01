@@ -40,7 +40,8 @@ async fn switch_agent(
         &st,
         std::path::Path::new(snapshot.info.directory()),
         Some(req.agent.as_str()),
-    )?;
+    )
+    .await?;
     st.engine.switch_agent(session, agent).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

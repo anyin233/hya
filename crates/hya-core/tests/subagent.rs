@@ -157,10 +157,11 @@ async fn governed_engine(
     (engine, agent)
 }
 
-fn member(agent: &AgentSpec, directive: &str) -> MemberSpec {
+fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberSpec {
     MemberSpec {
         id: MemberId::new(),
         agent: agent.clone(),
+        binding: engine.bind_runtime(&agent.workdir).unwrap(),
         agents: Arc::from([]),
         resources: None,
         guidance: None,
@@ -197,7 +198,9 @@ async fn governor_caps_streaming_concurrency() {
         })
         .await
         .unwrap();
-    let specs: Vec<MemberSpec> = (0..6).map(|i| member(&agent, &format!("m{i}"))).collect();
+    let specs: Vec<MemberSpec> = (0..6)
+        .map(|i| member(&engine, &agent, &format!("m{i}")))
+        .collect();
     let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
     assert_eq!(evidence.len(), 6);
     assert!(evidence.iter().all(|e| e.status == MemberStatus::Done));
@@ -230,9 +233,9 @@ async fn governor_rejects_members_beyond_budget() {
         .await
         .unwrap();
     let specs = vec![
-        member(&agent, "a"),
-        member(&agent, "b"),
-        member(&agent, "c"),
+        member(&engine, &agent, "a"),
+        member(&engine, &agent, "b"),
+        member(&engine, &agent, "c"),
     ];
     let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
     assert_eq!(evidence.len(), 3);
@@ -288,7 +291,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
     let evidence = run_team(
         engine.clone(),
         child,
-        vec![member(&agent, "too deep")],
+        vec![member(&engine, &agent, "too deep")],
         CancellationToken::new(),
     )
     .await;
@@ -312,7 +315,10 @@ async fn run_team_records_member_lifecycle_on_lead() {
     let evidence = run_team(
         engine.clone(),
         lead,
-        vec![member(&agent, "member one"), member(&agent, "member two")],
+        vec![
+            member(&engine, &agent, "member one"),
+            member(&engine, &agent, "member two"),
+        ],
         CancellationToken::new(),
     )
     .await;
@@ -351,6 +357,7 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
         MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
             agents: Arc::from([]),
             resources: None,
             guidance: None,
@@ -361,6 +368,7 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
         MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
             agents: Arc::from([]),
             resources: None,
             guidance: None,
@@ -422,6 +430,7 @@ async fn run_team_can_resume_existing_member_session() {
         lead,
         vec![MemberSpec {
             id: MemberId::new(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
             agent,
             agents: Arc::from([]),
             resources: None,
@@ -470,6 +479,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
         vec![MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
             agents: Arc::from([]),
             resources: None,
             guidance: None,
@@ -512,6 +522,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
         lead,
         vec![MemberSpec {
             id: MemberId::new(),
+            binding: engine.bind_runtime(&agent.workdir).unwrap(),
             agent,
             agents: Arc::from([]),
             resources: None,
@@ -597,6 +608,7 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
             MemberSpec {
                 id: healthy_id,
                 agent: agent.clone(),
+                binding: engine.bind_runtime(&agent.workdir).unwrap(),
                 agents: Arc::from([]),
                 resources: None,
                 guidance: None,
@@ -606,6 +618,7 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
             },
             MemberSpec {
                 id: failed_id,
+                binding: engine.bind_runtime(&failing_agent.workdir).unwrap(),
                 agent: failing_agent,
                 agents: Arc::from([]),
                 resources: None,
@@ -662,6 +675,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             MemberSpec {
                 id: first,
                 agent: agent.clone(),
+                binding: engine.bind_runtime(&agent.workdir).unwrap(),
                 agents: Arc::from([]),
                 resources: None,
                 guidance: None,
@@ -671,6 +685,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             },
             MemberSpec {
                 id: second,
+                binding: engine.bind_runtime(&failing_agent.workdir).unwrap(),
                 agent: failing_agent,
                 agents: Arc::from([]),
                 resources: None,
@@ -681,6 +696,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             },
             MemberSpec {
                 id: third,
+                binding: engine.bind_runtime(&agent.workdir).unwrap(),
                 agent,
                 agents: Arc::from([]),
                 resources: None,

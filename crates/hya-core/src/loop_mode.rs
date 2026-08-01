@@ -194,6 +194,7 @@ pub struct WorkerSessionExecutor {
     engine: Arc<SessionEngine>,
     lead_session: SessionId,
     agent: AgentSpec,
+    binding: crate::TurnBinding,
 }
 
 #[async_trait]
@@ -216,7 +217,13 @@ impl IterationExecutor for WorkerSessionExecutor {
             .admit_user_prompt(child, directive.to_string())
             .await?;
         self.engine
-            .run_turn(child, &self.agent, cancel.clone())
+            .run_bound_turn(
+                child,
+                &self.agent,
+                self.binding.clone(),
+                cancel.clone(),
+                None,
+            )
             .await?;
         let projection = self.engine.read_projection(child).await?;
         Ok(render_transcript(&projection))
@@ -253,10 +260,12 @@ pub async fn run_loop(
     cancel: CancellationToken,
 ) -> Result<RunOutcome, CoreError> {
     cost_preflight(&config)?;
+    let binding = engine.bind_root_runtime(&agent.workdir).await?;
     let executor = WorkerSessionExecutor {
         engine,
         lead_session,
         agent,
+        binding,
     };
     drive_loop(&executor, verifier, planner, target, config, cancel).await
 }

@@ -89,9 +89,37 @@ pub enum SpawnError {
     UnsupportedInlineAgentField { field: &'static str },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnRequestSendError {
+    Full,
+    Closed,
+}
+
+/// Narrow request transport used by [`SpawnerPlane`].
+///
+/// The default implementation writes raw [`SpawnRequest`] values to a bounded
+/// Tokio channel. Runtime owners can supply a typed sink that enriches the
+/// request without introducing a dependency from `hya-tool` back to them.
+pub trait SpawnRequestSink: Send + Sync {
+    fn try_send(&self, request: SpawnRequest) -> Result<(), SpawnRequestSendError>;
+}
+
+struct ChannelSpawnRequestSink {
+    tx: mpsc::Sender<SpawnRequest>,
+}
+
+impl SpawnRequestSink for ChannelSpawnRequestSink {
+    fn try_send(&self, request: SpawnRequest) -> Result<(), SpawnRequestSendError> {
+        self.tx.try_send(request).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => SpawnRequestSendError::Full,
+            mpsc::error::TrySendError::Closed(_) => SpawnRequestSendError::Closed,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct SpawnerPlane {
-    tx: mpsc::Sender<SpawnRequest>,
+    sink: Arc<dyn SpawnRequestSink>,
     session: Option<SessionId>,
     agents: Arc<[AgentDef]>,
     /// Immutable guidance captured for the parent turn; Arc-cloned onto each spawn.
@@ -112,15 +140,19 @@ impl SpawnerPlane {
     pub fn with_capacity(capacity: usize) -> (Self, mpsc::Receiver<SpawnRequest>) {
         let capacity = capacity.clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
         let (tx, rx) = mpsc::channel(capacity);
-        (
-            Self {
-                tx,
-                session: None,
-                agents: Arc::from([]),
-                guidance: None,
-            },
-            rx,
-        )
+        let sink = Arc::new(ChannelSpawnRequestSink { tx });
+        (Self::from_sink(sink), rx)
+    }
+
+    /// Build an unscoped plane over a runtime-owned request sink.
+    #[must_use]
+    pub fn from_sink(sink: Arc<dyn SpawnRequestSink>) -> Self {
+        Self {
+            sink,
+            session: None,
+            agents: Arc::from([]),
+            guidance: None,
+        }
     }
 
     #[must_use]
@@ -192,9 +224,9 @@ impl SpawnerPlane {
             background,
             reply: tx,
         };
-        self.tx.try_send(req).map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => SpawnError::Overloaded,
-            mpsc::error::TrySendError::Closed(_) => SpawnError::Unavailable,
+        self.sink.try_send(req).map_err(|error| match error {
+            SpawnRequestSendError::Full => SpawnError::Overloaded,
+            SpawnRequestSendError::Closed => SpawnError::Unavailable,
         })?;
         rx.await.map_err(|_| SpawnError::Unavailable)?
     }

@@ -11,13 +11,14 @@ use http_body_util::BodyExt;
 use hya_app::spawn_team_supervisor;
 use hya_bundle::AgentRole;
 use hya_core::{
-    AgentSpec, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor, SessionEngine,
+    AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
+    SessionEngine,
 };
 use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, SpawnerPlane, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, ToolRegistry};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -33,7 +34,7 @@ async fn nested_spawn() -> NestedSpawn {
     let provider_router =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
-    let (spawner, spawn_rx) = SpawnerPlane::new();
+    let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(1);
     let engine = Arc::new(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
@@ -50,7 +51,7 @@ async fn nested_spawn() -> NestedSpawn {
             permission,
             EventBus::default(),
         )
-        .with_spawner(spawner.clone()),
+        .with_spawn_sender(spawn_sender.clone()),
     );
     let agent = AgentSpec {
         name: AgentName::new("build"),
@@ -78,8 +79,8 @@ async fn nested_spawn() -> NestedSpawn {
         })
         .await
         .unwrap();
-    let child = spawn_one(&engine, &spawner, root, "build", "explore").await;
-    let grandchild = spawn_one(&engine, &spawner, child, "explore", "plan").await;
+    let child = spawn_one(&engine, &spawn_sender, root, "build", "explore").await;
+    let grandchild = spawn_one(&engine, &spawn_sender, child, "explore", "plan").await;
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -132,13 +133,14 @@ async fn nested_spawn() -> NestedSpawn {
 
 async fn spawn_one(
     engine: &SessionEngine,
-    spawner: &SpawnerPlane,
+    spawn_sender: &BoundSpawnSender,
     parent: SessionId,
     caller: &str,
     agent_type: &str,
 ) -> SessionId {
     let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
     let agents = engine.agent_roster_for_binding(&binding, caller).unwrap();
+    let spawner = spawn_sender.for_binding(&binding);
     let outcomes = tokio::time::timeout(
         Duration::from_secs(5),
         spawner

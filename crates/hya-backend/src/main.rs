@@ -10,6 +10,7 @@
 
 mod agent_cmd;
 mod auth_cmd;
+mod bundle_cmd;
 mod cli_args;
 mod models_cmd;
 mod rpc;
@@ -324,6 +325,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
+        Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
         Some(Command::Models {
             provider,
             verbose,

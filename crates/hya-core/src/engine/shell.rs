@@ -37,7 +37,7 @@ impl SessionEngine {
         self.admit_shell_user_message(session).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let binding = self.runtime.bind_turn(&workdir)?;
+        let binding = self.bind_root_runtime(&workdir).await?;
         let stable_id = projection
             .session
             .agent
@@ -186,7 +186,7 @@ impl SessionEngine {
                     let ctx = ToolCtx {
                         permission,
                         interaction: self.interaction.for_session(session),
-                        spawner: self.spawner.for_session_with_agents(
+                        spawner: self.spawner.for_binding(binding).for_session_with_agents(
                             session,
                             agent_roster(binding, agent.name.as_str())?,
                         ),

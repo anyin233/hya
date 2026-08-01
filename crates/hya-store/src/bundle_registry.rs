@@ -90,6 +90,15 @@ impl BundleRegistry {
         Ok(Self { pool })
     }
 
+    pub async fn generation(&self) -> Result<u64, StoreError> {
+        let row =
+            sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
+                .fetch_one(&self.pool)
+                .await?;
+        let generation: i64 = row.try_get("generation")?;
+        decode_generation(generation)
+    }
+
     pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, StoreError> {
         let mut transaction = self.pool.begin().await?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -301,11 +310,7 @@ impl BundleRegistry {
                 .fetch_one(&mut **transaction)
                 .await?;
         let generation: i64 = generation_row.try_get("generation")?;
-        let generation = u64::try_from(generation).map_err(|_| {
-            StoreError::BundleRegistryData(format!(
-                "invalid bundle registry generation `{generation}`"
-            ))
-        })?;
+        let generation = decode_generation(generation)?;
 
         let rows = sqlx::query(
             "SELECT bundle_id, version, publisher, source_digest, prepared_digest, prepared_bytes, installed_at
@@ -366,6 +371,12 @@ impl BundleRegistry {
         sqlx::migrate!("./bundle_migrations").run(pool).await?;
         Ok(())
     }
+}
+
+fn decode_generation(generation: i64) -> Result<u64, StoreError> {
+    u64::try_from(generation).map_err(|_| {
+        StoreError::BundleRegistryData(format!("invalid bundle registry generation `{generation}`"))
+    })
 }
 
 async fn advance_generation(

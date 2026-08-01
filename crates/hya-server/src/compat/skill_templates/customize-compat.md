@@ -37,11 +37,14 @@ already-loaded config until then.
 
 ## Native agent bundles (not this skill)
 
-0.34.8 runtime does not parse, discover, or migrate old agent
+0.34.10 runtime does not parse, discover, or migrate legacy agent
 JSON/JSONC/Markdown definitions. Built-ins come from embedded native
-AgentBundles; external bundle distribution is later scope. For agent
-authoring, use the built-in agent-bundle-authoring skill (and
-`docs/agent-bundle-authoring.md`). Do not create or fix agents via this skill.
+AgentBundles. External public-static packages must use the exact lowercase
+`.hyabundle` suffix: inspect a package with `hya bundle info -f
+<path>.hyabundle`, then install it with `hya bundle install
+<path>.hyabundle`. For agent authoring, use the built-in
+`agent-bundle-authoring` skill and `docs/agent-bundle-authoring.md`; this
+customize skill is not an agent-authoring surface.
 
 ## Where files live
 

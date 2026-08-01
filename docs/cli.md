@@ -75,6 +75,45 @@ with `HYA_DB=/path/to.db`, or set `HYA_DB=` empty for an in-memory store.
 invoke `hya` so help and errors retain canonical branding. In the TUI, press
 `Ctrl-P` for the authoritative command list and `Ctrl-X` for leader-key actions.
 
+## Bundle Commands
+
+```sh
+hya bundle info -f example.hyabundle
+hya bundle install example.hyabundle
+hya bundle list
+hya bundle info hya/docs-example
+hya bundle uninstall hya/docs-example
+```
+
+These are the canonical bundle commands. `hya` delegates once to `hya-ts`,
+which forwards the bundle subcommand once to `hya-backend`; invoking
+`hya-backend bundle ...` directly exposes the same backend implementation.
+
+`install` reports whether the package was installed, replaced, or unchanged,
+along with bundle identity, version, and registry generation. `list` reports
+name, version, origin, format, state, and immutability for the merged built-in
+and installed catalog. `info` reports identity, publisher, origin, format,
+state, immutability, digests, and static agent/skill IDs when available.
+Built-ins are merged read-only and cannot be replaced or uninstalled. Repeating
+an install with the same digest is idempotent; replacement and removal publish
+through atomic registry operations.
+
+The separate registry is
+`$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, falling back to
+`~/.local/share/hya/bundles/registry.sqlite3`. A successful generation change
+is loaded lazily before a new root turn binds and when the TUI/catalog is
+refreshed. In-flight and child turns remain pinned to their existing catalog;
+a failed candidate leaves the previous snapshot active. There is no filesystem
+watcher or per-round/tool-call registry query.
+
+`info -f` strictly inspects a package without mutating the registry or runtime
+publication. Package paths require the exact lowercase `.hyabundle` suffix;
+the bytes magic is still authoritative for public/private format detection.
+Public packages are static-only. Private output reports authentication as
+unverified, payload as opaque, and activation as unsupported in 0.34.10.
+See [AgentBundle Authoring](agent-bundle-authoring.md) for the strict public
+archive profile and supported content.
+
 ## `hya-backend exec`
 
 ```sh

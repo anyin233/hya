@@ -10,9 +10,9 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::AgentResourcePolicy;
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
+use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Assign a stable, team-scoped handle (`{type}-{ordinal}`) to each member in
 /// input order, continuing the per-type ordinal across earlier spawn batches.
@@ -118,11 +118,13 @@ pub enum TeamAdmissionError {
 pub struct MemberSpec {
     pub id: MemberId,
     pub agent: AgentSpec,
+    /// Exact immutable runtime snapshot captured by the parent turn.
+    pub binding: TurnBinding,
     /// Caller-authorized catalog reachability projected at spawn resolution.
     /// Inline public names never become catalog identities or roster keys.
     pub agents: Arc<[AgentDef]>,
     /// Catalog resource policy captured alongside the authorized target.
-    /// `None` requires an exact lookup of `agent.name` in the new turn binding.
+    /// `None` requires an exact lookup of `agent.name` in the captured binding.
     pub resources: Option<AgentResourcePolicy>,
     /// Immutable triggering-turn guidance Arc (request-scoped; not persisted).
     pub guidance: Option<Arc<str>>,
@@ -257,7 +259,7 @@ async fn run_member(
                         .run_resolved_turn_for_actor(
                             child,
                             &spec.agent,
-                            (spec.agents.clone(), resources),
+                            (spec.binding.clone(), spec.agents.clone(), resources),
                             claim,
                             cancel,
                             spec.guidance.clone(),
@@ -266,7 +268,14 @@ async fn run_member(
                 }
                 None => {
                     engine
-                        .run_turn_for_actor(child, &spec.agent, claim, cancel)
+                        .run_bound_turn_for_actor(
+                            child,
+                            &spec.agent,
+                            spec.binding.clone(),
+                            claim,
+                            cancel,
+                            spec.guidance.clone(),
+                        )
                         .await?;
                 }
             }
@@ -279,15 +288,16 @@ async fn run_member(
                         .run_resolved_turn(
                             child,
                             &spec.agent,
-                            spec.agents.clone(),
-                            resources,
+                            (spec.binding, spec.agents.clone(), resources),
                             cancel,
                             spec.guidance,
                         )
                         .await?;
                 }
                 None => {
-                    engine.run_turn(child, &spec.agent, cancel).await?;
+                    engine
+                        .run_bound_turn(child, &spec.agent, spec.binding, cancel, spec.guidance)
+                        .await?;
                 }
             }
         }

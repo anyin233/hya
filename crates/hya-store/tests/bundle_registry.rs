@@ -147,6 +147,12 @@ async fn corrupted_prepared_blob_is_rejected_by_snapshot() {
     };
     assert_eq!(update.rows_affected(), 1);
 
+    let generation = registry.generation().await;
+    let Ok(generation) = generation else {
+        panic!("bundle registry generation failed: {generation:?}");
+    };
+    assert_eq!(generation, 1);
+
     let snapshot = registry.snapshot().await;
     assert!(matches!(
         snapshot,

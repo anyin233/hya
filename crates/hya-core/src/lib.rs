@@ -32,7 +32,10 @@ pub use compaction::{
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
-pub use engine::{AgentSpec, CreateSession, SessionEngine, SpawnAdmissionOutcome};
+pub use engine::{
+    AgentSpec, BoundSpawnRequest, BoundSpawnSender, CreateSession, RuntimeCatalogRefresh,
+    SessionEngine, SpawnAdmissionOutcome,
+};
 pub use error::CoreError;
 pub use hooks::{
     ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,

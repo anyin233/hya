@@ -1477,6 +1477,10 @@ an explicitly supplied unknown ID returns typed `UNKNOWN_AGENT_ID`.
 
 ### `0.34.9` — package distribution and registry
 
+Historical planning only: this heading is retained for audit history.
+Sections 18.4.1 and 18.4.2 supersede the actual 0.34.9/0.34.10 release split;
+external runner work remains deferred with no replacement version assigned.
+
 - [ ] Implement only `hya bundle install <path>`, `list`, `uninstall <name>`,
       and `info <name>` / `info -f <path>`, with `.hyabundle` magic/version
       detection rather than suffix dispatch.
@@ -1493,6 +1497,10 @@ an explicitly supplied unknown ID returns typed `UNKNOWN_AGENT_ID`.
       `BUNDLE_IMMUTABLE`.
 
 ### `0.34.10` — owner-gated external main/transient execution
+
+Historical planning only: this heading is retained for audit history.
+Sections 18.4.1 and 18.4.2 supersede the actual 0.34.9/0.34.10 release split;
+external runner work remains deferred with no replacement version assigned.
 
 - [ ] Extend/reuse the existing out-of-process plugin JSON-RPC/stdio protocol;
       do not add Rust dylib ABI or a second transport.
@@ -2136,21 +2144,26 @@ invocation path. Exact focused and full `hya-tool` suites green afterward.
 
 #### 18.4 0.34.9 execution model and first RED
 
-For the resumed 0.34.9 phase, `gpt-5.6-sol` with `reasoning=max` is the
-persistent main orchestrator and canonical reviewer. Sol directly spawns one
-bounded native implementation subagent per edit slice, `gpt-5.6-terra` with
-`reasoning=max`. Terra edits only its assigned slice and never commits, pushes,
-creates topology, or stashes; Sol defines REDs, reviews diffs, runs
-verification, and performs commits, pushes, and CI monitoring after gates.
-Earlier Grok 402 failures, Luna work, and MacBook Air-driven per-turn Sol/Terra
-alternation remain accurate historical evidence, but are superseded as current
-rules.
+Current authority is Sol-max (`gpt-5.6-sol`, max reasoning), the canonical coordinator/reviewer
+in session `019fbf81-c41e-7450-8c17-e4036548bc33`, over this same task,
+worktree, and branch. Bounded native `luna-worker` agents perform deterministic
+file edits, commands, tests, fixture work, and return raw evidence/mechanical
+summaries; they never commit, push, create topology, stash, or decide
+architecture, safe inheritance, handoff, stage/goal completion.
 
-Each 0.34.9 atomic commit requires its own push and one unique green remote CI
-run before the next commit begins. Commit 1 owns package inspection, safe
-public 7z, private structural inspection, and SQLite registry core; Commit 2
-owns the four-command CLI, lazy publication, and documentation while staying
-on version 0.34.9.
+Sol independently checks raw evidence and exclusively owns architecture/stage
+slicing, RED/GREEN acceptance, diff review, risk/invariants/completion
+judgments, every session/stage/worker handoff and checkpoint reconstruction,
+next-executor prompts, Browser/Pro escalation packets, atomic commit/push,
+exact-SHA CI interpretation, and stage transition. Earlier Grok 402, Luna/Terra
+implementation turns, and Mac-driven Sol/Terra alternation remain accurate
+historical evidence but are superseded as current rules.
+
+The 0.34.9 plan required each atomic commit to receive its own push and unique
+green remote CI run. Commit 1 owned package inspection, safe public 7z, private
+structural inspection, and the SQLite registry core. The original plan assigned
+Commit 2 the four-command CLI, lazy publication, and documentation while
+staying on version 0.34.9; section 18.4.2 supersedes that version boundary.
 
 The first TDD slice is one `hya-bundle` integration RED only:
 `HYABNDL\0` plus little-endian envelope version 1 must be recognized as
@@ -2169,7 +2182,7 @@ and `lib.rs`: strict options, typed structural/memory-limit propagation,
 re-export, and exact EOF. `archive.rs` remains byte-identical upstream; no new
 parser or filesystem extractor is added.
 
-#### 18.4.1 0.34.9 Commit 1 current evidence
+#### 18.4.1 0.34.9 Commit 1 final evidence
 
 Externally observed RED→GREEN results: bytes-only private detect; truncated
 private fail-closed; public magic; structurally valid private
@@ -2200,5 +2213,65 @@ known ptrace restriction. TUI `bun run typecheck` and `bun run build` are
 GREEN; `CI=true bun test` is 49/49 GREEN outside the sandbox because of the
 known PTY/local-bind restriction. Locked/offline Cargo metadata and the sevenz
 feature tree are GREEN. Trellis validation is GREEN (`implement.jsonl`: 49;
-`check.jsonl`: 57), as are JSONL validation and `git diff --check`. Commit,
-push, and exact-SHA CI remain pending.
+`check.jsonl`: 57), as are JSONL validation and `git diff --check`. Commit 1 was
+committed and pushed as `c9055149`; exact-SHA CI run `30712583045` (job
+`91402594806`) completed successfully.
+
+#### 18.4.2 0.34.10 Commit 2 local evidence
+
+Commit 1 is closed at `c9055149`, with exact-SHA CI run `30712583045` GREEN.
+The earlier plan for Commit 2 to remain on 0.34.9 is superseded. Commit 2 is the
+atomic 0.34.10 feature commit for bundle `install`/`list`/`uninstall`/`info`,
+lazy atomic installed public-static catalog publication, and documentation/
+example/authoring-skill delivery.
+
+Actual backend RED→GREEN families cover parser routing, the full command
+workflow, private info-only inspection and activation rejection, built-in
+list/info immutability, public `info -f` without mutation, exact lowercase
+suffix enforcement, and static agent/skill info output. The hya-ts RED→GREEN
+covers all five forwarding shapes exactly once without starting the TUI:
+install, list, uninstall, named info, and file info.
+
+Focused verification is GREEN: the hya-backend suite is 31/31; the hya-ts suite
+is 17/17 in the authorized non-sandbox environment after two known sandbox
+failures caused only by denied loopback binds; the built-in authoring-skill
+metadata contract and repository bundle example preparer test are GREEN.
+`cargo fmt --all --check`, focused clippy, JSONL validation, and
+`git diff --check` are GREEN.
+
+Queued child binding has its own exact RED→GREEN evidence. Before the typed
+bound-spawn request was threaded through execution, the exact regression test
+exited 101 because the queued child received the NEW prompt. After the change,
+the exact test is 1/1 GREEN; the complete `spawn_admission` suite is 23/23, the
+focused core suite is 17/17, and the hya-tool spawn tests, focused clippy,
+`cargo fmt --all --check`, and `git diff --check` are GREEN. Child replay proves
+exactly one `TurnBindingRecorded` event carrying the old generation.
+
+Late review RED→GREEN: startup recovery of an installed resident initially
+failed exactly `AGENT_DEFINITION_MISSING: runtime-installed-resident-agent`.
+GREEN makes recovery call `bind_root_runtime` once and passes the same
+TurnBinding into `register_recovered_resident`; the new test is 1/1 and the
+existing recovered-resident test is 3/3 GREEN.
+
+Loop child pinning RED→GREEN: a two-iteration sequence refresh initially failed
+the second child with `AgentDefinitionMissing { agent_id: "loop-agent" }`.
+GREEN captures one root binding at `run_loop` admission and uses existing
+`run_bound_turn` for every child; the focused test is 1/1 and `loop_gate` is
+7/7 GREEN.
+
+The built-in `customize-compat` skill RED exposed stale 0.34.8/distribution-
+later text; GREEN states 0.34.10 public-static `.hyabundle` info/install and
+legacy discovery absence; the focused test is 1/1 GREEN.
+
+Final local gates are GREEN: `cargo fmt --all --check`, workspace clippy with
+`-D warnings`, workspace tests (1064 passed, 2 ignored), workspace bins plus
+locked `hya`/`hya-backend`/`hya-ts`, all three version probes at 0.34.10,
+zero-INET, and TUI typecheck/build. The first full TUI attempt was 48/49 with
+only byte-identical 140-column `CONFIRM_MAIN_MARKER_MISSING`; after user
+recovery and Sol causal reconstruction, exactly one zero-edit bounded full
+rerun was 49/49 with 2286 assertions and PTY 80/140 both GREEN. No
+test/product change was made for the flake.
+
+Trellis validation is GREEN (`implement.jsonl`: 49; `check.jsonl`: 74), as are
+JSONL validation and `git diff --check`. Exact staging, commit, push, and
+exact-SHA remote CI remain pending/unclaimed.

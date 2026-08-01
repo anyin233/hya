@@ -49,6 +49,41 @@ fn tool_publication_keeps_the_bound_agent_catalog_pinned() {
 }
 
 #[test]
+fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
+    let workdir = TestDir::new("catalog-publication");
+    workdir.write_skill("stable_skill");
+    let tools = ToolRegistry::builtins();
+    tools
+        .register_with_permission(MarkerTool::new("mcp__stable__marker"), ToolPermission::Mcp)
+        .expect("register stable marker tool");
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
+
+    let old_binding = registry.bind_turn(workdir.path()).unwrap();
+    let old_generation = old_binding.generation();
+    let candidate = test_catalog(&[
+        ("general", AgentRole::Main, &[]),
+        ("installed-agent", AgentRole::Main, &[]),
+    ]);
+
+    let published = registry.publish_catalog(candidate.clone()).unwrap();
+    let fresh_binding = registry.bind_turn(workdir.path()).unwrap();
+
+    assert_eq!(published.get(), old_generation.get() + 1);
+    assert_eq!(fresh_binding.generation(), published);
+    assert!(old_binding.resolve_agent("installed-agent").is_none());
+    assert!(fresh_binding.resolve_agent("installed-agent").is_some());
+    assert!(old_binding.resolve_agent("general").is_some());
+    assert!(tool_names(&old_binding).contains("mcp__stable__marker"));
+    assert!(skill_names(&old_binding).contains("stable_skill"));
+    assert_eq!(tool_names(&old_binding), tool_names(&fresh_binding));
+    assert_eq!(skill_names(&old_binding), skill_names(&fresh_binding));
+    assert!(std::ptr::eq(
+        fresh_binding.agent_catalog(),
+        candidate.as_ref()
+    ));
+}
+
+#[test]
 fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
     let workdir = TestDir::new("agent-resolution");
     let catalog = test_catalog(&[

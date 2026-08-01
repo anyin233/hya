@@ -236,6 +236,13 @@ repo-native built-in sources + installed package artifacts
 
 ## Owner-corrected patch dependency graph
 
+The authoritative package split supersedes the older runner placement retained
+later as historical/future architecture: `0.34.9` delivers inspection, the
+strict public reader, and registry core; `0.34.10` delivers the four-command
+CLI, lazy installed public-static catalog publication, and docs/example/skill.
+External runner work is deferred beyond this package release, and no
+replacement version is assigned here.
+
 ```text
 0.34.3 pre-create admission + bounded transport + typed overload
   -> remote CI green
@@ -255,15 +262,14 @@ repo-native built-in sources + installed package artifacts
                       + capability/replay fixtures + one catalog/runtime path
                       + old agent-file code removed in the same release
                       -> remote CI green
-                        -> 0.34.9 .hyabundle distribution + four-command CLI
-                          + registry/atomic activation + public/private inspect
+                        -> 0.34.9 public/private inspect + strict public reader
+                          + authoritative registry core
                           -> remote CI green
-                            -> 0.34.10 owner-gated shared stdio runner
-                              + external main/transient Bundles + examples/skill
+                            -> 0.34.10 four-command CLI + lazy public-static
+                              catalog publication + docs/example/skill
                               -> remote CI green
-                                -> 0.34.11 resident Bundle integration
-                                  + Hybrid send/wait/recovery/fencing
-                                  -> remote CI green
+                                -> later external runner/resident work
+                                  (deferred; release version unassigned)
                                     -> 0.34.12 100/256 certification
                                       + benchmark-triggered optimization only
                                       -> remote CI green
@@ -280,9 +286,9 @@ repo-native built-in sources + installed package artifacts
 | `0.34.6` | Dynamic MCP desired-observed-effective state; plugin startup/crash re-handshake consistency for tool exports plus RPC binding; generation binding and generic stable-ID/namespace seams | No plugin hot add/remove/reload, whole-plugin snapshot, hook/permission plane, Bundle loader, catalog, ABI, sandbox, or new permission framework |
 | `0.34.7` | Resident durable recovery, actor lease/epoch, minimal effect fencing | Correctness/fault scope; no independent `SecurityEpoch` |
 | `0.34.8` | Capability matrix/fixtures, minimal Bundle IR/catalog/namespace/resource view, deterministic embedded built-ins, startup/TUI/spawn cutover, all old agent-file code removed, simple repo-native Markdown example and authoring skill | One atomic native built-in cutover; boots without install; preserves stable IDs/event replay; no adapter/migration/detector |
-| `0.34.9` | `.hyabundle` public 7z/private envelope inspection, four-command CLI, authoritative registry, single-active version, atomic activation, built-in list/info/immutable semantics | No external Bundle execution or private decrypt/activation |
-| `0.34.10` | Existing JSON-RPC/stdio transport extended for owner-selected external main/transient execution; runnable Markdown/JS/Rust examples and authoring skill update | Private key and final external execution/context gates must be recorded; Harness retains spawn/send/wait |
-| `0.34.11` | Resident Bundle integration through the same actor/mailbox/admission/event/fencing runtime | Requires owner-selected resident idle/turn semantics and `0.34.10` remote CI green |
+| `0.34.9` | `.hyabundle` public/private inspection, strict in-process public reader, and authoritative registry core | No CLI publication, external Bundle execution, or private decrypt/activation |
+| `0.34.10` | Four bundle CLI commands, lazy installed public-static catalog publication, docs/example/authoring skill | Strict packages activate one static agent plus its Markdown prompt; no external static-skill file, runner, sandbox, new permission plane, or private activation |
+| Later (version unassigned) | Owner-gated external transient/resident execution through existing Harness architecture | Deferred beyond the package release; final execution/context/resident gates remain open |
 | `0.34.12` | 100/256 workload, capacity, and fault certification | SQLite/other changes only for one predeclared failed benchmark, one minimal optimization at a time |
 | `0.34.13` | Independent updater/verifier/activator, stage/build/verify/activate/rollback, self-update skill/example | Owner activation/key/TCB gates remain; never reintroduce old agent formats |
 
@@ -773,7 +779,7 @@ six are advisory provenance; MacBook Air native-only sequencing controls.
 - **Exit still open:** exact staging, commit, push, and one green remote CI
   run (`PENDING-COMMIT-PUSH-REMOTE-CI`); local gates already green.
 
-**Distribution — `0.34.9`**
+**Distribution — historical `0.34.9` planning detail (superseded above)**
 
 - Add only the four approved CLI commands, magic/version format detection,
   safe public 7z staging, private envelope metadata/auth inspection,
@@ -782,7 +788,7 @@ six are advisory provenance; MacBook Air native-only sequencing controls.
 - Do not execute external packages or persist private plaintext. Private
   decrypt/activation stays owner-blocked.
 
-**External execution — `0.34.10` and `0.34.11`**
+**External execution — historical version placement (deferred, unassigned)**
 
 - `0.34.10` reuses/extends the existing plugin JSON-RPC/stdio transport for
   owner-selected external main/transient execution. Harness retains

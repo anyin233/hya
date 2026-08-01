@@ -156,7 +156,8 @@ async fn create(
         &st,
         std::path::Path::new(&workdir),
         req.agent.as_deref(),
-    )?;
+    )
+    .await?;
     let session = st
         .engine
         .create_with_id(

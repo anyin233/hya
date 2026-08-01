@@ -35,6 +35,16 @@ struct TurnExecution<'a> {
     guidance: Option<Arc<str>>,
 }
 
+enum TurnActivation {
+    Root,
+    Bound(TurnBinding),
+    Resolved {
+        binding: TurnBinding,
+        agents: Arc<[AgentDef]>,
+        resources: AgentResourcePolicy,
+    },
+}
+
 impl SessionEngine {
     pub async fn run_turn(
         &self,
@@ -42,24 +52,13 @@ impl SessionEngine {
         agent: &AgentSpec,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, (&[], None), None, None)
-            .await
-    }
-
-    pub(crate) async fn run_turn_for_actor(
-        &self,
-        session: SessionId,
-        agent: &AgentSpec,
-        claim: &ActorClaim,
-        cancel: CancellationToken,
-    ) -> Result<FinishReason, CoreError> {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
             cancel,
             (&[], None),
-            Some(claim),
             None,
+            TurnActivation::Root,
         )
         .await
     }
@@ -77,7 +76,7 @@ impl SessionEngine {
             cancel,
             (external_dirs, None),
             None,
-            None,
+            TurnActivation::Root,
         )
         .await
     }
@@ -102,17 +101,16 @@ impl SessionEngine {
             cancel,
             (external_dirs, guidance),
             None,
-            None,
+            TurnActivation::Root,
         )
         .await
     }
 
-    pub(crate) async fn run_resolved_turn(
+    pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,
         agent: &AgentSpec,
-        agents: Arc<[AgentDef]>,
-        resources: AgentResourcePolicy,
+        binding: TurnBinding,
         cancel: CancellationToken,
         guidance: Option<Arc<str>>,
     ) -> Result<FinishReason, CoreError> {
@@ -122,16 +120,16 @@ impl SessionEngine {
             cancel,
             (&[], guidance),
             None,
-            Some((agents, resources)),
+            TurnActivation::Bound(binding),
         )
         .await
     }
 
-    pub(crate) async fn run_resolved_turn_for_actor(
+    pub(crate) async fn run_bound_turn_for_actor(
         &self,
         session: SessionId,
         agent: &AgentSpec,
-        resolved: (Arc<[AgentDef]>, AgentResourcePolicy),
+        binding: TurnBinding,
         claim: &ActorClaim,
         cancel: CancellationToken,
         guidance: Option<Arc<str>>,
@@ -142,7 +140,56 @@ impl SessionEngine {
             cancel,
             (&[], guidance),
             Some(claim),
-            Some(resolved),
+            TurnActivation::Bound(binding),
+        )
+        .await
+    }
+
+    pub(crate) async fn run_resolved_turn(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
+        cancel: CancellationToken,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        let (binding, agents, resources) = resolved;
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (&[], guidance),
+            None,
+            TurnActivation::Resolved {
+                binding,
+                agents,
+                resources,
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn run_resolved_turn_for_actor(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
+        claim: &ActorClaim,
+        cancel: CancellationToken,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        let (binding, agents, resources) = resolved;
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (&[], guidance),
+            Some(claim),
+            TurnActivation::Resolved {
+                binding,
+                agents,
+                resources,
+            },
         )
         .await
     }
@@ -154,13 +201,21 @@ impl SessionEngine {
         cancel: CancellationToken,
         request_context: (&[PathBuf], Option<Arc<str>>),
         actor_claim: Option<&ActorClaim>,
-        resolved: Option<(Arc<[AgentDef]>, AgentResourcePolicy)>,
+        activation: TurnActivation,
     ) -> Result<FinishReason, CoreError> {
         let (external_dirs, guidance) = request_context;
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let binding = self.runtime.bind_turn(&workdir)?;
+        let (binding, resolved) = match activation {
+            TurnActivation::Root => (self.bind_root_runtime(&workdir).await?, None),
+            TurnActivation::Bound(binding) => (binding, None),
+            TurnActivation::Resolved {
+                binding,
+                agents,
+                resources,
+            } => (binding, Some((agents, resources))),
+        };
         let guidance_text = guidance.as_deref();
         let (agent, agents, resources) = match resolved {
             Some((agents, policy)) => {
@@ -492,11 +547,14 @@ impl SessionEngine {
                             let ctx = ToolCtx {
                                 permission,
                                 interaction: self.interaction.for_session(session),
-                                spawner: self.spawner.for_session_with_agents_and_guidance(
-                                    session,
-                                    agents.clone(),
-                                    guidance.clone(),
-                                ),
+                                spawner: self
+                                    .spawner
+                                    .for_binding(binding)
+                                    .for_session_with_agents_and_guidance(
+                                        session,
+                                        agents.clone(),
+                                        guidance.clone(),
+                                    ),
                                 operation: hya_tool::ToolOperation::from_tool_call(tc.call)
                                     .with_actor_claim(actor_claim.copied()),
                                 mailbox: self

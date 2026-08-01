@@ -1,23 +1,36 @@
-# AgentBundle Authoring (0.34.8)
+# AgentBundle Authoring (0.34.10)
 
-Concise authoring guide for native `AgentBundle` sources. A prepare-valid Markdown
-example lives at [`examples/bundle.hya.md`](examples/bundle.hya.md).
+Use this guide to author and install a public-static `AgentBundle`. The complete
+single-file example is [`examples/bundle.hya.md`](examples/bundle.hya.md).
 
-## Release boundaries
+## Package and install the example
 
-Release **0.34.8** does **not**:
+Copy the example into an otherwise empty directory, enter that directory, and
+create the package with an external `7z` program:
 
-- runtime-scan `docs/examples`, ordinary Markdown, or other repo paths for bundles
-- install external bundles
-- execute JS, Rust, MCP, tool, or hook references declared only in a Bundle
+```sh
+7z a -t7z -mx=0 -ms=off example.hyabundle bundle.hya.md
+hya bundle info -f example.hyabundle
+hya bundle install example.hyabundle
+hya bundle list
+hya bundle info hya/docs-example
+hya bundle uninstall hya/docs-example
+```
 
-Built-in catalogs are prepared at **build time** and embedded. The executable boots
-from those prepared bytes. A source that prepares successfully is not thereby
-installable or runnable.
+Run `info -f` before installation to inspect without changing the registry or
+published catalog. The authoring command deliberately creates an unencrypted,
+non-solid archive with no compression. A public package must contain exactly
+one `bundle.hya.md` at the archive root and no other entry.
+
+The external `7z` program is author tooling only. The hya runtime never shells
+out to, locates, or depends on a system `7z`; it uses its strict in-process
+reader. Package paths must have the exact lowercase `.hyabundle` suffix, while
+the bytes magic remains authoritative for deciding whether the package is
+public or private.
 
 ## Source forms
 
-v1 accepts exactly one of:
+The v1 preparer accepts exactly one of:
 
 - `bundle.yaml` multi-file directory sources (prompts, static skill content, …)
 - a single `bundle.hya.md` with YAML frontmatter and Markdown body as the sole agent prompt
@@ -29,8 +42,9 @@ api_version: hya.agent-bundle/v1
 kind: AgentBundle
 ```
 
+An installable public-static package uses the single-file form.
 `bundle.hya.md` must declare exactly one agent and must not set `prompt:` in
-frontmatter; the body is the prompt.
+frontmatter; the Markdown body is the prepared static prompt.
 
 ## Stable AgentName bytes
 
@@ -66,28 +80,50 @@ catalog.
 A Bundle cannot expand `PermissionPlane` or plugin authority. Effective access is
 the narrowing intersection of access, view, and Harness policy.
 
-## Trust boundary
+## Shipped static boundary
 
-Bundle-declared executable code (when later releases support runners) is same-UID
-trusted process code. There is **no** sandbox or malicious-code isolation claim.
+Release 0.34.10 installs public packages containing exactly one static agent
+definition and its Markdown prompt. The strict installable profile admits no
+external static-skill file. Documentation paths, including `docs/examples`,
+are not runtime-scanned. External tool, MCP, hook, JavaScript, or Rust execution
+references are rejected with typed
+`UNSUPPORTED_BUNDLE_FEATURE`; installation does not create a runner or a new
+permission plane. There is no sandbox or malicious-code isolation claim.
+
+The exact-one-entry public example contains only its agent declaration and
+Markdown prompt; do not add an external static-skill file to that archive.
+Built-in or otherwise prepared catalogs may still contain static skill IDs and
+content, and `info` can report those IDs.
+
+Private packages are inspection-only. Their metadata is reported exactly as
+`authentication=unverified`, `payload=opaque`, and
+`activation unsupported-in-0.34.10`. Structural and declared-digest checks do
+not establish publisher authenticity.
 
 ## Built-ins and legacy
 
 - Built-ins are prepared at build time from repo-native sources under
-  `bundles/builtin/` and embedded; they are not discovered at runtime from disk.
+  `bundles/builtin/`, embedded, merged read-only with installed packages, and
+  immutable through bundle commands. They are not discovered at runtime from
+  disk.
 - Legacy agent files (for example `.hya/agents/*.md` and former compat agent-file
   loaders) are **unsupported**. There is no migration, adapter, or dual catalog.
 
 ## Skills and unsupported features
 
-- Bundle-local **static** skills may carry prepared content only. They are not a
-  general skill plane, hot installer, or remote skill loader.
-- Executable features without a current consumer (tool/MCP/hook/JS/Rust refs,
-  `resource_profile`, and similar) return typed `UNSUPPORTED_BUNDLE_FEATURE`
-  rather than being silently ignored.
+- Built-in or otherwise prepared catalogs may carry bundle-local **static**
+  skill content. The strict installable profile does not accept a static-skill
+  file, and this catalog support is not a general skill plane, hot installer,
+  or remote skill loader.
+- Installing the same identity and digest is idempotent. Replacement and
+  removal are atomic registry operations.
+- Installed catalog changes become visible lazily before a new root turn binds
+  and on TUI/catalog refresh. In-flight and child turns remain pinned to the
+  catalog snapshot they already hold.
 
 ## Example
 
 See [`examples/bundle.hya.md`](examples/bundle.hya.md) for one flat `main` /
-`transient` agent. Prepare it with the production preparer in tests or build
-tooling; do not expect the runtime to scan or install it in 0.34.8.
+`transient` agent with no executable references. Package the directory that
+contains it using the exact workflow above; the docs tree itself is never an
+installation source.
