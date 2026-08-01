@@ -5,7 +5,9 @@ use hya_tool::discover_skills;
 use serde::Serialize;
 
 const CUSTOMIZE_COMPAT_BODY: &str = include_str!("skill_templates/customize-compat.md");
-const CUSTOMIZE_COMPAT_DESCRIPTION: &str = "Use ONLY when the user is editing or creating compat's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing compat agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring compat itself.";
+const CUSTOMIZE_COMPAT_DESCRIPTION: &str = "Use ONLY when the user is editing or creating compat's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing compat skills, plugins, MCP servers, or permission rules. Do not use for native agent authoring (see agent-bundle-authoring), the user's own application code, or any project that is not configuring compat itself.";
+const AGENT_BUNDLE_AUTHORING_BODY: &str = include_str!("skill_templates/agent-bundle-authoring.md");
+const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring native AgentBundle sources (bundle.yaml or bundle.hya.md): stable AgentName bytes, role/selector, spawn_lifecycle, can_spawn, harness_access, resource_view, and 0.34.8 prepare-only boundaries. Do not use for compat opencode.json customization.";
 
 #[derive(Clone, Serialize)]
 pub(in crate::compat) struct SkillInfo {
@@ -31,6 +33,17 @@ pub(in crate::compat) fn list(workdir: &Path) -> Vec<SkillInfo> {
             description: CUSTOMIZE_COMPAT_DESCRIPTION.to_string(),
             location: "<built-in>".to_string(),
             content: CUSTOMIZE_COMPAT_BODY.to_string(),
+        });
+    }
+    if !skills
+        .iter()
+        .any(|skill| skill.name == "agent-bundle-authoring")
+    {
+        skills.push(SkillInfo {
+            name: "agent-bundle-authoring".to_string(),
+            description: AGENT_BUNDLE_AUTHORING_DESCRIPTION.to_string(),
+            location: "<built-in>".to_string(),
+            content: AGENT_BUNDLE_AUTHORING_BODY.to_string(),
         });
     }
     skills

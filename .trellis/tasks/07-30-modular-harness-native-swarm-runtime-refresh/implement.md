@@ -2043,30 +2043,93 @@ introduced. JSONL parsing, absence of `context.jsonl`, diff checks, exact scope,
 protected-main accounting, atomic staging, push, and remote CI remain the final
 Commit 1 gates.
 
-### 18.3 Atomic commit 2 — one-authority cutover
+### 18.3 Atomic commit 2 — one-authority cutover (WIP evidence)
 
 Commit subject: `feat(agent): cut over to native bundles`.
 
-RED/GREEN must prove and then implement one `Arc<BundleCatalog>` inside the
-source-owned `RuntimeSnapshot`, captured once by `TurnBinding` and used by TUI
-selection, model-facing/internal roster, SessionEngine resolution, spawn, and
-resident recovery. The cutover simultaneously embeds/loads native built-ins,
-applies `can_spawn` and the separated resource access/view semantics, preserves
-event/projection/replay/fork identity bytes, rejects missing definitions on
-continuation, and deletes AgentCatalogPlane, live catalog closures, hardcoded
-catalogs, merged entries, every old source parser/discovery/execution caller,
-and `.hya/agents`.
+**Overall status:** **`LOCAL-GATES-GREEN` / `PENDING-COMMIT-PUSH-REMOTE-CI`**.
+Uncommitted `0.34.8` Commit 2 WIP in this worktree. Workspace/release metadata
+is `0.34.8`; version/changelog/archive applied. Focused cutover contracts below
+remain **FOCUSED-VERIFIED** by direct source + named tests. Local full gates
+are green (evidence below). Staging, commit, push, and remote CI are **not**
+claimed.
+No 0.34.9 work. Capability matrix:
+`research/agent-capability-parity-matrix.md`.
 
-The same commit ships authoring documentation, the prepare-valid-only
-`bundle.hya.md` example, the built-in `agent-bundle-authoring` skill, explicit
-Drop Legacy/no-migration/no-sandbox boundaries, and the sole release bump
-`0.34.7 -> 0.34.8` with changelog archival. Focused Bundle/core/app/server/TUI
-and single-run PTY gates precede full workspace/TUI/bin/zero-INET gates, exact
-staging, push, and one green remote-CI run. No 0.34.9 work may begin here.
+#### Implemented authority (source)
 
-Consult20 adds the required Commit 2 proofs: model-facing roster/listing is the
-current caller's `can_spawn`-reachable set; explicit ordinary spawn of any of
-the three reserved IDs returns `AGENT_SPAWN_NOT_ALLOWED` without child creation
-or `general` fallback; the existing three Harness system callsites resolve only
-their fixed stable ID from the same TurnBinding catalog. Resume is definition
-resolution, not a new caller spawn, and preserves historical identity bytes.
+| Contract | Primary symbols |
+| --- | --- |
+| Single catalog Arc | `RuntimeSnapshot.catalog: Arc<BundleCatalog>`; `RuntimeRegistry::new`; `TurnBinding` pins snapshot |
+| Bootstrap decode once / fail-closed | `hya_app::runtime::builtin_catalog` (`OnceLock`); `PreparedCatalog::decode`; empty/corrupt/digest fail closed |
+| Spawn / roster | `TurnBinding::resolve_spawn` / `spawnable_agents`; empty/`None` → `general`; explicit missing → `UNKNOWN_AGENT_ID` |
+| Reserved system | Exact `resolve_agent` for `compaction`/`title`/`summary`; ordinary spawn not on `can_spawn` |
+| Inline overlay | `resolve_spawn_member`: authorize base, then request-scoped name/prompt/model/category/resident; `inline.description` → `UnsupportedInlineAgentField` |
+| Compiled resource view | `compile_agent_resources` → `Arc<CompiledResourceView>` shared by schema/skill/dispatch |
+| Guidance | Server pre-renders → `Option<Arc<str>>`; `agent_with_guidance_layer`; child/resident carry Arc; not in catalog/wire |
+| Legacy deletion | `AgentCatalogPlane` and compat agent parsers/discovery/`subagent_resolve` removed; tracked `.hya/agents/*` deleted |
+| Docs / skill | `docs/examples/bundle.hya.md`, `docs/agent-bundle-authoring.md`, `agent-bundle-authoring` skill; `plan` description corrected (no “disallows all edit tools”) |
+
+#### Focused RED→GREEN evidence (already in tree)
+
+Concise test evidence only (no re-litigation of Consult21–24 rulings):
+
+| Area | RED (missing behavior) | GREEN (current focused tests) |
+| --- | --- | --- |
+| Catalog Arc + binding pin | Registry/turn could diverge from catalog authority | `runtime_registry` suite; `runtime_turn_binding::admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch`; `builtin_catalog_initializes_once_and_shares_arc` |
+| Fail-closed bootstrap | Empty/corrupt embedded catalog could soft-fail | `zero_bundle_prepared_document_cannot_bootstrap_registry_catalog`; `corrupted_prepared_bytes_or_digest_fail_closed_with_decode_context` |
+| Role vs can_spawn | Role incorrectly gated spawn/roster | `role_selector_vs_can_spawn_roster::can_spawn_roster_includes_reachable_subagent_excludes_unlisted_main_and_system`; TUI `agent-visibility.test.ts` |
+| Omitted vs unknown | Explicit unknown fell back to general | `task::omitted_subagent_type_selects_general`; `spawn_admission::explicit_unknown_inline_target_creates_no_child` (+ batch zero side-effects) |
+| Reserved system exact lookup | Hardcoded prompts / ordinary spawn of system IDs | `fixed_system_agents::*` (title/summary/compaction exact Bundle resolve, missing → `AGENT_DEFINITION_MISSING`, roster exclusion) |
+| Historical identity / continue | Replay rewrite or silent general on missing def | `historical_agent_identity::*`; `root_turn_missing_definition_fails_closed_without_general_fallback` |
+| Inline overlay | Catalog mutation / unknown child | `authorized_inline_overlay_executes_without_catalog_entry`; `inline_child_spawns_through_its_authorized_base_roster`; unknown path above. Description typed-reject is **FOCUSED-VERIFIED** by `spawn_admission::inline_description_is_unsupported_before_admission_without_side_effects` |
+| Resource view | Schema ≠ dispatch; silent allow/deny drift | `agent_resource_view::{harness_access_filters_schema_dispatch_and_skill_prompt,canonical_allow_deny_and_alias_share_schema_and_dispatch,mcp_selected_public_name_dispatches_once_with_canonical_permission}` + `runtime_registry` alias/deny units |
+| Guidance composition | RED: guidance in `AgentSpec.system_prompt` wiped by Bundle replace (`available_references` 0) | GREEN: `compat_prompt_bundle_prompt_and_reference_guidance_parity`; `bundle_prompt_replaces_base_but_preserves_guidance_once_and_in_order`; `bundle_prompt_none_preserves_harness_base_then_guidance`; `guidance_captured_once_across_provider_rounds`; spawn `transient_child_uses_triggering_turn_guidance_once_without_child_scan`; `resident_activations_reuse_in_process_triggering_guidance`; `nested_spawn_inherits_same_immutable_guidance`; `resident_guidance_is_ephemeral_not_persisted_in_events` |
+| Root Bundle precedence | Base/Bundle/session/skills order wrong | `root_turn_bundle_precedence::*` |
+| Docs example prepare | Example invalid for preparer | `docs_example::docs_example_bundle_hya_md_prepares_deterministically` |
+| v1 typed reject (historical B fields) | Silent ignore of unsupported manifest keys | `validation::invalid_schema_references_and_executable_features_fail_typed`; `unsupported_resource_profile_is_rejected_as_a_feature_not_ignored` |
+
+#### Local full-gate evidence (final; concise)
+
+- `cargo fmt --all --check` pass
+- `cargo clippy --workspace --all-targets -- -D warnings` pass
+- `cargo test --workspace` full pass outside restricted sandbox (sandbox-only
+  OAuth bind `EPERM`; two real stale `0.34.8` README/builtin parity expectations
+  fixed, targeted tests passed, then final full green run)
+- `cargo build --workspace --bins` pass
+- `cargo build --locked -p hya -p hya-backend -p hya-ts --bins` pass
+- All three version probes `0.34.8`
+- zero-INET pass outside sandbox after ptrace restriction
+- TUI `bun` typecheck/build pass
+- One final `CI=true` focused PTY run 4/4
+- One full `CI=true` `bun test` run 49/49
+- `task.py validate` implement=49 / check=47 pass
+- `git diff --check` pass
+
+#### Still pending (do not claim)
+
+- Staging, commit, push, and one green remote CI run remain unclaimed.
+- No claim that global SKILL.md `allowed-tools`/`model`/`license` enforcement
+  is a Bundle GA item (those are skill-catalog fields, not AgentBundle v1).
+
+#### 18.3.1 Release-prep metadata + formatter fixture gate repair (focused)
+
+**Status:** focused release-prep for activating `0.34.8` is applied in this dirty
+worktree (version/changelog/archive/identity alignment + matrix `general` role
+fix). Local full gates are green (**`LOCAL-GATES-GREEN`**); staging/commit/push/
+remote CI remain **`PENDING-COMMIT-PUSH-REMOTE-CI`** (unclaimed).
+
+**Test-only formatter fixture gate repair (no product behavior change):** the
+`pint` vendor executable fixture still hit non-sandbox `ETXTBSY` after
+write/`sync`/drop. Replaced the freshly written executable inode with a
+`/bin/sh` symlink fixture while preserving the `./vendor/bin/pint` target
+invocation path. Exact focused and full `hya-tool` suites green afterward.
+
+**Earlier green focused/targeted suites (superseded by full local envelope above):**
+
+- `hya-tool` focused + full suite
+- `hya-server` full suite
+- `hya-bundle` / `hya-backend` targeted suites
+- TUI typecheck / build / agent-visibility focused
+
+**Still pending (explicit):** staging, commit, push, remote CI. Not claimed here.

@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,8 +43,14 @@ async fn engine(
     let tools = Arc::new(ToolRegistry::builtins());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
-        SessionEngine::new(store, router, tools, permission, EventBus::default())
-            .with_interaction(interaction),
+        SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(tools),
+            permission,
+            EventBus::default(),
+        )
+        .with_interaction(interaction),
     );
     let agent = Arc::new(AgentSpec {
         name: AgentName::new("build"),

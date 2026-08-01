@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::ServerState;
+use crate::{ApiError, ServerState};
 
 use super::agent_permission::PermissionRule;
 use super::location::{LocationInfo, LocationRef, LocationResponse};
@@ -68,36 +68,30 @@ async fn agent(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<LocationResponse<Vec<AgentInfo>>> {
+) -> Result<Json<LocationResponse<Vec<AgentInfo>>>, ApiError> {
     let model = model_ref_parts(&st.agent.model);
     let location = LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
-    Json(super::location::response_at(
+    let rows = super::bound_agent_metadata::list(&st, &workdir)?;
+    Ok(Json(super::location::response_at(
         &st,
         &location,
-        super::agent_catalog::list(&workdir, &st)
-            .into_iter()
+        rows.into_iter()
             .map(|agent| AgentInfo {
                 id: agent.name.clone(),
                 model: agent
                     .model
                     .as_deref()
                     .map(agent_model_ref)
-                    .map(|mut model| {
-                        if let Some(variant) = agent.variant {
-                            model.variant = Some(variant);
-                        }
-                        model
-                    })
                     .unwrap_or_else(|| AgentModelRef {
                         id: model.model_id.clone(),
                         provider_id: model.provider_id.clone(),
                         variant: model.variant.clone(),
                     }),
                 request: RequestInfo {
-                    headers: agent.request_headers,
-                    body: json!(agent.request_body),
+                    headers: BTreeMap::new(),
+                    body: json!({}),
                 },
                 system: if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())
@@ -108,11 +102,11 @@ async fn agent(
                 mode: agent.mode,
                 hidden: agent.hidden,
                 color: agent.color,
-                steps: agent.steps,
-                permissions: agent_permissions(&agent.name, &build_permissions, agent.permissions),
+                steps: None,
+                permissions: agent_permissions(&agent.name, &build_permissions),
             })
             .collect(),
-    ))
+    )))
 }
 
 fn agent_model_ref(model: &str) -> AgentModelRef {
@@ -130,18 +124,12 @@ fn agent_model_ref(model: &str) -> AgentModelRef {
     }
 }
 
-fn agent_permissions(
-    name: &str,
-    build_permissions: &[PermissionRule],
-    configured: Vec<PermissionRule>,
-) -> Vec<PermissionRule> {
-    let mut permissions = if name == "build" {
+fn agent_permissions(name: &str, build_permissions: &[PermissionRule]) -> Vec<PermissionRule> {
+    if name == "build" {
         build_permissions.to_vec()
     } else {
         Vec::new()
-    };
-    permissions.extend(configured);
-    permissions
+    }
 }
 
 async fn command(

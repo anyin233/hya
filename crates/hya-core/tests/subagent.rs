@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use async_trait::async_trait;
 use futures::stream;
 use hya_core::{
@@ -66,7 +68,7 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        tools,
+        support::test_runtime(tools),
         perm,
         EventBus::default(),
     ));
@@ -136,8 +138,14 @@ async fn governed_engine(
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
-        SessionEngine::new(store, router, tools, perm, EventBus::default())
-            .with_governor(SubagentGovernor::new(limits)),
+        SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(tools),
+            perm,
+            EventBus::default(),
+        )
+        .with_governor(SubagentGovernor::new(limits)),
     );
     let agent = AgentSpec {
         name: AgentName::new("build"),
@@ -153,6 +161,9 @@ fn member(agent: &AgentSpec, directive: &str) -> MemberSpec {
     MemberSpec {
         id: MemberId::new(),
         agent: agent.clone(),
+        agents: Arc::from([]),
+        resources: None,
+        guidance: None,
         directive: directive.to_string(),
         description: String::new(),
         session: None,
@@ -340,6 +351,9 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
         MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
             directive: "do A".to_string(),
             description: String::new(),
             session: None,
@@ -347,6 +361,9 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
         MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
             directive: "do B".to_string(),
             description: String::new(),
             session: None,
@@ -406,6 +423,9 @@ async fn run_team_can_resume_existing_member_session() {
         vec![MemberSpec {
             id: MemberId::new(),
             agent,
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
             directive: "continue prior work".to_string(),
             description: String::new(),
             session: Some(child),
@@ -450,6 +470,9 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
         vec![MemberSpec {
             id: MemberId::new(),
             agent: agent.clone(),
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
             directive: "first attempt".to_string(),
             description: String::new(),
             session: Some(child),
@@ -490,6 +513,9 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
         vec![MemberSpec {
             id: MemberId::new(),
             agent,
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
             directive: "restart after failure".to_string(),
             description: String::new(),
             session: Some(child),
@@ -571,6 +597,9 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
             MemberSpec {
                 id: healthy_id,
                 agent: agent.clone(),
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: "do healthy work".to_string(),
                 description: String::new(),
                 session: None,
@@ -578,6 +607,9 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
             MemberSpec {
                 id: failed_id,
                 agent: failing_agent,
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: "do failing work".to_string(),
                 description: String::new(),
                 session: None,
@@ -630,6 +662,9 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             MemberSpec {
                 id: first,
                 agent: agent.clone(),
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: "first member".to_string(),
                 description: String::new(),
                 session: None,
@@ -637,6 +672,9 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             MemberSpec {
                 id: second,
                 agent: failing_agent,
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: "second member fails".to_string(),
                 description: String::new(),
                 session: None,
@@ -644,6 +682,9 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             MemberSpec {
                 id: third,
                 agent,
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: "third member".to_string(),
                 description: String::new(),
                 session: None,

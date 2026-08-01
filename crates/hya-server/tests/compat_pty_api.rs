@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,7 +41,13 @@ async fn state(workdir: &Path) -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, permission, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

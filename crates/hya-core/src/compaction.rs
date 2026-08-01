@@ -4,9 +4,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use hya_proto::{Event, Message, MessageId, ModelRef, Part, PartId, SessionId};
-use hya_provider::{CompletionRequest, ProviderRouter};
+use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 
 use crate::error::CoreError;
+
+/// Optional overrides for a fixed Harness system summarize/compaction call.
+///
+/// Absent fields preserve the summarizer's constructed fallback model and leave
+/// system/reasoning unset rather than inventing hardcoded prompts.
+#[derive(Clone, Debug, Default)]
+pub struct SummarizeOptions {
+    pub system: Option<String>,
+    pub model: Option<ModelRef>,
+    pub reasoning: Option<ReasoningEffort>,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct CompactionConfig {
@@ -94,13 +105,18 @@ pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
 
 #[async_trait]
 pub trait Summarizer: Send + Sync {
-    async fn summarize(&self, messages: &[Message]) -> Result<String, CoreError>;
+    async fn summarize(
+        &self,
+        messages: &[Message],
+        options: SummarizeOptions,
+    ) -> Result<String, CoreError>;
 }
 
 pub async fn compact_with(
     mut messages: Vec<Message>,
     cfg: &CompactionConfig,
     summarizer: &dyn Summarizer,
+    options: SummarizeOptions,
 ) -> Result<Vec<Message>, CoreError> {
     if !needs_compaction(&messages, cfg) {
         return Ok(messages);
@@ -108,7 +124,7 @@ pub async fn compact_with(
     let split = messages.len() - cfg.keep_recent;
     let recent = messages.split_off(split);
     let older_count = messages.len();
-    let summary = summarizer.summarize(&messages).await?;
+    let summary = summarizer.summarize(&messages, options).await?;
     let mut out = Vec::with_capacity(recent.len() + 1);
     out.push(Message::System {
         id: MessageId::new(),
@@ -155,15 +171,19 @@ impl ModelSummarizer {
 
 #[async_trait]
 impl Summarizer for ModelSummarizer {
-    async fn summarize(&self, messages: &[Message]) -> Result<String, CoreError> {
+    async fn summarize(
+        &self,
+        messages: &[Message],
+        options: SummarizeOptions,
+    ) -> Result<String, CoreError> {
         let transcript = render_for_summary(messages);
         let prompt = format!(
             "Summarize the earlier conversation below into a compact briefing that preserves \
              decisions, facts, file paths, and open tasks. Be concise.\n\n{transcript}"
         );
         let request = CompletionRequest {
-            model: self.model.clone(),
-            system: Some("You compress conversation history. No tools.".to_string()),
+            model: options.model.unwrap_or_else(|| self.model.clone()),
+            system: options.system,
             messages: vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
@@ -174,7 +194,7 @@ impl Summarizer for ModelSummarizer {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(1024),
-            reasoning: None,
+            reasoning: options.reasoning,
             headers: Default::default(),
         };
         let mut stream = self
@@ -200,7 +220,11 @@ mod tests {
     struct Fake;
     #[async_trait]
     impl Summarizer for Fake {
-        async fn summarize(&self, _messages: &[Message]) -> Result<String, CoreError> {
+        async fn summarize(
+            &self,
+            _messages: &[Message],
+            _options: SummarizeOptions,
+        ) -> Result<String, CoreError> {
             Ok("CONDENSED".to_string())
         }
     }
@@ -263,7 +287,9 @@ mod tests {
             token_threshold: 10,
             keep_recent: 2,
         };
-        let out = compact_with(msgs, &cfg, &Fake).await.unwrap();
+        let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out.len(), 3);
         assert!(matches!(out[0], Message::System { .. }));
         if let Message::System { content, .. } = &out[0] {
@@ -279,7 +305,9 @@ mod tests {
             token_threshold: 1000,
             keep_recent: 2,
         };
-        let out = compact_with(msgs, &cfg, &Fake).await.unwrap();
+        let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
+            .await
+            .unwrap();
         assert_eq!(out.len(), 1);
     }
 }

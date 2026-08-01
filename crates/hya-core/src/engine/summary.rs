@@ -3,6 +3,9 @@ use hya_proto::{
 };
 
 use super::SessionEngine;
+use super::{
+    FixedSystemAgent, fixed_system_agent, projection_workdir, summarize_options_from_definition,
+};
 use crate::error::CoreError;
 
 const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
@@ -19,12 +22,23 @@ impl SessionEngine {
 
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
         let projection = self.store.read_projection(session).await?;
+        // Empty projection has no session id; fail before workdir/catalog lookup.
+        if projection.session.id.is_none() {
+            return Err(CoreError::Invalid("session not found".to_string()));
+        }
+        let workdir = projection_workdir(&projection).ok_or_else(|| {
+            CoreError::Invalid("session workdir required for summarize_session".to_string())
+        })?;
+        // Bind once from the persisted session workdir; exact-lookup only.
+        let binding = self.runtime.bind_turn(&workdir)?;
+        let definition = fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
+        let options = summarize_options_from_definition(definition);
         let messages = summary_messages(&projection)?;
         let summarizer = self
             .summarizer
             .as_ref()
             .ok_or_else(|| CoreError::Invalid("summarizer not configured".to_string()))?;
-        let summary = summarizer.summarize(&messages).await?;
+        let summary = summarizer.summarize(&messages, options).await?;
         self.inject_system_message(
             session,
             format!("Summary of earlier conversation:\n{summary}"),

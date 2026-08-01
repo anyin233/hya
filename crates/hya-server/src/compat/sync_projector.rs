@@ -1,5 +1,5 @@
 use hya_core::CreateSession;
-use hya_proto::{AgentName, ModelRef, SessionId};
+use hya_proto::{ModelRef, SessionId};
 use serde_json::{Map, Value};
 
 use crate::{ApiError, ServerState};
@@ -63,6 +63,13 @@ async fn create_session(
         .and_then(Value::as_str)
         .unwrap_or(directory)
         .to_string();
+    // Same bound-catalog default authority as live session create — no legacy
+    // agent_catalog fallback and no untyped AgentName::new bypass.
+    let agent = super::bound_agent_metadata::resolve_session_agent(
+        st,
+        std::path::Path::new(&workdir),
+        info.get("agent").and_then(Value::as_str),
+    )?;
     st.engine
         .create_with_id(
             Some(session),
@@ -71,23 +78,13 @@ async fn create_session(
                     .get("parentID")
                     .and_then(Value::as_str)
                     .and_then(|id| id.parse().ok()),
-                agent: info
-                    .get("agent")
-                    .and_then(Value::as_str)
-                    .map(AgentName::new)
-                    .unwrap_or_else(|| default_agent(st, &workdir)),
+                agent,
                 model: model_ref(info).unwrap_or_else(|| st.agent.model.clone()),
                 workdir,
             },
         )
         .await?;
     Ok(())
-}
-
-fn default_agent(st: &ServerState, workdir: &str) -> AgentName {
-    super::agent_catalog::default_name(std::path::Path::new(workdir), st)
-        .map(AgentName::new)
-        .unwrap_or_else(|| st.agent.name.clone())
 }
 
 async fn apply_info(

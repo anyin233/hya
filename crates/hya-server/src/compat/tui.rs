@@ -38,7 +38,7 @@ async fn bootstrap(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<Value> {
+) -> Result<Json<Value>, ApiError> {
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
 
@@ -59,7 +59,8 @@ async fn bootstrap(
     });
 
     let build_permissions = super::agent_permission::from_engine(&st.engine);
-    let agents: Vec<Value> = super::agent_catalog::list(&workdir, &st)
+    // Bound catalog only: native=true, empty per-agent legacy overrides.
+    let agents: Vec<Value> = super::bound_agent_metadata::list(&st, &workdir)?
         .into_iter()
         .map(|agent| {
             let model = agent.model.as_deref().unwrap_or(st.agent.model.as_str());
@@ -71,24 +72,24 @@ async fn bootstrap(
                 "name": agent.name,
                 "description": agent.description,
                 "mode": agent.mode,
-                "native": agent.native,
+                "native": true,
                 "hidden": agent.hidden,
                 "permission": super::instance::agent_permissions(
                     &agent.name,
                     &build_permissions,
-                    agent.permissions,
+                    Vec::new(),
                 ),
                 "model": { "modelID": model_id, "providerID": provider_id },
-                "temperature": agent.temperature,
-                "topP": agent.top_p,
+                "temperature": Value::Null,
+                "topP": Value::Null,
                 "color": agent.color,
-                "steps": agent.steps,
+                "steps": Value::Null,
                 "prompt": if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())
                 } else {
                     agent.prompt
                 },
-                "options": agent.options,
+                "options": json!({}),
             })
         })
         .collect();
@@ -135,7 +136,7 @@ async fn bootstrap(
         "default_branch": super::instance::vcs::git::default_branch(&workdir),
     });
 
-    Json(json!({
+    Ok(Json(json!({
         "config": st.global.config().await,
         "providers": providers,
         "provider_list": provider_list,
@@ -151,7 +152,7 @@ async fn bootstrap(
         "vcs": vcs,
         "path": path,
         "project": project,
-    }))
+    })))
 }
 
 fn home_dir() -> std::path::PathBuf {

@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -70,7 +72,7 @@ async fn text_complete_replaces_assistant_text_before_projection_finishes() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        tools,
+        support::test_runtime(tools),
         permission,
         EventBus::default(),
     )

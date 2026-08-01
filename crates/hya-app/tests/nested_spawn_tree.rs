@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,6 +9,7 @@ use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
 use hya_app::spawn_team_supervisor;
+use hya_bundle::AgentRole;
 use hya_core::{
     AgentSpec, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor, SessionEngine,
 };
@@ -35,7 +38,15 @@ async fn nested_spawn() -> NestedSpawn {
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             provider_router.clone(),
-            Arc::new(ToolRegistry::builtins()),
+            support::test_runtime(
+                Arc::new(ToolRegistry::builtins()),
+                &[
+                    ("build", AgentRole::Main, &["explore"]),
+                    ("explore", AgentRole::Subagent, &["plan"]),
+                    ("general", AgentRole::Main, &[]),
+                    ("plan", AgentRole::Subagent, &[]),
+                ],
+            ),
             permission,
             EventBus::default(),
         )
@@ -53,7 +64,6 @@ async fn nested_spawn() -> NestedSpawn {
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        false,
         provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
@@ -68,8 +78,8 @@ async fn nested_spawn() -> NestedSpawn {
         })
         .await
         .unwrap();
-    let child = spawn_one(&spawner, root, "explore").await;
-    let grandchild = spawn_one(&spawner, child, "plan").await;
+    let child = spawn_one(&engine, &spawner, root, "build", "explore").await;
+    let grandchild = spawn_one(&engine, &spawner, child, "explore", "plan").await;
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -120,19 +130,29 @@ async fn nested_spawn() -> NestedSpawn {
     }
 }
 
-async fn spawn_one(spawner: &SpawnerPlane, parent: SessionId, agent_type: &str) -> SessionId {
+async fn spawn_one(
+    engine: &SessionEngine,
+    spawner: &SpawnerPlane,
+    parent: SessionId,
+    caller: &str,
+    agent_type: &str,
+) -> SessionId {
+    let binding = engine.bind_runtime(&std::env::temp_dir()).unwrap();
+    let agents = engine.agent_roster_for_binding(&binding, caller).unwrap();
     let outcomes = tokio::time::timeout(
         Duration::from_secs(5),
-        spawner.for_session(parent).spawn_background(
-            hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            vec![SpawnMember {
-                description: format!("spawn {agent_type}"),
-                prompt: format!("run {agent_type}"),
-                subagent_type: agent_type.to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        ),
+        spawner
+            .for_session_with_agents(parent, agents)
+            .spawn_background(
+                hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                vec![SpawnMember {
+                    description: format!("spawn {agent_type}"),
+                    prompt: format!("run {agent_type}"),
+                    subagent_type: agent_type.to_string(),
+                    ..SpawnMember::default()
+                }],
+                Default::default(),
+            ),
     )
     .await
     .expect("spawn timed out")

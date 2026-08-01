@@ -236,7 +236,7 @@ mod tests {
             websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
-            agents: hya_tool::AgentCatalogPlane::default(),
+            agents: Default::default(),
             workdir: std::env::temp_dir(),
             cancel: CancellationToken::new(),
         }

@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,12 +24,13 @@ async fn state_with_script(script: Vec<Vec<FakeStep>>) -> AppState {
     let provider = FakeProvider::scripted_turns(script);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
+    let runtime = support::test_runtime(tools);
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        tools,
+        runtime,
         perm,
         EventBus::default(),
     ));

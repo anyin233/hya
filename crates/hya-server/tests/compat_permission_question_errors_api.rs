@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -29,7 +31,7 @@ async fn state_with_session() -> (AppState, SessionId) {
     let engine = Arc::new(SessionEngine::new(
         store,
         providers,
-        tools,
+        support::test_runtime(tools),
         permission,
         EventBus::default(),
     ));

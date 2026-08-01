@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -65,7 +67,13 @@ async fn state_at(path: &str, with_todowrite: bool) -> AppState {
         Mode::Allow,
     )]));
     let store = SessionStore::connect(path).await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

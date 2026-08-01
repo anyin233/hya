@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+mod support;
+
 use std::sync::Arc;
 
 use hya_core::{CreateSession, EventBus, SessionEngine};
@@ -13,7 +15,13 @@ async fn engine() -> SessionEngine {
     let providers = Arc::new(ProviderRouter::new());
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    SessionEngine::new(store, providers, tools, permission, EventBus::default())
+    SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    )
 }
 
 fn spec() -> CreateSession {

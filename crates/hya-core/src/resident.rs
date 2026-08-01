@@ -38,9 +38,11 @@ use hya_proto::{
     ActorClaim, Event, FinishReason, MailEndpoint, MemberId, MemberRunStatus, OwnerRunId,
     PartProjection, Role, RosterStatus, SessionId, SubagentMode, ToolPartState,
 };
+use hya_tool::AgentDef;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::AgentResourcePolicy;
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
 use crate::orchestrator::TeamBudget;
@@ -221,6 +223,11 @@ enum SlotStatus {
 struct SlotState {
     handle: String,
     agent: AgentSpec,
+    agents: Option<Arc<[AgentDef]>>,
+    resources: Option<AgentResourcePolicy>,
+    /// In-process only: immutable guidance from the triggering spawn turn.
+    /// Never durable; recovery paths leave this `None`.
+    guidance: Option<Arc<str>>,
     is_main: bool,
     status: SlotStatus,
     /// New mail has arrived and a turn is owed.
@@ -262,6 +269,9 @@ struct TeamState {
 /// (long, unlocked) turn runs against a stable plan.
 struct RunPlan {
     agent: AgentSpec,
+    agents: Option<Arc<[AgentDef]>>,
+    resources: Option<AgentResourcePolicy>,
+    guidance: Option<Arc<str>>,
     handle: String,
     is_main: bool,
     /// Inbox messages before this index are already injected.
@@ -274,7 +284,7 @@ struct RunPlan {
 /// What a resident task should do next, decided atomically under the team lock.
 enum Action {
     /// Run exactly one turn per the snapshotted [`RunPlan`].
-    Run(RunPlan),
+    Run(Box<RunPlan>),
     /// No work owed; the slot just transitioned to idle (`became_idle` gates the
     /// roster activity emission so it fires once per idle transition).
     Idle {
@@ -348,6 +358,9 @@ impl TeamActor {
             let claim = slot.claim;
             let cursor = slot.cursor;
             let agent = slot.agent.clone();
+            let agents = slot.agents.clone();
+            let resources = slot.resources.clone();
+            let guidance = slot.guidance.clone();
             let handle = slot.handle.clone();
             let is_main = slot.is_main;
             slot.pending = false;
@@ -363,14 +376,17 @@ impl TeamActor {
                 self.kill_locked(&mut st, "per-team turn budget exceeded");
                 return Action::Stop { killed_now: true };
             }
-            Action::Run(RunPlan {
+            Action::Run(Box::new(RunPlan {
                 agent,
+                agents,
+                resources,
+                guidance,
                 handle,
                 is_main,
                 cursor,
                 synth,
                 claim,
-            })
+            }))
         } else {
             let handle = slot.handle.clone();
             let claim = slot.claim;
@@ -487,6 +503,9 @@ impl TeamActor {
     async fn run_one_turn(&self, session: SessionId, plan: RunPlan) -> Result<(), CoreError> {
         let RunPlan {
             agent,
+            agents,
+            resources,
+            guidance,
             handle,
             is_main,
             cursor,
@@ -586,13 +605,37 @@ impl TeamActor {
             }
         }
         // Exactly one turn, under the team-wide cancel so a budget kill stops it.
-        match claim.as_ref() {
-            Some(claim) => {
+        match (claim.as_ref(), agents, resources) {
+            (Some(claim), Some(agents), Some(resources)) => {
+                self.engine
+                    .run_resolved_turn_for_actor(
+                        session,
+                        &agent,
+                        (agents, resources),
+                        claim,
+                        self.cancel.child_token(),
+                        guidance,
+                    )
+                    .await?;
+            }
+            (None, Some(agents), Some(resources)) => {
+                self.engine
+                    .run_resolved_turn(
+                        session,
+                        &agent,
+                        agents,
+                        resources,
+                        self.cancel.child_token(),
+                        guidance,
+                    )
+                    .await?;
+            }
+            (Some(claim), _, _) => {
                 self.engine
                     .run_turn_for_actor(session, &agent, claim, self.cancel.child_token())
                     .await?;
             }
-            None => {
+            (None, _, _) => {
                 self.engine
                     .run_turn(session, &agent, self.cancel.child_token())
                     .await?;
@@ -706,7 +749,7 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                 Action::Run(plan) => {
                     let handle = plan.handle.clone();
                     let claim = plan.claim;
-                    match team.run_one_turn(session, plan).await {
+                    match team.run_one_turn(session, *plan).await {
                         Ok(()) => {
                             let _ = team
                                 .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
@@ -873,11 +916,21 @@ impl ResidentSupervisor {
     /// it. Idempotent: a second call for the same root is a no-op. The root is
     /// registered on the roster as `main` (transient mode — it is the root, not a
     /// resident subagent) if not already present.
+    ///
+    /// Callers must supply the already-resolved **team root** `AgentSpec`, can_spawn
+    /// roster, and resource policy from the same captured [`TurnBinding`] as the
+    /// triggering spawn (exact root stable `AgentName`, not the nested caller).
+    /// `guidance` remains optional in-process-only triggering-turn text. Recovery
+    /// invents nothing. Later `ensure_main` calls for the same root leave the first
+    /// registration intact (first-wins).
     pub async fn ensure_main(
         &self,
         root: SessionId,
         agent: AgentSpec,
         actor_claim: Option<&ActorClaim>,
+        agents: Arc<[AgentDef]>,
+        resources: AgentResourcePolicy,
+        guidance: Option<Arc<str>>,
     ) -> Result<(), CoreError> {
         let handle = self
             .engine
@@ -896,6 +949,10 @@ impl ResidentSupervisor {
                     SlotState {
                         handle,
                         agent,
+                        // Required root activation context: always take the resolved path.
+                        agents: Some(agents),
+                        resources: Some(resources),
+                        guidance,
                         is_main: true,
                         status: SlotStatus::Idle,
                         pending: false,
@@ -921,13 +978,19 @@ impl ResidentSupervisor {
     ///
     /// Non-blocking: this returns as soon as the resident is registered and armed;
     /// the caller (parent) does NOT wait for the resident's turn.
+    ///
+    /// `guidance` is the immutable triggering-turn Arc stored only in-process for
+    /// every activation of this slot; it is not written to the resident definition.
     pub async fn spawn_resident(
         &self,
         parent: SessionId,
         agent: AgentSpec,
+        resolved: (Arc<[AgentDef]>, AgentResourcePolicy),
         directive: String,
         parent_claim: Option<&ActorClaim>,
+        guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
+        let (agents, resources) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = match parent_claim {
             Some(claim) => {
@@ -989,8 +1052,15 @@ impl ResidentSupervisor {
                     .await?;
             }
         }
-        self.register_existing_resident(root, session, handle.clone(), agent, Some(directive))
-            .await?;
+        self.register_existing_resident_with_agents(
+            root,
+            session,
+            handle.clone(),
+            agent,
+            Some((agents, resources)),
+            (Some(directive), guidance),
+        )
+        .await?;
         Ok((session, handle))
     }
 
@@ -1005,6 +1075,31 @@ impl ResidentSupervisor {
         agent: AgentSpec,
         initial: Option<String>,
     ) -> Result<(), CoreError> {
+        self.register_existing_resident_with_agents(
+            root,
+            session,
+            handle,
+            agent,
+            None,
+            (initial, None),
+        )
+        .await
+    }
+
+    async fn register_existing_resident_with_agents(
+        &self,
+        root: SessionId,
+        session: SessionId,
+        handle: String,
+        agent: AgentSpec,
+        resolved: Option<(Arc<[AgentDef]>, AgentResourcePolicy)>,
+        activation: (Option<String>, Option<Arc<str>>),
+    ) -> Result<(), CoreError> {
+        let (initial, guidance) = activation;
+        let (agents, resources) = match resolved {
+            Some((agents, resources)) => (Some(agents), Some(resources)),
+            None => (None, None),
+        };
         let claim = self
             .engine
             .store()
@@ -1040,6 +1135,9 @@ impl ResidentSupervisor {
                 SlotState {
                     handle,
                     agent,
+                    agents,
+                    resources,
+                    guidance,
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending: has_initial,
@@ -1093,6 +1191,10 @@ impl ResidentSupervisor {
                 SlotState {
                     handle,
                     agent,
+                    agents: None,
+                    resources: None,
+                    // Ephemeral guidance is not durable; recovery invents nothing.
+                    guidance: None,
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending,

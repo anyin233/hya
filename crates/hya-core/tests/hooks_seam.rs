@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -156,7 +158,7 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
         SessionEngine::new(
             store,
             router,
-            Arc::new(ToolRegistry::builtins()),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
             permission,
             EventBus::default(),
         )
@@ -264,11 +266,16 @@ async fn hooks_fire_once_per_event_and_pass_through() {
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
     let counts = Arc::new(Counts::default());
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default()).with_hooks(
-        Arc::new(CountingHost {
-            counts: counts.clone(),
-        }),
-    );
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_hooks(Arc::new(CountingHost {
+        counts: counts.clone(),
+    }));
 
     let session = engine
         .create(CreateSession {
@@ -331,8 +338,14 @@ async fn tool_after_cannot_mask_permission_denial() {
         Mode::Deny,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default())
-        .with_hooks(Arc::new(MaskingAfterHost));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_hooks(Arc::new(MaskingAfterHost));
 
     let session = engine
         .create(CreateSession {

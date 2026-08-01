@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,7 +59,13 @@ async fn text_tool_result_text_round_trip() {
         Mode::Allow,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
 
     let session = engine
         .create(CreateSession {
@@ -136,7 +144,13 @@ async fn turn_continues_past_twenty_five_tool_rounds() {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -187,7 +201,13 @@ async fn cancelled_turn_finishes_cancelled() {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
 
     let session = engine
         .create(CreateSession {
@@ -231,7 +251,13 @@ async fn provider_usage_is_recorded_on_assistant_message_projection() {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
 
     let session = engine
         .create(CreateSession {
@@ -271,7 +297,11 @@ struct Recording(Arc<AtomicBool>);
 
 #[async_trait::async_trait]
 impl Summarizer for Recording {
-    async fn summarize(&self, _messages: &[Message]) -> Result<String, CoreError> {
+    async fn summarize(
+        &self,
+        _messages: &[Message],
+        _options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
         self.0.store(true, Ordering::SeqCst);
         Ok("SUMMARY".to_string())
     }
@@ -289,14 +319,20 @@ async fn compaction_auto_triggers_when_over_threshold() {
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let called = Arc::new(AtomicBool::new(false));
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default())
-        .with_compaction(
-            Arc::new(Recording(called.clone())),
-            CompactionConfig {
-                token_threshold: 1,
-                keep_recent: 1,
-            },
-        );
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            token_threshold: 1,
+            keep_recent: 1,
+        },
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -336,7 +372,13 @@ async fn provider_error_still_finishes_the_assistant_message() {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
 
     let session = engine
         .create(CreateSession {

@@ -657,8 +657,11 @@ merely replayable, without creating a time lease or general effect framework.
 - full workspace, TUI, no-INET, local executable, version/changelog/JSONL, exact
   staging, push, and remote CI gates are green.
 
-**Parallel work:** none in this canonical turn. `0.34.8` remains blocked until
-the same draft PR is remote green and MacBook Air explicitly authorizes it.
+**Parallel work:** none inside the `0.34.7` release envelope. `0.34.8` Commit 2
+WIP is authorized on this worktree for cutover implementation/docs; local
+workspace/TUI/bin/zero-INET and product goldens are **`LOCAL-GATES-GREEN`**,
+while exact staging, commit, push, and remote CI remain
+**`PENDING-COMMIT-PUSH-REMOTE-CI`** (see R7).
 
 **Rollback seam:** rehydration may be disabled only from a quiescent state.
 Never roll back by selecting an older epoch. External effects are not claimed
@@ -667,9 +670,18 @@ not automatically retried.
 
 ## R7 — Markdown/JS/Rust `AgentBundle` and policy enforcement
 
-**Status:** native-only staged delivery in `0.34.8`–`0.34.11`. Pro rounds
-three through six are advisory provenance; the MacBook Air coordinator's
-native-only sequencing controls.
+**Status:** `0.34.8` Commit 2 **WIP FOCUSED-VERIFIED** for the native built-in
+cutover contracts (single `Arc<BundleCatalog>`/`TurnBinding`, decode-once
+fail-closed bootstrap, omitted vs explicit unknown, role vs `can_spawn`,
+reserved system exact lookup, historical AgentName replay/missing-definition
+continue, inline overlay + typed inline-description reject path, compiled
+resource view, immutable guidance composition, legacy parser/`.hya/agents`
+deletion, docs example + authoring skill, corrected `plan` description).
+**Commit 2 local gates: `LOCAL-GATES-GREEN`** (full workspace/TUI/bin/
+zero-INET and product goldens). **Exact staging, commit, push, and remote CI:
+`PENDING-COMMIT-PUSH-REMOTE-CI`** (unclaimed; no remote/GA completion claim).
+`0.34.9`–`0.34.11` remain planning-only and untouched. Pro rounds three through
+six are advisory provenance; MacBook Air native-only sequencing controls.
 
 **Owner-established boundary**
 
@@ -737,25 +749,29 @@ native-only sequencing controls.
 
 **Native built-in cutover — `0.34.8`**
 
-- Entry requires `0.34.7` remote CI green, a complete source-backed capability
-  matrix, and frozen current behavior/replay fixtures.
-- A deterministic package preparer validates repo-native built-ins, emits
-  authoritative embedded package bytes plus a digest-bound index, and lowers
-  them through one `AgentBundleIR -> immutable Generation/catalog ->
-  TurnBinding -> AgentSpec -> SessionEngine` path.
-- Startup merges `origin=builtin, immutable=true` packages with the installed
-  registry, rejects built-in bundle/stable-agent-ID collisions, and gives TUI
-  and spawn the same snapshot.
-- Built-ins retain every current public stable agent ID as explicit manifest
-  data. Event/session IDs are not rewritten.
-- Startup/TUI/spawn switch and deletion of every old agent-file
-  loader/parser/discovery/execution branch happen in this same release. There
-  is no adapter, migration, conversion, scanner, or rollback fallback.
-- Exit requires all A rows mapped/tested, all B/C rows implemented or typed
-  rejected, all built-ins native, unknown fields fail-closed, historical replay
-  green without old loaders, and boot without external install.
-- Deliver a simple repo-native Markdown Bundle example, authoring docs, and the
-  built-in `agent-bundle-authoring` skill.
+- **WIP status (this worktree):** focused cutover contracts
+  `FOCUSED-VERIFIED`; local workspace/TUI/bin/zero-INET and product goldens
+  `LOCAL-GATES-GREEN`; exact staging, commit, push, and remote CI
+  `PENDING-COMMIT-PUSH-REMOTE-CI` (unclaimed). Evidence:
+  `research/agent-capability-parity-matrix.md`, `implement.md` §18.3.
+- Entry baseline was green `0.34.7` tip + matrix/fixtures; Commit 1 inert
+  prepare preceded Commit 2 activation WIP.
+- Deterministic preparer emits embedded prepared bytes + digest-bound index;
+  runtime path is `AgentBundleIR → BundleCatalog → RuntimeSnapshot/TurnBinding →
+  AgentSpec → SessionEngine` (one `Arc` catalog authority).
+- Startup decodes embedded built-ins once (fail-closed); TUI selector uses
+  `role`; ordinary roster/spawn use caller `can_spawn` only.
+- Built-ins keep explicit public stable IDs; historical AgentName replay without
+  old files; missing definition continue is typed fail-closed.
+- Old agent-file loader/parser/discovery/execution modules and tracked
+  `.hya/agents` are deleted in this WIP; no adapter/migration dual authority.
+- Historical B-class AgentBundle fields: native v1 typed reject
+  (`deny_unknown_fields` / unsupported feature) — not silent ignore. Global
+  SKILL.md `allowed-tools`/`model`/`license` remain skill-plane (not Bundle GA).
+- Docs: prepare-valid `docs/examples/bundle.hya.md`, authoring guide, built-in
+  `agent-bundle-authoring` skill; `plan` description corrected.
+- **Exit still open:** exact staging, commit, push, and one green remote CI
+  run (`PENDING-COMMIT-PUSH-REMOTE-CI`); local gates already green.
 
 **Distribution — `0.34.9`**
 

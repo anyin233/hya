@@ -274,9 +274,9 @@ mod tests {
     async fn engine() -> SessionEngine {
         let store = SessionStore::connect_memory().await.unwrap();
         let router = Arc::new(ProviderRouter::new());
-        let tools = Arc::new(ToolRegistry::builtins());
+        let runtime = crate::test_support::runtime(ToolRegistry::builtins());
         let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
-        SessionEngine::new(store, router, tools, permission, EventBus::default())
+        SessionEngine::new(store, router, runtime, permission, EventBus::default())
     }
 
     async fn root_team(engine: &SessionEngine) -> SessionId {

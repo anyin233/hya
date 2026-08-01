@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -44,7 +46,13 @@ async fn base_engine(
     let router = Arc::new(ProviderRouter::new().with(provider));
     let tools = Arc::new(ToolRegistry::builtins());
     let store = SessionStore::connect_memory().await.unwrap();
-    let mut engine = SessionEngine::new(store, router, tools, permission, EventBus::default());
+    let mut engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    );
     if let Some(interaction) = interaction {
         engine = engine.with_interaction(interaction);
     }

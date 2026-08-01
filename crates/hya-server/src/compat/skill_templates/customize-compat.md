@@ -30,10 +30,18 @@ mistakes as they type.
 ## Applying changes
 
 Config is loaded once when compat starts and is not hot-reloaded. After
-saving changes to `opencode.json`, an agent file, a skill, a plugin, or any
-other config-time file, **tell the user to quit and restart compat** for
-the changes to take effect. The running session will keep using the
+saving changes to `opencode.json`, a skill, a plugin, or any other
+config-time file, **tell the user to quit and restart compat** for the
+changes to take effect. The running session will keep using the
 already-loaded config until then.
+
+## Native agent bundles (not this skill)
+
+0.34.8 runtime does not parse, discover, or migrate old agent
+JSON/JSONC/Markdown definitions. Built-ins come from embedded native
+AgentBundles; external bundle distribution is later scope. For agent
+authoring, use the built-in agent-bundle-authoring skill (and
+`docs/agent-bundle-authoring.md`). Do not create or fix agents via this skill.
 
 ## Where files live
 
@@ -41,8 +49,6 @@ already-loaded config until then.
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Project config                | `./opencode.json`, `./opencode.jsonc`, or `.opencode/opencode.json` (compat walks up from the cwd to the worktree root) |
 | Global config                 | `~/.config/opencode/opencode.json` (NOT `~/.opencode/`)                                                                   |
-| Project agents                | `.opencode/agent/<name>.md` or `.opencode/agents/<name>.md`                                                               |
-| Global agents                 | `~/.config/opencode/agent(s)/<name>.md`                                                                                   |
 | Project commands              | `.opencode/command/<name>.md` or `.opencode/commands/<name>.md`                                                           |
 | Global commands               | `~/.config/opencode/command(s)/<name>.md`                                                                                 |
 | Project skills                | `.opencode/skill(s)/<name>/SKILL.md`                                                                                      |
@@ -62,7 +68,6 @@ Every field is optional.
   "username": "string",
   "model": "provider/model-id",
   "small_model": "provider/model-id",
-  "default_agent": "agent-name",
   "shell": "/bin/zsh",
   "logLevel": "DEBUG" | "INFO" | "WARN" | "ERROR",
   "share": "manual" | "auto" | "disabled",
@@ -85,15 +90,6 @@ Every field is optional.
       "branch": "main",
       "description": "Use for SDK implementation details",
       "hidden": true
-    }
-  },
-
-  "agent": {
-    "my-agent": {
-      "model": "anthropic/claude-sonnet-4-6",
-      "mode": "subagent",
-      "description": "...",
-      "permission": { "edit": "deny" }
     }
   },
 
@@ -152,7 +148,6 @@ Shape notes worth being explicit about:
 - `model` always carries a provider prefix: `"anthropic/claude-sonnet-4-6"`.
 - `skills` is an object with `paths` and/or `urls`, not an array.
 - `references` is an object keyed by alias. Each value is a local path, Git repository, or string shorthand.
-- `agent` is an object keyed by agent name, not an array.
 - `command` is an object keyed by command name, not an array.
 - `plugin` is an array of strings or `[name, options]` tuples, not an object.
 - `mcp[name].command` is an array of strings, never a single string. `type` is required.
@@ -220,65 +215,6 @@ Local `path` values may be relative to the declaring config, absolute, or use
 - `hidden: true` removes a reference from TUI `@` autocomplete only. It remains available to agents and by direct path.
 - Reference directories are automatically allowed through the external-directory boundary; normal read/edit/tool permissions still apply.
 - String shorthand is supported: use `"docs": "../docs"` for local paths or `"effect": "Effect-TS/effect"` for Git repositories.
-
-## Agents
-
-Two ways to define an agent. Use the file form for anything non-trivial.
-
-### Inline (in `opencode.json`)
-
-```json
-{
-  "agent": {
-    "my-reviewer": {
-      "description": "Reviews PRs for style violations.",
-      "mode": "subagent",
-      "model": "anthropic/claude-sonnet-4-6",
-      "permission": { "edit": "deny", "bash": "ask" },
-      "prompt": "You are a strict PR reviewer..."
-    }
-  }
-}
-```
-
-### File
-
-```
-.opencode/agent/my-reviewer.md      OR     .opencode/agents/my-reviewer.md
-```
-
-```markdown
----
-description: Reviews PRs for style violations.
-mode: subagent
-model: anthropic/claude-sonnet-4-6
-permission:
-  edit: deny
-  bash: ask
----
-
-You are a strict PR reviewer. Focus on...
-```
-
-The file body becomes the agent's `prompt`. Do not also put `prompt:` in the
-frontmatter.
-
-`mode` is one of `"primary"`, `"subagent"`, `"all"`.
-
-Allowed top-level frontmatter fields: `name, model, variant, description, mode,
-hidden, color, steps, options, permission, disable, temperature, top_p`. Any
-unknown field is silently routed into `options`.
-
-To disable a built-in agent: `agent: { build: { disable: true } }`, or in a
-file, `disable: true` in frontmatter.
-
-`default_agent` must point to a non-hidden, primary-mode agent.
-
-### Built-in agents
-
-compat ships with `build`, `plan`, `general`, `explore`. Hidden internal agents:
-`compaction`, `title`, `summary`. To override a built-in's fields, define the
-same key in `agent: { <name>: { ... } }`.
 
 ## Commands
 
@@ -418,9 +354,6 @@ action, not a per-pattern object.
 `external_directory` patterns are filesystem paths (use `~/`, absolute paths,
 or globs like `~/projects/**`).
 
-Per-agent `permission:` overrides top-level `permission:`. Plan Mode lives on
-the `plan` agent's permission ruleset (`edit: deny *`).
-
 ## Escape hatches
 
 When a user's config is broken and compat won't start, these env vars help:
@@ -443,8 +376,8 @@ When a user's config is broken and compat won't start, these env vars help:
   exact shape, or the field is not covered in this skill, fetch
   `https://compat.ai/config.json` and read the schema rather than guessing.
 - Preserve `$schema` and any existing fields the user did not ask to change.
-- For agent, command, skill, and plugin definitions, prefer creating new files
-  in the correct location over inlining everything in `opencode.json`.
+- For command, skill, and plugin definitions, prefer creating new files in the
+  correct location over inlining everything in `opencode.json`.
 - If the user's existing config is malformed, point them at the env-var escape
   hatches above so they can edit from inside compat without breaking their
   session.

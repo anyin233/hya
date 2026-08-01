@@ -12,6 +12,7 @@ import { readJson, writeJsonAtomic } from "../util/persistence"
 import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
+import { isTuiSelectableAgent } from "../util/agent-visibility"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -71,7 +72,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     function createAgent() {
-      const agents = createMemo(() => sync.data.agent.filter((agent) => agent.mode !== "subagent" && !agent.hidden))
+      // Selector: role-mapped mode primary (main) only. hidden is not a second rule.
+      const agents = createMemo(() => sync.data.agent.filter(isTuiSelectableAgent))
       const visibleAgents = createMemo(() => sync.data.agent.filter((agent) => !agent.hidden))
       const [agentStore, setAgentStore] = createStore({
         current: undefined as string | undefined,

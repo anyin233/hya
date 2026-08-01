@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -161,7 +163,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        tools,
+        support::test_runtime(tools),
         perm,
         EventBus::default(),
     ));
@@ -191,6 +193,9 @@ async fn four_categories_drive_four_distinct_model_calls() {
             MemberSpec {
                 id: MemberId::new(),
                 agent: build_member_agent(&base, &resolved, &[]),
+                agents: Arc::from([]),
+                resources: None,
+                guidance: None,
                 directive: format!("work as {cat}"),
                 description: String::new(),
                 session: None,

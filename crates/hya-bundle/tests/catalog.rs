@@ -1,4 +1,8 @@
-use hya_bundle::{BundleCatalog, BundleSource, ExportKind, SourceFile, prepare_builtins};
+use hya_bundle::{
+    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, SourceFile,
+    prepare_builtins,
+};
+use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_agent_id: &str, content: &str) -> BundleSource {
     let manifest = format!(
@@ -29,6 +33,77 @@ agents:
     )
 }
 
+fn spawn_graph_source() -> BundleSource {
+    BundleSource::new(
+        "spawn-graph",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/spawn-graph
+  version: 1.0.0
+  publisher: hya
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    can_spawn: [worker]
+  - local_id: worker
+    stable_id: worker
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+  - local_id: compaction
+    stable_id: compaction
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+"#,
+        )],
+    )
+}
+
+fn digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        assert!(write!(encoded, "{byte:02x}").is_ok());
+    }
+    encoded
+}
+
+#[test]
+fn empty_prepared_catalog_is_rejected() {
+    assert_eq!(
+        BundleCatalog::from_prepared(&[]).err(),
+        Some(BundleError::EmptyPreparedCatalog)
+    );
+}
+
+#[test]
+fn zero_bundle_prepared_document_never_yields_empty_catalog() {
+    // Canonical empty prepared document: matching digest, valid shape, zero bundles.
+    let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
+    let expected_digest = digest(bytes);
+    let prepared = PreparedCatalog::decode(bytes, &expected_digest);
+    let Ok(prepared) = prepared else {
+        panic!("empty prepared document should still decode as prepared data: {prepared:?}");
+    };
+    assert!(
+        prepared.bundles().is_empty(),
+        "fixture must remain a zero-bundle prepared document"
+    );
+    assert_eq!(
+        BundleCatalog::from_prepared(prepared.bundles()).err(),
+        Some(BundleError::EmptyPreparedCatalog),
+        "zero bundles must never become an empty BundleCatalog"
+    );
+}
+
 #[test]
 fn bundle_local_short_name_wins_and_qualified_name_is_exact() {
     let prepared = prepare_builtins(vec![
@@ -57,4 +132,78 @@ fn bundle_local_short_name_wins_and_qualified_name_is_exact() {
     };
     assert_eq!(qualified.stable_id, "bundle:hya/beta/skill/docs");
     assert_eq!(qualified.content, "beta docs");
+}
+
+#[test]
+fn reserved_system_agent_is_not_an_ordinary_spawn_target() {
+    let prepared = prepare_builtins(vec![spawn_graph_source()]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let catalog = BundleCatalog::from_prepared(prepared.bundles());
+    let Ok(catalog) = catalog else {
+        panic!("catalog construction failed: {catalog:?}");
+    };
+
+    assert!(catalog.resolve_spawn("lead", "worker").is_ok());
+    assert!(matches!(
+        catalog.resolve_spawn("lead", "compaction"),
+        Err(hya_bundle::BundleError::AgentSpawnNotAllowed { .. })
+    ));
+    assert!(
+        catalog.resolve_agent("compaction").is_some(),
+        "the fixed Harness system lookup must remain exact and available"
+    );
+}
+
+#[test]
+fn bundle_id_with_kind_segments_resolves_structurally() {
+    let bundle_id = "hya/tool/skill/mcp-nest";
+    let source = BundleSource::new(
+        "nested-kinds",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                format!(
+                    r#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: {bundle_id}
+  version: 1.0.0
+  publisher: hya
+resources:
+  skills:
+    - id: docs
+      path: resources/skills/docs.md
+agents:
+  - local_id: lead
+    stable_id: nested-lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#
+                )
+                .into_bytes(),
+            ),
+            SourceFile::new("resources/skills/docs.md", b"nested docs"),
+        ],
+    );
+    let Ok(prepared) = prepare_builtins(vec![source]) else {
+        panic!("prepare nested bundle id");
+    };
+    let Ok(catalog) = BundleCatalog::from_prepared(prepared.bundles()) else {
+        panic!("catalog");
+    };
+    let Ok(local) = catalog.resolve_resource(bundle_id, ExportKind::Skill, "docs") else {
+        panic!("local short");
+    };
+    assert_eq!(local.stable_id, format!("bundle:{bundle_id}/skill/docs"));
+    let Ok(qualified) = catalog.resolve_resource(
+        bundle_id,
+        ExportKind::Skill,
+        &format!("bundle:{bundle_id}/skill/docs"),
+    ) else {
+        panic!("qualified must parse kind from rightmost segments");
+    };
+    assert_eq!(qualified.content, "nested docs");
 }

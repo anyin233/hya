@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod support;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -97,7 +99,7 @@ async fn engine(
     SessionEngine::new(
         store,
         provider_router,
-        tools,
+        support::test_runtime(tools),
         permission,
         EventBus::default(),
     )
@@ -215,11 +217,13 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
         system.find("base prompt").unwrap()
             < system.find("These skills are available on demand").unwrap()
     );
+    // Compiled resource views expose harness-qualified spellings next to the short name.
     assert!(
-        system.find("- a-session: A skill").unwrap() < system.find("- b-session: B skill").unwrap()
+        system.find("- a-session").unwrap() < system.find("- b-session").unwrap(),
+        "session skills must stay name-ordered: {system}"
     );
-    assert!(system.contains("- a-session: A skill"));
-    assert!(system.contains("- b-session: B skill"));
+    assert!(system.contains("a-session") && system.contains("A skill"));
+    assert!(system.contains("b-session") && system.contains("B skill"));
     assert!(!system.contains("agent-only"));
     assert!(!system.contains("Agent skill"));
 }

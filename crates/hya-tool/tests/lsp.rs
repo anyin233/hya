@@ -70,7 +70,7 @@ fn ctx_with(rules: Vec<Rule>, lsp: LspPlane, workdir: PathBuf) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp,
         formatter: hya_tool::FormatterPlane::default(),
-        agents: hya_tool::AgentCatalogPlane::default(),
+        agents: Default::default(),
         workdir,
         cancel: CancellationToken::new(),
     }

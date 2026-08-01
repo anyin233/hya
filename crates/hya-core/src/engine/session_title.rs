@@ -5,10 +5,11 @@ use hya_proto::{
 use hya_provider::CompletionRequest;
 
 use super::SessionEngine;
+use super::{
+    FixedSystemAgent, fixed_system_agent, projection_workdir, summarize_options_from_definition,
+};
 use crate::error::CoreError;
 use crate::title;
-
-const TITLE_SYSTEM_PROMPT: &str = "You are a title generator. Output only a concise single-line conversation title. Use the same language as the user when possible. Do not include explanations, quotes, or tool names.";
 
 impl SessionEngine {
     pub async fn auto_title_session(
@@ -28,7 +29,20 @@ impl SessionEngine {
         let Some(user_text) = only_user_text(&projection.session.messages) else {
             return Ok(false);
         };
-        let generated = self.generate_title(fallback_model, &user_text).await?;
+        let workdir = projection_workdir(&projection).ok_or_else(|| {
+            CoreError::Invalid("session workdir required for title generation".to_string())
+        })?;
+        // Bind once from the persisted session workdir; exact-lookup only.
+        let binding = self.runtime.bind_turn(&workdir)?;
+        let definition = fixed_system_agent(&binding, FixedSystemAgent::Title)?;
+        let options = summarize_options_from_definition(definition);
+        let model = options
+            .model
+            .clone()
+            .unwrap_or_else(|| fallback_model.clone());
+        let generated = self
+            .generate_title(&model, options.system, options.reasoning, &user_text)
+            .await?;
         let Some(title) = title::clean_title_output(&generated) else {
             return Ok(false);
         };
@@ -36,10 +50,16 @@ impl SessionEngine {
         Ok(true)
     }
 
-    async fn generate_title(&self, model: &ModelRef, user_text: &str) -> Result<String, CoreError> {
+    async fn generate_title(
+        &self,
+        model: &ModelRef,
+        system: Option<String>,
+        reasoning: Option<hya_provider::ReasoningEffort>,
+        user_text: &str,
+    ) -> Result<String, CoreError> {
         let request = CompletionRequest {
             model: model.clone(),
-            system: Some(TITLE_SYSTEM_PROMPT.to_string()),
+            system,
             messages: vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
@@ -50,7 +70,7 @@ impl SessionEngine {
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(128),
-            reasoning: None,
+            reasoning,
             headers: Default::default(),
         };
         let mut stream = self

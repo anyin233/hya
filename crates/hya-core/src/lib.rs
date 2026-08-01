@@ -18,12 +18,16 @@ pub mod subagent;
 pub mod title;
 pub mod workspace;
 
+#[cfg(test)]
+mod test_support;
+
 pub use bus::EventBus;
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, build_member_agent, inject_skills,
 };
 pub use compaction::{
-    CompactionConfig, ModelSummarizer, Summarizer, compact_with, estimate_tokens, needs_compaction,
+    CompactionConfig, ModelSummarizer, SummarizeOptions, Summarizer, compact_with, estimate_tokens,
+    needs_compaction,
 };
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
@@ -42,12 +46,14 @@ pub use loop_mode::{
 };
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
-pub use prompt::{PromptEnv, build_system_prompt};
+pub use prompt::{
+    PromptEnv, build_system_prompt, discover_context_files, render_environment_and_context, today,
+};
 pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor};
 pub use runtime_registry::{
-    RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError, RuntimeRegistry,
-    RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceManifest,
-    RuntimeSourceOwner, TurnBinding,
+    AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError,
+    RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
+    RuntimeSourceManifest, RuntimeSourceOwner, TurnBinding,
 };
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,

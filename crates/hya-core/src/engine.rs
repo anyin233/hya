@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use hya_bundle::PreparedAgent;
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, Projection, SessionId, ToolCallId,
     ToolSchema, now_millis,
@@ -8,17 +9,41 @@ use hya_proto::{
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
 use hya_tool::{
-    AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, ResolvedTool, SpawnerPlane, TodoPlane, ToolError, ToolRegistry,
-    WebSearchPlane, skills_section,
+    AgentDef, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
+    PermissionRules, ResolvedTool, SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
 use crate::bus::EventBus;
-use crate::compaction::{CompactionConfig, Summarizer};
+use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
 use crate::error::CoreError;
 use crate::hooks::HookDispatcher;
-use crate::{RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding};
+use crate::runtime_registry::CompiledResourceView;
+use crate::{
+    AgentResourcePolicy, RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding,
+};
+
+/// Closed set of fixed Harness system-operation agents.
+///
+/// Exact catalog lookup only — not spawn, not roster, and not an arbitrary-ID
+/// bypass. Callers cannot pass an open string; only these three operations exist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FixedSystemAgent {
+    Compaction,
+    Title,
+    Summary,
+}
+
+impl FixedSystemAgent {
+    /// Stable catalog id for this fixed system operation.
+    const fn stable_id(self) -> &'static str {
+        match self {
+            Self::Compaction => "compaction",
+            Self::Title => "title",
+            Self::Summary => "summary",
+        }
+    }
+}
 
 mod admission;
 mod fork;
@@ -77,7 +102,6 @@ pub struct SessionEngine {
     spawner: SpawnerPlane,
     mailbox: MailboxPlane,
     todo: TodoPlane,
-    agents: AgentCatalogPlane,
     websearch: WebSearchPlane,
     formatter: FormatterPlane,
     lsp: LspPlane,
@@ -93,7 +117,7 @@ impl SessionEngine {
     pub fn new(
         store: SessionStore,
         providers: Arc<ProviderRouter>,
-        tools: Arc<ToolRegistry>,
+        runtime: Arc<RuntimeRegistry>,
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Self {
@@ -101,20 +125,18 @@ impl SessionEngine {
         let (spawner, _srx) = SpawnerPlane::new();
         let mailbox = MailboxPlane::disconnected();
         let todo = TodoPlane::default();
-        let agents = AgentCatalogPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
         Self {
             store,
             providers,
-            runtime: Arc::new(RuntimeRegistry::from_snapshot(tools.snapshot())),
+            runtime,
             permission,
             interaction,
             spawner,
             mailbox,
             todo,
-            agents,
             websearch,
             formatter,
             lsp,
@@ -151,15 +173,6 @@ impl SessionEngine {
     #[must_use]
     pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
         self.mailbox = mailbox;
-        self
-    }
-
-    /// Inject the agent catalog resolver used by the model-facing `list_agents`
-    /// tool. Wired from the app layer (which owns the `hya-server` catalog) to
-    /// avoid a `hya-tool → hya-server` circular dependency.
-    #[must_use]
-    pub fn with_agents(mut self, agents: AgentCatalogPlane) -> Self {
-        self.agents = agents;
         self
     }
 
@@ -243,6 +256,35 @@ impl SessionEngine {
     #[must_use]
     pub fn runtime_registry(&self) -> Arc<RuntimeRegistry> {
         self.runtime.clone()
+    }
+
+    pub fn bind_runtime(&self, workdir: &std::path::Path) -> Result<TurnBinding, CoreError> {
+        Ok(self.runtime.bind_turn(workdir)?)
+    }
+
+    pub fn agent_spec_for_binding(
+        &self,
+        binding: &TurnBinding,
+        base: &AgentSpec,
+        stable_id: &str,
+    ) -> Result<AgentSpec, CoreError> {
+        agent_from_definition(base, stable_id, binding)
+    }
+
+    pub fn agent_roster_for_binding(
+        &self,
+        binding: &TurnBinding,
+        caller: &str,
+    ) -> Result<Arc<[AgentDef]>, CoreError> {
+        agent_roster(binding, caller)
+    }
+
+    pub fn agent_resource_policy_for_binding(
+        &self,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<AgentResourcePolicy, CoreError> {
+        Ok(binding.agent_resource_policy(stable_id)?)
     }
 
     pub fn refresh_runtime(
@@ -404,10 +446,111 @@ impl SessionEngine {
     }
 }
 
-pub(crate) fn effective_agent_for_binding(agent: &AgentSpec, binding: &TurnBinding) -> AgentSpec {
+pub(crate) fn effective_agent_for_binding(
+    agent: &AgentSpec,
+    stable_id: &str,
+    binding: &TurnBinding,
+    guidance: Option<&str>,
+) -> Result<(AgentSpec, Arc<CompiledResourceView>), CoreError> {
+    // One composition seam: agent_base (Bundle Some replaces / None keeps
+    // Harness base) → nonempty guidance → skill prompt material.
+    let effective = agent_from_definition(agent, stable_id, binding)?;
+    let effective = agent_with_guidance_layer(effective, guidance);
+    let policy = binding.agent_resource_policy(stable_id)?;
+    let resources = binding.compile_agent_resources(&policy)?;
+    Ok((
+        agent_with_bound_skills(effective, resources.as_ref()),
+        resources,
+    ))
+}
+
+fn agent_from_definition(
+    agent: &AgentSpec,
+    stable_id: &str,
+    binding: &TurnBinding,
+) -> Result<AgentSpec, CoreError> {
+    let definition =
+        binding
+            .resolve_agent(stable_id)
+            .ok_or_else(|| CoreError::AgentDefinitionMissing {
+                agent_id: stable_id.to_string(),
+            })?;
     let mut effective = agent.clone();
+    effective.name = definition.stable_id.clone();
     effective.workdir = binding.workdir().to_path_buf();
-    if let Some(section) = skills_section(binding.skills()) {
+    // Bundle prompt Some replaces only agent_base; None preserves Harness base.
+    if let Some(prompt) = definition.prompt.as_ref() {
+        effective.system_prompt = prompt.clone();
+    }
+    if let Some(reasoning) = definition
+        .model_policy
+        .reasoning
+        .as_deref()
+        .and_then(hya_provider::ReasoningEffort::parse)
+    {
+        effective.reasoning = Some(reasoning);
+    }
+    Ok(effective)
+}
+
+/// Append nonempty request-scoped guidance after agent_base resolution.
+///
+/// Absence or empty text is an empty layer (no error). Callers pre-render once
+/// per turn; this does not discover files.
+pub(crate) fn agent_with_guidance_layer(mut agent: AgentSpec, guidance: Option<&str>) -> AgentSpec {
+    let Some(guidance) = guidance.map(str::trim).filter(|text| !text.is_empty()) else {
+        return agent;
+    };
+    let base = agent.system_prompt.trim_end();
+    agent.system_prompt = if base.is_empty() {
+        guidance.to_string()
+    } else {
+        format!("{base}\n\n{guidance}")
+    };
+    agent
+}
+
+/// Exact-lookup a fixed Harness system agent from a captured TurnBinding.
+///
+/// Accepts only [`FixedSystemAgent`] — callers cannot pass an arbitrary ID.
+/// Not agent spawn and not a generic bypass surface.
+fn fixed_system_agent(
+    binding: &TurnBinding,
+    agent: FixedSystemAgent,
+) -> Result<&PreparedAgent, CoreError> {
+    let stable_id = agent.stable_id();
+    binding
+        .resolve_agent(stable_id)
+        .ok_or_else(|| CoreError::AgentDefinitionMissing {
+            agent_id: stable_id.to_string(),
+        })
+}
+
+/// Build summarize options from a fixed system definition.
+///
+/// Prepared prompt and explicit reasoning apply when present. Absent Bundle
+/// model leaves `model` unset so the caller/summarizer fallback is preserved.
+pub(crate) fn summarize_options_from_definition(definition: &PreparedAgent) -> SummarizeOptions {
+    SummarizeOptions {
+        system: definition.prompt.clone(),
+        model: definition.model_policy.model.as_deref().map(ModelRef::new),
+        reasoning: definition
+            .model_policy
+            .reasoning
+            .as_deref()
+            .and_then(ReasoningEffort::parse),
+    }
+}
+
+pub(crate) fn projection_workdir(projection: &Projection) -> Option<PathBuf> {
+    projection.session.workdir.as_ref().map(PathBuf::from)
+}
+
+pub(crate) fn agent_with_bound_skills(
+    mut effective: AgentSpec,
+    resources: &CompiledResourceView,
+) -> AgentSpec {
+    if let Some(section) = resources.skills_prompt_section() {
         let prompt = effective.system_prompt.trim_end();
         effective.system_prompt = if prompt.is_empty() {
             section
@@ -416,6 +559,24 @@ pub(crate) fn effective_agent_for_binding(agent: &AgentSpec, binding: &TurnBindi
         };
     }
     effective
+}
+
+fn agent_roster(binding: &TurnBinding, caller: &str) -> Result<Arc<[AgentDef]>, CoreError> {
+    Ok(binding
+        .spawnable_agents(caller)?
+        .into_iter()
+        .map(agent_definition)
+        .collect::<Vec<_>>()
+        .into())
+}
+
+fn agent_definition(agent: &PreparedAgent) -> AgentDef {
+    AgentDef {
+        name: agent.stable_id.as_str().to_string(),
+        description: agent.description.clone(),
+        category: agent.model_policy.category.clone(),
+        mode: agent.role.selector_mode().to_string(),
+    }
 }
 
 pub(crate) fn session_workdir(agent: &AgentSpec, projection: &Projection) -> PathBuf {

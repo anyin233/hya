@@ -1,33 +1,25 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use hya_core::AgentSpec;
-use hya_proto::{ModelRef, SessionId};
+use hya_core::{
+    AgentSpec, PromptEnv, discover_context_files, render_environment_and_context, today,
+};
+use hya_proto::SessionId;
 use serde_json::Value;
 
 use crate::ServerState;
 
-use super::agent_catalog::AgentEntry;
-
-pub(super) fn apply_agent_entry(
-    agent: &mut AgentSpec,
-    entry: &AgentEntry,
-    active_model: &ModelRef,
-    config: &Value,
-) {
-    if let Some(prompt) = &entry.prompt {
-        agent.system_prompt = prompt.clone();
-    }
-    if let Some(reasoning) = super::reasoning_options::resolve_reasoning(
-        entry.variant.as_deref(),
-        &entry.options,
-        active_model,
-        config,
-    ) {
-        agent.reasoning = Some(reasoning);
-    }
+/// Request-scoped turn agent: Harness/session identity without guidance overlay.
+///
+/// Guidance is pre-rendered separately and passed into core's one composition
+/// seam; it must not live on [`AgentSpec`].
+pub(in crate::compat) struct SessionTurnAgent {
+    pub agent: AgentSpec,
+    /// Immutable pre-rendered reference guidance for this turn, if any.
+    pub guidance: Option<Arc<str>>,
 }
 
-pub(in crate::compat) async fn agent_with_guidance(st: &ServerState) -> AgentSpec {
+pub(in crate::compat) async fn agent_with_guidance(st: &ServerState) -> SessionTurnAgent {
     let workdir = super::location::workdir(st);
     agent_with_guidance_at(st, &workdir).await
 }
@@ -35,21 +27,13 @@ pub(in crate::compat) async fn agent_with_guidance(st: &ServerState) -> AgentSpe
 pub(in crate::compat) async fn agent_with_guidance_at(
     st: &ServerState,
     workdir: &Path,
-) -> AgentSpec {
+) -> SessionTurnAgent {
     let mut agent = (*st.agent).clone();
     agent.workdir = workdir.to_path_buf();
-    let config = super::reasoning_options::load_compat_config(workdir);
-    if let Some(entry) = super::agent_catalog::list(workdir, st)
-        .into_iter()
-        .find(|entry| entry.name.as_str() == agent.name.as_str())
-    {
-        let active_model = agent.model.clone();
-        apply_agent_entry(&mut agent, &entry, &active_model, &config);
-    }
-    if let Some(guidance) = guidance_at(st, workdir).await {
-        agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
-    }
-    agent
+    // Bundle is the sole agent definition authority for prompt/reasoning.
+    // Do not overlay legacy disk agent file prompt/reasoning here.
+    let guidance = guidance_at(st, workdir).await;
+    SessionTurnAgent { agent, guidance }
 }
 
 pub(in crate::compat) async fn session_workdir(st: &ServerState, session: SessionId) -> PathBuf {
@@ -64,10 +48,12 @@ pub(in crate::compat) async fn session_workdir(st: &ServerState, session: Sessio
 
 // Run a turn under the session's switched agent, not the server default (the
 // engine already resolves the model per session; this overrides agent identity).
+//
+// Pre-renders reference guidance once for the turn; does not put it on AgentSpec.
 pub(in crate::compat) async fn session_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
-) -> AgentSpec {
+) -> SessionTurnAgent {
     let Ok(projection) = st.engine.store().read_projection(session).await else {
         return agent_with_guidance(st).await;
     };
@@ -84,23 +70,17 @@ pub(in crate::compat) async fn session_agent_with_guidance(
         .agent
         .clone()
         .unwrap_or_else(|| agent.name.clone());
+    agent.name = active_name;
+    // Session model is applied by the engine from projection; AgentSpec.model
+    // remains the server default fallback for routes that read it before bind.
     let active_model = projection
         .session
         .model
         .clone()
         .unwrap_or_else(|| agent.model.clone());
-    agent.name = active_name.clone();
-    let config = super::reasoning_options::load_compat_config(&workdir);
-    if let Some(entry) = super::agent_catalog::list(&workdir, st)
-        .into_iter()
-        .find(|entry| entry.name.as_str() == active_name.as_str())
-    {
-        apply_agent_entry(&mut agent, &entry, &active_model, &config);
-    }
-    if let Some(guidance) = guidance_at(st, &workdir).await {
-        agent.system_prompt = format!("{}\n\n{}", agent.system_prompt.trim_end(), guidance);
-    }
-    agent
+    agent.model = active_model;
+    let guidance = guidance_at(st, &workdir).await;
+    SessionTurnAgent { agent, guidance }
 }
 
 pub(in crate::compat) async fn list(st: &ServerState) -> Vec<Value> {
@@ -141,7 +121,38 @@ pub(in crate::compat) async fn external_directories_at(
         .collect()
 }
 
-async fn guidance_at(st: &ServerState, workdir: &Path) -> Option<String> {
+/// Pre-render request-scoped Harness project guidance + described references.
+///
+/// Discovers current workdir `AGENTS.md` once (parent→child), renders Environment
+/// and project-context separators via core prompt helpers, then appends sorted
+/// reference guidance. Result is immutable for the turn — core receives only
+/// this text, never paths/parser/raw files.
+async fn guidance_at(st: &ServerState, workdir: &Path) -> Option<Arc<str>> {
+    let env = PromptEnv {
+        cwd: workdir.to_string_lossy().into_owned(),
+        platform: std::env::consts::OS.to_string(),
+        date: today(),
+    };
+    let context = discover_context_files(workdir);
+    let project = render_environment_and_context(&env, &context);
+    let references = render_reference_guidance(st, workdir).await;
+
+    let text = match references {
+        Some(refs) if !project.is_empty() => format!("{project}\n\n{refs}"),
+        Some(refs) => refs,
+        None if !project.is_empty() => project,
+        None => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(Arc::<str>::from(text))
+    }
+}
+
+/// Sorted described project references (prior in-process shape and separators).
+async fn render_reference_guidance(st: &ServerState, workdir: &Path) -> Option<String> {
     let mut references: Vec<_> = list_at(st, workdir)
         .await
         .into_iter()

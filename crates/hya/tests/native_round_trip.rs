@@ -17,7 +17,6 @@ async fn native_turn_opens_no_socket() {
         db: String::new(),
         yolo: true,
         default_agent: None,
-        include_global_agents: false,
         force_offline: true,
     })
     .await

@@ -5,11 +5,137 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use hya_proto::{ToolName, ToolSchema};
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_bundle::{
+    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+};
+use hya_core::RuntimeRegistry;
+use hya_proto::{AgentName, ToolName, ToolSchema};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolRegistry};
 use serde_json::{Value, json};
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<BundleCatalog> {
+    let bundle = PreparedBundle {
+        format_version: 1,
+        identity: BundleIdentity {
+            id: "hya/test".to_string(),
+            version: "0.0.0".to_string(),
+            publisher: "hya-tests".to_string(),
+        },
+        origin: BundleOrigin::Builtin,
+        immutable: true,
+        digest: "test-only".to_string(),
+        agents: agents
+            .iter()
+            .map(|(stable_id, role, can_spawn)| PreparedAgent {
+                local_id: (*stable_id).to_string(),
+                stable_id: AgentName::new(*stable_id),
+                description: None,
+                role: *role,
+                color: None,
+                prompt: Some(format!("{stable_id} prompt")),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                harness_access: HarnessAccess::Full,
+                resource_view: ResourceView::default(),
+                can_spawn: can_spawn
+                    .iter()
+                    .map(|agent| AgentName::new(*agent))
+                    .collect(),
+                hook_refs: Vec::new(),
+            })
+            .collect(),
+        tools: Vec::new(),
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        hooks: Vec::new(),
+        extensions: Vec::new(),
+    };
+    let catalog = BundleCatalog::from_prepared(&[bundle]);
+    let Ok(catalog) = catalog else {
+        panic!("test catalog must be valid: {catalog:?}");
+    };
+    Arc::new(catalog)
+}
+
+/// Default runtime for root/main turn integration fixtures.
+///
+/// Includes the common main stable IDs with `prompt = None` so root turns keep
+/// the already composed base system prompt (AGENTS/context), matching build/
+/// plan/general native Bundle semantics.
+pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
+    let bundle = PreparedBundle {
+        format_version: 1,
+        identity: BundleIdentity {
+            id: "hya/test-runtime".to_string(),
+            version: "0.0.0".to_string(),
+            publisher: "hya-tests".to_string(),
+        },
+        origin: BundleOrigin::Builtin,
+        immutable: true,
+        digest: "test-only".to_string(),
+        agents: {
+            let ordinary = ["build", "plan", "general"].map(|stable_id| PreparedAgent {
+                local_id: stable_id.to_string(),
+                stable_id: AgentName::new(stable_id),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: None,
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                harness_access: HarnessAccess::Full,
+                resource_view: ResourceView::default(),
+                can_spawn: vec![
+                    AgentName::new("build"),
+                    AgentName::new("plan"),
+                    AgentName::new("general"),
+                ],
+                hook_refs: Vec::new(),
+            });
+            // Fixed Harness system agents: present for exact lookup, not in can_spawn.
+            let system = ["compaction", "title", "summary"].map(|stable_id| PreparedAgent {
+                local_id: stable_id.to_string(),
+                stable_id: AgentName::new(stable_id),
+                description: None,
+                role: AgentRole::Subagent,
+                color: None,
+                prompt: Some(format!("{stable_id} prompt")),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                harness_access: HarnessAccess::Full,
+                resource_view: ResourceView::default(),
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
+            });
+            ordinary.into_iter().chain(system).collect()
+        },
+        tools: Vec::new(),
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        hooks: Vec::new(),
+        extensions: Vec::new(),
+    };
+    let catalog = BundleCatalog::from_prepared(&[bundle]);
+    let Ok(catalog) = catalog else {
+        panic!("test runtime catalog must be valid: {catalog:?}");
+    };
+    Arc::new(RuntimeRegistry::from_snapshot(
+        tools.snapshot(),
+        Arc::new(catalog),
+    ))
+}
 
 pub struct TestDir {
     path: PathBuf,

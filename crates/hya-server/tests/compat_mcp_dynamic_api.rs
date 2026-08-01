@@ -3,6 +3,8 @@
 #[path = "support/mcp.rs"]
 mod mcp_support;
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,7 +64,13 @@ async fn state() -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, permission, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

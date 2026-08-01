@@ -1,13 +1,18 @@
-# 0.34.7
+# 0.34.8
 
-- Recover durable resident actors before spawn/mail readiness by atomically
-  advancing a TTL-free actor epoch, aborting old running work, and rescheduling
-  only committed queued messages.
-- Fence resident event, tool-result, mailbox, child, and spawn transitions with
-  the current actor claim so late old-incarnation commits fail typed-closed and
-  never advance replay or live projection state.
-- Bind resident-originated durable admissions to actor identity and epoch, then
-  converge takeover, cancellation, completion, and refund on idempotent
-  terminal transitions without crediting a fresh governor after restart.
-- Persist one minimal resident-work-started marker and durable inbox cursor so
-  repeated recovery is projection-stable and does not retry in-flight effects.
+- Embed deterministic build-time native builtin `AgentBundle`s and load them at
+  startup as the sole built-in agent-definition authority.
+- Publish one immutable `BundleCatalog` per `RuntimeSnapshot` / `TurnBinding`
+  with exact stable IDs, fail-closed explicit unknown and `can_spawn` checks,
+  role-only TUI visibility, fixed-system exact lookup, and historical replay of
+  exact agent-name bytes.
+- Compile `none` / `basic` / `full` resource views that share allow / deny /
+  alias / namespace schema and dispatch while `PermissionPlane` and plugins
+  remain authority.
+- Compose request-scoped inline overlays and guidance without catalog mutation;
+  ship built-in authoring docs, example, and skill for prepare-valid packages
+  only (user-installed executable Bundle/plugin code is trusted same-UID code
+  and is not sandboxed; malicious code is not isolated; no hyabundle install,
+  CLI, runner, or external execution).
+- Remove old JSON / JSONC / Markdown agent discovery and files with no migration
+  or compatibility loader.

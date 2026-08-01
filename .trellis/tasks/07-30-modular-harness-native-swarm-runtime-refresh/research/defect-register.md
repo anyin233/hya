@@ -45,10 +45,14 @@ Current-cycle owner disposition:
 - `MSR-TRU-001` is an accepted trust-boundary fact. Explicitly installed
   same-UID code is trusted and malicious-plugin isolation is not promised.
 - `MSR-BDL-001` is native-only. There is no old-agent adapter, synthetic
-  representation, agent-file execution, or old-source Bundle CLI behavior. Built-ins
-  migrate to native AgentBundles and the old parser/discovery/execution branch
-  is deleted atomically in `0.34.8`. Build-time embedded immutable built-ins
-  avoid both an installer bootstrap cycle and a temporary old-file detector.
+  representation, agent-file execution, or old-source Bundle CLI behavior.
+  Built-ins migrate to native AgentBundles and the old
+  parser/discovery/execution branch is deleted in the same `0.34.8` cutover.
+  **Commit 2 WIP (this worktree):** focused cutover contracts are
+  source+test verified; local workspace/TUI/bin/zero-INET and product goldens
+  are `LOCAL-GATES-GREEN`; exact staging, commit, push, and remote CI remain
+  `PENDING-COMMIT-PUSH-REMOTE-CI` (unclaimed). Build-time
+  embedded immutable built-ins avoid installer bootstrap and old-file detectors.
 
 ## Evidence and severity rules
 
@@ -98,16 +102,16 @@ Gate abbreviations:
 | `MSR-MCP-002` | P1 | `target-gap` | MCP state model | MCP/plugin resources have no common desired/observed/effective activation model. | TDD, FAULT |
 | `MSR-PLG-001` | P1 | `source-confirmed` | plugin restart | Plugin respawn discards the new initialize result while retaining initial declarations. | CHAR, TDD, FAULT |
 | `MSR-TRU-001` | P2 | `target-gap` | trust boundary | Same-UID child processes are not an untrusted-code containment boundary; trusted-only is the accepted current-cycle scope. | documentation, protocol/crash TDD |
-| `MSR-POL-001` | P1 | `source-confirmed` | agent policy | Parsed agent permission/options/request metadata is not fully represented in effective `AgentSpec`. | CHAR, TDD |
-| `MSR-POL-002` | P1 | `source-confirmed` | skill policy | Skill `allowed-tools` and `model` are parsed but not enforced in the prompt/tool execution view. | CHAR, TDD |
-| `MSR-BDL-001` | P1 | `target-gap` | AgentBundle | No first-class immutable Markdown/JS/Rust bundle or locked dependency graph exists. | TDD, FAULT |
+| `MSR-POL-001` | P1 | `source-confirmed`; `0.34.8` WIP typed-reject of unsupported AgentBundle v1 fields `FOCUSED-VERIFIED`, full product goldens `LOCAL-GATES-GREEN`, exact staging/commit/push/remote CI `PENDING-COMMIT-PUSH-REMOTE-CI` | agent policy | Pre-cutover parsers retained inert policy metadata; native v1 `deny_unknown_fields` / unsupported-feature reject replaces silent AgentBundle ignore. | CHAR, TDD, full gates |
+| `MSR-POL-002` | P1 | `source-confirmed`; **not** an AgentBundle v1 GA blocker | skill policy | Global SKILL.md `allowed-tools`/`model`/`license` still parsed in skill_catalog without execution enforcement; separate from Bundle cutover. | CHAR, TDD (skill plane; out of Bundle GA) |
+| `MSR-BDL-001` | P1 | `target-gap` → `0.34.8` Commit 2 WIP `FOCUSED-VERIFIED`, local `LOCAL-GATES-GREEN`, `PENDING-COMMIT-PUSH-REMOTE-CI` | AgentBundle | Native prepared catalog + TurnBinding cutover landed in WIP (built-ins, can_spawn, resource view, guidance, legacy deletion); distribution/external execution remain later patches. | TDD focused done; local gates green; commit/push/remote CI open |
 | `MSR-CAP-001` | P1 | `benchmark-unconfirmed` | 100/256 certification | Exact 100-active/156-durable-queue/257-overload behavior has not been certified. | CHAR, BENCH, FAULT |
 | `MSR-UPD-001` | P1 | `target-gap` | self-update | Existing installer/release protections do not form an independent verifier, anti-rollback authority, or atomic immutable selector. | TDD, FAULT |
 | `MSR-EVT-001` | P2 | `source-inferred` | event delivery | Durable envelopes use store sequence numbers while transient live envelopes use sequence zero; an observable ordering defect is not yet proven. | CHAR, FAULT |
 | `MSR-STO-001` | P2 | `benchmark-unconfirmed` | SQLite/replay | Full replay and current append/pool settings may constrain the workload, but no bottleneck is established. | BENCH, FAULT |
 | `MSR-DOC-001` | P2 | `source-confirmed` | ADR drift | ADR 0007/0008 specify next-Turn snapshots that current HEAD does not implement. | CHAR, TDD |
 | `MSR-REL-001` | P3 | `source-confirmed` | version/release state | Version and changelog are `0.34.2`, while checkout tag refs do not identify a `0.34.2` release. | CHAR, owner gate |
-| `MSR-LEG-001` | P3 | `target-gap` | obsolete authority bypasses | Mutable registry and split admission/reconciliation paths need evidence-gated removal in their owning patches; old agent-file code is removed atomically in `0.34.8`, not later. | CHAR, TDD, FAULT |
+| `MSR-LEG-001` | P3 | `target-gap`; agent-file authority removal `0.34.8` WIP `FOCUSED-VERIFIED` | obsolete authority bypasses | Mutable registry and split admission/reconciliation paths still need evidence-gated removal in their owning patches; old agent-file modules and tracked `.hya/agents` are deleted in this Commit 2 WIP (local gates green; commit/push/remote CI still open). | CHAR, TDD, FAULT |
 
 ## P0 details
 
@@ -509,89 +513,80 @@ Gate abbreviations:
 
 ### `MSR-POL-001` — agent policy metadata is only partially effective
 
-- **Evidence status:** `source-confirmed`.
-- **Source and symbols:**
-  `crates/hya-server/src/compat/agent_catalog.rs::AgentEntry` carries model,
-  category, resident, options, request headers/body, and permissions.
-  `crates/hya-server/src/compat/subagent_resolve.rs::resolve_subagent` and
-  `crates/hya-server/src/compat/reference.rs::apply_agent_entry` apply the
-  supported subset into `crates/hya-core/src/engine.rs::AgentSpec`, whose
-  fields are name, model, system prompt, workdir, and reasoning.
-- **Trigger:** a user expects parsed permissions/options/request customization
-  to constrain a spawned agent.
-- **Impact:** accepted configuration can be silently compatibility-only rather
-  than an enforced capability/provider request view.
-- **Current protection:** model/category/resident/prompt/reasoning behavior is
-  applied; reference tests cover parts of variant/reasoning resolution.
-- **Missing invariant:** generation compilation either represents and enforces
-  each supported field in the immutable binding or rejects/diagnoses it as
-  unsupported; no silent policy metadata.
-- **Dependency / owner phase:** R3 binding model, R7 policy/bundle enforcement.
-- **Required gates:** CHAR maps every parsed field to an effective consumer or
-  explicit diagnostic; TDD covers schema filtering, direct dispatch, model
-  selection, and provider request shaping for supported fields.
+- **Evidence status:** historical `source-confirmed` on pre-cutover parsers;
+  `0.34.8` Commit 2 WIP: unsupported AgentBundle v1 fields are
+  **typed-reject verified** (`deny_unknown_fields`,
+  `invalid_schema_references_and_executable_features_fail_typed`); full product
+  goldens are `LOCAL-GATES-GREEN`; exact staging, commit, push, and remote CI
+  remain `PENDING-COMMIT-PUSH-REMOTE-CI` (unclaimed).
+- **Historical source (deleted):** `compat::agent_catalog::AgentEntry` and
+  `subagent_resolve` retained inert options/headers/body/permissions.
+- **Current source:** `hya-bundle` prepared IR rejects unknown/unsupported
+  AgentBundle fields; effective runtime fields flow through prepared agents +
+  `AgentSpec` (name/model/prompt/workdir/reasoning) and compiled resource views.
+- **Trigger:** a user expects arbitrary pre-cutover agent-file policy keys to
+  constrain a spawned agent silently.
+- **Impact (historical):** accepted configuration could be compatibility-only.
+- **Current protection:** native v1 does not silently ignore unsupported Bundle
+  fields; model/prompt/reasoning/spawn lifecycle and resource views have focused
+  tests (see matrix).
+- **Missing invariant for release:** exact staging, commit, push, and remote CI
+  for Commit 2; any future typed permission-overlay consumer remains a later
+  feature.
+- **Dependency / owner phase:** `0.34.8` cutover WIP; later patches for
+  distribution/external execution.
+- **Required gates:** focused typed-reject + cutover suites (present); local
+  gates green (`LOCAL-GATES-GREEN`); commit/push/remote CI still open
+  (`PENDING-COMMIT-PUSH-REMOTE-CI`).
 
 ### `MSR-POL-002` — skill policy metadata is parsed but not enforced
 
-- **Evidence status:** `source-confirmed`.
+- **Evidence status:** `source-confirmed` on the **global skill catalog**, not
+  on AgentBundle v1. **Must not** be labeled a Bundle GA blocker for `0.34.8`.
 - **Source and symbols:**
-  `crates/hya-tool/src/skill_catalog.rs::{ParsedSkill,parse_skill}` parses and
-  retains `allowed_tools` and `model`;
-  `crates/hya-tool/src/skill_catalog.rs::skills_section` emits only names and
-  descriptions into
-  `crates/hya-core/src/engine.rs::effective_agent_for_projection`. Current
-  prompt/tool dispatch does not consume the retained policy fields as an
-  effective restriction.
-- **Trigger:** an activated skill declares a model restriction or tool
+  `crates/hya-tool/src/skill_catalog.rs::{SkillFrontmatter,parse_skill}` parses
+  and retains `allowed_tools` and `model` (and `license`);
+  `skills_section` emits only names/descriptions into the skill index path.
+  Current prompt/tool dispatch does not consume those retained skill policy
+  fields as an effective restriction.
+- **Trigger:** an activated global skill declares a model restriction or tool
   allowlist.
-- **Impact:** the model can see or directly invoke authority outside the
-  declared skill policy.
-- **Current protection:** malformed/disabled skills are skipped; discovery is
-  deterministic by sorted paths and first-name wins; tool permission checks
-  still apply globally.
-- **Missing invariant:** supported bundle/agent/skill views are narrowing
-  inputs to Harness config/current `PermissionPlane`, enforced consistently in
-  provider-visible schemas and direct invocation.
-- **Dependency / owner phase:** `0.34.5` structural binding, `0.34.8` native
-  built-in cutover, and `0.34.10`/`0.34.11` external execution.
-- **Required gates:** CHAR proves current parse/use distinction; TDD hides and
-  rejects a forbidden tool/model, including direct invocation that bypasses
-  model-visible schema filtering.
+- **Impact:** skill-declared allowlists/models are not execution fences.
+- **Current protection:** malformed/disabled skills skipped; global
+  PermissionPlane still applies to tool calls.
+- **Missing invariant:** skill-plane enforcement or typed reject of those
+  SKILL.md fields (separate track from AgentBundle cutover).
+- **Dependency / owner phase:** skill plane / later binding work — **not**
+  `0.34.8` Bundle GA.
+- **Required gates:** skill-plane CHAR/TDD; do not gate Bundle cutover on this.
 
 ### `MSR-BDL-001` — no first-class Markdown/JS/Rust `AgentBundle`
 
-- **Evidence status:** `target-gap`.
-- **Source and symbols:** `crates/hya-core/src/engine.rs::AgentSpec` has no
-  bundle identity, dependency graph, artifact identity, capability ceiling, or
-  trust state. Existing plugin mechanisms in
-  `crates/hya-plugin::{host,client}` are process extensions, not per-agent
-  bundle manifests.
-- **Trigger:** an agent definition depends on Markdown prompt/data plus a JS or
-  Rust executable artifact.
-- **Impact:** dependency integrity, provenance, activation order, capability
-  intersection, and rollback cannot be bound to the agent as one immutable
-  unit.
-- **Current protection:** Markdown agent/skill discovery and out-of-process
-  plugin protocols provide reusable adapters; Rust extensions are already kept
-  out of process by ADR 0009.
-- **Missing invariant:** a flat
-  `identity/extensions/resources/agents[]` manifest and read-only catalog use
-  stable namespaces, visibility `role`, native `spawn_lifecycle`, fail-closed resolution,
-  `none|basic|full` narrowing views, qualified hooks, default-deny
-  `can_spawn`, and current `PermissionPlane` as the sole permission authority.
-- **Dependency / owner phase:** `0.34.8` owns the atomic built-in cutover,
-  `0.34.9` owns distribution/registry, `0.34.10` owns owner-gated external
-  main/transient execution, and `0.34.11` owns resident integration.
-- **Required gates:** build-time preparation/catalog/resolver TDD covers
-  reproducible embedded bytes/index, deterministic identity,
-  main/subagent visibility and transient/resident spawn-lifecycle rules,
-  built-in native Bundle cutover, deletion of old agent-file loaders,
-  alias/local/global
-  resolution, collision/ambiguity, resource views, permission narrowing,
-  boot-without-install, and stable-ID/event/replay fixtures. Future external
-  execution TDD/FAULT covers native
-  spawn/send/wait, admission/OperationId, crash/cancel/restart, runnable
-  main+transient+resident example, and the authoring skill.
+- **Evidence status:** historical `target-gap`; **`0.34.8` Commit 2 WIP focused
+  cutover `FOCUSED-VERIFIED`**, local **`LOCAL-GATES-GREEN`**, exact staging/
+  commit/push/remote CI **`PENDING-COMMIT-PUSH-REMOTE-CI`** (unclaimed).
+  Distribution (`.hyabundle`) and external JS/Rust runners remain later
+  patches (`0.34.9+` / `0.34.10+`).
+- **Current source and symbols:** `hya-bundle` prepare/catalog IR;
+  `RuntimeSnapshot`/`TurnBinding` single `Arc<BundleCatalog>`;
+  `hya_app::runtime::builtin_catalog`; compiled resource views; deleted legacy
+  agent-file modules and tracked `.hya/agents`. Focused tests indexed in
+  `research/agent-capability-parity-matrix.md` and `implement.md` §18.3.
+- **Trigger:** product requires immutable prepared agent definitions without
+  dual catalog authority.
+- **Impact (historical):** no first-class bundle unit; cutover WIP closes the
+  built-in native path only.
+- **Current protection:** build-time embedded prepared built-ins; fail-closed
+  decode; `can_spawn`; resource view narrowing; guidance composition; docs
+  example + authoring skill (prepare-valid only).
+- **Still open for this defect's full original scope:** package distribution,
+  external runners, exact staging/commit/push/remote CI, version `0.34.8`
+  publish (local gates already green; no remote/GA claim).
+- **Dependency / owner phase:** `0.34.8` WIP cutover (this worktree);
+  `0.34.9` distribution; `0.34.10`/`0.34.11` external/resident execution.
+- **Required gates:** focused cutover TDD (present); local workspace/TUI/CI
+  green (`LOCAL-GATES-GREEN`); exact staging/commit/push/remote CI open
+  (`PENDING-COMMIT-PUSH-REMOTE-CI`); later FAULT for external runners.
 
 ### `MSR-CAP-001` — 100/256 capacity contract is uncertified
 

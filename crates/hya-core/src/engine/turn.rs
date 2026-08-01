@@ -1,20 +1,24 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage};
 use hya_store::ActorClaim;
-use hya_tool::{Action, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
+use hya_tool::{Action, AgentDef, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{
-    AgentSpec, SessionEngine, authorize_tool_call, effective_agent_for_binding, session_workdir,
+    AgentSpec, FixedSystemAgent, SessionEngine, agent_roster, agent_with_bound_skills,
+    agent_with_guidance_layer, authorize_tool_call, effective_agent_for_binding,
+    fixed_system_agent, session_workdir, summarize_options_from_definition,
 };
-use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
     ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+use crate::runtime_registry::CompiledResourceView;
+use crate::{AgentResourcePolicy, TurnBinding};
 
 mod messages;
 
@@ -22,9 +26,13 @@ use messages::{projection_to_messages, request_from_messages};
 
 struct TurnExecution<'a> {
     binding: &'a TurnBinding,
+    resources: &'a CompiledResourceView,
+    agents: &'a Arc<[AgentDef]>,
     cancel: &'a CancellationToken,
     external_dirs: &'a [PathBuf],
     actor_claim: Option<&'a ActorClaim>,
+    /// Immutable triggering-turn guidance scoped into child SpawnerPlane.
+    guidance: Option<Arc<str>>,
 }
 
 impl SessionEngine {
@@ -34,7 +42,7 @@ impl SessionEngine {
         agent: &AgentSpec,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, &[], None)
+        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, (&[], None), None, None)
             .await
     }
 
@@ -45,8 +53,15 @@ impl SessionEngine {
         claim: &ActorClaim,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, &[], Some(claim))
-            .await
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (&[], None),
+            Some(claim),
+            None,
+        )
+        .await
     }
 
     pub async fn run_turn_with_external_dirs(
@@ -56,8 +71,80 @@ impl SessionEngine {
         cancel: CancellationToken,
         external_dirs: &[PathBuf],
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs_and_claim(session, agent, cancel, external_dirs, None)
-            .await
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (external_dirs, None),
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Run a turn with optional external directories and request-scoped guidance.
+    ///
+    /// `guidance` is pre-rendered by the caller and composed once after Bundle
+    /// agent_base resolution (and before skill prompt material). Absence is an
+    /// empty layer. Existing [`Self::run_turn`] / [`Self::run_turn_with_external_dirs`]
+    /// callers stay source-compatible with no guidance.
+    pub async fn run_turn_with_external_dirs_and_guidance(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        cancel: CancellationToken,
+        external_dirs: &[PathBuf],
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (external_dirs, guidance),
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn run_resolved_turn(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        agents: Arc<[AgentDef]>,
+        resources: AgentResourcePolicy,
+        cancel: CancellationToken,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (&[], guidance),
+            None,
+            Some((agents, resources)),
+        )
+        .await
+    }
+
+    pub(crate) async fn run_resolved_turn_for_actor(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        resolved: (Arc<[AgentDef]>, AgentResourcePolicy),
+        claim: &ActorClaim,
+        cancel: CancellationToken,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            cancel,
+            (&[], guidance),
+            Some(claim),
+            Some(resolved),
+        )
+        .await
     }
 
     async fn run_turn_with_external_dirs_and_claim(
@@ -65,13 +152,41 @@ impl SessionEngine {
         session: SessionId,
         agent: &AgentSpec,
         cancel: CancellationToken,
-        external_dirs: &[PathBuf],
+        request_context: (&[PathBuf], Option<Arc<str>>),
         actor_claim: Option<&ActorClaim>,
+        resolved: Option<(Arc<[AgentDef]>, AgentResourcePolicy)>,
     ) -> Result<FinishReason, CoreError> {
+        let (external_dirs, guidance) = request_context;
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
         let binding = self.runtime.bind_turn(&workdir)?;
+        let guidance_text = guidance.as_deref();
+        let (agent, agents, resources) = match resolved {
+            Some((agents, policy)) => {
+                let resources = binding.compile_agent_resources(&policy)?;
+                // Resolved activation reuses caller-owned agent_base; optional
+                // inherited guidance composed once, then skills.
+                let agent = agent_with_guidance_layer(agent.clone(), guidance_text);
+                (
+                    agent_with_bound_skills(agent, resources.as_ref()),
+                    agents,
+                    resources,
+                )
+            }
+            None => {
+                let stable_id = projection
+                    .session
+                    .agent
+                    .as_ref()
+                    .unwrap_or(&agent.name)
+                    .as_str();
+                let (agent, resources) =
+                    effective_agent_for_binding(agent, stable_id, &binding, guidance_text)?;
+                let agents = agent_roster(&binding, stable_id)?;
+                (agent, agents, resources)
+            }
+        };
         let message = MessageId::new();
         self.emit_for_actor(
             actor_claim,
@@ -98,12 +213,16 @@ impl SessionEngine {
             .run_turn_rounds(
                 session,
                 message,
-                agent,
+                &agent,
                 TurnExecution {
                     binding: &binding,
+                    resources: &resources,
+                    agents: &agents,
                     cancel: &cancel,
                     external_dirs,
                     actor_claim,
+                    // Same Arc for nested spawn scope; no re-discovery.
+                    guidance: guidance.clone(),
                 },
             )
             .await;
@@ -144,13 +263,15 @@ impl SessionEngine {
     ) -> Result<FinishReason, CoreError> {
         let TurnExecution {
             binding,
+            resources,
+            agents,
             cancel,
             external_dirs,
             actor_claim,
+            guidance,
         } = execution;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
-        let agent = effective_agent_for_binding(agent, binding);
         // Depth in the subagent tree, derived from the parent chain. Only subagents
         // (depth > 0) are subject to the streaming-concurrency semaphore; the
         // interactive lead (depth 0) never waits behind background subagents.
@@ -181,10 +302,16 @@ impl SessionEngine {
             }
 
             let mut projection = self.store.read_projection(session).await?;
-            let mut messages = projection_to_messages(&agent, &projection);
+            let mut messages = projection_to_messages(agent, &projection);
             // Context protection: prefer provider `/responses/compact` when the
             // route supports it; otherwise fall back to the local model summarizer.
             if crate::compaction::needs_compaction(&messages, &self.compaction) {
+                // Exact-resolve fixed Compaction once before any compact provider
+                // call (native or local). Missing definition fails closed here.
+                // Reuse the turn's captured binding; never re-bind or open a second catalog.
+                let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
+                let compaction_prompt = definition.prompt.as_deref();
+                // Native compact resolves the active session provider/model route.
                 let model = projection
                     .session
                     .model
@@ -192,7 +319,7 @@ impl SessionEngine {
                     .unwrap_or_else(|| agent.model.clone());
                 match self
                     .providers
-                    .compact_if_supported(&model, &messages, Some(agent.system_prompt.as_str()))
+                    .compact_if_supported(&model, &messages, compaction_prompt)
                     .await
                 {
                     Ok(Some(window)) => {
@@ -208,35 +335,43 @@ impl SessionEngine {
                         };
                         if injected.is_ok() {
                             projection = self.store.read_projection(session).await?;
-                            messages = projection_to_messages(&agent, &projection);
+                            messages = projection_to_messages(agent, &projection);
                         }
                     }
                     Ok(None) | Err(_) => {
-                        if let Some(summarizer) = &self.summarizer
-                            && let Ok(compacted) = crate::compaction::compact_with(
+                        if let Some(summarizer) = &self.summarizer {
+                            // Local fallback reuses the same exact-resolved definition
+                            // (Bundle model/reasoning overrides apply here only).
+                            let options = summarize_options_from_definition(definition);
+                            // Provider failures stay soft (prior behavior); missing
+                            // definition already failed closed above.
+                            if let Ok(compacted) = crate::compaction::compact_with(
                                 messages.clone(),
                                 &self.compaction,
                                 summarizer.as_ref(),
+                                options,
                             )
                             .await
-                        {
-                            messages = compacted;
+                            {
+                                messages = compacted;
+                            }
                         }
                     }
                 }
             } else if let Some(summarizer) = &self.summarizer {
-                // Under threshold, compact_with is a no-op; keep prior call sites' shape.
+                // Under threshold, compact_with is a no-op; no fixed definition required.
                 if let Ok(compacted) = crate::compaction::compact_with(
                     messages.clone(),
                     &self.compaction,
                     summarizer.as_ref(),
+                    crate::compaction::SummarizeOptions::default(),
                 )
                 .await
                 {
                     messages = compacted;
                 }
             }
-            let request = request_from_messages(&agent, &projection, messages, binding);
+            let request = request_from_messages(agent, &projection, messages, resources);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {
@@ -343,7 +478,7 @@ impl SessionEngine {
                 }
                 let input_for_after = self.hooks.as_ref().map(|_| tc.input.clone());
                 let started = std::time::Instant::now();
-                let result = match binding.resolve_tool(&tc.name) {
+                let result = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => match authorize_tool_call(
                         &resolved,
                         &tc.input,
@@ -357,7 +492,11 @@ impl SessionEngine {
                             let ctx = ToolCtx {
                                 permission,
                                 interaction: self.interaction.for_session(session),
-                                spawner: self.spawner.for_session(session),
+                                spawner: self.spawner.for_session_with_agents_and_guidance(
+                                    session,
+                                    agents.clone(),
+                                    guidance.clone(),
+                                ),
                                 operation: hya_tool::ToolOperation::from_tool_call(tc.call)
                                     .with_actor_claim(actor_claim.copied()),
                                 mailbox: self
@@ -366,8 +505,8 @@ impl SessionEngine {
                                 session: Some(session),
                                 parent_session: projection.session.parent,
                                 todo: self.todo.clone(),
-                                skills: binding.skill_plane(),
-                                agents: self.agents.clone(),
+                                skills: resources.skill_plane(),
+                                agents: agents.clone(),
                                 websearch: self.websearch.clone(),
                                 lsp: self.lsp.clone(),
                                 formatter: self.formatter.clone(),

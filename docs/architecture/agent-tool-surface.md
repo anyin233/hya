@@ -459,19 +459,28 @@ Tool errors are categorized as `input`, `permission`, `io`, `json`,
 ## Runtime planes and extensions
 
 All builtin schemas are registered before runtime capabilities are considered.
-`ToolCtx` carries permission, interaction, spawner, mailbox, todo, skills,
-agent catalog, web search, LSP, formatter, workdir, session, and cancellation
-planes/resources.
-([crates/hya-tool/src/tool.rs:59-74](../../crates/hya-tool/src/tool.rs#L59-L74),
+`ToolCtx` carries permission, interaction, spawner, mailbox, todo, skills, web
+search, LSP, formatter, workdir, session, and cancellation planes/resources,
+plus an immutable caller-reachable `AgentDef` roster derived from the bound
+agent's `can_spawn` reachability (not a mutable agent catalog plane). The
+single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
+application wiring does not replace an agent catalog authority.
+([crates/hya-tool/src/tool.rs:71-88](../../crates/hya-tool/src/tool.rs#L71-L88),
+[crates/hya-tool/src/agents.rs:1-19](../../crates/hya-tool/src/agents.rs#L1-L19),
+[crates/hya-core/src/runtime_registry.rs:18-20](../../crates/hya-core/src/runtime_registry.rs#L18-L20),
+[crates/hya-core/src/runtime_registry.rs:95-96](../../crates/hya-core/src/runtime_registry.rs#L95-L96),
+[crates/hya-core/src/runtime_registry.rs:505-505](../../crates/hya-core/src/runtime_registry.rs#L505-L505),
 [crates/hya-app/src/runtime.rs:462-475](../../crates/hya-app/src/runtime.rs#L462-L475))
 
 A bare `SessionEngine` starts with a disconnected mailbox and default
-interaction, spawner, todo, skill, agent, websearch, formatter, and LSP planes.
-The application replaces the interaction, spawner, mailbox, agent catalog, and
-formatter planes and starts the mailbox service. Consequently, registry
-presence alone does not prove that a plane-backed tool can return useful data;
-for example, mailbox operations report that they are available only inside a
-running team, and LSP reports when no server supports a file type.
+interaction, spawner, todo, skill, websearch, formatter, and LSP planes. The
+application replaces the interaction, spawner, mailbox, and formatter planes
+and starts the mailbox service. Agent discovery for tools uses the immutable
+per-turn `AgentDef` roster from the bound catalog's `can_spawn` set rather than
+an injectable catalog plane. Consequently, registry presence alone does not
+prove that a plane-backed tool can return useful data; for example, mailbox
+operations report that they are available only inside a running team, and LSP
+reports when no server supports a file type.
 ([crates/hya-core/src/engine.rs:68-127](../../crates/hya-core/src/engine.rs#L68-L127),
 [crates/hya-app/src/runtime.rs:489-522](../../crates/hya-app/src/runtime.rs#L489-L522),
 [crates/hya-app/src/runtime.rs:539-542](../../crates/hya-app/src/runtime.rs#L539-L542),

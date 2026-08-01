@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,7 +41,13 @@ async fn direct_shell_runs_command_and_records_tool_part() {
         Mode::Allow,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -130,7 +138,7 @@ async fn direct_shell_authorizes_once_with_call_correlation() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        Arc::new(ToolRegistry::builtins()),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
         permission,
         EventBus::default(),
     ));

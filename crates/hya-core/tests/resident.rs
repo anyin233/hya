@@ -4,6 +4,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,11 +25,19 @@ async fn engine_with(limits: SubagentLimits) -> (Arc<SessionEngine>, AgentSpec) 
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = Arc::new(
-        SessionEngine::new(store, router, tools, perm, EventBus::default())
-            .with_governor(SubagentGovernor::new(limits)),
+        SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(tools),
+            perm,
+            EventBus::default(),
+        )
+        .with_governor(SubagentGovernor::new(limits)),
     );
+    // Catalog-backed id: resident turns exact-resolve session AgentName; "worker"
+    // is a roster handle only and is not a Bundle definition.
     let agent = AgentSpec {
-        name: AgentName::new("worker"),
+        name: AgentName::new("general"),
         model: ModelRef::new("dev"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -52,7 +62,7 @@ async fn make_child(engine: &SessionEngine, root: SessionId) -> SessionId {
     engine
         .create(CreateSession {
             parent: Some(root),
-            agent: AgentName::new("worker"),
+            agent: AgentName::new("general"),
             model: ModelRef::new("dev"),
             workdir: "/tmp".to_string(),
         })
@@ -169,8 +179,14 @@ async fn quiescence_wakes_main_to_synthesize() {
     let supervisor = ResidentSupervisor::start(engine.clone());
 
     // Main-as-actor must be registered so quiescence has someone to wake.
+    // Catalog-derived root roster/resource policy (root session agent is "build").
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let root_agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let root_resources = engine
+        .agent_resource_policy_for_binding(&binding, "build")
+        .unwrap();
     supervisor
-        .ensure_main(root, agent.clone(), None)
+        .ensure_main(root, agent.clone(), None, root_agents, root_resources, None)
         .await
         .unwrap();
 
@@ -261,8 +277,13 @@ async fn message_budget_kill_cancels_the_team() {
     .await;
     let root = make_root(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let root_agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let root_resources = engine
+        .agent_resource_policy_for_binding(&binding, "build")
+        .unwrap();
     supervisor
-        .ensure_main(root, agent.clone(), None)
+        .ensure_main(root, agent.clone(), None, root_agents, root_resources, None)
         .await
         .unwrap();
 

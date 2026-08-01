@@ -55,7 +55,7 @@ fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPl
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter,
-        agents: hya_tool::AgentCatalogPlane::default(),
+        agents: Default::default(),
         workdir,
         cancel: CancellationToken::new(),
     }
