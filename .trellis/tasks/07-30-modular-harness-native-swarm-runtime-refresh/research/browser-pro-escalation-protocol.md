@@ -1380,3 +1380,170 @@ Current RED checkpoint (source-verified / experimentally verified):
 - Legacy disk prompt expectation was removed from that test; no GREEN has been
   implemented yet. Further prompt-composition, child/resident, fixed-system,
   replay/continue GREEN and gates remain pending.
+
+### `CONSULT-2026-08-01-HYABUNDLE-DISTRIBUTION-25`
+
+```text
+consultation_id: CONSULT-2026-08-01-HYABUNDLE-DISTRIBUTION-25
+received_by_fuji1_date_utc: 2026-08-01
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: define the 0.34.9 public/private .hyabundle inspector, safe staging, static-package activation, SQLite registry, lazy runtime publication, and exact CLI boundary
+provenance: MacBook Air coordinator submitted the packet through the in-app Browser; Pro output is advisory evidence and the coordinator corrections below are controlling
+execution_model: gpt-5.6-luna reasoning=max implementation turns edit files; the MacBook Air coordinator / canonical reviewer orchestrates, reviews, verifies, commits, pushes, and monitors CI
+supersedes_current_rule: any current Grok-only implementation wording; historical Grok 402 quota failures remain historical evidence and are not erased
+ruling_scope: 0.34.9 package distribution and registry only; no 0.34.10 runner or private activation
+```
+
+Controlling MacBook Air corrections:
+
+1. Public `.hyabundle` is an unencrypted standard 7z archive identified by
+   magic; private `.hyabundle` is an opaque `HYABNDL\0` v1 envelope. `install`
+   and `info -f` require the exact lowercase suffix, but format detection uses
+   only magic/version.
+2. A public archive has exactly one root `bundle.hya.md` and otherwise only
+   regular files/directories accepted by the existing v1 source contract.
+   Reuse the existing source/preparer; do not add a second manifest, DTO, or
+   loader.
+3. Pure static public agents, prompts, skills, and resources may be prepared,
+   published into the single `BundleCatalog`, and become callable by new
+   turns. JS/Rust runners and executable tool/MCP/hook references are typed
+   unsupported and must not spawn, open network, register plugins, or register
+   MCP clients.
+4. Private v1 performs only structural header/length/target/protocol/nonce/
+   tag-layout/ciphertext-digest checks. `info -f` must state
+   `authentication: unverified`, `payload: opaque`, and
+   `activation: unsupported-in-0.34.9`; install returns
+   `PRIVATE_ACTIVATION_UNSUPPORTED` without persistence or registry mutation.
+   No signature, key service, decrypt, licensing, or attacker-authenticity
+   claim is implemented.
+5. **Superseding public-7z dependency resolution (Consult25 evidence).**
+   sevenz-rust 0.6.1 is **NO-GO**. sevenz-rust2 0.21.3 is also **NO-GO**:
+   its official Cargo.toml declares rust-version = 1.93, above workspace Rust
+   1.91, which must not be raised. The sole conditional candidate is
+   sevenz-rust2 = "=0.20.2" with default-features = false; its official
+   Cargo.toml declares Rust 1.85, but it is usable only behind Hya's strict
+   adapter or a minimal local patch. The stock high-level filesystem extractor
+   is insufficient. Coordinator official evidence is the
+   [0.20.2 source](https://docs.rs/crate/sevenz-rust2/0.20.2/source/) and
+   [0.20.2 API](https://docs.rs/sevenz-rust2/0.20.2/sevenz_rust2/).
+   Verified gaps are archive/FilesInfo unknown-property skipping, unbounded
+   decode-memory/header allocation, no first-class special-entry type, and CRC
+   only after declared remaining reaches zero. The strict adapter must use
+   Password::empty, never the stock filesystem extractor, reject nonempty or
+   unknown properties plus solid/encrypted/multivolume/special/anti/directory/
+   extra entries, accept exactly root bundle.hya.md, enforce configured caps
+   for raw bytes/header/entries/blocks/coders/LZMA memory/declared bytes/actual
+   bytes/ratio, set thread = 1, whitelist only fixture-needed COPY/LZMA/LZMA2,
+   require stream CRC and independently require actual equals declared plus
+   callback count one before accepting output, and let Hya own newly created
+   staging and all writes. If public APIs cannot express the property-skip or
+   memory fixes, an Apache-2.0-noticed local patched 0.20.2 copy is allowed;
+   no new parser or relaxed contract is allowed.
+6. Fixed limits are archive 128 MiB, 4096 entries, one regular file 64 MiB,
+   expanded sum 256 MiB, path bytes 1024, and depth 32. Reject absolute,
+   drive, UNC, backslash, NUL, dot, dotdot, empty-segment, duplicate,
+   case-collision, and non-UTF-8 paths; use `create_new`, open the input once,
+   copy it to unique mode-0700 staging, and inspect/extract only that copy.
+7. The sole installed state source is
+   `<data_root>/bundles/registry.sqlite3`; builtins are not rows. Store one
+   singleton generation and one active public prepared Bundle BLOB row per
+   bundle ID with identity, source/prepared digests, and `installed_at`.
+8. Stage/inspect/prepare outside the writer lock. In a short `BEGIN IMMEDIATE`
+   with `synchronous=FULL`, reread generation and rows, build and validate the
+   complete embedded-plus-installed catalog, replace the row, and increment
+   generation atomically. Busy is typed immediately without retry; failures
+   preserve old rows/bytes/generation; staging cleanup is conservative.
+9. Same ID/source digest is idempotent with no generation advance. Same ID and
+   version with a different digest is a content conflict. A different version
+   is an explicit atomic replacement; uninstall increments generation. Builtins
+   are reserved immutable and all full-catalog identity/reference collisions
+   fail closed.
+10. A narrow lazy seam checks DB generation only before a new root TurnBinding
+    and existing TUI/agent catalog refresh. A changed generation reads all
+    prepared BLOBs, validates the complete catalog, atomically publishes it,
+    then binds. No provider-round, dispatch, or child hot-path DB query;
+    children and old TurnBindings retain their pinned Arcs. No BUNDLE_IN_USE
+    tracker is added in this release.
+11. CLI is exactly `install`, `list`, `uninstall`, `info`, and `info -f`, with
+    deterministic fields. `info -f` never writes or publishes; private info is
+    metadata-only.
+12. Reuse source/prepared/catalog typed errors and add only the smallest
+    package/registry codes required by this behavior. No duplicated error stack,
+    sandbox, new permission plane, legacy/compat/migration support,
+    marketplace/remote registry, watcher/control API, or 0.34.10 placeholder.
+
+The first RED is intentionally bytes-only: construct `HYABNDL\0` followed by
+little-endian envelope version 1 and assert the future detector returns
+private/v1 without receiving a filename or path. No product detector is added
+until the RED is observed. Historical Grok quota failures remain recorded as
+external execution evidence; they do not authorize a model substitution.
+
+Execution-model supersession after this Consult25 record: Luna completed the
+first private/v1 RED/GREEN as historical implementation evidence. The user
+then selected `gpt-5.6-terra` with `reasoning=max` as the current implementation
+model and `gpt-5.6-sol` with `reasoning=max` as the current canonical reviewer.
+
+Current-rule supersession: `gpt-5.6-sol` with `reasoning=max` is the persistent
+main orchestrator/reviewer and directly spawns one bounded
+`gpt-5.6-terra` `reasoning=max` native implementation subagent per edit slice.
+Terra edits only its assigned slice and never commits, pushes, creates topology,
+or stashes; Sol defines REDs, reviews diffs, runs verification, and performs
+commits, pushes, and CI monitoring after gates. Earlier Grok 402 failures, Luna
+work, and MacBook Air-driven per-turn Sol/Terra alternation remain historical
+evidence, but are superseded as current rules.
+
+#### Consult25 dependency source-sync and bounded audit evidence
+
+**Authoritative dependency correction.** `sevenz-rust` 0.6.1 is **NO-GO**;
+`sevenz-rust2` 0.21.3 is **NO-GO** because its Rust 1.93 MSRV exceeds the
+workspace. Exact `sevenz-rust2` 0.20.2 with `default-features = false` is
+**GO** through the minimal Apache-noticed local strict patch: official commit,
+checksum, and Rust 1.85 MSRV were verified.
+
+The existing single bounded acquisition at
+`/tmp/hya-sevenz-rust2-0202.4SdiMp` was reused and verified at detached
+[424ebdb8fa98b78b8e1c18f73c9add6972fe5496](https://github.com/hasenbanck/sevenz-rust2/commit/424ebdb8fa98b78b8e1c18f73c9add6972fe5496)
+(Update dependencies and release v0.20.2); Cargo version 0.20.2 and
+rust-version 1.85 were verified and the canonical worktree was untouched by
+the acquisition; no second fetch was issued. Coordinator evidence records that
+the Mac artifact SHA-256
+29225600349ef74beda5a9fffb36ac660a24613c0bde9315d0c49be1d51e9c24 matches
+the official crates.io checksum and that .cargo_vcs_info points to that commit.
+
+The source audit confirms a wrapper suffices for Hya-owned reader/staging,
+metadata/coder policy, thread = 1, and exact byte/CRC/callback counting, but
+cannot prevent reader.rs unknown-property skips, raw/encoded-header allocation,
+or internal unbounded memory. The actual functional patch is limited to
+`reader.rs`, `decoder.rs`, `error.rs`, and `lib.rs`: strict options, typed
+structural/memory-limit propagation, re-export, and exact EOF. `archive.rs` is
+byte-identical upstream; there is no new parser or filesystem extractor.
+
+A direct standalone vendor test later hit crates.io DNS for uncached upstream
+dev/default dependencies and was not retried. The workspace
+`default-features = false` path compiles, tests, and passes Clippy.
+
+#### Authoritative expansion-ratio resolution
+
+**Controlling 0.34.9 ruling:** `MAX_EXPANSION_RATIO = 1000`. The denominator is
+the checked sum of the distinct PackInfo stream sizes referenced by the
+accepted file's block. The exact comparison is
+`(expanded_bytes as u128) <= (packed_bytes as u128) * 1000_u128`. With a zero
+denominator, `packed=0, expanded=0` accepts and `packed=0, expanded>0` rejects;
+`expanded=0, packed>0` accepts by the same formula.
+
+- **Source-verified:** the accepted file-to-block mapping and that block's
+  PackInfo boundaries determine the denominator. The rule runs at metadata
+  preflight and against cumulative actual decoded bytes before retaining each
+  chunk. Archive length, `entry.compressed_size`, and configuration are not
+  ratio inputs.
+- **Experimentally verified:** the scalar boundary/zero contract completed
+  RED→GREEN; the deterministic standard 7z fixture is 409 bytes total while
+  declaring 320,000 expanded bytes over 304 referenced PackInfo bytes; and the
+  streaming test rejects a crossing chunk before retention with buffer/count
+  unchanged. The current package suite is 58 passed.
+- **Discarded timeboxed probe:** a next-header size/CRC mutation was inspected
+  but discarded without repository code or a retained test. The independent
+  scalar contract, real-fixture metadata preflight, and streaming helper test
+  are sufficient evidence, so the mutation probe is not part of the accepted
+  proof or product surface.

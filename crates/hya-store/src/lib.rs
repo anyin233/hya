@@ -6,6 +6,7 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 mod admission;
+mod bundle_registry;
 pub mod error;
 mod permission;
 mod resident_claim;
@@ -21,6 +22,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 pub use admission::{
     AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome,
     AdmissionRecord, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+};
+pub use bundle_registry::{
+    BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleRegistryRecord,
+    BundleRegistrySnapshot, BundleUninstallOutcome,
 };
 pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};

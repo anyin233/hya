@@ -331,6 +331,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crossbeam-queue"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -793,7 +802,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "hya-app",
  "hya-native",
@@ -804,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -835,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -853,19 +862,20 @@ dependencies = [
 
 [[package]]
 name = "hya-bundle"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "hya-proto",
  "serde",
  "serde_json",
  "serde_norway",
+ "sevenz-rust2",
  "sha2",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "hya-client"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "hya-proto",
  "reqwest",
@@ -874,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "futures",
@@ -893,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -908,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "axum",
@@ -924,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -943,15 +953,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.34.8"
+version = "0.34.9"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.34.8"
+version = "0.34.9"
 
 [[package]]
 name = "hya-proto"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -961,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "base64",
@@ -978,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -993,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "axum",
@@ -1024,8 +1034,9 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
+ "hya-bundle",
  "hya-proto",
  "serde_json",
  "sqlx",
@@ -1036,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "async-trait",
  "base64",
@@ -1056,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "hya-ts"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "clap",
  "hya-app",
@@ -1339,6 +1350,12 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.16.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca93e534d1142d1d0dcca6d25fe302508a5dfb40b302802904577725ea0b695b"
 
 [[package]]
 name = "matchit"
@@ -2000,6 +2017,16 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "sevenz-rust2"
+version = "0.20.2"
+dependencies = [
+ "crc32fast",
+ "js-sys",
+ "lzma-rust2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3171,7 +3198,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.34.8"
+version = "0.34.9"
 dependencies = [
  "anyhow",
  "serde",

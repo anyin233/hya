@@ -6,6 +6,7 @@
 mod catalog;
 mod error;
 mod model;
+mod package;
 mod prepare;
 mod source;
 
@@ -16,5 +17,10 @@ pub use model::{
     PreparedBundle, PreparedBundleIndex, PreparedCatalog, PreparedResource, ResourceView,
     SpawnLifecycle,
 };
-pub use prepare::prepare_builtins;
+pub use package::{
+    PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,
+    PrivatePackagePayload, PublicPackageInspection, StagedPackage, cleanup_orphaned_staging,
+    detect_package_format, inspect_private_package, inspect_public_package, stage_package,
+};
+pub use prepare::{prepare_builtins, prepare_package};
 pub use source::{BundleSource, SourceFile};

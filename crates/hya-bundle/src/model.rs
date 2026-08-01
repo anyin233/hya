@@ -55,6 +55,7 @@ pub struct BundleIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum BundleOrigin {
     Builtin,
+    Installed,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -13,6 +13,9 @@
   projection or emit parallel public events.
 - The `admission_journal` is a narrow idempotency/admission control plane, not a
   runnable queue, effect log, or child-session source of truth.
+- Exception: `BundleRegistry` owns the separate
+  `<data_root>/bundles/registry.sqlite3` installed-package control-plane DB;
+  builtins are not rows, and it is not a session projection.
 
 ---
 
@@ -44,10 +47,14 @@
 ## Migrations
 
 - Add monotonically numbered SQL files under `crates/hya-store/migrations/`.
+- `BundleRegistry` embeds its separate migrations from
+  `crates/hya-store/bundle_migrations`; migration tests use a `BundleRegistry`
+  temp DB.
 - Migrations are additive for active control-plane state. Do not repurpose the
   dormant `session`, `team_run`, or `team_member` tables for admission.
-- Keep CHECK/UNIQUE constraints aligned with Rust invariants and exercise every
-  new migration through `SessionStore::connect_memory` tests.
+- Keep CHECK/UNIQUE constraints aligned with Rust invariants; exercise
+  `SessionStore` migrations through `SessionStore::connect_memory` tests and
+  `BundleRegistry` migrations through its temp-DB tests.
 - Actor epoch is monotonic integer state. The claim table must not acquire TTL,
   heartbeat, wall-clock, or background-expiry columns.
 

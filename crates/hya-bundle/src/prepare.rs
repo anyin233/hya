@@ -19,6 +19,18 @@ const PREPARED_FORMAT_VERSION: u32 = 1;
 
 /// Validate and deterministically prepare repo-native built-in Bundle sources.
 pub fn prepare_builtins(sources: Vec<BundleSource>) -> Result<PreparedCatalog, BundleError> {
+    prepare_sources(sources, BundleOrigin::Builtin, true)
+}
+
+pub fn prepare_package(source: BundleSource) -> Result<PreparedCatalog, BundleError> {
+    prepare_sources(vec![source], BundleOrigin::Installed, false)
+}
+
+fn prepare_sources(
+    sources: Vec<BundleSource>,
+    origin: BundleOrigin,
+    immutable: bool,
+) -> Result<PreparedCatalog, BundleError> {
     let mut parsed = sources
         .into_iter()
         .map(parse_source)
@@ -33,7 +45,7 @@ pub fn prepare_builtins(sources: Vec<BundleSource>) -> Result<PreparedCatalog, B
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let bundle = prepare_bundle(source, &mut stable_agent_ids)?;
+        let bundle = prepare_bundle(source, &mut stable_agent_ids, origin, immutable)?;
         bundles.push(bundle);
     }
     resolve_catalog_references(&mut bundles)?;
@@ -109,8 +121,10 @@ impl PreparedCatalog {
 
 fn prepared_bundle_is_canonical(bundle: &PreparedBundle) -> bool {
     bundle.format_version == PREPARED_FORMAT_VERSION
-        && bundle.origin == BundleOrigin::Builtin
-        && bundle.immutable
+        && matches!(
+            (bundle.origin, bundle.immutable),
+            (BundleOrigin::Builtin, true) | (BundleOrigin::Installed, false)
+        )
         && validate_identity(&bundle.identity.id, &bundle.identity.version).is_ok()
         && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.stable_id.as_str()))
         && bundle.agents.iter().all(|agent| {
@@ -554,6 +568,8 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
 fn prepare_bundle(
     source: ParsedSource,
     stable_agent_ids: &mut BTreeSet<String>,
+    origin: BundleOrigin,
+    immutable: bool,
 ) -> Result<PreparedBundle, BundleError> {
     let bundle_id = source.manifest.identity.id.clone();
     validate_identity(&bundle_id, &source.manifest.identity.version)?;
@@ -590,8 +606,8 @@ fn prepare_bundle(
     let mut bundle = PreparedBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: source.manifest.identity,
-        origin: BundleOrigin::Builtin,
-        immutable: true,
+        origin,
+        immutable,
         digest: String::new(),
         agents,
         tools: Vec::new(),
