@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +24,13 @@ async fn state() -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -45,7 +53,13 @@ async fn usage_state() -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -68,7 +82,13 @@ async fn reasoning_state() -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -91,7 +111,13 @@ async fn shell_state() -> AppState {
         Mode::Allow,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -114,7 +140,13 @@ async fn text_state() -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

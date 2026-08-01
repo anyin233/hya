@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -44,7 +46,13 @@ async fn state_with_rules(workdir: PathBuf, rules: PermissionRules) -> AppState 
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(rules);
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

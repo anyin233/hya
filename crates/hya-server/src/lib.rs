@@ -13,7 +13,7 @@ use hya_proto::api::{
     CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
     PromptResponse, ShellRequest,
 };
-use hya_proto::{AgentName, Envelope, ModelRef, SessionId};
+use hya_proto::{Envelope, ModelRef, SessionId};
 use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
@@ -24,10 +24,6 @@ mod pending;
 mod runs;
 mod state;
 
-pub use compat::agent_catalog::{AgentDefinition, agent_definitions};
-pub use compat::subagent_resolve::{
-    ResolvedSubagent, SubagentResolve, resolve_subagent, resolve_subagent_agent,
-};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
@@ -116,11 +112,16 @@ async fn create_session(
     State(st): State<ServerState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<CreateSessionResponse>, ApiError> {
+    let agent = compat::bound_agent_metadata::resolve_session_agent(
+        &st,
+        std::path::Path::new(&req.workdir),
+        Some(req.agent.as_str()),
+    )?;
     let session = st
         .engine
         .create(CreateSession {
             parent: req.parent,
-            agent: AgentName::new(req.agent),
+            agent,
             model: ModelRef::new(req.model),
             workdir: req.workdir,
         })

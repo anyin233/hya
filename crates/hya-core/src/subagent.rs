@@ -5,10 +5,12 @@ use hya_proto::{
     Event, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
 };
 use hya_store::ActorClaim;
+use hya_tool::AgentDef;
 use serde::Serialize;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::AgentResourcePolicy;
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
 
@@ -116,6 +118,14 @@ pub enum TeamAdmissionError {
 pub struct MemberSpec {
     pub id: MemberId,
     pub agent: AgentSpec,
+    /// Caller-authorized catalog reachability projected at spawn resolution.
+    /// Inline public names never become catalog identities or roster keys.
+    pub agents: Arc<[AgentDef]>,
+    /// Catalog resource policy captured alongside the authorized target.
+    /// `None` requires an exact lookup of `agent.name` in the new turn binding.
+    pub resources: Option<AgentResourcePolicy>,
+    /// Immutable triggering-turn guidance Arc (request-scoped; not persisted).
+    pub guidance: Option<Arc<str>>,
     /// Full task prompt for the child turn.
     pub directive: String,
     /// Short UI label from the task tool (3–5 words). Empty falls back to a
@@ -241,13 +251,45 @@ async fn run_member(
             engine
                 .admit_user_prompt_for_actor(claim, child, spec.directive)
                 .await?;
-            engine
-                .run_turn_for_actor(child, &spec.agent, claim, cancel)
-                .await?;
+            match spec.resources.clone() {
+                Some(resources) => {
+                    engine
+                        .run_resolved_turn_for_actor(
+                            child,
+                            &spec.agent,
+                            (spec.agents.clone(), resources),
+                            claim,
+                            cancel,
+                            spec.guidance.clone(),
+                        )
+                        .await?;
+                }
+                None => {
+                    engine
+                        .run_turn_for_actor(child, &spec.agent, claim, cancel)
+                        .await?;
+                }
+            }
         }
         None => {
             engine.admit_user_prompt(child, spec.directive).await?;
-            engine.run_turn(child, &spec.agent, cancel).await?;
+            match spec.resources {
+                Some(resources) => {
+                    engine
+                        .run_resolved_turn(
+                            child,
+                            &spec.agent,
+                            spec.agents.clone(),
+                            resources,
+                            cancel,
+                            spec.guidance,
+                        )
+                        .await?;
+                }
+                None => {
+                    engine.run_turn(child, &spec.agent, cancel).await?;
+                }
+            }
         }
     }
     let projection = engine.read_projection(child).await?;

@@ -21,6 +21,7 @@ import type { PromptInfo } from "../../prompt/history"
 import { useFrecency } from "../../prompt/frecency"
 import { useBindings, useCommandSlashes, useOpencodeModeStack } from "../../keymap"
 import { displayCharAt, mentionTriggerIndex } from "../../prompt/display"
+import { isSubagentAutocompleteAgent } from "../../util/agent-visibility"
 
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
@@ -390,7 +391,7 @@ export function Autocomplete(props: {
 
   const agents = createMemo(() => {
     return sync.data.agent
-      .filter((agent) => !agent.hidden && agent.mode !== "primary")
+      .filter(isSubagentAutocompleteAgent)
       .map(
         (agent): AutocompleteOption => ({
           display: "@" + agent.name,

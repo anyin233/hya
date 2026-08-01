@@ -8,7 +8,8 @@ use std::sync::{Arc, Barrier};
 use hya_core::{RuntimeRefreshError, RuntimeRegistry};
 use hya_tool::{ToolPermission, ToolRegistry};
 
-use support::{MarkerTool, TestDir};
+use hya_bundle::AgentRole;
+use support::{MarkerTool, TestDir, test_catalog};
 
 fn tool_names(binding: &hya_core::TurnBinding) -> BTreeSet<String> {
     binding
@@ -25,7 +26,7 @@ fn failed_candidate_refresh_retains_generation_and_exact_registry_view() {
     tools
         .register(MarkerTool::new("stable"))
         .expect("register stable marker");
-    let registry = RuntimeRegistry::new(tools);
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
     let before = registry.bind_turn(workdir.path()).unwrap();
     let before_names = tool_names(&before);
 
@@ -54,7 +55,7 @@ fn logically_unchanged_candidate_does_not_advance_generation() {
     tools
         .register(stable.clone())
         .expect("register stable marker");
-    let registry = RuntimeRegistry::new(tools);
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
     let before = registry.bind_turn(workdir.path()).unwrap();
     let before_names = tool_names(&before);
 
@@ -78,7 +79,10 @@ fn concurrent_publications_are_unique_monotonic_and_never_publish_a_mixed_candid
     const REFRESHES: usize = 8;
 
     let workdir = Arc::new(TestDir::new("concurrent-refresh"));
-    let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+    let registry = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        test_catalog(&[("general", AgentRole::Main, &[])]),
+    ));
     let first = registry.bind_turn(workdir.path()).unwrap().generation();
     let barrier = Arc::new(Barrier::new(REFRESHES));
 

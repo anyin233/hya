@@ -110,13 +110,20 @@ async fn prompt(
     set_auto_title(&st, session);
     if let Some(run) = run {
         let engine = st.engine.clone();
-        let agent = super::reference::session_agent_with_guidance(&st, session).await;
-        let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
+        let turn = super::reference::session_agent_with_guidance(&st, session).await;
+        let external_dirs =
+            super::reference::external_directories_at(&st, &turn.agent.workdir).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
             let _guard = run;
             let _ = engine
-                .run_turn_with_external_dirs(session, &agent, cancel, &external_dirs)
+                .run_turn_with_external_dirs_and_guidance(
+                    session,
+                    &turn.agent,
+                    cancel,
+                    &external_dirs,
+                    turn.guidance,
+                )
                 .await;
         }));
     }
@@ -158,11 +165,17 @@ async fn command(
         .engine
         .admit_command_prompt(session, command, arguments, text)
         .await?;
-    let agent = super::reference::session_agent_with_guidance(&st, session).await;
-    let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
+    let turn = super::reference::session_agent_with_guidance(&st, session).await;
+    let external_dirs = super::reference::external_directories_at(&st, &turn.agent.workdir).await;
     let _finish = st
         .engine
-        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            &turn.agent,
+            run.token(),
+            &external_dirs,
+            turn.guidance,
+        )
         .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
     Ok(Json(MessageResponse { data }))

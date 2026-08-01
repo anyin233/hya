@@ -32,9 +32,9 @@ use crate::permission::spawn_reject_responder;
 use cli_args::{Cli, Command};
 
 pub use hya_app::{
-    InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_with_model, build_session_engine,
-    compaction_config, discover_context_files, host_info, offline_router, open_store,
-    resolve_runtime, spawn_team_supervisor, today,
+    InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
+    build_session_engine, compaction_config, discover_context_files, host_info, offline_router,
+    open_store, resolve_runtime, spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -83,7 +83,6 @@ async fn cmd_exec(
         runtime.mcp,
         runtime.plugins,
         (runtime.websearch, runtime.permission),
-        true,
     )
     .await?;
     let _responder = spawn_reject_responder(asks);
@@ -136,7 +135,6 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         runtime.mcp,
         runtime.plugins,
         (runtime.websearch, runtime.permission),
-        true,
     )
     .await?;
     let _responder = spawn_reject_responder(asks);
@@ -200,7 +198,6 @@ async fn cmd_goal(
         runtime.mcp,
         runtime.plugins,
         (runtime.websearch, runtime.permission),
-        true,
     )
     .await?;
     let _responder = spawn_reject_responder(asks);

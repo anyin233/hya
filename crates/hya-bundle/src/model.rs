@@ -11,6 +11,20 @@ pub enum AgentRole {
     Subagent,
 }
 
+impl AgentRole {
+    /// Compat/TUI selector mode for this role.
+    ///
+    /// `main` → `"primary"`, `subagent` → `"subagent"`. Role remains the sole
+    /// selector rule; callers must not invent a parallel mode source.
+    #[must_use]
+    pub const fn selector_mode(self) -> &'static str {
+        match self {
+            Self::Main => "primary",
+            Self::Subagent => "subagent",
+        }
+    }
+}
+
 /// Lifecycle used only when Harness spawns the catalog entry.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

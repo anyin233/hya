@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_proto::{OperationId, SessionId, ToolCallId};
 use hya_tool::{
-    Action, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane, PermissionRules,
-    Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolOperation,
-    ToolRegistry, WebSearchPlane,
+    Action, AgentDef, InteractionPlane, LspPlane, MemberOutcome, Mode, PermissionPlane,
+    PermissionRules, Rule, SkillPlane, SpawnMember, SpawnerPlane, TodoPlane, ToolCtx, ToolError,
+    ToolOperation, ToolRegistry, WebSearchPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +46,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
-        agents: hya_tool::AgentCatalogPlane::default(),
+        agents: std::sync::Arc::<[AgentDef]>::from([]),
         workdir: tempdir(),
         cancel: CancellationToken::new(),
     }
@@ -104,6 +104,40 @@ async fn subagent_can_spawn_nested_task() {
 }
 
 #[tokio::test]
+async fn omitted_subagent_type_selects_general() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "general")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let mut handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Use default agent",
+                "prompt": "handle this task"
+            }),
+        )
+        .await
+    });
+
+    let req = tokio::select! {
+        result = &mut handle => panic!("omitted target rejected before spawn: {result:?}"),
+        req = rx.recv() => req.expect("spawn request"),
+    };
+    assert_eq!(req.members[0].subagent_type, "general");
+    req.reply
+        .send(Ok(vec![MemberOutcome {
+            member: "mbr_1".to_string(),
+            session: "ses_general".to_string(),
+            status: "done".to_string(),
+            summary: "done".to_string(),
+        }]))
+        .unwrap();
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn task_preserves_the_persisted_tool_call_operation_identity() {
     let parent = SessionId::new();
     let source_tool_call_id = ToolCallId::new();
@@ -140,10 +174,7 @@ fn task_schema_exposes_open_code_fields() {
     let tool = ToolRegistry::builtins().get("task").unwrap();
     let schema = tool.schema().input_schema;
 
-    assert_eq!(
-        schema["required"],
-        json!(["description", "prompt", "subagent_type"])
-    );
+    assert_eq!(schema["required"], json!(["description", "prompt"]));
     let props = &schema["properties"];
     assert_eq!(props["description"]["type"], "string");
     assert_eq!(props["prompt"]["type"], "string");
@@ -151,6 +182,36 @@ fn task_schema_exposes_open_code_fields() {
     assert_eq!(props["task_id"]["type"], "string");
     assert_eq!(props["command"]["type"], "string");
     assert_eq!(props["background"]["type"], "boolean");
+}
+
+#[test]
+fn task_schema_describes_inline_agent_as_request_scoped() {
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let schema = tool.schema().input_schema;
+    let props = &schema["properties"];
+
+    let single = props["inline_agent"]["description"]
+        .as_str()
+        .expect("single-task inline_agent schema description");
+    let batch = props["members"]["items"]["properties"]["inline_agent"]["description"]
+        .as_str()
+        .expect("batch members inline_agent schema description");
+
+    for (label, description) in [("single", single), ("batch", batch)] {
+        let lower = description.to_ascii_lowercase();
+        assert!(
+            lower.contains("request-scoped") || lower.contains("request scoped"),
+            "{label} inline_agent description must state request-scoped semantics: {description:?}"
+        );
+        assert!(
+            !lower.contains(".md")
+                && !lower.contains("persist")
+                && !lower.contains("disk")
+                && !lower.contains("reuse it later")
+                && !lower.contains("save an"),
+            "{label} inline_agent description must not mention .md/disk persistence or legacy file reuse: {description:?}"
+        );
+    }
 }
 
 #[tokio::test]

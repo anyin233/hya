@@ -3,7 +3,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use hya_proto::AgentName;
 use serde::Deserialize;
 
 use super::model_ref::CompatModelRefRequest;
@@ -31,12 +30,18 @@ async fn switch_agent(
     Json(req): Json<AgentSwitchRequest>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    if let Err(response) = super::session_v2::load_existing_session(&st, session, &id).await? {
-        return Ok(response);
-    }
-    st.engine
-        .switch_agent(session, AgentName::new(req.agent))
-        .await?;
+    // Load once: existence check and session directory for the workdir binding.
+    let snapshot = match super::session_v2::load_existing_session(&st, session, &id).await? {
+        Ok(snapshot) => snapshot,
+        Err(response) => return Ok(response),
+    };
+    // Exact-validate against one binding before any switch event is appended.
+    let agent = super::bound_agent_metadata::resolve_session_agent(
+        &st,
+        std::path::Path::new(snapshot.info.directory()),
+        Some(req.agent.as_str()),
+    )?;
+    st.engine.switch_agent(session, agent).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

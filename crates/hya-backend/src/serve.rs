@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_server::{AppState, router as server_router};
 
-use super::{agent_with_model, build_session_engine, open_store, resolve_runtime};
+use super::{agent_base_with_model, build_session_engine, open_store, resolve_runtime};
 
 pub(crate) async fn cmd_serve(
     bind: String,
@@ -14,7 +14,10 @@ pub(crate) async fn cmd_serve(
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
-    let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
+    // Server AppState: base-only agent slot. Environment + AGENTS + references
+    // are discovered per turn so Bundle Some does not drop project AGENTS and
+    // Bundle None does not duplicate startup-baked AGENTS.
+    let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
     let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
         store,
         runtime.router,
@@ -22,15 +25,13 @@ pub(crate) async fn cmd_serve(
         runtime.mcp,
         runtime.plugins,
         (runtime.websearch, runtime.permission),
-        true,
     )
     .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
-        .with_default_agent(runtime.default_agent.clone())
-        .with_global_agents(true);
+        .with_default_agent(runtime.default_agent.clone());
     if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
@@ -103,7 +104,8 @@ pub(crate) async fn cmd_tui_hya(
     if let Some(notice) = &runtime.offline_notice {
         notice.emit();
     }
-    let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
+    // Interactive TUI backend uses the same base-only AppState seam as serve.
+    let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
     let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
         store,
         runtime.router,
@@ -111,15 +113,13 @@ pub(crate) async fn cmd_tui_hya(
         runtime.mcp,
         runtime.plugins,
         (runtime.websearch, runtime.permission),
-        true,
     )
     .await?;
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
-        .with_default_agent(runtime.default_agent.clone())
-        .with_global_agents(true);
+        .with_default_agent(runtime.default_agent.clone());
     if yolo {
         eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
     }

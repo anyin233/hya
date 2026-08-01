@@ -15,7 +15,8 @@ mod runtime_reconcile;
 
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use runtime::{
-    HyaRuntime, OfflineNotice, RuntimeConfig, RuntimeOptions, agent_with_model,
-    build_session_engine, compaction_config, discover_context_files, host_info, offline_router,
-    open_store, resolve_runtime, spawn_team_supervisor, today,
+    HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig, RuntimeOptions,
+    agent_base_with_model, agent_with_model, build_session_engine, builtin_catalog,
+    compaction_config, discover_context_files, host_info, offline_router, open_store,
+    resolve_runtime, spawn_team_supervisor, today,
 };

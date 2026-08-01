@@ -37,7 +37,13 @@ pub async fn state_with_router(providers: ProviderRouter, model: &str) -> AppSta
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        crate::support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -60,7 +66,13 @@ pub async fn shell_state() -> AppState {
         Mode::Allow,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        crate::support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

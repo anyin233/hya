@@ -69,11 +69,18 @@ async fn prompt(
             return Ok(super::errors::session_busy(session));
         };
         super::session_prompt_async::publish_session_status(&st.engine, session, "busy").await;
-        let agent = super::reference::session_agent_with_guidance(&st, session).await;
-        let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
+        let turn = super::reference::session_agent_with_guidance(&st, session).await;
+        let external_dirs =
+            super::reference::external_directories_at(&st, &turn.agent.workdir).await;
         let result = st
             .engine
-            .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+            .run_turn_with_external_dirs_and_guidance(
+                session,
+                &turn.agent,
+                run.token(),
+                &external_dirs,
+                turn.guidance,
+            )
             .await;
         drop(run);
         super::session_prompt_async::publish_session_status(&st.engine, session, "idle").await;

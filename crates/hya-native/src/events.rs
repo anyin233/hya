@@ -78,7 +78,6 @@ mod tests {
             db: String::new(),
             yolo: true,
             default_agent: None,
-            include_global_agents: false,
             force_offline: true,
         })
         .await

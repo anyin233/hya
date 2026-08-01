@@ -4,12 +4,13 @@ mod support;
 
 use std::sync::Arc;
 
+use hya_bundle::AgentRole;
 use hya_core::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
 };
 use hya_tool::{ToolPermission, ToolRegistry};
 
-use support::{MarkerTool, TestDir};
+use support::{MarkerTool, TestDir, test_catalog};
 
 fn source(
     id: RuntimeSourceId,
@@ -53,7 +54,10 @@ fn assert_rejected_without_generation(
 #[test]
 fn duplicate_source_and_canonical_alias_collisions_reject_before_generation() {
     let workdir = TestDir::new("runtime-source-collisions");
-    let registry = RuntimeRegistry::new(ToolRegistry::builtins());
+    let registry = RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        test_catalog(&[("general", AgentRole::Main, &[])]),
+    );
     let duplicate_id = RuntimeSourceId::mcp("duplicate");
     assert_rejected_without_generation(
         &registry,

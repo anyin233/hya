@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -65,7 +67,7 @@ async fn state_with_store(
     let engine = Arc::new(SessionEngine::new(
         store,
         providers,
-        tools,
+        support::test_runtime(tools),
         permission.clone(),
         EventBus::default(),
     ));

@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -141,7 +143,7 @@ async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),
         Arc::new(router),
-        tools,
+        support::test_runtime(tools),
         permission,
         bus,
     ));
@@ -223,7 +225,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.expect("store"),
         Arc::new(router),
-        tools,
+        support::test_runtime(tools),
         permission,
         EventBus::default(),
     );

@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+mod support;
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -82,7 +84,7 @@ async fn compact_context_prunes_prior_messages_from_next_provider_request() {
     let engine = SessionEngine::new(
         store,
         Arc::new(router),
-        Arc::new(ToolRegistry::builtins()),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
         permission,
         EventBus::default(),
     );

@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use hya_proto::SessionId;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::tool::ToolOperation;
+use crate::{AgentDef, tool::ToolOperation};
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SpawnMember {
@@ -12,40 +14,39 @@ pub struct SpawnMember {
     pub prompt: String,
     pub subagent_type: String,
     pub task_id: Option<String>,
-    /// Spawn-time explicit model override (precedence 1, highest). `None`/empty
-    /// defers to the agent's own model/category.
+    /// Spawn-time explicit model override (highest precedence). `None`/empty
+    /// defers down the Bundle definition / request-overlay model chain.
     pub model: Option<String>,
-    /// Spawn-time logical category override (precedence 2). `None`/empty defers
-    /// to the agent's frontmatter category, then the global default.
+    /// Spawn-time logical category override. `None`/empty defers to inline and
+    /// Bundle definition category layers, then the base model.
     pub category: Option<String>,
-    /// A full inline agent definition that lives only for this spawn (no disk
-    /// write). When present it supplies the system prompt + name and folds into
-    /// the same model/category precedence chain (decision 11).
+    /// Request-scoped agent overlay for this spawn only. Supplies system
+    /// prompt + name and folds into the model/category precedence chain; never
+    /// a catalog or Bundle definition authority.
     pub inline_agent: Option<InlineAgent>,
     /// Spawn-time opt-in to the resident (long-lived actor) lifecycle (ADR-0002).
-    /// OR'd with the agent's frontmatter/inline `resident:` — `true` from any
-    /// source makes the member resident. Default `false` (transient, unchanged).
+    /// OR'd with Bundle definition and request-scoped inline `resident` — `true`
+    /// from any source makes the member resident. Default `false` (transient).
     pub resident: bool,
 }
 
-/// A runtime-authored, ephemeral agent definition attached to a single spawn.
+/// Request-scoped agent overlay attached to a single spawn.
 ///
-/// It carries the same core fields a disk agent's frontmatter would (name,
-/// system prompt, optional `category`/`model`) but is never persisted; an agent
-/// that wants reuse saves an `.md` itself via the existing `write` tool.
+/// Carries name, system prompt, and optional `category`/`model` for this child
+/// only. It is not retained as a Bundle definition or catalog entry.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct InlineAgent {
     /// Human-friendly agent name (used as the spawned session's agent name).
     pub name: String,
     /// The system prompt / persona for the ephemeral agent.
     pub prompt: String,
-    /// Optional short description (parity with frontmatter `description:`).
+    /// Optional short description on the request overlay (not a Bundle field).
     pub description: Option<String>,
-    /// Logical model category (`~` frontmatter `category:` in precedence).
+    /// Logical model category (request-overlay layer in spawn model precedence).
     pub category: Option<String>,
-    /// Concrete `provider/model` (`~` frontmatter `model:` in precedence).
+    /// Concrete `provider/model` (request-overlay layer in spawn model precedence).
     pub model: Option<String>,
-    /// Inline opt-in to the resident lifecycle (`~` frontmatter `resident:`).
+    /// Request-scoped opt-in to the resident lifecycle.
     pub resident: Option<bool>,
 }
 
@@ -59,6 +60,10 @@ pub struct MemberOutcome {
 
 pub struct SpawnRequest {
     pub parent: SessionId,
+    pub agents: Arc<[AgentDef]>,
+    /// Immutable triggering-turn guidance captured by the parent turn.
+    /// Request-scoped Arc clone only; never discovered on the child workdir.
+    pub guidance: Option<Arc<str>>,
     pub operation: ToolOperation,
     pub members: Vec<SpawnMember>,
     pub cancel: CancellationToken,
@@ -66,7 +71,7 @@ pub struct SpawnRequest {
     pub reply: oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>,
 }
 
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SpawnError {
     #[error("spawner channel unavailable")]
     Unavailable,
@@ -76,12 +81,21 @@ pub enum SpawnError {
     OperationIdConflict,
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
+    UnknownAgentId { agent_id: String },
+    #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
+    AgentSpawnNotAllowed { caller: String, agent_id: String },
+    #[error("UNSUPPORTED_INLINE_AGENT_FIELD: `{field}`")]
+    UnsupportedInlineAgentField { field: &'static str },
 }
 
 #[derive(Clone)]
 pub struct SpawnerPlane {
     tx: mpsc::Sender<SpawnRequest>,
     session: Option<SessionId>,
+    agents: Arc<[AgentDef]>,
+    /// Immutable guidance captured for the parent turn; Arc-cloned onto each spawn.
+    guidance: Option<Arc<str>>,
 }
 
 impl SpawnerPlane {
@@ -98,13 +112,46 @@ impl SpawnerPlane {
     pub fn with_capacity(capacity: usize) -> (Self, mpsc::Receiver<SpawnRequest>) {
         let capacity = capacity.clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
         let (tx, rx) = mpsc::channel(capacity);
-        (Self { tx, session: None }, rx)
+        (
+            Self {
+                tx,
+                session: None,
+                agents: Arc::from([]),
+                guidance: None,
+            },
+            rx,
+        )
     }
 
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
         let mut plane = self.clone();
         plane.session = Some(session);
+        plane
+    }
+
+    /// Scope this plane to the caller and the spawn graph captured by its turn.
+    #[must_use]
+    pub fn for_session_with_agents(&self, session: SessionId, agents: Arc<[AgentDef]>) -> Self {
+        let mut plane = self.for_session(session);
+        plane.agents = agents;
+        plane
+    }
+
+    /// Scope session, authorized roster, and immutable triggering-turn guidance.
+    ///
+    /// Fields are assigned directly on a session-scoped clone (no intermediate
+    /// public convenience setter). Guidance is Arc-cloned onto each spawn request.
+    #[must_use]
+    pub fn for_session_with_agents_and_guidance(
+        &self,
+        session: SessionId,
+        agents: Arc<[AgentDef]>,
+        guidance: Option<Arc<str>>,
+    ) -> Self {
+        let mut plane = self.for_session(session);
+        plane.agents = agents;
+        plane.guidance = guidance;
         plane
     }
 
@@ -137,6 +184,8 @@ impl SpawnerPlane {
         let (tx, rx) = oneshot::channel();
         let req = SpawnRequest {
             parent,
+            agents: self.agents.clone(),
+            guidance: self.guidance.clone(),
             operation,
             members,
             cancel,

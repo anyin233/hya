@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+mod support;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,7 +23,7 @@ async fn engine(store: SessionStore) -> SessionEngine {
     SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new()),
-        Arc::new(ToolRegistry::builtins()),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
         permission,
         EventBus::default(),
     )
@@ -32,7 +34,7 @@ fn engine_with_governor(store: SessionStore, governor: SubagentGovernor) -> Sess
     SessionEngine::new(
         store,
         Arc::new(ProviderRouter::new()),
-        Arc::new(ToolRegistry::builtins()),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
         permission,
         EventBus::default(),
     )

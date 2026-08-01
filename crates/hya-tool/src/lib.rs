@@ -36,7 +36,7 @@ mod websearch;
 mod websearch_response;
 mod write;
 
-pub use agents::{AgentCatalogPlane, AgentDef};
+pub use agents::AgentDef;
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
     FormatterProvider, FormatterStatus,

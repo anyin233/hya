@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,10 +19,9 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::Value;
 use tower::ServiceExt;
 
-static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+use support::{AgentFixture, runtime_with_catalog, test_runtime};
 
-const BUILD_AGENT_DESCRIPTION: &str =
-    "The default agent. Executes tools based on configured permissions.";
+static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 fn tempdir() -> PathBuf {
     let nanos = SystemTime::now()
@@ -37,11 +38,14 @@ fn tempdir() -> PathBuf {
 }
 
 async fn state(workdir: PathBuf) -> AppState {
+    state_with_runtime(workdir, test_runtime(Arc::new(ToolRegistry::builtins()))).await
+}
+
+async fn state_with_runtime(workdir: PathBuf, runtime: Arc<hya_core::RuntimeRegistry>) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
-    let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, permission, EventBus::default());
+    let engine = SessionEngine::new(store, providers, runtime, permission, EventBus::default());
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -79,29 +83,115 @@ fn find_agent<'a>(agents: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing agent {name}: {agents}"))
 }
 
+/// Configured `default_agent: hya-main` must lead both agent list routes so the
+/// TUI primary selector (`current()` = first mode-primary row) defaults to it.
 #[tokio::test]
-async fn compat_agent_route_includes_build_description() {
-    // Given: a server exposing the Compat-compatible instance routes.
+async fn configured_default_agent_hya_main_is_first_among_agent_rows() {
+    // Given: explicit catalog with build + hya-main (main) and general (subagent),
+    // plus fixed system agents. Workdir opencode.json names hya-main as default.
+    let workdir = tempdir();
+    std::fs::write(
+        workdir.join("opencode.json"),
+        r#"{ "default_agent": "hya-main" }"#,
+    )
+    .unwrap();
+    let tools = Arc::new(ToolRegistry::builtins());
+    let runtime = runtime_with_catalog(
+        tools,
+        &[
+            AgentFixture::main("build").description("Build main"),
+            AgentFixture::main("hya-main").description("Configured default main"),
+            AgentFixture::subagent("general").description("General subagent"),
+            AgentFixture::subagent("compaction").prompt("compaction system"),
+            AgentFixture::subagent("title").prompt("title system"),
+            AgentFixture::subagent("summary").prompt("summary system"),
+        ],
+    );
+    let app = router(state_with_runtime(workdir.clone(), runtime).await);
+    let uri = format!("/agent?directory={}", workdir.display());
+    let api_uri = format!("/api/agent?directory={}", workdir.display());
+
+    // When: both legacy and v2 agent routes list bound catalog rows.
+    let (status, agents) = get_json(app.clone(), &uri).await;
+    let (api_status, api_body) = get_json(app, &api_uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(api_status, StatusCode::OK);
+
+    let legacy_names: Vec<&str> = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["name"].as_str().unwrap())
+        .collect();
+    let api_agents = &api_body["data"];
+    let api_ids: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+
+    // Then: hya-main is first among returned rows on both routes.
+    assert_eq!(
+        legacy_names.first().copied(),
+        Some("hya-main"),
+        "legacy /agent must put configured default first, got {legacy_names:?}"
+    );
+    assert_eq!(
+        api_ids.first().copied(),
+        Some("hya-main"),
+        "/api/agent must put configured default first, got {api_ids:?}"
+    );
+    assert_eq!(find_agent(&agents, "hya-main")["mode"], "primary");
+    assert_eq!(find_agent(api_agents, "hya-main")["mode"], "primary");
+    assert_eq!(find_agent(&agents, "build")["mode"], "primary");
+    assert_eq!(find_agent(&agents, "general")["mode"], "subagent");
+
+    // TUI selector = mode primary only; current() takes the first selector row.
+    let selector: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|agent| agent["mode"] == "primary")
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        selector.first().copied(),
+        Some("hya-main"),
+        "TUI primary selector must default to configured hya-main, got {selector:?}"
+    );
+    assert!(
+        !selector.contains(&"general"),
+        "subagent general must not enter TUI selector"
+    );
+}
+
+#[tokio::test]
+async fn compat_agent_route_includes_build_from_bound_catalog() {
+    // Given: a server whose SessionEngine holds the default test catalog.
     let app = router(state(tempdir()).await);
 
     // When: the Compat /agent route is listed.
     let (status, agents) = get_json(app, "/agent").await;
 
-    // Then: the build agent includes Compat's native description field.
+    // Then: build is present from the bound catalog (prompt falls back to AgentSpec).
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(agents[0]["description"], BUILD_AGENT_DESCRIPTION);
+    let build = find_agent(&agents, "build");
+    assert_eq!(build["mode"], "primary");
+    assert_eq!(build["prompt"], "system prompt");
+    assert_eq!(build["native"], true);
 }
 
 #[tokio::test]
-async fn compat_agent_routes_include_native_agent_catalog() {
-    // Given: a server exposing the Compat-compatible agent metadata routes.
+async fn compat_agent_routes_include_bound_catalog_agents() {
+    // Given: a server exposing agent metadata over the bound BundleCatalog.
     let app = router(state(tempdir()).await);
 
     // When: both legacy and v2 agent routes are listed.
     let (status, agents) = get_json(app.clone(), "/agent").await;
     let (api_status, api_agents) = get_json(app, "/api/agent").await;
 
-    // Then: Compat's native agents are available with their public metadata.
+    // Then: only the bound test catalog is listed; role maps to mode.
     assert_eq!(status, StatusCode::OK);
     assert_eq!(api_status, StatusCode::OK);
     assert_eq!(
@@ -111,29 +201,20 @@ async fn compat_agent_routes_include_native_agent_catalog() {
             .iter()
             .map(|agent| agent["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec![
-            "build",
-            "compaction",
-            "explore",
-            "general",
-            "plan",
-            "summary",
-            "title"
-        ]
+        vec!["build", "compaction", "general", "plan", "summary", "title"]
     );
 
     assert_eq!(find_agent(&agents, "plan")["mode"], "primary");
     assert_eq!(find_agent(&agents, "general")["mode"], "subagent");
-    assert_eq!(find_agent(&agents, "explore")["mode"], "subagent");
-    assert!(
-        find_agent(&agents, "explore")["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("file search specialist")
-    );
+    assert_eq!(find_agent(&agents, "compaction")["mode"], "subagent");
     assert_eq!(find_agent(&agents, "compaction")["hidden"], true);
     assert_eq!(find_agent(&agents, "title")["hidden"], true);
     assert_eq!(find_agent(&agents, "summary")["hidden"], true);
+    // Legacy /agent omits hidden when false (skip_serializing_if).
+    assert!(
+        find_agent(&agents, "general")["hidden"].is_null(),
+        "reachable subagent must not be wire-hidden on /agent"
+    );
 
     let api_agents = &api_agents["data"];
     assert_eq!(
@@ -143,40 +224,29 @@ async fn compat_agent_routes_include_native_agent_catalog() {
             .iter()
             .map(|agent| agent["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec![
-            "build",
-            "compaction",
-            "explore",
-            "general",
-            "plan",
-            "summary",
-            "title"
-        ]
+        vec!["build", "compaction", "general", "plan", "summary", "title"]
     );
     assert_eq!(find_agent(api_agents, "general")["mode"], "subagent");
-    assert!(
-        find_agent(api_agents, "explore")["system"]
-            .as_str()
-            .unwrap()
-            .contains("file search specialist")
-    );
-    assert!(
-        find_agent(api_agents, "title")["system"]
-            .as_str()
-            .unwrap()
-            .contains("title generator")
-    );
-    assert!(
-        find_agent(api_agents, "summary")["system"]
-            .as_str()
-            .unwrap()
-            .contains("pull request description")
+    assert_eq!(find_agent(api_agents, "general")["hidden"], false);
+    assert_eq!(find_agent(api_agents, "title")["system"], "title prompt");
+    assert_eq!(
+        find_agent(api_agents, "summary")["system"],
+        "summary prompt"
     );
     assert_eq!(find_agent(api_agents, "compaction")["hidden"], true);
+    // TUI selector = mode primary only (build/plan main; general is subagent).
+    let selector: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|agent| agent["mode"] == "primary")
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(selector, vec!["build", "plan"]);
 }
 
 #[tokio::test]
-async fn compat_agent_routes_discover_project_agent_files() {
+async fn compat_agent_routes_ignore_project_legacy_agent_files() {
     // Given: a workspace with Compat agent and mode markdown files.
     let workdir = tempdir();
     std::fs::create_dir_all(workdir.join(".opencode/agents")).unwrap();
@@ -209,34 +279,189 @@ async fn compat_agent_routes_discover_project_agent_files() {
     let (status, agents) = get_json(app.clone(), &uri).await;
     let (api_status, api_agents) = get_json(app, &api_uri).await;
 
-    // Then: project agents are merged with native agents and preserve metadata.
+    // Then: cut-over metadata ignores project agent files; only bound catalog remains.
     assert_eq!(status, StatusCode::OK);
     assert_eq!(api_status, StatusCode::OK);
-    let reviewer = find_agent(&agents, "reviewer");
-    assert_eq!(reviewer["description"], "Reviews changes");
-    assert_eq!(reviewer["mode"], "subagent");
-    assert_eq!(reviewer["hidden"], true);
-    assert_eq!(reviewer["model"]["providerID"], "anthropic");
-    assert_eq!(reviewer["model"]["modelID"], "claude");
-    assert_eq!(reviewer["prompt"], "Review carefully.");
-
-    let audit = find_agent(&agents, "audit");
-    assert_eq!(audit["description"], "Audit mode");
-    assert_eq!(audit["mode"], "primary");
-    assert_eq!(audit["prompt"], "Audit thoroughly.");
-
+    let names: Vec<&str> = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        !names.contains(&"reviewer") && !names.contains(&"audit"),
+        "legacy project agents must not merge into bound catalog view: {names:?}"
+    );
+    // plan is not overwritten by .opencode/agents/plan.md.
     let plan = find_agent(&agents, "plan");
-    assert_eq!(plan["description"], "Custom plan mode");
+    assert_ne!(plan["prompt"], "Plan in project style.");
     assert_eq!(plan["mode"], "primary");
-    assert_eq!(plan["native"], true);
-    assert_eq!(plan["prompt"], "Plan in project style.");
     assert_eq!(find_agent(&agents, "compaction")["hidden"], true);
+    assert_eq!(
+        find_agent(&agents, "compaction")["prompt"],
+        "compaction prompt"
+    );
 
     let api_agents = &api_agents["data"];
-    let reviewer = find_agent(api_agents, "reviewer");
-    assert_eq!(reviewer["description"], "Reviews changes");
-    assert_eq!(reviewer["model"]["providerID"], "anthropic");
-    assert_eq!(reviewer["model"]["id"], "claude");
-    assert_eq!(reviewer["system"], "Review carefully.");
-    assert_eq!(find_agent(api_agents, "audit")["mode"], "primary");
+    let ids: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        !ids.contains(&"reviewer") && !ids.contains(&"audit"),
+        "v2 route must not merge legacy project agents: {ids:?}"
+    );
+    assert_eq!(find_agent(api_agents, "plan")["mode"], "primary");
+}
+
+/// Commit 2 slice: `/api/agent` metadata is the bound BundleCatalog.
+///
+/// Role maps to selector mode; TUI-selectable set is main/primary only;
+/// ordinary can_spawn roster is independent of role; legacy project agent
+/// files must not alter this cut-over view.
+#[tokio::test]
+async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
+    // Given: an explicit prepared catalog that is *not* the legacy NATIVE_AGENTS table.
+    // - build (main) can_spawn research (subagent)
+    // - plan (main) is present but not reachable from build
+    // - research (subagent) is reachable
+    // - compaction/title/summary (subagent) have no ordinary inbound can_spawn edge
+    // - explore is intentionally absent from the catalog
+    let workdir = tempdir();
+    std::fs::create_dir_all(workdir.join(".opencode/agents")).unwrap();
+    // Legacy project agent file must not appear in the cut-over metadata view.
+    std::fs::write(
+        workdir.join(".opencode/agents/reviewer.md"),
+        "---\ndescription: Reviews changes\nmode: subagent\n---\nReview carefully.\n",
+    )
+    .unwrap();
+    let tools = Arc::new(ToolRegistry::builtins());
+    let runtime = runtime_with_catalog(
+        tools,
+        &[
+            AgentFixture::main("build")
+                .description("Default build agent")
+                .can_spawn(&["research"]),
+            AgentFixture::main("plan").description("Plan agent"),
+            AgentFixture::subagent("research")
+                .description("Reachable research subagent")
+                .prompt("research prompt body"),
+            AgentFixture::subagent("compaction").prompt("compaction system"),
+            AgentFixture::subagent("title").prompt("title system"),
+            AgentFixture::subagent("summary").prompt("summary system"),
+        ],
+    );
+    let app = router(state_with_runtime(workdir.clone(), runtime).await);
+    let engine = {
+        // Re-bind the same catalog for roster assertions through SessionEngine.
+        let providers =
+            Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+        let tools = Arc::new(ToolRegistry::builtins());
+        let runtime = runtime_with_catalog(
+            tools,
+            &[
+                AgentFixture::main("build")
+                    .description("Default build agent")
+                    .can_spawn(&["research"]),
+                AgentFixture::main("plan").description("Plan agent"),
+                AgentFixture::subagent("research")
+                    .description("Reachable research subagent")
+                    .prompt("research prompt body"),
+                AgentFixture::subagent("compaction").prompt("compaction system"),
+                AgentFixture::subagent("title").prompt("title system"),
+                AgentFixture::subagent("summary").prompt("summary system"),
+            ],
+        );
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let store = SessionStore::connect_memory().await.unwrap();
+        SessionEngine::new(store, providers, runtime, permission, EventBus::default())
+    };
+
+    // When: v2 agent metadata is listed for the workdir that also has legacy agent files.
+    let api_uri = format!("/api/agent?directory={}", workdir.display());
+    let (api_status, api_body) = get_json(app, &api_uri).await;
+    assert_eq!(api_status, StatusCode::OK);
+    let api_agents = &api_body["data"];
+    let ids: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+
+    // Then (a): metadata comes from the explicit PreparedBundle catalog; role → mode.
+    assert!(
+        ids.contains(&"research"),
+        "bound catalog agent `research` must appear, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"explore"),
+        "absent catalog agent `explore` must not be synthesized from NATIVE_AGENTS, got {ids:?}"
+    );
+    assert_eq!(find_agent(api_agents, "build")["mode"], "primary");
+    assert_eq!(find_agent(api_agents, "plan")["mode"], "primary");
+    assert_eq!(find_agent(api_agents, "research")["mode"], "subagent");
+    assert_eq!(find_agent(api_agents, "compaction")["mode"], "subagent");
+    assert_eq!(
+        find_agent(api_agents, "research")["description"],
+        "Reachable research subagent"
+    );
+
+    // Then (b): TUI selector set is role-main / mode-primary only (research stays out).
+    let selector: Vec<&str> = api_agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|agent| agent["mode"] == "primary")
+        .map(|agent| agent["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        selector,
+        vec!["build", "plan"],
+        "TUI selector modes must be primary-only, got {selector:?}"
+    );
+    assert!(
+        !selector.contains(&"research"),
+        "reachable subagent must not enter the TUI selector"
+    );
+
+    // Then (c): caller can_spawn roster includes reachable subagent, excludes unlisted main
+    // and fixed system agents (independent of role).
+    let binding = engine.bind_runtime(&workdir).unwrap();
+    let Ok(roster) = engine.agent_roster_for_binding(&binding, "build") else {
+        panic!("caller roster must resolve from bound catalog");
+    };
+    let roster_names: Vec<&str> = roster.iter().map(|agent| agent.name.as_str()).collect();
+    assert_eq!(
+        roster_names,
+        vec!["research"],
+        "roster must be can_spawn-only, got {roster_names:?}"
+    );
+    assert!(
+        !roster_names.contains(&"plan"),
+        "unlisted main must not appear"
+    );
+    for reserved in ["compaction", "title", "summary"] {
+        assert!(
+            !roster_names.contains(&reserved),
+            "{reserved} must not appear in ordinary roster"
+        );
+    }
+    // Wire hidden for autocomplete: fixed system agents are not ordinarily reachable.
+    assert_eq!(find_agent(api_agents, "compaction")["hidden"], true);
+    assert_eq!(find_agent(api_agents, "title")["hidden"], true);
+    assert_eq!(find_agent(api_agents, "summary")["hidden"], true);
+    assert_eq!(
+        find_agent(api_agents, "research")["hidden"],
+        false,
+        "reachable subagent must remain autocomplete-visible"
+    );
+
+    // Then (d): project legacy agent files do not alter the cut-over metadata view.
+    assert!(
+        !ids.contains(&"reviewer"),
+        "legacy .opencode agent must not merge into bound catalog metadata, got {ids:?}"
+    );
 }

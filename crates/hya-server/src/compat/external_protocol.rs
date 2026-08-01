@@ -20,10 +20,7 @@ pub(crate) const CONNECT_TOKEN_HEADER: &str = "x-opencode-ticket";
 /// Project-local config directory the external tool uses (read for interop).
 /// Documented here as the canonical contract value; the discovery modules build
 /// their `.opencode/<sub>` paths from this base, and tests pin it.
-#[allow(dead_code)]
 pub(crate) const PROJECT_CONFIG_DIR: &str = ".opencode";
-/// Config directory name under `~/.config/` (read for interop).
-pub(crate) const GLOBAL_CONFIG_DIR: &str = "opencode";
 /// Config file names the external tool writes (read for interop).
 pub(crate) const CONFIG_FILE_JSON: &str = "opencode.json";
 pub(crate) const CONFIG_FILE_JSONC: &str = "opencode.jsonc";
@@ -50,7 +47,6 @@ mod tests {
         assert_eq!(WORKSPACE_HEADER, "x-opencode-workspace");
         assert_eq!(CONNECT_TOKEN_HEADER, "x-opencode-ticket");
         assert_eq!(PROJECT_CONFIG_DIR, ".opencode");
-        assert_eq!(GLOBAL_CONFIG_DIR, "opencode");
         assert_eq!(CONFIG_FILE_JSON, "opencode.json");
         assert_eq!(CONFIG_FILE_JSONC, "opencode.jsonc");
     }

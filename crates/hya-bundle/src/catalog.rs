@@ -34,6 +34,9 @@ pub struct BundleCatalog {
 
 impl BundleCatalog {
     pub fn from_prepared(bundles: &[PreparedBundle]) -> Result<Self, BundleError> {
+        if bundles.is_empty() {
+            return Err(BundleError::EmptyPreparedCatalog);
+        }
         let mut catalog = Self {
             bundles: bundles.to_vec(),
             agents: BTreeMap::new(),
@@ -111,10 +114,75 @@ impl BundleCatalog {
 
     #[must_use]
     pub fn resolve_agent(&self, reference: &str) -> Option<&PreparedAgent> {
+        self.resolve_agent_entry(reference).map(|(_, agent)| agent)
+    }
+
+    #[must_use]
+    pub fn resolve_agent_entry(&self, reference: &str) -> Option<(&str, &PreparedAgent)> {
         let (bundle, agent) = *self.agents.get(reference)?;
+        let bundle = self.bundles.get(bundle)?;
+        Some((bundle.identity.id.as_str(), bundle.agents.get(agent)?))
+    }
+
+    #[must_use]
+    pub fn bundle_resources(
+        &self,
+        bundle_id: &str,
+        kind: ExportKind,
+    ) -> Option<&[PreparedResource]> {
         self.bundles
-            .get(bundle)
-            .and_then(|bundle| bundle.agents.get(agent))
+            .iter()
+            .find(|bundle| bundle.identity.id == bundle_id)
+            .map(|bundle| resources(bundle, kind))
+    }
+
+    /// Resolve one ordinary agent-to-agent spawn against the caller's compiled
+    /// reachability graph. Exact catalog lookup remains available separately for
+    /// the Harness-owned system operations.
+    pub fn resolve_spawn(
+        &self,
+        caller: &str,
+        requested: &str,
+    ) -> Result<&PreparedAgent, BundleError> {
+        let caller_agent =
+            self.resolve_agent(caller)
+                .ok_or_else(|| BundleError::UnknownAgentId {
+                    agent_id: caller.to_string(),
+                })?;
+        let requested_agent =
+            self.resolve_agent(requested)
+                .ok_or_else(|| BundleError::UnknownAgentId {
+                    agent_id: requested.to_string(),
+                })?;
+        if !caller_agent
+            .can_spawn
+            .iter()
+            .any(|allowed| allowed == &requested_agent.stable_id)
+        {
+            return Err(BundleError::AgentSpawnNotAllowed {
+                caller: caller_agent.stable_id.as_str().to_string(),
+                agent_id: requested_agent.stable_id.as_str().to_string(),
+            });
+        }
+        Ok(requested_agent)
+    }
+
+    pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<&PreparedAgent>, BundleError> {
+        let caller_agent =
+            self.resolve_agent(caller)
+                .ok_or_else(|| BundleError::UnknownAgentId {
+                    agent_id: caller.to_string(),
+                })?;
+        caller_agent
+            .can_spawn
+            .iter()
+            .map(|stable_id| {
+                self.resolve_agent(stable_id.as_str())
+                    .ok_or_else(|| BundleError::UnknownAgentId {
+                        agent_id: stable_id.as_str().to_string(),
+                    })
+            })
+            .collect()
     }
 
     pub fn resolve_resource(

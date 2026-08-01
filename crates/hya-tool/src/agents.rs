@@ -1,15 +1,4 @@
-//! Model-facing agent discovery: the `list_agents` tool + the plane that feeds
-//! it the team's agent catalog.
-//!
-//! The agent catalog lives in `hya-server`, which depends on `hya-tool` (not the
-//! other way round). To let a tool enumerate agents without a circular
-//! dependency, the app/runtime layer injects a closure via [`AgentCatalogPlane`]
-//! — exactly how [`crate::skill::SkillPlane`] / [`crate::spawn::SpawnerPlane`]
-//! are injected into [`ToolCtx`]. `hya-tool` never names the catalog type; it
-//! only knows the flattened [`AgentDef`] shape.
-
-use std::path::Path;
-use std::sync::Arc;
+//! Model-facing agent discovery over the immutable per-turn spawn roster.
 
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
@@ -23,48 +12,10 @@ pub struct AgentDef {
     /// The `subagent_type` value to pass to the `task` tool.
     pub name: String,
     pub description: Option<String>,
-    /// Logical model category (frontmatter `category:`), if any.
+    /// Logical model category from the bound Bundle definition, if any.
     pub category: Option<String>,
     /// Agent mode, e.g. `primary`, `subagent`, `all`.
     pub mode: String,
-}
-
-type CatalogSource = Arc<dyn Fn(&Path) -> Vec<AgentDef> + Send + Sync>;
-
-/// Injected access to the workdir-scoped agent catalog. Default yields an empty
-/// list so tests/engines without a wired catalog degrade gracefully.
-#[derive(Clone)]
-pub struct AgentCatalogPlane {
-    source: CatalogSource,
-}
-
-impl Default for AgentCatalogPlane {
-    fn default() -> Self {
-        Self {
-            source: Arc::new(|_| Vec::new()),
-        }
-    }
-}
-
-impl AgentCatalogPlane {
-    /// Wire a catalog resolver. The closure is called with the active workdir and
-    /// returns the agent definitions visible there (already filtered to the ones
-    /// worth showing the model, i.e. non-hidden).
-    #[must_use]
-    pub fn new<F>(source: F) -> Self
-    where
-        F: Fn(&Path) -> Vec<AgentDef> + Send + Sync + 'static,
-    {
-        Self {
-            source: Arc::new(source),
-        }
-    }
-
-    /// Enumerate the agent definitions available in `workdir`.
-    #[must_use]
-    pub fn list(&self, workdir: &Path) -> Vec<AgentDef> {
-        (self.source)(workdir)
-    }
 }
 
 pub(crate) struct ListAgentsTool;
@@ -89,7 +40,7 @@ impl Tool for ListAgentsTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let mut agents = ctx.agents.list(&ctx.workdir);
+        let mut agents = ctx.agents.to_vec();
         agents.sort_by(|left, right| left.name.cmp(&right.name));
         let rows: Vec<Value> = agents
             .iter()
@@ -128,35 +79,5 @@ impl Tool for ListAgentsTool {
             "agents": rows,
             "metadata": { "count": agents.len() },
         }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn default_plane_lists_nothing() {
-        let plane = AgentCatalogPlane::default();
-        assert!(plane.list(&PathBuf::from("/tmp")).is_empty());
-    }
-
-    #[test]
-    fn injected_closure_is_workdir_scoped() {
-        // The plane forwards the active workdir to the injected resolver, mirroring
-        // how the app layer wires `hya_server::agent_definitions`.
-        let plane = AgentCatalogPlane::new(|workdir: &Path| {
-            vec![AgentDef {
-                name: workdir.to_string_lossy().into_owned(),
-                description: Some("d".to_string()),
-                category: Some("deep".to_string()),
-                mode: "subagent".to_string(),
-            }]
-        });
-        let defs = plane.list(&PathBuf::from("/work/here"));
-        assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].name, "/work/here");
-        assert_eq!(defs[0].category.as_deref(), Some("deep"));
     }
 }

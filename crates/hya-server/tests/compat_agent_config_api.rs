@@ -1,8 +1,15 @@
+//! Characterization after legacy agent-definition authority deletion.
+//!
+//! Inline JSON/JSONC agent definitions and per-agent permission/options/reasoning
+//! overlays must not reappear through `/agent` or `/api/agent`. The approved
+//! `default_agent` key remains readable for selection/sort only.
+
 #![allow(clippy::unwrap_used)]
+
+mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -13,28 +20,37 @@ use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use support::{AgentFixture, runtime_with_catalog, tempdir as support_tempdir};
+
 fn tempdir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "hya-server-agent-config-test-{nanos}-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    support_tempdir("agent-config")
 }
 
-async fn state(workdir: PathBuf) -> AppState {
-    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+/// Catalog with mains `hya-main`/`build` for default_agent selection checks.
+fn catalog_runtime() -> Arc<hya_core::RuntimeRegistry> {
     let tools = Arc::new(ToolRegistry::builtins());
+    runtime_with_catalog(
+        tools,
+        &[
+            AgentFixture::main("hya-main").description("Configured default main"),
+            AgentFixture::main("build").description("Build main"),
+            AgentFixture::main("plan").description("Plan main"),
+            AgentFixture::subagent("general").description("General subagent"),
+            AgentFixture::subagent("compaction").prompt("compaction system"),
+            AgentFixture::subagent("title").prompt("title system"),
+            AgentFixture::subagent("summary").prompt("summary system"),
+        ],
+    )
+}
+
+async fn state_with_runtime(workdir: PathBuf, runtime: Arc<hya_core::RuntimeRegistry>) -> AppState {
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, permission, EventBus::default());
+    let engine = SessionEngine::new(store, providers, runtime, permission, EventBus::default());
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -63,42 +79,39 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-async fn post_json(app: axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(uri)
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap())
+fn agent_names(agents: &Value) -> Vec<&str> {
+    agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| {
+            agent["name"]
+                .as_str()
+                .or_else(|| agent["id"].as_str())
+                .unwrap()
+        })
+        .collect()
 }
 
 fn find_agent<'a>(agents: &'a Value, name: &str) -> &'a Value {
-    agent_named(agents, name).unwrap_or_else(|| panic!("missing agent {name}: {agents}"))
-}
-
-fn agent_named<'a>(agents: &'a Value, name: &str) -> Option<&'a Value> {
     agents
         .as_array()
         .unwrap()
         .iter()
         .find(|agent| agent["name"] == name || agent["id"] == name)
+        .unwrap_or_else(|| panic!("missing agent {name}: {agents}"))
 }
 
+/// Inline agent definitions in JSON/JSONC must not create reusable catalog rows,
+/// and legacy per-agent permissions/options/reasoning must not project as overlays.
 #[tokio::test]
-async fn compat_agent_routes_discover_inline_config_agents() {
-    // Given: Compat config files with inline agents and modes.
+async fn inline_config_agents_and_overlays_do_not_appear_in_agent_routes() {
     let workdir = tempdir();
     std::fs::create_dir_all(workdir.join(".opencode")).unwrap();
     std::fs::write(
         workdir.join("opencode.jsonc"),
         r##"{
+  // Inline definitions and overlays must be ignored by metadata projection.
   "permissions": [
     { "action": "todowrite", "resource": "*", "effect": "deny" }
   ],
@@ -114,24 +127,13 @@ async fn compat_agent_routes_discover_inline_config_agents() {
       "color": "#A855F7",
       "steps": 9,
       "options": {
-        "reasoning": { "summary": "auto" }
+        "reasoning": { "summary": "auto" },
+        "reasoningEffort": "high"
       },
       "customFlag": "from-rest",
-      "request": {
-        "headers": { "x-agent": "architect" },
-        "body": { "reasoning_effort": "high" }
-      },
       "permissions": [
         { "action": "read", "resource": "docs/**", "effect": "allow" }
       ],
-      "tools": {
-        "write": false,
-        "webfetch": true
-      },
-      "permission": {
-        "grep": "deny",
-        "bash": { "git *": "ask" }
-      },
       "prompt": "Think structurally."
     },
     "plan": {
@@ -150,7 +152,7 @@ async fn compat_agent_routes_discover_inline_config_agents() {
     std::fs::write(
         workdir.join(".opencode/opencode.json"),
         r#"{
-  "default_agent": "triage",
+  "default_agent": "hya-main",
   "mode": {
     "triage": {
       "description": "Triage mode",
@@ -162,103 +164,107 @@ async fn compat_agent_routes_discover_inline_config_agents() {
 "#,
     )
     .unwrap();
-    let app = router(state(workdir.clone()).await);
 
-    // When: both agent routes are listed for that workspace.
+    let app = router(state_with_runtime(workdir.clone(), catalog_runtime()).await);
     let uri = format!("/agent?directory={}", workdir.display());
     let api_uri = format!("/api/agent?directory={}", workdir.display());
     let (status, agents) = get_json(app.clone(), &uri).await;
-    let (api_status, api_agents) = get_json(app.clone(), &api_uri).await;
-    let (create_status, created) = post_json(
-        app,
-        "/api/session",
-        serde_json::json!({ "location": { "directory": workdir.display().to_string() } }),
-    )
-    .await;
+    let (api_status, api_body) = get_json(app, &api_uri).await;
 
-    // Then: inline agents merge with native agents and inline modes become primary agents.
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(api_status, StatusCode::OK);
-    assert_eq!(create_status, StatusCode::OK);
-    assert_eq!(agents[0]["name"], "triage");
-    let architect = find_agent(&agents, "architect");
-    assert_eq!(architect["description"], "Architecture reviewer");
-    assert_eq!(architect["mode"], "subagent");
-    assert_eq!(architect["hidden"], true);
-    assert_eq!(architect["model"]["providerID"], "openai");
-    assert_eq!(architect["model"]["modelID"], "gpt-5");
-    assert_eq!(architect["temperature"], 0.2);
-    assert_eq!(architect["topP"], 0.8);
-    assert_eq!(architect["color"], "#A855F7");
-    assert_eq!(architect["steps"], 9);
-    assert_eq!(architect["options"]["reasoning"]["summary"], "auto");
-    assert_eq!(architect["options"]["customFlag"], "from-rest");
-    assert_eq!(architect["prompt"], "Think structurally.");
-    assert_agent_permissions(&architect["permission"]);
+    assert_eq!(status, StatusCode::OK, "legacy body: {agents}");
+    assert_eq!(api_status, StatusCode::OK, "api body: {api_body}");
 
+    let legacy_names = agent_names(&agents);
+    let api_agents = &api_body["data"];
+    let api_ids = agent_names(api_agents);
+
+    // Inline agent / mode names never become reusable definitions.
+    for forbidden in ["architect", "triage"] {
+        assert!(
+            !legacy_names.contains(&forbidden),
+            "legacy /agent must not list inline config agent {forbidden}: {legacy_names:?}"
+        );
+        assert!(
+            !api_ids.contains(&forbidden),
+            "/api/agent must not list inline config agent {forbidden}: {api_ids:?}"
+        );
+    }
+
+    // summary remains from the bound catalog (disable:true no longer removes it).
+    assert!(
+        legacy_names.contains(&"summary"),
+        "bound catalog summary must remain listed: {legacy_names:?}"
+    );
+    assert!(
+        api_ids.contains(&"summary"),
+        "bound catalog summary must remain listed on /api/agent: {api_ids:?}"
+    );
+
+    // plan is catalog main, not the inline overlay (description/prompt/steps).
     let plan = find_agent(&agents, "plan");
-    assert_eq!(plan["description"], "Inline plan mode");
-    assert_eq!(plan["mode"], "primary");
-    assert_eq!(plan["native"], true);
-    assert_eq!(plan["steps"], 7);
-    assert_eq!(plan["prompt"], "Plan inline.");
-    assert!(agent_named(&agents, "summary").is_none());
-
-    let triage = find_agent(&agents, "triage");
-    assert_eq!(triage["description"], "Triage mode");
-    assert_eq!(triage["mode"], "primary");
-    assert_eq!(triage["model"]["providerID"], "anthropic");
-    assert_eq!(triage["model"]["modelID"], "claude-sonnet");
-    assert_global_permissions(&triage["permission"]);
-    assert_eq!(created["data"]["agent"], "triage");
-
-    let api_agents = &api_agents["data"];
-    assert_eq!(api_agents[0]["id"], "triage");
-    let architect = find_agent(api_agents, "architect");
-    assert_eq!(architect["description"], "Architecture reviewer");
-    assert_eq!(architect["system"], "Think structurally.");
-    assert_eq!(architect["model"]["providerID"], "openai");
-    assert_eq!(architect["model"]["id"], "gpt-5");
-    assert_eq!(architect["model"]["variant"], "high");
-    assert_eq!(architect["color"], "#A855F7");
-    assert_eq!(architect["steps"], 9);
-    assert_eq!(architect["request"]["headers"]["x-agent"], "architect");
-    assert_eq!(architect["request"]["body"]["reasoning_effort"], "high");
-    assert_agent_permissions(&architect["permissions"]);
-    assert_eq!(find_agent(api_agents, "plan")["steps"], 7);
-    let triage = find_agent(api_agents, "triage");
-    assert_eq!(triage["mode"], "primary");
-    assert_global_permissions(&triage["permissions"]);
-    assert!(agent_named(api_agents, "summary").is_none());
-}
-
-fn assert_global_permissions(permissions: &Value) {
-    let permissions = permissions.as_array().unwrap();
-    assert!(permissions.contains(
-        &serde_json::json!({"permission": "todowrite", "pattern": "*", "action": "deny"})
-    ));
-}
-
-fn assert_agent_permissions(permissions: &Value) {
-    let permissions = permissions.as_array().unwrap();
-    assert_global_permissions(&Value::Array(permissions.clone()));
-    assert!(permissions.contains(
-        &serde_json::json!({"permission": "read", "pattern": "docs/**", "action": "allow"})
-    ));
-    assert!(
-        permissions
-            .contains(&serde_json::json!({"permission": "grep", "pattern": "*", "action": "deny"}))
+    assert_ne!(
+        plan.get("description").and_then(Value::as_str),
+        Some("Inline plan mode"),
+        "inline plan description must not overlay catalog plan: {plan}"
+    );
+    assert_ne!(
+        plan.get("prompt").and_then(Value::as_str),
+        Some("Plan inline."),
+        "inline plan prompt must not overlay catalog plan: {plan}"
     );
     assert!(
-        permissions
-            .contains(&serde_json::json!({"permission": "edit", "pattern": "*", "action": "deny"}))
+        plan.get("steps").is_none() || plan["steps"].is_null(),
+        "inline maxSteps must not project onto catalog plan: {plan}"
     );
-    assert!(permissions.contains(
-        &serde_json::json!({"permission": "webfetch", "pattern": "*", "action": "allow"})
-    ));
+
+    // Config-level permissions and agent options/reasoning are not per-agent overlays.
+    let build = find_agent(&agents, "build");
+    let build_permission = &build["permission"];
     assert!(
-        permissions.contains(
-            &serde_json::json!({"permission": "bash", "pattern": "git *", "action": "ask"})
-        )
+        build_permission
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
+            || !build_permission
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["permission"] == "todowrite"),
+        "config permissions must not project as agent overlays: {build_permission}"
     );
+    assert_eq!(
+        build.get("options").cloned().unwrap_or(json!({})),
+        json!({}),
+        "legacy agent options/reasoning must not project: {build}"
+    );
+
+    let api_build = find_agent(api_agents, "build");
+    let api_permissions = &api_build["permissions"];
+    assert!(
+        api_permissions
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
+            || !api_permissions
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["permission"] == "todowrite"),
+        "config permissions must not project on /api/agent: {api_permissions}"
+    );
+
+    // Valid default_agent still sorts the native catalog definition first.
+    // Stronger session-create coverage lives in bound_catalog_session_api.
+    assert_eq!(
+        legacy_names.first().copied(),
+        Some("hya-main"),
+        "valid default_agent must promote hya-main on /agent: {legacy_names:?}"
+    );
+    assert_eq!(
+        api_ids.first().copied(),
+        Some("hya-main"),
+        "valid default_agent must promote hya-main on /api/agent: {api_ids:?}"
+    );
+    assert_eq!(find_agent(&agents, "hya-main")["mode"], "primary");
+    assert_eq!(find_agent(api_agents, "hya-main")["mode"], "primary");
 }

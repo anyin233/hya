@@ -9,8 +9,8 @@ use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HostInfo, PluginKindWire};
 use hya_proto::SessionId;
 use hya_tool::{
-    AgentCatalogPlane, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolOperation, WebSearchPlane,
+    FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane, PermissionRules,
+    SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolOperation, WebSearchPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -75,7 +75,7 @@ fn ctx() -> ToolCtx {
         skills: SkillPlane::default(),
         websearch: WebSearchPlane::default(),
         formatter: FormatterPlane::default(),
-        agents: AgentCatalogPlane::default(),
+        agents: Default::default(),
         lsp: LspPlane::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),

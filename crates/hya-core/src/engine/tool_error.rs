@@ -24,6 +24,9 @@ fn tool_error_type(error: &ToolError) -> &'static str {
         ToolError::Overloaded(_) => "overloaded",
         ToolError::OperationIdConflict => "operation_id_conflict",
         ToolError::OperationAlreadyHandled => "operation_already_handled",
+        ToolError::UnknownAgentId { .. } => "unknown_agent_id",
+        ToolError::AgentSpawnNotAllowed { .. } => "agent_spawn_not_allowed",
+        ToolError::UnsupportedInlineAgentField { .. } => "unsupported_inline_agent_field",
         ToolError::Other(_) => "unknown",
     }
 }

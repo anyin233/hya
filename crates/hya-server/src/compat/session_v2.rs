@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hya_core::CreateSession;
-use hya_proto::{AgentName, SessionId};
+use hya_proto::SessionId;
 use serde::{Deserialize, Serialize};
 
 use super::model_ref::CompatModelRefRequest;
@@ -151,10 +151,12 @@ async fn create(
     let workdir = super::location::canonical_workdir(workdir)
         .to_string_lossy()
         .into_owned();
-    let agent = req
-        .agent
-        .map(AgentName::new)
-        .unwrap_or_else(|| default_agent(&st, &workdir));
+    // Validate against one bound catalog before any create/event side effects.
+    let agent = super::bound_agent_metadata::resolve_session_agent(
+        &st,
+        std::path::Path::new(&workdir),
+        req.agent.as_deref(),
+    )?;
     let session = st
         .engine
         .create_with_id(
@@ -172,12 +174,6 @@ async fn create(
         .await?;
     let data = super::load_session(&st, session, None).await?.info;
     Ok(Json(DataResponse { data }))
-}
-
-fn default_agent(st: &ServerState, workdir: &str) -> AgentName {
-    super::agent_catalog::default_name(std::path::Path::new(workdir), st)
-        .map(AgentName::new)
-        .unwrap_or_else(|| st.agent.name.clone())
 }
 
 async fn get_one(

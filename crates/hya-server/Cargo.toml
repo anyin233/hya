@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+hya-bundle = { workspace = true }
 hya-core = { workspace = true }
 hya-mcp = { workspace = true }
 hya-proto = { workspace = true }

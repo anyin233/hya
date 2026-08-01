@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,7 +51,13 @@ async fn tool_errors_record_structured_payload_for_provider_replay() {
         Mode::Deny,
     )]));
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, router, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
 
     let session = engine
         .create(CreateSession {

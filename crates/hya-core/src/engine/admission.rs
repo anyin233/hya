@@ -529,7 +529,7 @@ mod tests {
         let engine = SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new()),
-            Arc::new(ToolRegistry::builtins()),
+            crate::test_support::runtime(ToolRegistry::builtins()),
             permission,
             EventBus::default(),
         )
@@ -583,7 +583,7 @@ mod tests {
         let engine = SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new()),
-            Arc::new(ToolRegistry::builtins()),
+            crate::test_support::runtime(ToolRegistry::builtins()),
             permission,
             EventBus::default(),
         )
@@ -633,7 +633,7 @@ mod tests {
         let engine = SessionEngine::new(
             store.clone(),
             Arc::new(ProviderRouter::new()),
-            Arc::new(ToolRegistry::builtins()),
+            crate::test_support::runtime(ToolRegistry::builtins()),
             permission,
             EventBus::default(),
         )

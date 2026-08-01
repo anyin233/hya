@@ -134,7 +134,7 @@ async fn admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch() {
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        Arc::new(tools),
+        support::test_runtime(Arc::new(tools)),
         permission,
         EventBus::default(),
     ));

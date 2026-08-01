@@ -9,8 +9,8 @@ use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 
 pub struct TaskTool;
 
-/// An inline, ephemeral agent definition supplied on a `task` call. It lives only
-/// for that spawn (no disk write); persistence is opt-in via the `write` tool.
+/// Request-scoped inline agent overlay for a `task` call. Applies only to this
+/// request/child spawn and is not retained as a reusable agent definition.
 #[derive(Deserialize)]
 struct InlineAgentInput {
     #[serde(default)]
@@ -52,6 +52,7 @@ struct TaskMemberInput {
     #[serde(default)]
     description: String,
     prompt: String,
+    #[serde(default)]
     subagent_type: String,
     #[serde(default)]
     category: Option<String>,
@@ -149,14 +150,14 @@ impl Tool for TaskTool {
                 },
                 "inline_agent": {
                     "type": "object",
-                    "description": "Define an ephemeral agent for this spawn only (no disk file). Supplies its own system prompt + name and folds into the same model/category precedence chain. To reuse it later, have the agent save an .md via the write tool.",
+                    "description": "Request-scoped agent overlay for this spawn only. Supplies its own system prompt and name for the child and folds into the same model/category precedence chain; not retained for later reuse as an agent definition.",
                     "properties": {
                         "name": { "type": "string", "description": "Agent name (defaults to subagent_type when omitted)" },
-                        "prompt": { "type": "string", "description": "The system prompt / persona for the ephemeral agent" },
+                        "prompt": { "type": "string", "description": "The system prompt / persona for the request-scoped overlay" },
                         "description": { "type": "string" },
-                        "category": { "type": "string", "description": "Logical model category (~ frontmatter category)" },
-                        "model": { "type": "string", "description": "Concrete provider/model (~ frontmatter model)" },
-                        "resident": { "type": "boolean", "description": "Make this ephemeral agent a resident actor (~ frontmatter resident)" }
+                        "category": { "type": "string", "description": "Logical model category (request overlay; folds into spawn model precedence)" },
+                        "model": { "type": "string", "description": "Concrete provider/model (request overlay; folds into spawn model precedence)" },
+                        "resident": { "type": "boolean", "description": "Make this request-scoped overlay a resident actor" }
                     }
                 },
                 "members": {
@@ -173,6 +174,7 @@ impl Tool for TaskTool {
                             "resident": { "type": "boolean", "description": "Spawn this member as a resident actor (non-blocking)" },
                             "inline_agent": {
                                 "type": "object",
+                                "description": "Request-scoped agent overlay for this member spawn only. Supplies its own system prompt and name for the child and folds into the same model/category precedence chain; not retained for later reuse as an agent definition.",
                                 "properties": {
                                     "name": { "type": "string" },
                                     "prompt": { "type": "string" },
@@ -183,11 +185,11 @@ impl Tool for TaskTool {
                                 }
                             }
                         },
-                        "required": ["prompt", "subagent_type"]
+                        "required": ["prompt"]
                     }
                 }
             }),
-            &["description", "prompt", "subagent_type"],
+            &["description", "prompt"],
         )
     }
 
@@ -210,13 +212,14 @@ impl Tool for TaskTool {
             .members
             .into_iter()
             .map(|m| {
+                let subagent_type = normalized_agent_target(&m.subagent_type);
                 let inline_agent = m
                     .inline_agent
-                    .map(|inline| inline.into_inline(&m.subagent_type));
+                    .map(|inline| inline.into_inline(&subagent_type));
                 SpawnMember {
                     description: m.description,
                     prompt: m.prompt,
-                    subagent_type: m.subagent_type,
+                    subagent_type,
                     task_id: None,
                     model: m.model,
                     category: m.category,
@@ -233,21 +236,19 @@ impl Tool for TaskTool {
                     ))
                 })?;
             }
-            if input.description.trim().is_empty()
-                || input.prompt.trim().is_empty()
-                || input.subagent_type.trim().is_empty()
-            {
+            if input.description.trim().is_empty() || input.prompt.trim().is_empty() {
                 return Err(ToolError::Input(
-                    "provide description, prompt, and subagent_type".to_string(),
+                    "provide description and prompt".to_string(),
                 ));
             }
+            let subagent_type = normalized_agent_target(&input.subagent_type);
             let inline_agent = input
                 .inline_agent
-                .map(|inline| inline.into_inline(&input.subagent_type));
+                .map(|inline| inline.into_inline(&subagent_type));
             members.push(SpawnMember {
                 description: input.description,
                 prompt: input.prompt,
-                subagent_type: input.subagent_type,
+                subagent_type,
                 task_id,
                 model: input.model,
                 category: input.category,
@@ -284,6 +285,13 @@ impl Tool for TaskTool {
             SpawnError::Unavailable => ToolError::Other(error.to_string()),
             SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
             SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
+            SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
+            SpawnError::AgentSpawnNotAllowed { caller, agent_id } => {
+                ToolError::AgentSpawnNotAllowed { caller, agent_id }
+            }
+            SpawnError::UnsupportedInlineAgentField { field } => {
+                ToolError::UnsupportedInlineAgentField { field }
+            }
         })?;
         if members.len() == 1 && outcomes.len() == 1 {
             let member = members.remove(0);
@@ -339,6 +347,15 @@ impl Tool for TaskTool {
                 members_json.len()
             ),
         }))
+    }
+}
+
+fn normalized_agent_target(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        "general".to_string()
+    } else {
+        value.to_string()
     }
 }
 

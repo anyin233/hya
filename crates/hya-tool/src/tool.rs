@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::agents::{AgentCatalogPlane, ListAgentsTool};
+use crate::agents::{AgentDef, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
@@ -52,6 +52,12 @@ pub enum ToolError {
     OperationIdConflict,
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
+    UnknownAgentId { agent_id: String },
+    #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
+    AgentSpawnNotAllowed { caller: String, agent_id: String },
+    #[error("UNSUPPORTED_INLINE_AGENT_FIELD: `{field}`")]
+    UnsupportedInlineAgentField { field: &'static str },
     #[error("{0}")]
     Other(String),
 }
@@ -72,7 +78,7 @@ pub struct ToolCtx {
     pub parent_session: Option<SessionId>,
     pub todo: TodoPlane,
     pub skills: SkillPlane,
-    pub agents: AgentCatalogPlane,
+    pub agents: Arc<[AgentDef]>,
     pub websearch: WebSearchPlane,
     pub lsp: LspPlane,
     pub formatter: FormatterPlane,
@@ -434,6 +440,32 @@ impl ToolRegistrySnapshot {
             .values()
             .map(|resolved| resolved.tool.schema())
             .collect()
+    }
+
+    /// Canonical effective tools, excluding alternate registry aliases.
+    #[must_use]
+    pub fn canonical_tools(&self) -> Vec<(String, ResolvedTool)> {
+        self.inner
+            .tools
+            .iter()
+            .map(|(name, resolved)| (name.clone(), resolved.clone()))
+            .collect()
+    }
+
+    /// Alias spellings whose resolved tool name matches `canonical`.
+    /// Narrow seam used by resource-view compilation to project candidate
+    /// effective aliases; there is no bulk public alias dump.
+    #[must_use]
+    pub fn aliases_for_canonical(&self, canonical: &str) -> Vec<String> {
+        let mut names = self
+            .inner
+            .aliases
+            .iter()
+            .filter(|(_, resolved)| resolved.tool.name() == canonical)
+            .map(|(alias, _)| alias.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
     }
 }
 

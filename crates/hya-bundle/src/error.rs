@@ -25,6 +25,10 @@ pub enum BundleError {
     DuplicateBundleId { bundle_id: String },
     #[error("duplicate stable agent id `{stable_id}`")]
     DuplicateStableAgentId { stable_id: String },
+    #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
+    UnknownAgentId { agent_id: String },
+    #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
+    AgentSpawnNotAllowed { caller: String, agent_id: String },
     #[error("duplicate local agent id `{local_id}` in bundle `{bundle_id}`")]
     DuplicateLocalAgentId { bundle_id: String, local_id: String },
     #[error(
@@ -64,4 +68,6 @@ pub enum BundleError {
     PreparedIndexMismatch,
     #[error("prepared catalog is not canonically ordered")]
     NonCanonicalPreparedCatalog,
+    #[error("prepared catalog contains no bundles")]
+    EmptyPreparedCatalog,
 }

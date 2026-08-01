@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,7 +36,13 @@ async fn state(workdir: PathBuf) -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, permission, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
@@ -181,17 +189,54 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
     assert_eq!(skill_status, StatusCode::OK);
     let skill = find_named(&skills, "customize-compat");
     assert_eq!(skill["location"], "<built-in>");
+    let customize_description = skill["description"].as_str().unwrap_or("");
+    let customize_content = skill["content"].as_str().unwrap_or("");
+    assert!(customize_description.starts_with("Use ONLY"));
+    assert!(customize_content.contains("# Customizing compat"));
+
+    // And: customize-compat must not advertise unsupported legacy agent surfaces
+    // (Markdown agent paths, opencode.json agent definitions, write-agent-file
+    // persistence, or "create/fix agents/subagents" as this skill's job).
+    let customize_surface = format!("{customize_description}\n{customize_content}");
     assert!(
-        skill["description"]
-            .as_str()
-            .unwrap()
-            .starts_with("Use ONLY")
+        !customize_surface.contains(".opencode/agent")
+            && !customize_surface.contains(".opencode/agents")
+            && !customize_surface.contains("~/.config/opencode/agent"),
+        "customize-compat must not advertise legacy .opencode/agent(s) Markdown paths: {customize_surface}"
     );
     assert!(
-        skill["content"]
-            .as_str()
-            .unwrap()
-            .contains("# Customizing compat")
+        !customize_content.contains("## Agents")
+            && !customize_content.contains("\"agent\": {")
+            && !customize_content.contains("Two ways to define an agent")
+            && !customize_content.contains("Inline (in `opencode.json`)"),
+        "customize-compat must not advertise an opencode JSON agent definition surface: {customize_content}"
+    );
+    assert!(
+        !customize_content.contains("an agent file")
+            && !customize_content.contains("For agent, command, skill, and plugin")
+            && !customize_content.contains("writing agent files"),
+        "customize-compat must not teach persistence by writing agent files: {customize_content}"
+    );
+    assert!(
+        !customize_description.contains("creating or fixing compat agents")
+            && !customize_description.contains("compat agents, subagents")
+            && !customize_surface.contains("creating or fixing compat agents, subagents"),
+        "customize-compat must not say this skill creates/fixes compat agents or subagents: {customize_description}"
+    );
+    // Native-only agent authority note: point at agent-bundle-authoring and state
+    // 0.34.8 does not parse/discover/migrate legacy agent JSON/JSONC/Markdown.
+    assert!(
+        customize_surface.contains("agent-bundle-authoring")
+            && customize_surface.contains("0.34.8")
+            && (customize_surface.contains("does not parse")
+                || customize_surface.contains("does not discover")
+                || customize_surface.contains("does not parse/discover")
+                || customize_surface.contains("does not parse, discover")),
+        "customize-compat must point at agent-bundle-authoring and state 0.34.8 native-only agent boundaries: {customize_surface}"
+    );
+    assert!(
+        customize_surface.contains("AgentBundle") || customize_surface.contains("embedded native"),
+        "customize-compat must state built-ins come from embedded native AgentBundles: {customize_surface}"
     );
 
     assert_eq!(command_status, StatusCode::OK);
@@ -202,6 +247,53 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
             .as_str()
             .unwrap()
             .contains("opencode.json")
+    );
+
+    // And: the built-in agent-bundle-authoring skill is registered exactly once
+    // with built-in location and nonempty truthful content.
+    let authoring_matches = skills
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|skill| skill["name"] == "agent-bundle-authoring")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authoring_matches.len(),
+        1,
+        "agent-bundle-authoring must appear exactly once: {skills}"
+    );
+    let authoring = authoring_matches[0];
+    assert_eq!(authoring["location"], "<built-in>");
+    let authoring_description = authoring["description"].as_str().unwrap_or("");
+    assert!(
+        !authoring_description.trim().is_empty(),
+        "agent-bundle-authoring description must be nonempty"
+    );
+    let authoring_content = authoring["content"].as_str().unwrap_or("");
+    assert!(
+        !authoring_content.trim().is_empty(),
+        "agent-bundle-authoring content must be nonempty"
+    );
+    assert!(
+        authoring_content.contains("AgentBundle")
+            && authoring_content.contains("0.34.8")
+            && authoring_content.contains("does not runtime-scan"),
+        "agent-bundle-authoring content must be truthful about AgentBundle and 0.34.8 prepare-only boundaries: {authoring_content}"
+    );
+    // Role controls TUI direct-selector visibility only: main is selectable;
+    // subagent is hidden from direct selection — never a subagent selector placement.
+    // Roster/spawn come from can_spawn, never from role.
+    assert!(
+        !authoring_content.contains("subagent selector placement"),
+        "agent-bundle-authoring must not imply role subagent has a subagent selector placement: {authoring_content}"
+    );
+    assert!(
+        authoring_content.contains("hidden from direct TUI selection"),
+        "agent-bundle-authoring must state role subagent is hidden from direct TUI selection: {authoring_content}"
+    );
+    assert!(
+        authoring_content.contains("can_spawn") && authoring_content.contains("never from `role`"),
+        "agent-bundle-authoring must distinguish can_spawn-derived roster/spawn from role: {authoring_content}"
     );
 }
 

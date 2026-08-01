@@ -1201,3 +1201,182 @@ mapping. Runtime rejection, selector/eligible-roster behavior, fixed system
 lookups, and replay/resume proofs remain Commit 2 RED/GREEN work. This ruling
 supersedes only the Consult19 ambiguity; all other Consult19 constraints remain
 in force.
+
+### `CONSULT-2026-07-31-RUNTIME-CATALOG-AUTHORITY-21`
+
+```text
+consultation_id: CONSULT-2026-07-31-RUNTIME-CATALOG-AUTHORITY-21
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: choose the single runtime ownership and construction seam for the activating native Bundle cutover
+pro_conclusion: construct RuntimeRegistry with one required Arc<BundleCatalog>, retain it in every immutable RuntimeSnapshot and TurnBinding, and remove every SessionEngine catalog/resolver authority
+macbook_air_ruling: adopt option A only; production decodes the embedded prepared catalog once at app bootstrap, and tests construct explicit in-memory prepared catalogs through the production BundleCatalog constructor
+ruling_scope: release 0.34.8 atomic commit 2 only
+follow_up_of: CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19 and CONSULT-2026-07-31-RESERVED-SYSTEM-AGENTS-20
+```
+
+Controlling disposition:
+
+- `RuntimeRegistry` requires the catalog at construction and every complete
+  tool/skill/MCP publication carries forward the unchanged `Arc`; there is no
+  catalog replacement API in `0.34.8`.
+- `SessionEngine`, tools, server, and TUI may consume definitions or minimal
+  views from the current `TurnBinding`, but none may own a resolver, closure,
+  cache, fallback catalog, or independently embedded copy.
+- Empty/later-injected catalogs, overloaded constructors, test runtime
+  fallbacks, synthesized `AgentSpec`, and missing-definition fallback to
+  `general` are `rejected`. Tests use crate-local fixtures that exercise the
+  production `PreparedBundle -> BundleCatalog::from_prepared -> Arc` path.
+- Read-only event/projection replay remains catalog-independent. Any operation
+  that continues execution resolves its stable `AgentName` through the new
+  binding and fails typed `AGENT_DEFINITION_MISSING` when absent.
+- Required Commit 2 evidence remains `pending`: construction-time ownership,
+  binding pinning across a tool generation, omitted-versus-explicit resolution,
+  caller `can_spawn` reachability, fixed system lookups, and invalid embedded
+  catalog bootstrap failure without fallback.
+
+### `CONSULT-2026-07-31-INLINE-AGENT-OVERLAY-22`
+
+```text
+consultation_id: CONSULT-2026-07-31-INLINE-AGENT-OVERLAY-22
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: preserve the effective one-spawn inline-agent behavior without creating a reusable definition or a second catalog authority
+pro_conclusion: authorize the catalog base target first, then apply a child-scoped overlay to a clone of that bound AgentSpec
+macbook_air_ruling: adopt option A with the verified HEAD model/category precedence and fail-closed unknown, can_spawn, restart, and ignored-description semantics below
+ruling_scope: release 0.34.8 atomic commit 2 inline spawn resolution only
+follow_up_of: CONSULT-2026-07-31-RUNTIME-CATALOG-AUTHORITY-21
+```
+
+Controlling disposition:
+
+- Resolve the base target from the current `TurnBinding` first: omission alone
+  selects `general`; an explicit unknown ID is `UNKNOWN_AGENT_ID`; the caller's
+  `can_spawn` edge is required before admission, child creation, or events.
+- Only after authorization may one explicit inline request clone that bound
+  `AgentSpec` and overlay it for one child execution. It creates no Bundle,
+  catalog/snapshot entry, namespace row, roster/TUI/list row, or reusable
+  definition, and it never mutates the catalog.
+- Preserve the source-verified precedence: spawn model, spawn category, inline
+  model, Bundle model, inline category, Bundle category, then base model.
+  Non-empty inline prompt replaces the bound prompt; non-empty inline name is
+  only the child's public event/session identity. Resident is the OR of Bundle
+  lifecycle, inline resident, and spawn-time resident.
+- Replay remains identity-only. An in-process resident may retain its overlay;
+  process-loss recovery cannot reconstruct it and returns
+  `AGENT_DEFINITION_MISSING` when the recorded name has no catalog definition.
+  A coincident same-name definition does not prove restoration of the lost
+  inline prompt/model/category.
+- Inline `description` is `B_PARSED_IGNORED` on current HEAD and must gain an
+  honest existing consumer or be typed-rejected; silent acceptance is
+  forbidden. No persistence, public API/event, catalog overlay, or external
+  runner is authorized.
+
+This ruling releases only the paused inline branch. Source verification,
+RED/GREEN evidence, full local gates, and remote CI remain mandatory.
+
+### `CONSULT-2026-07-31-COMPILED-RESOURCE-VIEW-23`
+
+```text
+consultation_id: CONSULT-2026-07-31-COMPILED-RESOURCE-VIEW-23
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: fix the canonical allow/deny/alias/namespace order for the immutable per-turn AgentBundle resource view
+pro_conclusion: select bundle-local plus the harness_access baseline per resource kind, filter by canonical identity with deny winning, then assign collision-checked public names used identically by schema/prompt and dispatch
+macbook_air_ruling: adopt the algorithm with one performance correction: compile once only for the actual bound agent from its retained TurnBinding, not eagerly for every agent on each RuntimeSnapshot publication
+ruling_scope: release 0.34.8 atomic commit 2 resource visibility and routing only
+follow_up_of: CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19
+```
+
+Controlling disposition:
+
+- Bundle-local resources are candidates independently of `harness_access`;
+  `none` adds no Harness resources, `basic` adds only built-in-origin resources,
+  and `full` adds the complete current bound Harness view.
+- `allow` and `deny` resolve to canonical identities before naming; non-empty
+  allow is a whitelist and deny wins. Missing, cross-kind, ambiguous, filtered,
+  or access-ineligible references fail typed, and aliases cannot bypass this
+  filtering.
+- Namespace changes only bundle-local qualified spelling. Bundle-local wins a
+  short-name collision, while the Harness resource remains available under its
+  Harness-qualified spelling; removing the local candidate restores the
+  Harness short name. Qualified stable identities cannot be overwritten.
+- One `Arc<CompiledResourceView>` is built per actual turn/child from its
+  retained `TurnBinding` and bound definition. Prompt/schema visibility, skill
+  exposure, and dispatch consume that same map; dispatch has no global registry
+  fallback and existing PermissionPlane/plugin authorization remains final.
+- The ruling authorizes static skill/descriptor fixtures only. It does not add
+  a bundle-local executable runner, parallel permission plane, global view
+  cache, or any `0.34.9+` distribution behavior.
+
+### `CONSULT-2026-07-31-REFERENCE-GUIDANCE-COMPOSITION-24`
+
+```text
+consultation_id: CONSULT-2026-07-31-REFERENCE-GUIDANCE-COMPOSITION-24
+received_by_fuji1_date_utc: 2026-07-31
+safe_canonical_session_url: https://chatgpt.com/c/6a6bd036-10a4-83eb-8a05-a7cfcb31dc7e
+displayed_model_label_exact: Pro
+question_summary: compose Bundle prompt replacement with project/reference guidance without a second authority, AgentSpec overlay, wire API, or per-round discovery
+pro_conclusion: advisory only — keep guidance as a separate pre-rendered layer composed once with agent_base after exact Bundle resolution
+macbook_air_ruling: adopt the composition and transport rules below; Pro remains advisory and the MacBook Air coordinator ruling is controlling
+ruling_scope: release 0.34.8 atomic commit 2 reference/project guidance composition only
+follow_up_of: CONSULT-2026-07-31-RUNTIME-CATALOG-AUTHORITY-21 and CONSULT-2026-07-31-NATIVE-BUNDLE-CUTOVER-19
+```
+
+Controlling disposition:
+
+- `hya-core` uses the same real-turn `TurnBinding` and exact-resolves the stable
+  `AgentName` once. The single prompt builder composes `agent_base` plus
+  nonempty guidance once. Bundle prompt `Some` replaces only `agent_base`;
+  Bundle prompt `None` preserves the existing Harness base/system prompt.
+  Harness-owned guidance is never deleted.
+- `hya-server` uses existing discovery, sorting, and separators to pre-render
+  project `AGENTS.md` plus reference guidance and passes a request-scoped
+  immutable `Option<Arc<str>>` (or existing equivalent) to core. No
+  `AgentSpec` guidance overlay, catalog or snapshot storage, paths/parser/raw
+  files, wire API, proto, `Event`, or persistence.
+- User/task input remains a separate user message. Guidance is captured once
+  per actual turn or activation and reused across provider rounds, with no
+  per-round filesystem discovery.
+- Root, resume, and fork-continue rediscover current project guidance and
+  exact-resolve the current Bundle definition; missing remains
+  `AGENT_DEFINITION_MISSING`. Read-only replay does neither lookup nor
+  guidance discovery.
+- Transient/resident semantics must first be characterized; prefer passing
+  triggering-turn immutable guidance through the existing child activation,
+  with no child scan or permanent resident definition storage, unless direct
+  HEAD evidence proves current child-workdir discovery.
+- Fixed title, summary, and compaction agents do not gain project/reference
+  guidance unless characterization proves current behavior already does;
+  their fixed Bundle prompt remains exact and isolated.
+- No new prompt error; absent guidance is an empty layer. Non-goals include
+  manifest or IR changes, a second composer or authority, persisted effective
+  prompt, new Event/API, legacy loader, per-round discovery,
+  sandbox/permission changes, or later-release API.
+- Required behavioral tests: Bundle prompt replaces base while preserving
+  guidance once and in order; Bundle prompt `None` preserves Harness base then
+  guidance; user input stays a separate provider message; guidance captured
+  once across rounds; transient/resident immutable semantics without
+  `AgentSpec` overlay; fixed-system characterization; reuse replay no-lookup
+  and continue missing-definition tests.
+
+Current RED checkpoint (source-verified / experimentally verified):
+
+- `crates/hya-server/tests/compat_reference_guidance_api.rs` was migrated to
+  explicit `PreparedBundle` → `BundleCatalog` → `RuntimeRegistry` fixtures and
+  added `compat_prompt_bundle_prompt_and_reference_guidance_parity`.
+- Independent command
+  `cargo test -p hya-server --test compat_reference_guidance_api
+  compat_prompt_bundle_prompt_and_reference_guidance_parity -- --nocapture`
+  failed behaviorally as expected: Bundle marker exactly once,
+  `available_references` count 0. Full binary reported 4 passed and 1 expected
+  failed.
+- Source-verified cause: server currently concatenates guidance into
+  `AgentSpec.system_prompt` before the turn, then exact Bundle prompt
+  replacement overwrites it; skills appended later survive.
+- Legacy disk prompt expectation was removed from that test; no GREEN has been
+  implemented yet. Further prompt-composition, child/resident, fixed-system,
+  replay/continue GREEN and gates remain pending.

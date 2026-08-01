@@ -10,7 +10,7 @@ use axum::routing::{get, post};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::ServerState;
+use crate::{ApiError, ServerState};
 
 use super::agent_permission::PermissionRule;
 
@@ -93,34 +93,35 @@ async fn agent(
     axum::extract::State(st): axum::extract::State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
-) -> Json<Vec<AgentInfo>> {
+) -> Result<Json<Vec<AgentInfo>>, ApiError> {
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
-    Json(
-        super::agent_catalog::list(&workdir, &st)
-            .into_iter()
+    let rows = super::bound_agent_metadata::list(&st, &workdir)?;
+    Ok(Json(
+        rows.into_iter()
             .map(|agent| AgentInfo {
                 name: agent.name.clone(),
                 description: agent.description,
                 mode: agent.mode,
-                native: agent.native,
+                // Bound catalog agents are the native authority after cut-over.
+                native: true,
                 hidden: agent.hidden,
-                permission: agent_permissions(&agent.name, &build_permissions, agent.permissions),
+                permission: agent_permissions(&agent.name, &build_permissions, Vec::new()),
                 model: model_info(agent.model.as_deref().unwrap_or(st.agent.model.as_str())),
-                temperature: agent.temperature,
-                top_p: agent.top_p,
+                temperature: None,
+                top_p: None,
                 color: agent.color,
-                steps: agent.steps,
+                steps: None,
                 prompt: if agent.name == "build" && agent.prompt.is_none() {
                     Some(st.agent.system_prompt.clone())
                 } else {
                     agent.prompt
                 },
-                options: json!(agent.options),
+                options: json!({}),
             })
             .collect(),
-    )
+    ))
 }
 
 async fn command(

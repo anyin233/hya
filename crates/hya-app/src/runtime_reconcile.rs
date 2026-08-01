@@ -1075,7 +1075,10 @@ mod tests {
 
     #[test]
     fn stale_success_is_closed_and_cannot_publish_over_newer_ticket() -> anyhow::Result<()> {
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_catalog()?,
+        ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let source = SourceId::mcp("alpha");
         let old_plan = reconciler.replace_desired(vec![desired(&source, "old")])?;
@@ -1115,7 +1118,10 @@ mod tests {
     #[test]
     fn explicit_removal_publishes_drop_only_despite_unrelated_connect_failure() -> anyhow::Result<()>
     {
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_catalog()?,
+        ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let removed_source = SourceId::mcp("removed");
         let initial = reconciler.replace_desired(vec![desired(&removed_source, "initial")])?;
@@ -1160,7 +1166,10 @@ mod tests {
 
     #[test]
     fn current_failure_keeps_generation_and_closes_partial_successes() -> anyhow::Result<()> {
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_catalog()?,
+        ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let ready_source = SourceId::mcp("ready");
         let failed_source = SourceId::mcp("failed");
@@ -1210,7 +1219,10 @@ mod tests {
 
     #[test]
     fn candidate_rejection_records_failure_and_invalidates_attempt() -> anyhow::Result<()> {
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_catalog()?,
+        ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let source = SourceId::plugin("collision");
         let plan = reconciler.replace_desired(vec![desired_plugin(&source, "collision")])?;
@@ -1260,7 +1272,10 @@ mod tests {
 
     #[test]
     fn mixed_mcp_plugin_revision_publishes_exactly_once_only_when_complete() -> anyhow::Result<()> {
-        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins()));
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_catalog()?,
+        ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let mcp = SourceId::mcp("mixed-mcp");
         let plugin = SourceId::plugin("mixed-plugin");

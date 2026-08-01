@@ -4,10 +4,14 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
-use super::{AgentSpec, SessionEngine, authorize_tool_call, session_workdir};
+use super::{
+    AgentSpec, SessionEngine, agent_roster, authorize_tool_call, effective_agent_for_binding,
+    session_workdir,
+};
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
+use crate::runtime_registry::CompiledResourceView;
 
 mod admission;
 mod hooks;
@@ -15,6 +19,7 @@ mod hooks;
 use hooks::{AfterHookCall, apply_tool_after_hooks};
 
 struct ShellPart {
+    session: SessionId,
     message: MessageId,
     part: PartId,
     call: ToolCallId,
@@ -33,6 +38,14 @@ impl SessionEngine {
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
         let binding = self.runtime.bind_turn(&workdir)?;
+        let stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&agent.name)
+            .as_str();
+        // Shell turns do not attach project/reference guidance.
+        let (agent, resources) = effective_agent_for_binding(agent, stable_id, &binding, None)?;
 
         let message = MessageId::new();
         self.emit(
@@ -71,8 +84,8 @@ impl SessionEngine {
 
         let finish = self
             .execute_shell_part(
-                session,
                 ShellPart {
+                    session,
                     message,
                     part,
                     call,
@@ -80,6 +93,8 @@ impl SessionEngine {
                 },
                 command,
                 &binding,
+                &agent,
+                &resources,
                 cancel,
             )
             .await?;
@@ -99,12 +114,14 @@ impl SessionEngine {
 
     async fn execute_shell_part(
         &self,
-        session: SessionId,
         shell_part: ShellPart,
         command: String,
         binding: &TurnBinding,
+        agent: &AgentSpec,
+        resources: &CompiledResourceView,
         cancel: CancellationToken,
     ) -> Result<FinishReason, CoreError> {
+        let session = shell_part.session;
         let tool = shell_part.name.to_string();
         let mut input = json!({ "command": command });
         if let Some(hooks) = &self.hooks {
@@ -155,7 +172,7 @@ impl SessionEngine {
         let projection = self.store.read_projection(session).await?;
         let input_for_after = self.hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
-        let result = match binding.resolve_tool(&tool) {
+        let result = match resources.resolve_tool(&tool) {
             Some(resolved) => match authorize_tool_call(
                 &resolved,
                 &input,
@@ -169,14 +186,17 @@ impl SessionEngine {
                     let ctx = ToolCtx {
                         permission,
                         interaction: self.interaction.for_session(session),
-                        spawner: self.spawner.for_session(session),
+                        spawner: self.spawner.for_session_with_agents(
+                            session,
+                            agent_roster(binding, agent.name.as_str())?,
+                        ),
                         operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
                         mailbox: self.mailbox.for_session(session),
                         session: Some(session),
                         parent_session: projection.session.parent,
                         todo: self.todo.clone(),
-                        skills: binding.skill_plane(),
-                        agents: self.agents.clone(),
+                        skills: resources.skill_plane(),
+                        agents: agent_roster(binding, agent.name.as_str())?,
                         websearch: self.websearch.clone(),
                         lsp: self.lsp.clone(),
                         formatter: self.formatter.clone(),

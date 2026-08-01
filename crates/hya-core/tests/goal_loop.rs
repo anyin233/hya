@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,7 +41,7 @@ async fn engine_with(provider: FakeProvider) -> (Arc<SessionEngine>, AgentSpec) 
     let engine = Arc::new(SessionEngine::new(
         store,
         router,
-        tools,
+        support::test_runtime(tools),
         perm,
         EventBus::default(),
     ));

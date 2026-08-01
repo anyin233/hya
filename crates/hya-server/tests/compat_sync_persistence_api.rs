@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+mod support;
+
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,7 +36,13 @@ async fn state(path: &str) -> AppState {
     let tools = Arc::new(ToolRegistry::builtins());
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect(path).await.unwrap();
-    let engine = SessionEngine::new(store, providers, tools, perm, EventBus::default());
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    );
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {

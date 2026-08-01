@@ -3,7 +3,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use hya_core::AgentSpec;
 use hya_proto::api::{CommandRequest, ShellRequest};
 use hya_proto::{Event, MessageId, ModelRef, Projection, SessionId};
 use serde::Deserialize;
@@ -119,11 +118,17 @@ async fn command(
         .engine
         .admit_command_prompt(session, command, arguments, text)
         .await?;
-    let agent = super::reference::session_agent_with_guidance(&st, session).await;
-    let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
+    let turn = super::reference::session_agent_with_guidance(&st, session).await;
+    let external_dirs = super::reference::external_directories_at(&st, &turn.agent.workdir).await;
     let _finish = st
         .engine
-        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            &turn.agent,
+            run.token(),
+            &external_dirs,
+            turn.guidance,
+        )
         .await?;
     Ok(Json(load_message(&st, session, message).await?).into_response())
 }
@@ -168,7 +173,7 @@ pub(in crate::compat) async fn load_message(
 pub(in crate::compat) async fn init_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
-) -> AgentSpec {
+) -> super::reference::SessionTurnAgent {
     super::reference::session_agent_with_guidance(st, session).await
 }
 
@@ -189,8 +194,8 @@ pub(in crate::compat) async fn run_session_init(
         .runs
         .start(session)
         .ok_or_else(|| ApiError::bad_request("Bad request"))?;
-    let mut agent = init_agent_with_guidance(st, session).await;
-    agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
+    let mut turn = init_agent_with_guidance(st, session).await;
+    turn.agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
     st.engine
         .admit_command_prompt_with_id(
             session,
@@ -200,10 +205,16 @@ pub(in crate::compat) async fn run_session_init(
             "/init".to_string(),
         )
         .await?;
-    let external_dirs = super::reference::external_directories_at(st, &agent.workdir).await;
+    let external_dirs = super::reference::external_directories_at(st, &turn.agent.workdir).await;
     let _finish = st
         .engine
-        .run_turn_with_external_dirs(session, &agent, run.token(), &external_dirs)
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            &turn.agent,
+            run.token(),
+            &external_dirs,
+            turn.guidance,
+        )
         .await?;
     Ok(true)
 }

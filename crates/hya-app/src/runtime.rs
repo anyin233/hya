@@ -3,13 +3,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
+use hya_bundle::{BundleCatalog, PreparedCatalog, SpawnLifecycle};
 use hya_core::{
-    AgentSpec, CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberSpec,
-    MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, SessionEngine,
-    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope, build_system_prompt,
-    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_team,
+    AgentResourcePolicy, AgentSpec, CategoryRegistry, CompactionConfig, CoreError, CreateSession,
+    EventBus, MemberSpec, MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor,
+    RuntimeRegistry, SessionEngine, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
+    TeamEvidenceEnvelope, TurnBinding, build_system_prompt, project_envelope,
+    project_envelope_for_actor, run_mailbox_service, run_pre_admitted_team,
     run_pre_admitted_team_for_actor,
 };
+
+// Single discovery/date implementation lives in hya-core; re-export for callers.
+pub use hya_core::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
@@ -32,39 +37,43 @@ use crate::runtime_reconcile::{
 };
 use crate::{formatter_config, plugins};
 
-pub fn today() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}-{:02}-{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day()
-    )
+const BUILTIN_BUNDLES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-bundles.json"));
+const BUILTIN_BUNDLES_DIGEST: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/builtin-bundles.sha256"));
+
+/// Injectable decode path for invalid/tamper unit tests. Production bootstrap
+/// uses [`builtin_catalog`], which caches the embedded artifact once.
+#[cfg(test)]
+fn builtin_catalog_from(bytes: &[u8], expected_digest: &str) -> anyhow::Result<Arc<BundleCatalog>> {
+    let prepared = PreparedCatalog::decode(bytes, expected_digest)
+        .context("decode embedded built-in AgentBundle catalog")?;
+    let catalog = BundleCatalog::from_prepared(prepared.bundles())
+        .context("validate embedded built-in AgentBundle catalog")?;
+    Ok(Arc::new(catalog))
 }
 
-pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
-    let start = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut chain: Vec<PathBuf> = Vec::new();
-    let mut dir = Some(start.as_path());
-    while let Some(d) = dir {
-        let candidate = d.join("AGENTS.md");
-        if candidate.is_file() {
-            chain.push(candidate);
+/// Decode and validate the build-embedded prepared catalog exactly once.
+///
+/// Success and failure are both cached so a corrupt embedded artifact stays
+/// fail-closed for the process lifetime without silent retry or substitution.
+/// Read-only public accessor for consumers (e.g. `hya-backend` agent list) that
+/// must share the same process-wide `Arc` — no second embed, decode, or cache.
+/// Injectable [`builtin_catalog_from`] remains uncached for tamper tests.
+pub fn builtin_catalog() -> anyhow::Result<Arc<BundleCatalog>> {
+    use hya_bundle::BundleError;
+
+    static EMBEDDED_CATALOG: OnceLock<Result<Arc<BundleCatalog>, BundleError>> = OnceLock::new();
+    match EMBEDDED_CATALOG.get_or_init(|| {
+        PreparedCatalog::decode(BUILTIN_BUNDLES, BUILTIN_BUNDLES_DIGEST)
+            .and_then(|prepared| BundleCatalog::from_prepared(prepared.bundles()))
+            .map(Arc::new)
+    }) {
+        Ok(catalog) => Ok(Arc::clone(catalog)),
+        Err(error) => {
+            Err(anyhow::Error::new(error.clone())
+                .context("load embedded built-in AgentBundle catalog"))
         }
-        if home.as_deref() == Some(d) {
-            break;
-        }
-        dir = d.parent();
     }
-    chain.reverse();
-    let mut files = Vec::new();
-    for path in chain {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            files.push((path.to_string_lossy().into_owned(), content));
-        }
-    }
-    files
 }
 
 pub fn host_info() -> HostInfo {
@@ -103,6 +112,28 @@ pub fn compaction_config() -> CompactionConfig {
     }
 }
 
+/// Canonical Harness agent base string (no Environment / AGENTS).
+pub const HARNESS_AGENT_BASE: &str = "You are hya, a coding agent.";
+
+/// Agent base only — for HTTP/SSE server and interactive TUI AppState assembly.
+///
+/// Bundle `prompt=None` keeps this base; per-turn server discovery appends
+/// Environment + current workdir AGENTS + references. Baking those at startup
+/// would duplicate AGENTS when guidance is also layered.
+pub fn agent_base_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
+    AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new(model),
+        system_prompt: HARNESS_AGENT_BASE.to_string(),
+        workdir: PathBuf::from("."),
+        reasoning,
+    }
+}
+
+/// Direct-mode agent (exec/RPC/goal): base + Environment + process-cwd AGENTS.
+///
+/// These paths call `run_turn` without a separate guidance layer, so context
+/// must remain composed into `system_prompt` here.
 pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     let workdir = PathBuf::from(".");
     let env = PromptEnv {
@@ -113,7 +144,7 @@ pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> Agen
         date: today(),
     };
     let context = discover_context_files(&workdir);
-    let system_prompt = build_system_prompt("You are hya, a coding agent.", &env, &context);
+    let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &context);
     AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new(model),
@@ -289,17 +320,312 @@ fn spawn_request_fingerprint(req: &SpawnRequest) -> Result<[u8; 32], serde_json:
     Ok(Sha256::digest(canonical).into())
 }
 
+struct ResolvedSpawnMember {
+    request: SpawnMember,
+    authorized_target: AgentName,
+    agent: AgentSpec,
+    agents: Arc<[hya_tool::AgentDef]>,
+    resources: AgentResourcePolicy,
+    resident: bool,
+    /// Immutable guidance Arc cloned from the spawn request (not from disk).
+    guidance: Option<Arc<str>>,
+}
+
+/// Pre-admission team-root context for main-as-actor synthesis on resident batches.
+///
+/// Bound from the spawn TurnBinding + root projection stable AgentName — never from
+/// a nested caller's roster/resource policy.
+struct MainActivationContext {
+    root: SessionId,
+    agent: AgentSpec,
+    agents: Arc<[hya_tool::AgentDef]>,
+    resources: AgentResourcePolicy,
+    guidance: Option<Arc<str>>,
+}
+
+/// Resolve exact team root + root definition/roster/resource policy before durable
+/// spawn admission. Fail-closed; no parent-fallback and no catalog/base synthesis.
+async fn resolve_main_activation_context(
+    engine: &SessionEngine,
+    binding: &TurnBinding,
+    base: &AgentSpec,
+    parent: SessionId,
+    guidance: Option<Arc<str>>,
+) -> Result<MainActivationContext, SpawnError> {
+    let (root, _) = engine
+        .session_lineage(parent)
+        .await
+        .map_err(|_| SpawnError::Unavailable)?;
+    let root_projection = engine
+        .read_projection(root)
+        .await
+        .map_err(|_| SpawnError::Unavailable)?;
+    let root_agent_name = root_projection
+        .session
+        .agent
+        .as_ref()
+        .ok_or(SpawnError::Unavailable)?;
+    let root_stable = root_agent_name.as_str();
+    // Exact catalog lookup for the root stable id; map missing definition through
+    // the existing typed UnknownAgentId seam (no general/base fallback).
+    if binding.resolve_agent(root_stable).is_none() {
+        return Err(SpawnError::UnknownAgentId {
+            agent_id: root_stable.to_string(),
+        });
+    }
+    let agent = engine
+        .agent_spec_for_binding(binding, base, root_stable)
+        .map_err(|_| SpawnError::Unavailable)?;
+    let agents = engine
+        .agent_roster_for_binding(binding, root_stable)
+        .map_err(|err| match err {
+            CoreError::Bundle(hya_bundle::BundleError::UnknownAgentId { agent_id })
+            | CoreError::AgentDefinitionMissing { agent_id } => {
+                SpawnError::UnknownAgentId { agent_id }
+            }
+            _ => SpawnError::Unavailable,
+        })?;
+    let resources = engine
+        .agent_resource_policy_for_binding(binding, root_stable)
+        .map_err(|err| match err {
+            CoreError::Bundle(hya_bundle::BundleError::UnknownAgentId { agent_id })
+            | CoreError::AgentDefinitionMissing { agent_id } => {
+                SpawnError::UnknownAgentId { agent_id }
+            }
+            _ => SpawnError::Unavailable,
+        })?;
+    Ok(MainActivationContext {
+        root,
+        agent,
+        agents,
+        resources,
+        guidance,
+    })
+}
+
+/// Batch-scoped shared inputs for [`resolve_spawn_member`].
+///
+/// One captured [`TurnBinding`] and request guidance Arc per batch; [`SpawnMember`]
+/// remains the only per-member argument.
+struct ResolveSpawnMemberCtx<'a> {
+    engine: &'a SessionEngine,
+    binding: &'a TurnBinding,
+    base: &'a AgentSpec,
+    caller: &'a str,
+    allowed_agents: &'a [hya_tool::AgentDef],
+    categories: &'a CategoryRegistry,
+    is_servable: &'a dyn Fn(&ModelRef) -> bool,
+    guidance: Option<Arc<str>>,
+}
+
+fn resolve_spawn_member(
+    ctx: &ResolveSpawnMemberCtx<'_>,
+    member: SpawnMember,
+) -> Result<ResolvedSpawnMember, SpawnError> {
+    let requested = member.subagent_type.trim();
+    let requested = if requested.is_empty() {
+        "general"
+    } else {
+        requested
+    };
+    let definition =
+        ctx.binding
+            .resolve_agent(requested)
+            .ok_or_else(|| SpawnError::UnknownAgentId {
+                agent_id: requested.to_string(),
+            })?;
+    if !ctx
+        .allowed_agents
+        .iter()
+        .any(|allowed| allowed.name == definition.stable_id.as_str())
+    {
+        return Err(SpawnError::AgentSpawnNotAllowed {
+            caller: ctx.caller.to_string(),
+            agent_id: definition.stable_id.as_str().to_string(),
+        });
+    }
+    let authorized_target = definition.stable_id.clone();
+    let mut agent = ctx
+        .engine
+        .agent_spec_for_binding(ctx.binding, ctx.base, definition.stable_id.as_str())
+        .map_err(|_| SpawnError::Unavailable)?;
+    let agents = ctx
+        .engine
+        .agent_roster_for_binding(ctx.binding, definition.stable_id.as_str())
+        .map_err(|_| SpawnError::Unavailable)?;
+    let resources = ctx
+        .engine
+        .agent_resource_policy_for_binding(ctx.binding, definition.stable_id.as_str())
+        .map_err(|_| SpawnError::Unavailable)?;
+
+    let resolve_category = |name: &str| {
+        ctx.categories
+            .resolve_servable(name, ctx.is_servable)
+            .map(|resolved| resolved.model)
+    };
+    if let Some(model) = definition
+        .model_policy
+        .category
+        .as_deref()
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = member
+        .inline_agent
+        .as_ref()
+        .and_then(|inline| inline.category.as_deref())
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = definition.model_policy.model.as_deref() {
+        agent.model = ModelRef::new(model);
+    }
+    if let Some(model) = member
+        .inline_agent
+        .as_ref()
+        .and_then(|inline| inline.model.as_deref())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        agent.model = ModelRef::new(model);
+    }
+    if let Some(model) = member
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = member
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        agent.model = ModelRef::new(model);
+    }
+
+    let mut resident = definition.spawn_lifecycle == SpawnLifecycle::Resident || member.resident;
+    if let Some(inline) = member.inline_agent.as_ref() {
+        if inline.description.is_some() {
+            return Err(SpawnError::UnsupportedInlineAgentField {
+                field: "description",
+            });
+        }
+        resident |= inline.resident.unwrap_or(false);
+        if !inline.prompt.trim().is_empty() {
+            agent.system_prompt = inline.prompt.clone();
+        }
+        if !inline.name.trim().is_empty() {
+            agent.name = AgentName::new(&inline.name);
+        }
+    }
+
+    Ok(ResolvedSpawnMember {
+        request: member,
+        authorized_target,
+        agent,
+        agents,
+        resources,
+        resident,
+        guidance: ctx.guidance.clone(),
+    })
+}
+
 pub fn spawn_team_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<SpawnRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
-    include_global_agents: bool,
     router: Arc<ProviderRouter>,
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
 ) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
+            let parent = match engine.read_projection(req.parent).await {
+                Ok(parent) => parent,
+                Err(error) => {
+                    eprintln!("hya: failed to resolve spawn parent ({error})");
+                    let _ = req.reply.send(Err(SpawnError::Unavailable));
+                    continue;
+                }
+            };
+            let Some(caller) = parent.session.agent.as_ref() else {
+                let _ = req.reply.send(Err(SpawnError::Unavailable));
+                continue;
+            };
+            let workdir = parent
+                .session
+                .workdir
+                .as_deref()
+                .map(Path::new)
+                .unwrap_or(&base.workdir);
+            let binding = match engine.bind_runtime(workdir) {
+                Ok(binding) => binding,
+                Err(error) => {
+                    eprintln!("hya: failed to bind spawn catalog ({error})");
+                    let _ = req.reply.send(Err(SpawnError::Unavailable));
+                    continue;
+                }
+            };
+            let is_servable = |model: &ModelRef| router.resolve(model).is_some();
+            // Guidance is request-scoped: one Arc cloned to every resolved member.
+            let request_guidance = req.guidance.clone();
+            // Scope the ctx so the non-Sync `is_servable` borrow ends before any await.
+            let resolved = {
+                let resolve_ctx = ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: caller.as_str(),
+                    allowed_agents: &req.agents,
+                    categories: &categories,
+                    is_servable: &is_servable,
+                    guidance: request_guidance.clone(),
+                };
+                req.members
+                    .iter()
+                    .cloned()
+                    .map(|member| resolve_spawn_member(&resolve_ctx, member))
+                    .collect::<Result<Vec<_>, _>>()
+            };
+            let resolved = match resolved {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    let _ = req.reply.send(Err(error));
+                    continue;
+                }
+            };
+            // Resident batches need team-root main activation context resolved from
+            // the same captured TurnBinding before any durable admission. Nested
+            // callers must not supply their own roster/resource policy for main.
+            // Transient-only batches skip this lookup entirely.
+            let batch_has_resident = resolved.iter().any(|entry| entry.resident);
+            let main_activation = if batch_has_resident {
+                match resolve_main_activation_context(
+                    &engine,
+                    &binding,
+                    &base,
+                    req.parent,
+                    request_guidance.clone(),
+                )
+                .await
+                {
+                    Ok(context) => Some(context),
+                    Err(error) => {
+                        let _ = req.reply.send(Err(error));
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             let fingerprint = match spawn_request_fingerprint(&req) {
                 Ok(fingerprint) => fingerprint,
                 Err(error) => {
@@ -342,47 +668,18 @@ pub fn spawn_team_supervisor(
                 }
             }
             let engine = engine.clone();
-            let base = base.clone();
-            let router = router.clone();
-            let categories = categories.clone();
             let resident_supervisor = resident_supervisor.clone();
             tokio::spawn(async move {
                 let parent = req.parent;
-                let members = req.members;
                 let operation_cancel = req.cancel;
                 let cancel = operation_cancel.clone();
                 let background = req.background;
                 let mut reply = Some(req.reply);
                 let mut spawn_failed = false;
-                // A concrete category candidate is servable when the live router
-                // recognizes its provider; used for ordered category failover.
-                let is_servable = |model: &ModelRef| router.resolve(model).is_some();
-
-                // Resolve every member once, capturing its resident-ness (spawn-time
-                // flag OR the agent's frontmatter/inline `resident:`).
-                let resolved: Vec<(SpawnMember, AgentSpec, bool)> = members
-                    .into_iter()
-                    .map(|member| {
-                        let out = hya_server::resolve_subagent(hya_server::SubagentResolve {
-                            base: &base,
-                            subagent_type: &member.subagent_type,
-                            workdir: &base.workdir,
-                            include_global_agents,
-                            categories: &categories,
-                            spawn_model: member.model.as_deref(),
-                            spawn_category: member.category.as_deref(),
-                            is_servable: &is_servable,
-                            inline_agent: member.inline_agent.as_ref(),
-                        });
-                        let resident = member.resident || out.resident;
-                        (member, out.agent, resident)
-                    })
-                    .collect();
-
                 let mut resident_members = Vec::new();
                 let mut transient_members = Vec::new();
                 for entry in resolved {
-                    if entry.2 {
+                    if entry.resident {
                         resident_members.push(entry);
                     } else {
                         transient_members.push(entry);
@@ -390,24 +687,55 @@ pub fn spawn_team_supervisor(
                 }
 
                 // Resident members are NON-BLOCKING: register each as a long-lived
-                // actor and return its handle immediately (ADR-0002). The parent's
                 // turn is not held on their work.
                 let mut resident_outcomes = Vec::new();
                 if !resident_members.is_empty() {
                     // Register the team root as the main actor so child mail +
                     // quiescence can wake it. Only done when the team actually has
                     // residents, so pure-transient teams keep their old behavior.
-                    let root = engine
-                        .session_lineage(parent)
-                        .await
-                        .map(|(root, _)| root)
-                        .unwrap_or(parent);
-                    let _ = resident_supervisor
-                        .ensure_main(root, base.clone(), actor_claim.as_ref())
-                        .await;
-                    for (member, agent, _) in resident_members {
+                    // Synthesis is an ordinary activation of this main slot through
+                    // the same resident_task path, seeded with pre-admission root
+                    // context (first ensure_main wins on re-entry).
+                    if let Some(MainActivationContext {
+                        root,
+                        agent: main_agent,
+                        agents: main_agents,
+                        resources: main_resources,
+                        guidance: main_guidance,
+                    }) = main_activation
+                        && let Err(err) = resident_supervisor
+                            .ensure_main(
+                                root,
+                                main_agent,
+                                actor_claim.as_ref(),
+                                main_agents,
+                                main_resources,
+                                main_guidance,
+                            )
+                            .await
+                    {
+                        eprintln!("hya: ensure_main failed ({err})");
+                    }
+                    for resolved in resident_members {
+                        let ResolvedSpawnMember {
+                            request: member,
+                            authorized_target,
+                            agent,
+                            agents,
+                            resources,
+                            guidance,
+                            ..
+                        } = resolved;
+                        let _authorized_target = authorized_target;
                         match resident_supervisor
-                            .spawn_resident(parent, agent, member.prompt, actor_claim.as_ref())
+                            .spawn_resident(
+                                parent,
+                                agent,
+                                (agents, resources),
+                                member.prompt,
+                                actor_claim.as_ref(),
+                                guidance,
+                            )
                             .await
                         {
                             Ok((session, handle)) => resident_outcomes.push(MemberOutcome {
@@ -435,7 +763,17 @@ pub fn spawn_team_supervisor(
                 let specs: Vec<MemberSpec> = if background {
                     let mut specs = Vec::new();
                     let mut started = resident_outcomes.clone();
-                    for (member, agent, _) in transient_members {
+                    for resolved in transient_members {
+                        let ResolvedSpawnMember {
+                            request: member,
+                            authorized_target,
+                            agent,
+                            agents,
+                            resources,
+                            guidance,
+                            ..
+                        } = resolved;
+                        let _authorized_target = authorized_target;
                         let id = MemberId::new();
                         let session = match member
                             .task_id
@@ -478,6 +816,9 @@ pub fn spawn_team_supervisor(
                         specs.push(MemberSpec {
                             id,
                             agent,
+                            agents,
+                            resources: Some(resources),
+                            guidance,
                             directive: member.prompt,
                             description: member.description,
                             session: Some(session),
@@ -490,15 +831,30 @@ pub fn spawn_team_supervisor(
                 } else {
                     transient_members
                         .into_iter()
-                        .map(|(m, agent, _)| MemberSpec {
-                            id: MemberId::new(),
-                            agent,
-                            directive: m.prompt,
-                            description: m.description,
-                            session: m
-                                .task_id
-                                .as_deref()
-                                .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                        .map(|resolved| {
+                            let ResolvedSpawnMember {
+                                request,
+                                authorized_target,
+                                agent,
+                                agents,
+                                resources,
+                                guidance,
+                                ..
+                            } = resolved;
+                            let _authorized_target = authorized_target;
+                            MemberSpec {
+                                id: MemberId::new(),
+                                agent,
+                                agents,
+                                resources: Some(resources),
+                                guidance,
+                                directive: request.prompt,
+                                description: request.description,
+                                session: request
+                                    .task_id
+                                    .as_deref()
+                                    .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+                            }
                         })
                         .collect()
                 };
@@ -585,7 +941,6 @@ fn defer_sideplanes() -> bool {
 
 #[derive(Clone, Copy)]
 struct EngineBuildOptions {
-    include_global_agents: bool,
     defer_mcp: bool,
 }
 
@@ -596,7 +951,6 @@ pub async fn build_session_engine(
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
     tool_config: (WebSearchConfig, InvocationPolicy),
-    include_global_agents: bool,
 ) -> anyhow::Result<(
     Arc<SessionEngine>,
     tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
@@ -612,7 +966,6 @@ pub async fn build_session_engine(
         plugins,
         tool_config,
         EngineBuildOptions {
-            include_global_agents,
             defer_mcp: defer_sideplanes(),
         },
     )
@@ -671,7 +1024,7 @@ async fn build_session_engine_with_mcp_defer(
         .map(|plugin| (plugin.id().to_string(), plugin))
         .collect::<BTreeMap<_, _>>();
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
-    let tools = Arc::new(registry);
+    let runtime = Arc::new(RuntimeRegistry::new(registry, builtin_catalog()?));
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -701,29 +1054,13 @@ async fn build_session_engine_with_mcp_defer(
     // can test category-candidate servability against the same live providers.
     let spawn_router = router.clone();
     let categories = Arc::new(crate::config::load_categories());
-    // Inject the agent catalog into the `list_agents` tool via a closure, mirroring
-    // the SkillPlane/SpawnerPlane injection pattern. The catalog lives in
-    // `hya-server`; wiring it from here (which depends on both) keeps `hya-tool`
-    // free of a `hya-server` dependency.
-    let agents = hya_tool::AgentCatalogPlane::new(move |workdir| {
-        hya_server::agent_definitions(workdir, options.include_global_agents)
-            .into_iter()
-            .map(|def| hya_tool::AgentDef {
-                name: def.name,
-                description: def.description,
-                category: def.category,
-                mode: def.mode,
-            })
-            .collect()
-    });
-    let mut engine_builder = SessionEngine::new(store, router, tools, permission, bus)
+    let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
         .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
         .with_spawner(spawner)
         .with_mailbox(mailbox)
-        .with_agents(agents)
         .with_governor(governor);
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
@@ -811,20 +1148,28 @@ async fn build_session_engine_with_mcp_defer(
             .workdir
             .map(PathBuf::from)
             .unwrap_or_else(|| agent.workdir.clone());
-        let is_servable = |model: &ModelRef| spawn_router.resolve(model).is_some();
-        let resolved = hya_server::resolve_subagent(hya_server::SubagentResolve {
-            base: agent,
-            subagent_type: entry.agent_type.as_str(),
-            workdir: &workdir,
-            include_global_agents: options.include_global_agents,
-            categories: &categories,
-            spawn_model: None,
-            spawn_category: None,
-            is_servable: &is_servable,
-            inline_agent: None,
-        });
+        // Resume is not a new spawn: exact catalog lookup only (no can_spawn,
+        // no legacy general/base synthesis). Missing or inline-only identity fails.
+        let recorded = actor_projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&entry.agent_type);
+        let recovered_agent = resolve_recovered_resident_agent(&engine, agent, recorded, &workdir)
+            .with_context(|| {
+                format!(
+                    "resolve recovered resident agent `{}` from current catalog",
+                    recorded.as_str()
+                )
+            })?;
         resident_supervisor
-            .register_recovered_resident(root, entry.handle, resolved.agent, recovered, report.work)
+            .register_recovered_resident(
+                root,
+                entry.handle,
+                recovered_agent,
+                recovered,
+                report.work,
+            )
             .await
             .context("recreate recovered resident runtime owner")?;
     }
@@ -832,7 +1177,6 @@ async fn build_session_engine_with_mcp_defer(
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        options.include_global_agents,
         spawn_router,
         categories,
         resident_supervisor,
@@ -841,6 +1185,21 @@ async fn build_session_engine_with_mcp_defer(
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
     Ok((engine, asks, questions, mcp_control, plugin_host))
+}
+
+/// Exact-resolve a process-loss recovered resident from the current RuntimeSnapshot.
+///
+/// Binds once from the recorded session workdir and uses the same production
+/// TurnBinding catalog projection as live turns. Resume is definition resolution,
+/// not a new spawn: no `can_spawn`, no AgentSpec synthesis, no general/base fallback.
+fn resolve_recovered_resident_agent(
+    engine: &SessionEngine,
+    base: &AgentSpec,
+    recorded_agent: &AgentName,
+    session_workdir: &Path,
+) -> Result<AgentSpec, CoreError> {
+    let binding = engine.bind_runtime(session_workdir)?;
+    engine.agent_spec_for_binding(&binding, base, recorded_agent.as_str())
 }
 
 fn prepared_plugin_results(
@@ -908,7 +1267,6 @@ pub struct RuntimeOptions {
     pub db: String,
     pub yolo: bool,
     pub default_agent: Option<String>,
-    pub include_global_agents: bool,
     pub force_offline: bool,
 }
 
@@ -948,7 +1306,9 @@ impl HyaRuntime {
         if opts.yolo {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
-        let agent = Arc::new(agent_with_model(&runtime.model, runtime.reasoning));
+        // Server/TUI AppState: agent base only. Per-turn guidance layers
+        // Environment + current workdir AGENTS + references once.
+        let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
         let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
             store,
             runtime.router,
@@ -956,15 +1316,13 @@ impl HyaRuntime {
             runtime.mcp,
             runtime.plugins,
             (runtime.websearch, runtime.permission),
-            opts.include_global_agents,
         )
         .await?;
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
             .with_workspace_adapters(plugin_host.workspace_adapters())
-            .with_default_agent(runtime.default_agent.clone())
-            .with_global_agents(opts.include_global_agents);
+            .with_default_agent(runtime.default_agent.clone());
         state = state.with_permission_requests(asks);
         let app_state = state.clone();
         let router = hya_server::router(state);
@@ -997,11 +1355,20 @@ mod tests {
 
     use super::*;
     use async_trait::async_trait;
+    use hya_bundle::{
+        AgentRole, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy, PreparedAgent,
+        PreparedBundle, ResourceView,
+    };
+    use hya_core::CategoryEntry;
     use hya_proto::{
         Event, MailEndpoint, MailKind, OwnerRunId, RosterStatus, SubagentMode, ToolName, ToolSchema,
     };
-    use hya_tool::{PermissionModel, Tool, ToolCtx, ToolError, ToolPermission};
+    use hya_tool::{
+        AgentDef, InlineAgent, PermissionModel, Tool, ToolCtx, ToolError, ToolPermission,
+        ToolRegistry,
+    };
     use serde_json::{Value, json};
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1009,6 +1376,94 @@ mod tests {
     #[test]
     fn resident_owner_run_id_is_stable_for_the_process() {
         assert_eq!(process_owner_run_id(), process_owner_run_id());
+    }
+
+    fn hex_digest(bytes: &[u8]) -> String {
+        let digest = Sha256::digest(bytes);
+        let mut encoded = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            assert!(write!(encoded, "{byte:02x}").is_ok());
+        }
+        encoded
+    }
+
+    #[test]
+    fn zero_bundle_prepared_document_cannot_bootstrap_registry_catalog() {
+        let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
+        let digest = hex_digest(bytes);
+        match builtin_catalog_from(bytes, &digest) {
+            Ok(catalog) => panic!(
+                "zero-bundle prepared must not bootstrap a catalog for RuntimeRegistry, got {} bundles",
+                catalog.bundles().len()
+            ),
+            Err(err) => {
+                let message = format!("{err:#}");
+                assert!(
+                    message.contains("validate embedded built-in AgentBundle catalog"),
+                    "empty prepared must surface validate context, got: {message}"
+                );
+                assert!(
+                    message.contains("no bundles") || message.contains("empty"),
+                    "empty prepared must fail closed as empty-catalog integrity, got: {message}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corrupted_prepared_bytes_or_digest_fail_closed_with_decode_context() {
+        let wrong_digest =
+            builtin_catalog_from(BUILTIN_BUNDLES, "0".repeat(64).as_str()).expect_err("digest");
+        let wrong_digest_message = format!("{wrong_digest:#}");
+        assert!(
+            wrong_digest_message.contains("decode embedded built-in AgentBundle catalog"),
+            "digest mismatch must keep decode context, got: {wrong_digest_message}"
+        );
+        assert!(
+            wrong_digest.chain().any(|cause| cause
+                .downcast_ref::<hya_bundle::BundleError>()
+                .is_some_and(|error| {
+                    matches!(
+                        error,
+                        hya_bundle::BundleError::PreparedDigestMismatch { .. }
+                    )
+                })),
+            "digest mismatch must remain typed BundleError, got: {wrong_digest_message}"
+        );
+
+        let garbage = b"not-a-prepared-catalog";
+        let garbage_digest = hex_digest(garbage);
+        let decode_err = builtin_catalog_from(garbage, &garbage_digest).expect_err("corrupt bytes");
+        let decode_message = format!("{decode_err:#}");
+        assert!(
+            decode_message.contains("decode embedded built-in AgentBundle catalog"),
+            "corrupt bytes must keep decode context, got: {decode_message}"
+        );
+        assert!(
+            decode_err.chain().any(|cause| {
+                cause
+                    .downcast_ref::<hya_bundle::BundleError>()
+                    .is_some_and(|error| {
+                        matches!(error, hya_bundle::BundleError::PreparedDecode { .. })
+                    })
+            }),
+            "corrupt bytes must remain typed PreparedDecode, got: {decode_message}"
+        );
+    }
+
+    #[test]
+    fn builtin_catalog_initializes_once_and_shares_arc() {
+        let first = builtin_catalog().expect("embedded catalog must load");
+        let second = builtin_catalog().expect("embedded catalog must load");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "embedded prepared catalog must initialize once and be shared"
+        );
+        assert!(
+            !first.bundles().is_empty(),
+            "shared embedded catalog must not be empty"
+        );
     }
 
     struct RuntimeMarker(&'static str);
@@ -1259,7 +1714,6 @@ for line in sys.stdin:
                 },
                 InvocationPolicy::default(),
             ),
-            false,
         )
         .await
         .unwrap();
@@ -1280,7 +1734,10 @@ for line in sys.stdin:
         let engine = Arc::new(SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             Arc::new(router),
-            builder.clone(),
+            Arc::new(RuntimeRegistry::from_snapshot(
+                builder.snapshot(),
+                builtin_catalog().unwrap(),
+            )),
             permission,
             EventBus::default(),
         ));
@@ -1380,7 +1837,6 @@ for line in sys.stdin:
             BTreeMap::new(),
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            false,
         )
         .await
         .unwrap();
@@ -1504,7 +1960,6 @@ for line in sys.stdin:
             BTreeMap::new(),
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            false,
         )
         .await
         .unwrap();
@@ -1550,10 +2005,7 @@ for line in sys.stdin:
             mcp,
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            EngineBuildOptions {
-                include_global_agents: false,
-                defer_mcp: true,
-            },
+            EngineBuildOptions { defer_mcp: true },
         )
         .await;
         let (_engine, _asks, _questions, mcp_control, _plugins) = result.unwrap();
@@ -1596,10 +2048,7 @@ for line in sys.stdin:
             mcp,
             plugins,
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            EngineBuildOptions {
-                include_global_agents: false,
-                defer_mcp: false,
-            },
+            EngineBuildOptions { defer_mcp: false },
         )
         .await;
         let (engine, _, _, _, _) = result.unwrap();
@@ -1634,7 +2083,6 @@ for line in sys.stdin:
             BTreeMap::new(),
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            false,
         )
         .await
         .unwrap();
@@ -1722,5 +2170,454 @@ for line in sys.stdin:
         );
         assert!(!agent.system_prompt.contains("baseline-skill"));
         assert!(!agent.system_prompt.contains("Baseline skill"));
+    }
+
+    /// Direct exec/RPC/goal construction still bakes Environment + AGENTS.
+    #[test]
+    fn agent_with_model_retains_environment_and_agents_context() {
+        let home = tempdir();
+        let workdir = tempdir();
+        let _env = EnvGuard::set(&home, &workdir);
+        let agents_marker = "DIRECT_MODE_AGENTS_CONTEXT_MARKER";
+        std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
+
+        let agent = agent_with_model("fake", None);
+
+        assert!(
+            agent.system_prompt.contains(HARNESS_AGENT_BASE),
+            "direct agent must keep harness base: {}",
+            agent.system_prompt
+        );
+        assert!(
+            agent.system_prompt.contains("## Environment"),
+            "direct agent must bake Environment: {}",
+            agent.system_prompt
+        );
+        assert!(
+            agent.system_prompt.contains(agents_marker),
+            "direct agent must bake process-cwd AGENTS: {}",
+            agent.system_prompt
+        );
+        assert!(
+            agent.system_prompt.contains("## Project context:"),
+            "direct agent must use project-context separators: {}",
+            agent.system_prompt
+        );
+    }
+
+    /// Server/TUI AppState agent slot is base-only (no pre-baked AGENTS).
+    #[test]
+    fn agent_base_with_model_excludes_prebaked_agents_and_environment() {
+        let home = tempdir();
+        let workdir = tempdir();
+        let _env = EnvGuard::set(&home, &workdir);
+        let agents_marker = "SERVER_BASE_MUST_NOT_BAKE_AGENTS";
+        std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
+
+        let agent = agent_base_with_model("fake", None);
+
+        assert_eq!(agent.system_prompt, HARNESS_AGENT_BASE);
+        assert!(
+            !agent.system_prompt.contains("## Environment"),
+            "server base must not bake Environment"
+        );
+        assert!(
+            !agent.system_prompt.contains(agents_marker),
+            "server base must not bake AGENTS (layered per turn)"
+        );
+        assert!(!agent.system_prompt.contains("## Project context:"));
+    }
+
+    /// Minimal engine whose catalog deliberately omits a recorded historical id.
+    async fn engine_with_catalog(catalog: Arc<BundleCatalog>) -> SessionEngine {
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            catalog,
+        ));
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
+            runtime,
+            permission,
+            EventBus::default(),
+        )
+    }
+
+    fn catalog_with_agents(stable_ids: &[&str]) -> Arc<BundleCatalog> {
+        let bundle = PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: "hya/recovery-resolution".to_string(),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            origin: BundleOrigin::Builtin,
+            immutable: true,
+            digest: "test-only".to_string(),
+            agents: stable_ids
+                .iter()
+                .map(|stable_id| PreparedAgent {
+                    local_id: (*stable_id).to_string(),
+                    stable_id: AgentName::new(*stable_id),
+                    description: None,
+                    role: AgentRole::Main,
+                    color: None,
+                    prompt: Some(format!("{stable_id} recovery prompt")),
+                    prompt_source: None,
+                    prompt_digest: None,
+                    model_policy: ModelPolicy::default(),
+                    workdir: None,
+                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    harness_access: HarnessAccess::Full,
+                    resource_view: ResourceView::default(),
+                    // Deliberately empty: recovery must not depend on can_spawn.
+                    can_spawn: Vec::new(),
+                    hook_refs: Vec::new(),
+                })
+                .collect(),
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        };
+        Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("valid recovery catalog"))
+    }
+
+    #[tokio::test]
+    async fn recovered_resident_missing_definition_fails_closed_without_synthesis() {
+        let workdir = tempdir();
+        let engine = engine_with_catalog(catalog_with_agents(&["build", "general"])).await;
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base-model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let recorded = AgentName::new("legacy-resident-only");
+
+        let err = match resolve_recovered_resident_agent(&engine, &base, &recorded, &workdir) {
+            Ok(_) => panic!("absent recorded id must fail typed definition missing"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(
+                &err,
+                CoreError::AgentDefinitionMissing { agent_id } if agent_id == "legacy-resident-only"
+            ),
+            "expected AgentDefinitionMissing for recorded id, got {err}"
+        );
+        assert!(
+            err.to_string().contains("AGENT_DEFINITION_MISSING"),
+            "typed surface must remain AGENT_DEFINITION_MISSING, got {err}"
+        );
+        // No general/base rewrite of the recorded identity.
+        assert!(
+            !err.to_string().contains("`general`") && !err.to_string().contains("`build`"),
+            "error must name the recorded id only, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovered_resident_exact_lookup_preserves_recorded_id_without_can_spawn() {
+        let workdir = tempdir();
+        // Agent present for exact lookup but not in anyone's can_spawn (empty lists).
+        let engine = engine_with_catalog(catalog_with_agents(&["build", "resident-helper"])).await;
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base-model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let recorded = AgentName::new("resident-helper");
+
+        let resolved = resolve_recovered_resident_agent(&engine, &base, &recorded, &workdir)
+            .expect("exact catalog hit must resolve without can_spawn");
+        assert_eq!(
+            resolved.name.as_str(),
+            "resident-helper",
+            "recorded AgentName must remain stable"
+        );
+        assert_eq!(
+            resolved.workdir, workdir,
+            "session workdir from bind must be preserved"
+        );
+        assert!(
+            resolved
+                .system_prompt
+                .contains("resident-helper recovery prompt"),
+            "exact definition prompt must apply: {}",
+            resolved.system_prompt
+        );
+        assert_ne!(
+            resolved.name.as_str(),
+            "general",
+            "must not fall back to general"
+        );
+        assert_ne!(
+            resolved.name.as_str(),
+            "build",
+            "must not rewrite to base/lead"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovered_resident_uses_session_workdir_not_base_workdir() {
+        let session_dir = tempdir();
+        let base_dir = tempdir();
+        let engine = engine_with_catalog(catalog_with_agents(&["build", "resident-helper"])).await;
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base-model"),
+            system_prompt: "lead base".to_string(),
+            workdir: base_dir.clone(),
+            reasoning: None,
+        };
+        let recorded = AgentName::new("resident-helper");
+
+        let resolved =
+            resolve_recovered_resident_agent(&engine, &base, &recorded, &session_dir).unwrap();
+        assert_eq!(resolved.workdir, session_dir);
+        assert_ne!(resolved.workdir, base_dir);
+    }
+
+    /// Catalog with one spawnable worker whose Bundle model_policy is explicit.
+    fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<BundleCatalog> {
+        let agent = |stable_id: &str, role: AgentRole, can_spawn: &[&str], policy: ModelPolicy| {
+            PreparedAgent {
+                local_id: stable_id.to_string(),
+                stable_id: AgentName::new(stable_id),
+                description: None,
+                role,
+                color: None,
+                prompt: Some(format!("{stable_id} prompt")),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: policy,
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                harness_access: HarnessAccess::Full,
+                resource_view: ResourceView::default(),
+                can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
+                hook_refs: Vec::new(),
+            }
+        };
+        let bundle = PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: "hya/spawn-model-precedence".to_string(),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            origin: BundleOrigin::Builtin,
+            immutable: true,
+            digest: "test-only".to_string(),
+            agents: vec![
+                agent(
+                    "build",
+                    AgentRole::Main,
+                    &["worker"],
+                    ModelPolicy::default(),
+                ),
+                agent("worker", AgentRole::Subagent, &[], model_policy),
+            ],
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        };
+        Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("valid precedence catalog"))
+    }
+
+    fn precedence_categories() -> CategoryRegistry {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "bundle-cat".to_string(),
+            CategoryEntry::from_candidates(&["cat/bundle-model".to_string()]).unwrap(),
+        );
+        entries.insert(
+            "inline-cat".to_string(),
+            CategoryEntry::from_candidates(&["cat/inline-model".to_string()]).unwrap(),
+        );
+        entries.insert(
+            "spawn-cat".to_string(),
+            CategoryEntry::from_candidates(&["cat/spawn-model".to_string()]).unwrap(),
+        );
+        CategoryRegistry::from_entries(entries)
+    }
+
+    /// Highest-to-lowest spawn model chain, each row selecting the first set layer
+    /// while lower layers remain present so the winner is unambiguous.
+    #[tokio::test]
+    async fn resolve_spawn_member_model_precedence_highest_to_lowest() {
+        let workdir = tempdir();
+        let categories = precedence_categories();
+        let is_servable = |_: &ModelRef| true;
+        let allowed = [AgentDef {
+            name: "worker".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+        }];
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base/model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+
+        #[derive(Clone, Copy)]
+        struct Case {
+            label: &'static str,
+            bundle_model: Option<&'static str>,
+            bundle_category: Option<&'static str>,
+            inline_model: Option<&'static str>,
+            inline_category: Option<&'static str>,
+            spawn_model: Option<&'static str>,
+            spawn_category: Option<&'static str>,
+            expected: &'static str,
+        }
+
+        // Cumulative lower layers prove exact order:
+        // spawn model > spawn category > inline model > Bundle model >
+        // inline category > Bundle category > base model.
+        let cases = [
+            Case {
+                label: "base model",
+                bundle_model: None,
+                bundle_category: None,
+                inline_model: None,
+                inline_category: None,
+                spawn_model: None,
+                spawn_category: None,
+                expected: "base/model",
+            },
+            Case {
+                label: "Bundle category",
+                bundle_model: None,
+                bundle_category: Some("bundle-cat"),
+                inline_model: None,
+                inline_category: None,
+                spawn_model: None,
+                spawn_category: None,
+                expected: "cat/bundle-model",
+            },
+            Case {
+                label: "inline category over Bundle category",
+                bundle_model: None,
+                bundle_category: Some("bundle-cat"),
+                inline_model: None,
+                inline_category: Some("inline-cat"),
+                spawn_model: None,
+                spawn_category: None,
+                expected: "cat/inline-model",
+            },
+            Case {
+                label: "Bundle model over category layers",
+                bundle_model: Some("bundle/model"),
+                bundle_category: Some("bundle-cat"),
+                inline_model: None,
+                inline_category: Some("inline-cat"),
+                spawn_model: None,
+                spawn_category: None,
+                expected: "bundle/model",
+            },
+            Case {
+                label: "inline model over Bundle model",
+                bundle_model: Some("bundle/model"),
+                bundle_category: Some("bundle-cat"),
+                inline_model: Some("inline/model"),
+                inline_category: Some("inline-cat"),
+                spawn_model: None,
+                spawn_category: None,
+                expected: "inline/model",
+            },
+            Case {
+                label: "spawn category over inline model",
+                bundle_model: Some("bundle/model"),
+                bundle_category: Some("bundle-cat"),
+                inline_model: Some("inline/model"),
+                inline_category: Some("inline-cat"),
+                spawn_model: None,
+                spawn_category: Some("spawn-cat"),
+                expected: "cat/spawn-model",
+            },
+            Case {
+                label: "spawn explicit model highest",
+                bundle_model: Some("bundle/model"),
+                bundle_category: Some("bundle-cat"),
+                inline_model: Some("inline/model"),
+                inline_category: Some("inline-cat"),
+                spawn_model: Some("spawn/model"),
+                spawn_category: Some("spawn-cat"),
+                expected: "spawn/model",
+            },
+        ];
+
+        for case in cases {
+            let catalog = catalog_with_worker_policy(ModelPolicy {
+                model: case.bundle_model.map(str::to_string),
+                category: case.bundle_category.map(str::to_string),
+                reasoning: None,
+            });
+            let engine = engine_with_catalog(catalog).await;
+            let binding = engine
+                .bind_runtime(&workdir)
+                .expect("bind prepared catalog");
+            assert!(
+                binding.resolve_agent("worker").is_some(),
+                "{}: worker must resolve from prepared BundleCatalog",
+                case.label
+            );
+
+            let has_inline = case.inline_model.is_some() || case.inline_category.is_some();
+            let member = SpawnMember {
+                description: case.label.to_string(),
+                prompt: "resolve model only".to_string(),
+                subagent_type: "worker".to_string(),
+                model: case.spawn_model.map(str::to_string),
+                category: case.spawn_category.map(str::to_string),
+                inline_agent: has_inline.then(|| InlineAgent {
+                    name: "overlay".to_string(),
+                    prompt: "overlay prompt".to_string(),
+                    model: case.inline_model.map(str::to_string),
+                    category: case.inline_category.map(str::to_string),
+                    ..InlineAgent::default()
+                }),
+                ..SpawnMember::default()
+            };
+
+            let resolve_ctx = ResolveSpawnMemberCtx {
+                engine: &engine,
+                binding: &binding,
+                base: &base,
+                caller: "build",
+                allowed_agents: &allowed,
+                categories: &categories,
+                is_servable: &is_servable,
+                guidance: None,
+            };
+            let resolved = resolve_spawn_member(&resolve_ctx, member)
+                .unwrap_or_else(|err| panic!("{}: resolve failed: {err}", case.label));
+
+            assert_eq!(
+                resolved.agent.model.as_str(),
+                case.expected,
+                "{}: expected model {}",
+                case.label,
+                case.expected
+            );
+            assert_eq!(
+                resolved.authorized_target.as_str(),
+                "worker",
+                "{}: authorized target must remain the Bundle agent",
+                case.label
+            );
+        }
     }
 }

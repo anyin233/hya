@@ -2,7 +2,7 @@ api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/core-agents
-  version: 0.34.7
+  version: 0.34.8
   publisher: hya
 agents:
   - local_id: build
@@ -48,7 +48,7 @@ agents:
     can_spawn: *ordinary_agents
   - local_id: plan
     stable_id: plan
-    description: Plan mode. Disallows all edit tools.
+    description: Plan mode. Planning-focused agent for designs and task breakdowns.
     role: main
     spawn_lifecycle: transient
     harness_access: full

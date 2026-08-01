@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 
 use hya_core::{
@@ -68,7 +70,7 @@ async fn command_execute_before_mutates_text_before_user_message_is_admitted() {
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
-        tools,
+        support::test_runtime(tools),
         permission,
         EventBus::default(),
     )

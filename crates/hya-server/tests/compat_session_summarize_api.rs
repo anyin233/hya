@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -25,11 +27,12 @@ async fn state_with_session() -> (AppState, String) {
     ]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
+    let runtime = support::test_runtime(tools);
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let store = SessionStore::connect_memory().await.unwrap();
     let summarizer = Arc::new(ModelSummarizer::new(router.clone(), ModelRef::new("fake")));
     let engine = Arc::new(
-        SessionEngine::new(store, router, tools, perm, EventBus::default()).with_compaction(
+        SessionEngine::new(store, router, runtime, perm, EventBus::default()).with_compaction(
             summarizer,
             CompactionConfig {
                 token_threshold: 1,

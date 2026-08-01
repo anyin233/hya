@@ -1,10 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
-#[cfg(unix)]
-use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -182,16 +178,14 @@ async fn builtin_formatter_command_formats_matching_extension() {
     .unwrap();
     let bin_dir = dir.join("vendor/bin");
     tokio::fs::create_dir_all(&bin_dir).await.unwrap();
-    let pint = bin_dir.join("pint");
-    let mut pint_file = std::fs::File::create(&pint).unwrap();
-    pint_file
-        .write_all(b"#!/bin/sh\nprintf 'pint\\n' > \"$1\"\n")
-        .unwrap();
-    pint_file.sync_all().unwrap();
-    drop(pint_file);
-    std::fs::set_permissions(&pint, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Symlink to a stable binary so discovery still execs ./vendor/bin/pint without
+    // racing ETXTBSY on a freshly written executable inode.
+    std::os::unix::fs::symlink("/bin/sh", bin_dir.join("pint")).unwrap();
     let target = dir.join("app.php");
-    tokio::fs::write(&target, "raw\n").await.unwrap();
+    // Target is a tiny shell program: when run as `pint app.php`, sh rewrites $0.
+    tokio::fs::write(&target, "printf 'pint\\n' > \"$0\"\n")
+        .await
+        .unwrap();
     let provider = BuiltinFormatterProvider::new(FormatterConfig::Builtins);
 
     // When: formatting a matching PHP file.

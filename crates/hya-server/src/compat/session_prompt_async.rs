@@ -23,8 +23,8 @@ pub(super) async fn prompt_async(
     }
     let runs = st.runs.clone();
     let engine = st.engine.clone();
-    let agent = super::reference::session_agent_with_guidance(&st, session).await;
-    let external_dirs = super::reference::external_directories_at(&st, &agent.workdir).await;
+    let turn = super::reference::session_agent_with_guidance(&st, session).await;
+    let external_dirs = super::reference::external_directories_at(&st, &turn.agent.workdir).await;
     std::mem::drop(tokio::spawn(async move {
         let Some(run) = runs.start(session) else {
             publish_background_error(&engine, session, "session busy".to_string()).await;
@@ -35,9 +35,15 @@ pub(super) async fn prompt_async(
         publish_session_status(&engine, session, "busy").await;
         let result = async {
             engine.admit_user_prompt(session, text).await?;
-            let _ = engine.auto_title_session(session, &agent.model).await;
+            let _ = engine.auto_title_session(session, &turn.agent.model).await;
             engine
-                .run_turn_with_external_dirs(session, &agent, cancel, &external_dirs)
+                .run_turn_with_external_dirs_and_guidance(
+                    session,
+                    &turn.agent,
+                    cancel,
+                    &external_dirs,
+                    turn.guidance,
+                )
                 .await?;
             Ok::<(), hya_core::CoreError>(())
         }
