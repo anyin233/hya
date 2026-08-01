@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod config;
 pub mod formatter_config;
+mod installed_bundle_refresh;
 pub mod oauth;
 pub mod permission;
 pub mod plugins;
@@ -14,6 +15,7 @@ pub mod runtime;
 mod runtime_reconcile;
 
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
+pub use installed_bundle_refresh::{InstalledBundleRefresh, bundle_registry_path};
 pub use runtime::{
     HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig, RuntimeOptions,
     agent_base_with_model, agent_with_model, build_session_engine, builtin_catalog,

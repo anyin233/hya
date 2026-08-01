@@ -197,6 +197,39 @@ impl RuntimeRegistry {
         Ok(self.publish_candidate(current, candidate)?.generation)
     }
 
+    /// Atomically publish a complete agent catalog while preserving the
+    /// current tool, skill, and source view.
+    pub fn publish_catalog(
+        &self,
+        catalog: Arc<BundleCatalog>,
+    ) -> Result<ConfigGeneration, RuntimeRefreshError> {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = self.active();
+        if current.catalog.bundles() == catalog.bundles() {
+            return Ok(current.generation);
+        }
+        let generation = current
+            .generation
+            .checked_next()
+            .ok_or(RuntimeRefreshError::GenerationExhausted)?;
+        let published = Arc::new(RuntimeSnapshot {
+            generation,
+            catalog,
+            basic_tools: current.basic_tools.clone(),
+            tools: current.tools.clone(),
+            skills: current.skills.clone(),
+            sources: current.sources.clone(),
+        });
+        *self
+            .active
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = published;
+        Ok(generation)
+    }
+
     #[must_use]
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.active().tools.schemas()

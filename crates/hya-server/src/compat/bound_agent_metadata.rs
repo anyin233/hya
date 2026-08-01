@@ -41,12 +41,12 @@ struct DefaultAgentConfig {
 /// `ServerState.default_agent`, then `st.agent.name`. The candidate is
 /// exact-resolved in that binding — no `general` fallback and no role gate.
 /// Unknown ids surface as `BundleError::UnknownAgentId` via `CoreError`/`ApiError`.
-pub(crate) fn resolve_session_agent(
+pub(crate) async fn resolve_session_agent(
     st: &ServerState,
     workdir: &Path,
     requested: Option<&str>,
 ) -> Result<AgentName, ApiError> {
-    let binding = st.engine.bind_runtime(workdir)?;
+    let binding = st.engine.bind_root_runtime(workdir).await?;
     let candidate = match requested {
         Some(id) => id.to_string(),
         None => configured_default_agent(workdir)
@@ -65,8 +65,8 @@ pub(crate) fn resolve_session_agent(
 ///
 /// Bind failures surface as typed `ApiError` (via `CoreError`) rather than an
 /// empty list fallback — there is no second authority when binding fails.
-pub(super) fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAgentRow>, ApiError> {
-    let binding = st.engine.bind_runtime(workdir)?;
+pub(super) async fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAgentRow>, ApiError> {
+    let binding = st.engine.bind_root_runtime(workdir).await?;
     let catalog = binding.agent_catalog();
 
     // Ordinary reachability: any catalog agent lists the id in can_spawn.

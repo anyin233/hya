@@ -85,6 +85,48 @@ fn import_compat_exits_before_tui_processes_start() {
 }
 
 #[test]
+fn bundle_commands_forward_to_backend_without_starting_tui() {
+    let fixture = Fixture::new("bundle-forward");
+    let backend = fixture.root.join("bundle-backend");
+    executable(
+        &backend,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BUNDLE_ARGS_FILE\"\nexit 23\n",
+    );
+    let cases: [&[&str]; 5] = [
+        &["bundle", "install", "demo.hyabundle"],
+        &["bundle", "list"],
+        &["bundle", "uninstall", "hya/demo"],
+        &["bundle", "info", "hya/demo"],
+        &["bundle", "info", "-f", "demo.hyabundle"],
+    ];
+
+    for (index, args) in cases.into_iter().enumerate() {
+        let args_file = fixture.root.join(format!("bundle-args-{index}"));
+        let output = fixture
+            .command()
+            .arg("--backend-bin")
+            .arg(&backend)
+            .args(args.iter().copied())
+            .env("BUNDLE_ARGS_FILE", &args_file)
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(23), "{args:?}: {output:?}");
+        assert_eq!(
+            lines(&args_file),
+            args.iter()
+                .map(|argument| (*argument).to_string())
+                .collect::<Vec<_>>(),
+            "backend argv mismatch for {args:?}"
+        );
+        assert!(
+            !fixture.args.exists(),
+            "Bun started while forwarding {args:?}"
+        );
+    }
+}
+
+#[test]
 fn missing_bun_error_names_attempted_executable() {
     let fixture = Fixture::new("missing-bun");
     let missing_bun = fixture.root.join("missing-bun");

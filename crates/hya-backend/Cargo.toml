@@ -13,6 +13,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+hya-bundle = { workspace = true }
 hya-core = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }

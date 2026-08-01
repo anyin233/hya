@@ -69,7 +69,8 @@ async fn create_session(
         st,
         std::path::Path::new(&workdir),
         info.get("agent").and_then(Value::as_str),
-    )?;
+    )
+    .await?;
     st.engine
         .create_with_id(
             Some(session),

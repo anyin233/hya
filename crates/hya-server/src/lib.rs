@@ -116,7 +116,8 @@ async fn create_session(
         &st,
         std::path::Path::new(&req.workdir),
         Some(req.agent.as_str()),
-    )?;
+    )
+    .await?;
     let session = st
         .engine
         .create(CreateSession {

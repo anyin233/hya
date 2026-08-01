@@ -1,12 +1,16 @@
-# 0.34.9
+# 0.34.10
 
-- Add content-magic inspection for public and private bundle packages.
-- Add a strict, bounded pure-Rust 7z reader/profile and canonical v1
-  public-package preparation with a fixed 1000:1 expansion ceiling using the
-  accepted block's referenced PackInfo stream sizes, enforced at metadata
-  preflight and before retaining each decoded chunk.
-- Keep private package inspection structural only: authentication remains unverified,
-  payloads remain opaque, and inspection does not activate package content.
-- Add the SQLite prepared-BLOB registry core with immutable builtins,
-  idempotency, conflict/replacement/uninstall handling, and atomic generation
-  updates.
+- Ship `hya bundle install`, `list`, `uninstall`, and `info`, including
+  file-only `info -f`, with atomic registry updates, immutable built-ins, and
+  idempotent same-digest installs.
+- Publish installed public-static catalogs lazily and atomically for new root
+  turns and TUI/catalog refreshes; in-flight and child turns stay pinned to
+  their existing catalog snapshots.
+- Require the exact lowercase `.hyabundle` suffix while treating package magic
+  bytes as format authority. Private packages remain inspection-only with
+  `authentication=unverified`, `payload=opaque`, and
+  `activation unsupported-in-0.34.10`.
+- Activate one static agent definition and its Markdown prompt from each
+  installable package. The strict public profile admits no external static-skill
+  file, bundle runner, sandbox, executable tool/MCP/hook/JS/Rust activation, or
+  new permission plane.

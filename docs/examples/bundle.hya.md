@@ -13,9 +13,5 @@ agents:
     harness_access: full
 ---
 
-You are the minimal prepare-valid AgentBundle documentation example agent.
-
-This file is prepare-valid source only. Release 0.34.8 does not runtime-scan
-docs/examples, install external bundles, or execute JS/Rust/MCP/tool/hook refs.
-Built-ins are prepared at build time; this example is not installed or run by
-the executable.
+You are a concise documentation example lead. Answer with the static prompt and
+the Harness resources available to this agent.

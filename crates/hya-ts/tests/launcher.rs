@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser as _;
 use hya_ts::{
-    AuthCommand, Cli, Command, OauthCommand, backend_auth_args, build_bun_command,
+    AuthCommand, Cli, Command, OauthCommand, backend_command_args, build_bun_command,
     resolve_backend_bin, resolve_runtime_dir,
 };
 
@@ -148,7 +148,7 @@ fn parses_oauth_login_and_forwards_backend_args() {
     );
     // Defaults are applied in hya-backend (device + no-browser for openai-codex).
     assert_eq!(
-        backend_auth_args(&command),
+        backend_command_args(&command),
         os_strings(&[
             "oauth",
             "login",
@@ -176,7 +176,7 @@ fn parses_oauth_login_and_forwards_backend_args() {
     ])
     .unwrap();
     assert_eq!(
-        backend_auth_args(&loopback.command.expect("loopback oauth")),
+        backend_command_args(&loopback.command.expect("loopback oauth")),
         os_strings(&[
             "oauth",
             "login",
@@ -194,13 +194,13 @@ fn parses_oauth_login_and_forwards_backend_args() {
 fn parses_login_auth_list_and_oauth_status() {
     let login = Cli::try_parse_from(["hya-ts", "login", "anthropic", "sk-test"]).unwrap();
     assert_eq!(
-        backend_auth_args(&login.command.unwrap()),
+        backend_command_args(&login.command.unwrap()),
         os_strings(&["login", "anthropic", "sk-test"])
     );
 
     let list = Cli::try_parse_from(["hya-ts", "auth", "list"]).unwrap();
     assert_eq!(
-        backend_auth_args(&list.command.unwrap()),
+        backend_command_args(&list.command.unwrap()),
         os_strings(&["auth", "list"])
     );
 
@@ -213,13 +213,13 @@ fn parses_login_auth_list_and_oauth_status() {
         } if provider == "codex"
     ));
     assert_eq!(
-        backend_auth_args(&providers_cmd),
+        backend_command_args(&providers_cmd),
         os_strings(&["auth", "logout", "codex"])
     );
 
     let status = Cli::try_parse_from(["hya-ts", "oauth", "status", "grok"]).unwrap();
     assert_eq!(
-        backend_auth_args(&status.command.expect("oauth status")),
+        backend_command_args(&status.command.expect("oauth status")),
         os_strings(&["oauth", "status", "grok"])
     );
 }

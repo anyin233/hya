@@ -60,7 +60,8 @@ async fn bootstrap(
 
     let build_permissions = super::agent_permission::from_engine(&st.engine);
     // Bound catalog only: native=true, empty per-agent legacy overrides.
-    let agents: Vec<Value> = super::bound_agent_metadata::list(&st, &workdir)?
+    let agents: Vec<Value> = super::bound_agent_metadata::list(&st, &workdir)
+        .await?
         .into_iter()
         .map(|agent| {
             let model = agent.model.as_deref().unwrap_or(st.agent.model.as_str());

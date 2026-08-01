@@ -186,6 +186,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
         workdir: PathBuf::from("/tmp"),
         reasoning: None,
     };
+    let binding = engine.bind_runtime(&base.workdir).unwrap();
     let specs: Vec<MemberSpec> = ["quick", "deep", "ultrabrain", "writing"]
         .iter()
         .map(|cat| {
@@ -193,6 +194,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
             MemberSpec {
                 id: MemberId::new(),
                 agent: build_member_agent(&base, &resolved, &[]),
+                binding: binding.clone(),
                 agents: Arc::from([]),
                 resources: None,
                 guidance: None,

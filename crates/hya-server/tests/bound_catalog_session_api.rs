@@ -6,11 +6,15 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_core::{
+    AgentSpec, CoreError, EventBus, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine,
+};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
@@ -130,6 +134,63 @@ fn error_text(body: &Value) -> String {
 
 async fn session_count(engine: &SessionEngine) -> usize {
     engine.store().list_sessions().await.unwrap().len()
+}
+
+struct CountingRefresh {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl RuntimeCatalogRefresh for CountingRefresh {
+    async fn refresh_if_changed(&self, _runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn root_session_create_refreshes_before_agent_resolution() {
+    let workdir = tempdir();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            providers,
+            catalog_runtime(),
+            permission,
+            EventBus::default(),
+        )
+        .with_catalog_refresh(Arc::new(CountingRefresh {
+            calls: Arc::clone(&calls),
+        })),
+    );
+    let state = AppState::new(
+        Arc::clone(&engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake-model"),
+            system_prompt: "system prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        }),
+    );
+
+    let (status, body) = post_json(
+        router(state),
+        "/sessions",
+        json!({
+            "agent": "build",
+            "model": "fake-model",
+            "workdir": workdir.to_string_lossy(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(session_count(&engine).await, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 /// Omitted Compat legacy `/session` and v2 `/api/session` honor configured

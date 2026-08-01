@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use hya_bundle::PreparedAgent;
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, Projection, SessionId, ToolCallId,
@@ -10,7 +11,8 @@ use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, ResolvedTool, SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
+    PermissionRules, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
+    SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
@@ -93,13 +95,86 @@ pub struct AgentSpec {
     pub reasoning: Option<ReasoningEffort>,
 }
 
+#[async_trait]
+pub trait RuntimeCatalogRefresh: Send + Sync {
+    async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError>;
+}
+
+/// One spawn request bound to the immutable runtime snapshot of its parent turn.
+///
+/// This value is process-local orchestration state. It is never persisted or
+/// exposed on the wire; dropping it naturally releases the retained snapshot.
+pub struct BoundSpawnRequest {
+    binding: TurnBinding,
+    request: SpawnRequest,
+}
+
+impl BoundSpawnRequest {
+    #[must_use]
+    pub fn into_parts(self) -> (TurnBinding, SpawnRequest) {
+        (self.binding, self.request)
+    }
+}
+
+/// Core-owned sender for parent-turn-bound spawn requests.
+#[derive(Clone)]
+pub struct BoundSpawnSender {
+    tx: tokio::sync::mpsc::Sender<BoundSpawnRequest>,
+}
+
+impl BoundSpawnSender {
+    #[must_use]
+    pub fn with_capacity(
+        capacity: usize,
+    ) -> (Self, tokio::sync::mpsc::Receiver<BoundSpawnRequest>) {
+        let capacity = capacity.clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        (Self { tx }, rx)
+    }
+
+    fn disconnected() -> Self {
+        let (sender, receiver) = Self::with_capacity(1);
+        drop(receiver);
+        sender
+    }
+
+    /// Derive a raw tool-plane facade closed over one already-admitted turn.
+    #[must_use]
+    pub fn for_binding(&self, binding: &TurnBinding) -> SpawnerPlane {
+        SpawnerPlane::from_sink(Arc::new(BoundSpawnRequestSink {
+            tx: self.tx.clone(),
+            binding: binding.clone(),
+        }))
+    }
+}
+
+struct BoundSpawnRequestSink {
+    tx: tokio::sync::mpsc::Sender<BoundSpawnRequest>,
+    binding: TurnBinding,
+}
+
+impl SpawnRequestSink for BoundSpawnRequestSink {
+    fn try_send(&self, request: SpawnRequest) -> Result<(), SpawnRequestSendError> {
+        self.tx
+            .try_send(BoundSpawnRequest {
+                binding: self.binding.clone(),
+                request,
+            })
+            .map_err(|error| match error {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => SpawnRequestSendError::Full,
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => SpawnRequestSendError::Closed,
+            })
+    }
+}
+
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
     runtime: Arc<RuntimeRegistry>,
+    catalog_refresh: Option<Arc<dyn RuntimeCatalogRefresh>>,
     permission: PermissionPlane,
     interaction: InteractionPlane,
-    spawner: SpawnerPlane,
+    spawner: BoundSpawnSender,
     mailbox: MailboxPlane,
     todo: TodoPlane,
     websearch: WebSearchPlane,
@@ -122,7 +197,7 @@ impl SessionEngine {
         bus: EventBus,
     ) -> Self {
         let (interaction, _rx) = InteractionPlane::new();
-        let (spawner, _srx) = SpawnerPlane::new();
+        let spawner = BoundSpawnSender::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
@@ -132,6 +207,7 @@ impl SessionEngine {
             store,
             providers,
             runtime,
+            catalog_refresh: None,
             permission,
             interaction,
             spawner,
@@ -155,13 +231,19 @@ impl SessionEngine {
     }
 
     #[must_use]
+    pub fn with_catalog_refresh(mut self, refresh: Arc<dyn RuntimeCatalogRefresh>) -> Self {
+        self.catalog_refresh = Some(refresh);
+        self
+    }
+
+    #[must_use]
     pub fn with_interaction(mut self, interaction: InteractionPlane) -> Self {
         self.interaction = interaction;
         self
     }
 
     #[must_use]
-    pub fn with_spawner(mut self, spawner: SpawnerPlane) -> Self {
+    pub fn with_spawn_sender(mut self, spawner: BoundSpawnSender) -> Self {
         self.spawner = spawner;
         self
     }
@@ -259,6 +341,16 @@ impl SessionEngine {
     }
 
     pub fn bind_runtime(&self, workdir: &std::path::Path) -> Result<TurnBinding, CoreError> {
+        Ok(self.runtime.bind_turn(workdir)?)
+    }
+
+    pub async fn bind_root_runtime(
+        &self,
+        workdir: &std::path::Path,
+    ) -> Result<TurnBinding, CoreError> {
+        if let Some(refresh) = &self.catalog_refresh {
+            let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
+        }
         Ok(self.runtime.bind_turn(workdir)?)
     }
 

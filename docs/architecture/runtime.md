@@ -100,6 +100,20 @@ plugin watcher, or plugin hot-reload API. A respawn must reproduce the complete
 canonical initialize declaration or the new child is closed and calls fail
 closed.
 
+`RuntimeSnapshot` owns exactly one `BundleCatalog`. For installed bundles,
+`hya-app` reads the bundle registry generation before binding each new root turn
+and before TUI/catalog refresh, builds one complete built-ins-plus-installed
+public-static candidate, and publishes it atomically. An unchanged generation
+is a no-op; validation or load failure preserves the old snapshot. In-flight
+turns and child turns retain their pinned snapshot. There is no bundle watcher,
+per-provider-round or per-tool-call database check, or second catalog authority.
+
+Core preserves that child pinning with a typed `BoundSpawnRequest` carrying the
+parent `TurnBinding` through the application supervisor into both transient and
+resident execution. The child path does not query the bundle registry database
+for a generation or bind whichever runtime is current when a queued request
+runs.
+
 ## Resident recovery and actor fencing
 
 Resident subagents retain the immutable runtime `TurnBinding` behavior above,

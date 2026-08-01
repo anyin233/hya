@@ -186,7 +186,13 @@ async fn quiescence_wakes_main_to_synthesize() {
         .agent_resource_policy_for_binding(&binding, "build")
         .unwrap();
     supervisor
-        .ensure_main(root, agent.clone(), None, root_agents, root_resources, None)
+        .ensure_main(
+            root,
+            agent.clone(),
+            (binding, root_agents, root_resources),
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -283,7 +289,13 @@ async fn message_budget_kill_cancels_the_team() {
         .agent_resource_policy_for_binding(&binding, "build")
         .unwrap();
     supervisor
-        .ensure_main(root, agent.clone(), None, root_agents, root_resources, None)
+        .ensure_main(
+            root,
+            agent.clone(),
+            (binding, root_agents, root_resources),
+            None,
+            None,
+        )
         .await
         .unwrap();
 

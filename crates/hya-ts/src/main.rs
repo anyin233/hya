@@ -8,8 +8,8 @@ use std::time::Duration;
 use clap::Parser as _;
 use hya_sdk::ServerHandle;
 use hya_ts::{
-    Cli, Command, backend_auth_args, build_bun_command_from, invocation_name, resolve_backend_bin,
-    resolve_runtime_dir,
+    Cli, Command, backend_command_args, build_bun_command_from, invocation_name,
+    resolve_backend_bin, resolve_runtime_dir,
 };
 use tokio::process::Command as TokioCommand;
 
@@ -29,7 +29,7 @@ async fn run() -> Result<u8, Box<dyn Error>> {
     cli.validate()?;
 
     if let Some(command) = &cli.command {
-        return run_auth_command(&cli, command).await;
+        return run_backend_command(&cli, command).await;
     }
     if let Some(source) = cli.import.as_deref() {
         cmd_import(source)?;
@@ -163,8 +163,8 @@ fn cmd_import(source: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Forward auth/oauth commands to the sibling `hya-backend` binary (same store/config).
-async fn run_auth_command(cli: &Cli, command: &Command) -> Result<u8, Box<dyn Error>> {
+/// Forward backend-owned commands to the sibling `hya-backend` binary.
+async fn run_backend_command(cli: &Cli, command: &Command) -> Result<u8, Box<dyn Error>> {
     let executable = std::env::current_exe()?;
     let backend = resolve_backend_bin(
         cli.backend_bin.as_deref(),
@@ -174,7 +174,7 @@ async fn run_auth_command(cli: &Cli, command: &Command) -> Result<u8, Box<dyn Er
             .join("../..")
             .as_path(),
     );
-    let args = backend_auth_args(command);
+    let args = backend_command_args(command);
     let status = TokioCommand::new(&backend)
         .args(&args)
         .status()

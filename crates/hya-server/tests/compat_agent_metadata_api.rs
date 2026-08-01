@@ -4,13 +4,16 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_core::{
+    AgentSpec, CoreError, EventBus, RuntimeCatalogRefresh, RuntimeRegistry, SessionEngine,
+};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
@@ -81,6 +84,53 @@ fn find_agent<'a>(agents: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|agent| agent["name"] == name || agent["id"] == name)
         .unwrap_or_else(|| panic!("missing agent {name}: {agents}"))
+}
+
+struct CountingRefresh {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl RuntimeCatalogRefresh for CountingRefresh {
+    async fn refresh_if_changed(&self, _runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(false)
+    }
+}
+
+#[tokio::test]
+async fn agent_catalog_endpoint_refreshes_before_binding() {
+    let workdir = tempdir();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        providers,
+        test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    )
+    .with_catalog_refresh(Arc::new(CountingRefresh {
+        calls: Arc::clone(&calls),
+    }));
+    let app = router(AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake-model"),
+            system_prompt: "system prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        }),
+    ));
+
+    let uri = format!("/api/agent?directory={}", workdir.display());
+    let (status, body) = get_json(app, &uri).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body["data"].as_array().unwrap().is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 /// Configured `default_agent: hya-main` must lead both agent list routes so the

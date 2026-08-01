@@ -223,16 +223,28 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
             && !customize_surface.contains("creating or fixing compat agents, subagents"),
         "customize-compat must not say this skill creates/fixes compat agents or subagents: {customize_description}"
     );
-    // Native-only agent authority note: point at agent-bundle-authoring and state
-    // 0.34.8 does not parse/discover/migrate legacy agent JSON/JSONC/Markdown.
+    // Native-only agent authority note: 0.34.10 does not parse, discover, or
+    // migrate legacy agent JSON/JSONC/Markdown; external public-static
+    // `.hyabundle` packages use the bundle info/install commands, while agent
+    // authoring remains delegated to agent-bundle-authoring.
     assert!(
         customize_surface.contains("agent-bundle-authoring")
-            && customize_surface.contains("0.34.8")
-            && (customize_surface.contains("does not parse")
-                || customize_surface.contains("does not discover")
-                || customize_surface.contains("does not parse/discover")
-                || customize_surface.contains("does not parse, discover")),
-        "customize-compat must point at agent-bundle-authoring and state 0.34.8 native-only agent boundaries: {customize_surface}"
+            && customize_surface.contains("0.34.10")
+            && customize_surface.contains("does not parse, discover")
+            && customize_surface.contains("JSON/JSONC/Markdown")
+            && customize_surface.contains("public-static")
+            && customize_surface.contains(".hyabundle")
+            && customize_surface.contains("hya bundle info -f")
+            && customize_surface.contains("hya bundle install"),
+        "customize-compat must state 0.34.10 native-only agent boundaries and public-static bundle inspection/install: {customize_surface}"
+    );
+    assert!(
+        !customize_surface.contains("external bundle distribution is later scope"),
+        "customize-compat must not claim external bundle distribution is later scope: {customize_surface}"
+    );
+    assert!(
+        !customize_surface.contains("0.34.8"),
+        "customize-compat must not advertise stale 0.34.8 native-agent behavior: {customize_surface}"
     );
     assert!(
         customize_surface.contains("AgentBundle") || customize_surface.contains("embedded native"),
@@ -276,9 +288,15 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
     );
     assert!(
         authoring_content.contains("AgentBundle")
-            && authoring_content.contains("0.34.8")
-            && authoring_content.contains("does not runtime-scan"),
-        "agent-bundle-authoring content must be truthful about AgentBundle and 0.34.8 prepare-only boundaries: {authoring_content}"
+            && authoring_content.contains("0.34.10")
+            && authoring_content.contains("public-static")
+            && authoring_content.contains("hya bundle install")
+            && authoring_content.contains("hya bundle info -f")
+            && authoring_content.contains("does not runtime-scan")
+            && authoring_content.contains("authentication=unverified")
+            && authoring_content.contains("payload=opaque")
+            && authoring_content.contains("activation unsupported-in-0.34.10"),
+        "agent-bundle-authoring content must describe the 0.34.10 static package install/info and private inspection boundaries: {authoring_content}"
     );
     // Role controls TUI direct-selector visibility only: main is selectable;
     // subagent is hidden from direct selection — never a subagent selector placement.

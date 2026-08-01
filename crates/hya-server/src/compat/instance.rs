@@ -97,7 +97,7 @@ async fn agent(
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
     let build_permissions = super::agent_permission::from_engine(&st.engine);
-    let rows = super::bound_agent_metadata::list(&st, &workdir)?;
+    let rows = super::bound_agent_metadata::list(&st, &workdir).await?;
     Ok(Json(
         rows.into_iter()
             .map(|agent| AgentInfo {

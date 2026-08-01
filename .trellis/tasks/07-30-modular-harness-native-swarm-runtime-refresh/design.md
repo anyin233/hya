@@ -538,7 +538,7 @@ recommendation is C, but the owner must also choose context transfer
 (`input only`, `input + summary`, or `full context`) and resident idle/turn
 lifecycle. No implementation may guess.
 
-The dependency-ordered delivery is:
+The authoritative shipped package split is now:
 
 - `0.34.8`: one atomic built-in cutover. Freeze the capability/replay fixtures,
   add the minimal Bundle IR/catalog/namespace/resource-view compiler, prepare
@@ -546,14 +546,18 @@ The dependency-ordered delivery is:
   the one immutable generation, and delete every old agent-file
   loader/parser/discovery/runtime path in the same release. It must boot
   without `hya bundle install`.
-- `0.34.9`: add `.hyabundle` public/private inspection, the four-command CLI,
-  package registry, immutable built-in list/info semantics, and atomic
-  generation activation. It does not execute external bundles.
-- `0.34.10`: after the owner gate, extend the existing out-of-process plugin
-  JSON-RPC/stdio transport for installed public/private main/transient
-  execution, plus runnable Markdown/JS/Rust examples and the authoring skill.
-- `0.34.11`: add resident Bundle integration through the same Harness actor,
-  admission, mailbox, event, and fencing path; no second actor runtime.
+- `0.34.9`: deliver public/private inspection, the strict in-process public
+  reader, and the authoritative registry core. It does not execute external
+  bundles.
+- `0.34.10`: deliver the four bundle CLI commands, lazy atomic publication of
+  installed public-static catalogs, and the documentation/example/authoring
+  skill.
+
+This split supersedes every older placement of an external runner in `0.34.10`
+later in this design. External runner work is deferred beyond this package
+release, with no replacement version assigned. The older runner and resident
+sections remain future architecture and historical planning evidence, not a
+claim about the shipped `0.34.10` scope.
 
 ## 6. Lane B — versioned binding and atomic refresh
 

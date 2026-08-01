@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 use crate::agent_cmd::AgentCommand;
 use crate::auth_cmd::{AuthCommand, OauthCommand};
+use crate::bundle_cmd::BundleCommand;
 
 #[derive(Parser)]
 #[command(
@@ -129,6 +130,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Manage agent bundles.
+    Bundle {
+        #[command(subcommand)]
+        command: BundleCommand,
+    },
     /// List configured models.
     Models {
         /// Provider id to filter models by.
@@ -195,6 +201,23 @@ mod tests {
         let help = Cli::command().render_help().to_string();
 
         assert!(!help.contains("--mini"));
+    }
+
+    #[test]
+    fn parses_bundle_install_list_uninstall_and_info_file_commands() {
+        let cases: &[&[&str]] = &[
+            &["hya-backend", "bundle", "install", "demo.hyabundle"],
+            &["hya-backend", "bundle", "list"],
+            &["hya-backend", "bundle", "uninstall", "hya/demo"],
+            &["hya-backend", "bundle", "info", "hya/demo"],
+            &["hya-backend", "bundle", "info", "-f", "demo.hyabundle"],
+        ];
+
+        for args in cases {
+            let parsed = Cli::try_parse_from(args.iter().copied());
+            let error = parsed.as_ref().err().map(ToString::to_string);
+            assert!(parsed.is_ok(), "failed to parse {args:?}: {error:?}");
+        }
     }
 
     #[test]

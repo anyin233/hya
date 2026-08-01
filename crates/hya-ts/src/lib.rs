@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = invocation_name(), version, about = "hya TypeScript terminal frontend")]
 pub struct Cli {
-    /// Auth / OAuth subcommands (when absent, launch the TypeScript TUI).
+    /// Backend-backed subcommands (when absent, launch the TypeScript TUI).
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -52,6 +52,11 @@ pub fn invocation_name() -> &'static str {
 /// Top-level subcommands available on `hya-ts` in addition to the default TUI launch.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
+    /// Install, inspect, list, or uninstall agent bundles.
+    Bundle {
+        #[command(subcommand)]
+        command: BundleCommand,
+    },
     /// Interactive OAuth login / status for openai-codex and grok-build.
     Oauth {
         #[command(subcommand)]
@@ -69,6 +74,30 @@ pub enum Command {
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
+    },
+}
+
+/// Bundle subcommands — same surface as `hya-backend bundle`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum BundleCommand {
+    /// Install a bundle package.
+    Install { package: PathBuf },
+    /// List available bundles.
+    List,
+    /// Uninstall an installed bundle.
+    Uninstall { name: String },
+    /// Show bundle information by installed name or package file.
+    Info {
+        #[arg(required_unless_present = "file", conflicts_with = "file")]
+        name: Option<String>,
+        #[arg(
+            short = 'f',
+            long,
+            value_name = "FILE",
+            required_unless_present = "name",
+            conflicts_with = "name"
+        )]
+        file: Option<PathBuf>,
     },
 }
 
@@ -138,13 +167,38 @@ impl Cli {
     }
 }
 
-/// Build argv for a sibling `hya-backend` auth/oauth invocation.
+/// Build argv for a sibling `hya-backend` command invocation.
 ///
-/// Auth lives in the backend today; `hya-ts` exposes the same commands and
-/// forwards them so users can log in without switching binaries.
+/// Backend-owned command surfaces are exposed by `hya-ts` and forwarded so
+/// users do not need to switch binaries.
 #[must_use]
-pub fn backend_auth_args(command: &Command) -> Vec<OsString> {
+pub fn backend_command_args(command: &Command) -> Vec<OsString> {
     match command {
+        Command::Bundle { command } => {
+            let mut args = vec![OsString::from("bundle")];
+            match command {
+                BundleCommand::Install { package } => {
+                    args.push(OsString::from("install"));
+                    args.push(package.as_os_str().to_os_string());
+                }
+                BundleCommand::List => args.push(OsString::from("list")),
+                BundleCommand::Uninstall { name } => {
+                    args.push(OsString::from("uninstall"));
+                    args.push(OsString::from(name));
+                }
+                BundleCommand::Info { name, file } => {
+                    args.push(OsString::from("info"));
+                    if let Some(name) = name {
+                        args.push(OsString::from(name));
+                    }
+                    if let Some(file) = file {
+                        args.push(OsString::from("-f"));
+                        args.push(file.as_os_str().to_os_string());
+                    }
+                }
+            }
+            args
+        }
         Command::Oauth {
             command:
                 OauthCommand::Login {

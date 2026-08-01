@@ -42,10 +42,10 @@ use hya_tool::AgentDef;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use crate::AgentResourcePolicy;
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
 use crate::orchestrator::TeamBudget;
+use crate::{AgentResourcePolicy, TurnBinding};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentRecovery {
@@ -223,6 +223,8 @@ enum SlotStatus {
 struct SlotState {
     handle: String,
     agent: AgentSpec,
+    /// Immutable runtime snapshot retained for every activation of this slot.
+    binding: TurnBinding,
     agents: Option<Arc<[AgentDef]>>,
     resources: Option<AgentResourcePolicy>,
     /// In-process only: immutable guidance from the triggering spawn turn.
@@ -269,6 +271,7 @@ struct TeamState {
 /// (long, unlocked) turn runs against a stable plan.
 struct RunPlan {
     agent: AgentSpec,
+    binding: TurnBinding,
     agents: Option<Arc<[AgentDef]>>,
     resources: Option<AgentResourcePolicy>,
     guidance: Option<Arc<str>>,
@@ -279,6 +282,15 @@ struct RunPlan {
     /// (Main only) inject the synthesis directive before the turn.
     synth: bool,
     claim: Option<ActorClaim>,
+}
+
+enum ResidentRuntimeContext {
+    Bound(TurnBinding),
+    Resolved {
+        binding: TurnBinding,
+        agents: Arc<[AgentDef]>,
+        resources: AgentResourcePolicy,
+    },
 }
 
 /// What a resident task should do next, decided atomically under the team lock.
@@ -358,6 +370,7 @@ impl TeamActor {
             let claim = slot.claim;
             let cursor = slot.cursor;
             let agent = slot.agent.clone();
+            let binding = slot.binding.clone();
             let agents = slot.agents.clone();
             let resources = slot.resources.clone();
             let guidance = slot.guidance.clone();
@@ -378,6 +391,7 @@ impl TeamActor {
             }
             Action::Run(Box::new(RunPlan {
                 agent,
+                binding,
                 agents,
                 resources,
                 guidance,
@@ -503,6 +517,7 @@ impl TeamActor {
     async fn run_one_turn(&self, session: SessionId, plan: RunPlan) -> Result<(), CoreError> {
         let RunPlan {
             agent,
+            binding,
             agents,
             resources,
             guidance,
@@ -611,7 +626,7 @@ impl TeamActor {
                     .run_resolved_turn_for_actor(
                         session,
                         &agent,
-                        (agents, resources),
+                        (binding, agents, resources),
                         claim,
                         self.cancel.child_token(),
                         guidance,
@@ -623,8 +638,7 @@ impl TeamActor {
                     .run_resolved_turn(
                         session,
                         &agent,
-                        agents,
-                        resources,
+                        (binding, agents, resources),
                         self.cancel.child_token(),
                         guidance,
                     )
@@ -632,12 +646,25 @@ impl TeamActor {
             }
             (Some(claim), _, _) => {
                 self.engine
-                    .run_turn_for_actor(session, &agent, claim, self.cancel.child_token())
+                    .run_bound_turn_for_actor(
+                        session,
+                        &agent,
+                        binding,
+                        claim,
+                        self.cancel.child_token(),
+                        guidance,
+                    )
                     .await?;
             }
             (None, _, _) => {
                 self.engine
-                    .run_turn(session, &agent, self.cancel.child_token())
+                    .run_bound_turn(
+                        session,
+                        &agent,
+                        binding,
+                        self.cancel.child_token(),
+                        guidance,
+                    )
                     .await?;
             }
         }
@@ -927,11 +954,11 @@ impl ResidentSupervisor {
         &self,
         root: SessionId,
         agent: AgentSpec,
+        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
         actor_claim: Option<&ActorClaim>,
-        agents: Arc<[AgentDef]>,
-        resources: AgentResourcePolicy,
         guidance: Option<Arc<str>>,
     ) -> Result<(), CoreError> {
+        let (binding, agents, resources) = resolved;
         let handle = self
             .engine
             .ensure_root_registered_for_actor(root, actor_claim)
@@ -949,6 +976,7 @@ impl ResidentSupervisor {
                     SlotState {
                         handle,
                         agent,
+                        binding,
                         // Required root activation context: always take the resolved path.
                         agents: Some(agents),
                         resources: Some(resources),
@@ -985,12 +1013,12 @@ impl ResidentSupervisor {
         &self,
         parent: SessionId,
         agent: AgentSpec,
-        resolved: (Arc<[AgentDef]>, AgentResourcePolicy),
+        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
         directive: String,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
-        let (agents, resources) = resolved;
+        let (binding, agents, resources) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = match parent_claim {
             Some(claim) => {
@@ -1057,7 +1085,11 @@ impl ResidentSupervisor {
             session,
             handle.clone(),
             agent,
-            Some((agents, resources)),
+            ResidentRuntimeContext::Resolved {
+                binding,
+                agents,
+                resources,
+            },
             (Some(directive), guidance),
         )
         .await?;
@@ -1075,12 +1107,13 @@ impl ResidentSupervisor {
         agent: AgentSpec,
         initial: Option<String>,
     ) -> Result<(), CoreError> {
+        let binding = self.engine.bind_runtime(&agent.workdir)?;
         self.register_existing_resident_with_agents(
             root,
             session,
             handle,
             agent,
-            None,
+            ResidentRuntimeContext::Bound(binding),
             (initial, None),
         )
         .await
@@ -1092,14 +1125,18 @@ impl ResidentSupervisor {
         session: SessionId,
         handle: String,
         agent: AgentSpec,
-        resolved: Option<(Arc<[AgentDef]>, AgentResourcePolicy)>,
+        runtime: ResidentRuntimeContext,
         activation: (Option<String>, Option<Arc<str>>),
     ) -> Result<(), CoreError> {
-        let (initial, guidance) = activation;
-        let (agents, resources) = match resolved {
-            Some((agents, resources)) => (Some(agents), Some(resources)),
-            None => (None, None),
+        let (binding, agents, resources) = match runtime {
+            ResidentRuntimeContext::Bound(binding) => (binding, None, None),
+            ResidentRuntimeContext::Resolved {
+                binding,
+                agents,
+                resources,
+            } => (binding, Some(agents), Some(resources)),
         };
+        let (initial, guidance) = activation;
         let claim = self
             .engine
             .store()
@@ -1135,6 +1172,7 @@ impl ResidentSupervisor {
                 SlotState {
                     handle,
                     agent,
+                    binding,
                     agents,
                     resources,
                     guidance,
@@ -1160,6 +1198,7 @@ impl ResidentSupervisor {
         root: SessionId,
         handle: String,
         agent: AgentSpec,
+        binding: TurnBinding,
         recovered: hya_store::RecoveredActorClaim,
         disposition: ResidentRecovery,
     ) -> Result<(), CoreError> {
@@ -1191,6 +1230,7 @@ impl ResidentSupervisor {
                 SlotState {
                     handle,
                     agent,
+                    binding,
                     agents: None,
                     resources: None,
                     // Ephemeral guidance is not durable; recovery invents nothing.
