@@ -43,8 +43,14 @@ impl BundleCatalog {
             resources: BTreeMap::new(),
             local_resources: BTreeMap::new(),
         };
+        let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
+            if !bundle_ids.insert(bundle.identity.id.as_str()) {
+                return Err(BundleError::DuplicateBundleId {
+                    bundle_id: bundle.identity.id.clone(),
+                });
+            }
             for (agent_index, agent) in bundle.agents.iter().enumerate() {
                 if !stable_agent_ids.insert(agent.stable_id.as_str()) {
                     return Err(BundleError::DuplicateStableAgentId {

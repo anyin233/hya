@@ -3,9 +3,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.34.8"
+version = "0.34.9"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -54,6 +55,7 @@ tracing = "0.1"
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
 secrecy = "0.8"
+sevenz-rust2 = { path = "vendor/sevenz-rust2-0.20.2", version = "=0.20.2", default-features = false }
 
 # Library crates deny panic-paths (parse-don't-validate; typed errors). Bins/tests
 # may relax locally with #![allow(...)]. (Per design.md N3 / implement.md gate.)

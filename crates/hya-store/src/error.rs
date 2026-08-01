@@ -10,6 +10,22 @@ pub enum StoreError {
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("bundle: {0}")]
+    Bundle(#[from] hya_bundle::BundleError),
+    #[error("bundle registry data: {0}")]
+    BundleRegistryData(String),
+    #[error("BUNDLE_REGISTRY_CORRUPT: bundle {bundle_id} stored prepared catalog is corrupt")]
+    BundleRegistryCorrupt { bundle_id: String },
+    #[error("BUNDLE_REGISTRY_BUSY: bundle registry writer is busy")]
+    BundleRegistryBusy,
+    #[error("BUNDLE_NOT_FOUND: bundle {bundle_id} is not installed")]
+    BundleNotFound { bundle_id: String },
+    #[error("BUNDLE_CONTENT_CONFLICT: bundle {bundle_id} version {version} has different content")]
+    BundleContentConflict { bundle_id: String, version: String },
+    #[error("PRIVATE_ACTIVATION_UNSUPPORTED")]
+    PrivateActivationUnsupported,
+    #[error("BUNDLE_IMMUTABLE: bundle {bundle_id} is builtin and immutable")]
+    BundleImmutable { bundle_id: String },
     #[error("OPERATION_ID_CONFLICT: immutable request differs for {operation_id}")]
     OperationIdConflict { operation_id: OperationId },
     #[error("admission operation not found: {operation_id}")]

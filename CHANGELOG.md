@@ -1,18 +1,12 @@
-# 0.34.8
+# 0.34.9
 
-- Embed deterministic build-time native builtin `AgentBundle`s and load them at
-  startup as the sole built-in agent-definition authority.
-- Publish one immutable `BundleCatalog` per `RuntimeSnapshot` / `TurnBinding`
-  with exact stable IDs, fail-closed explicit unknown and `can_spawn` checks,
-  role-only TUI visibility, fixed-system exact lookup, and historical replay of
-  exact agent-name bytes.
-- Compile `none` / `basic` / `full` resource views that share allow / deny /
-  alias / namespace schema and dispatch while `PermissionPlane` and plugins
-  remain authority.
-- Compose request-scoped inline overlays and guidance without catalog mutation;
-  ship built-in authoring docs, example, and skill for prepare-valid packages
-  only (user-installed executable Bundle/plugin code is trusted same-UID code
-  and is not sandboxed; malicious code is not isolated; no hyabundle install,
-  CLI, runner, or external execution).
-- Remove old JSON / JSONC / Markdown agent discovery and files with no migration
-  or compatibility loader.
+- Add content-magic inspection for public and private bundle packages.
+- Add a strict, bounded pure-Rust 7z reader/profile and canonical v1
+  public-package preparation with a fixed 1000:1 expansion ceiling using the
+  accepted block's referenced PackInfo stream sizes, enforced at metadata
+  preflight and before retaining each decoded chunk.
+- Keep private package inspection structural only: authentication remains unverified,
+  payloads remain opaque, and inspection does not activate package content.
+- Add the SQLite prepared-BLOB registry core with immutable builtins,
+  idempotency, conflict/replacement/uninstall handling, and atomic generation
+  updates.

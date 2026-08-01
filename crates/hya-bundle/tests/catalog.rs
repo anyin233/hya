@@ -1,6 +1,6 @@
 use hya_bundle::{
     BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, SourceFile,
-    prepare_builtins,
+    prepare_builtins, prepare_package,
 };
 use sha2::{Digest, Sha256};
 
@@ -30,6 +30,32 @@ agents:
             SourceFile::new("bundle.yaml", manifest.into_bytes()),
             SourceFile::new("resources/skills/docs.md", content.as_bytes()),
         ],
+    )
+}
+
+fn installed_duplicate_package_source(
+    root: &str,
+    local_agent_id: &str,
+    stable_agent_id: &str,
+) -> BundleSource {
+    let manifest = format!(
+        r#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/duplicate-package
+  version: 1.0.0
+  publisher: hya
+agents:
+  - local_id: {local_agent_id}
+    stable_id: {stable_agent_id}
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#,
+    );
+    BundleSource::new(
+        root,
+        vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
     )
 }
 
@@ -102,6 +128,38 @@ fn zero_bundle_prepared_document_never_yields_empty_catalog() {
         Some(BundleError::EmptyPreparedCatalog),
         "zero bundles must never become an empty BundleCatalog"
     );
+}
+
+#[test]
+fn catalog_rejects_duplicate_bundle_identity_with_disjoint_exports() {
+    let alpha = prepare_package(installed_duplicate_package_source(
+        "duplicate-package-alpha",
+        "alpha",
+        "duplicate-alpha",
+    ));
+    let Ok(alpha) = alpha else {
+        panic!("alpha package preparation failed: {alpha:?}");
+    };
+    let beta = prepare_package(installed_duplicate_package_source(
+        "duplicate-package-beta",
+        "beta",
+        "duplicate-beta",
+    ));
+    let Ok(beta) = beta else {
+        panic!("beta package preparation failed: {beta:?}");
+    };
+    let [alpha] = alpha.bundles() else {
+        panic!("alpha package must prepare exactly one bundle");
+    };
+    let [beta] = beta.bundles() else {
+        panic!("beta package must prepare exactly one bundle");
+    };
+    let bundles = vec![alpha.clone(), beta.clone()];
+
+    assert!(matches!(
+        BundleCatalog::from_prepared(&bundles),
+        Err(BundleError::DuplicateBundleId { bundle_id }) if bundle_id == "hya/duplicate-package"
+    ));
 }
 
 #[test]

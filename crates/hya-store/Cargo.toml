@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 sqlx = { workspace = true }
 serde_json = { workspace = true }

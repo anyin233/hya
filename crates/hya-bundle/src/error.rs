@@ -70,4 +70,16 @@ pub enum BundleError {
     NonCanonicalPreparedCatalog,
     #[error("prepared catalog contains no bundles")]
     EmptyPreparedCatalog,
+    #[error("invalid bundle package format")]
+    InvalidPackageFormat,
+    #[error("PACKAGE_CORRUPT")]
+    CorruptPackage,
+    #[error("PACKAGE_UNSAFE")]
+    UnsafePackage,
+    #[error("PACKAGE_LIMIT_EXCEEDED: {limit}")]
+    PackageLimitExceeded { limit: &'static str },
+    #[error("unsupported bundle package version `{found}`")]
+    UnsupportedPackageVersion { found: u16 },
+    #[error("private bundle ciphertext digest mismatch")]
+    PrivateCiphertextDigestMismatch,
 }

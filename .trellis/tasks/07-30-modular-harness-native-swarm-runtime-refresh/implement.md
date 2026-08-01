@@ -2133,3 +2133,72 @@ invocation path. Exact focused and full `hya-tool` suites green afterward.
 - TUI typecheck / build / agent-visibility focused
 
 **Still pending (explicit):** staging, commit, push, remote CI. Not claimed here.
+
+#### 18.4 0.34.9 execution model and first RED
+
+For the resumed 0.34.9 phase, `gpt-5.6-sol` with `reasoning=max` is the
+persistent main orchestrator and canonical reviewer. Sol directly spawns one
+bounded native implementation subagent per edit slice, `gpt-5.6-terra` with
+`reasoning=max`. Terra edits only its assigned slice and never commits, pushes,
+creates topology, or stashes; Sol defines REDs, reviews diffs, runs
+verification, and performs commits, pushes, and CI monitoring after gates.
+Earlier Grok 402 failures, Luna work, and MacBook Air-driven per-turn Sol/Terra
+alternation remain accurate historical evidence, but are superseded as current
+rules.
+
+Each 0.34.9 atomic commit requires its own push and one unique green remote CI
+run before the next commit begins. Commit 1 owns package inspection, safe
+public 7z, private structural inspection, and SQLite registry core; Commit 2
+owns the four-command CLI, lazy publication, and documentation while staying
+on version 0.34.9.
+
+The first TDD slice is one `hya-bundle` integration RED only:
+`HYABNDL\0` plus little-endian envelope version 1 must be recognized as
+private/v1 solely from bytes magic/version, without a filename or path. No
+detector implementation, dependency, version/changelog change, or additional
+test belongs in this RED checkpoint.
+
+Current Consult25 public-reader evidence: sevenz-rust 0.6.1 and sevenz-rust2
+0.21.3 remain no-go; only exact sevenz-rust2 = "=0.20.2" with
+default-features = false is conditional. A bounded /tmp source sync verified
+detached 424ebdb8fa98b78b8e1c18f73c9add6972fe5496, Cargo 0.20.2, and
+rust-version 1.85 without touching the canonical worktree; the Hya wrapper
+owns staging/policy/thread = 1/byte-CRC-callback accounting, while the
+source-verified functional boundary is `reader.rs`, `decoder.rs`, `error.rs`,
+and `lib.rs`: strict options, typed structural/memory-limit propagation,
+re-export, and exact EOF. `archive.rs` remains byte-identical upstream; no new
+parser or filesystem extractor is added.
+
+#### 18.4.1 0.34.9 Commit 1 current evidence
+
+Externally observed RED→GREEN results: bytes-only private detect; truncated
+private fail-closed; public magic; structurally valid private
+`Unverified`/`Opaque` and digest mismatch; strict public root/CRC/header/
+property/limits; typed next-header limit; extra decoded COPY byte; duplicate
+bundle ID; and empty private target all pass their focused contracts. Expansion
+ratio coverage also passes a scalar boundary/zero-semantics RED→GREEN, a real
+deterministic 409-byte 7z fixture whose accepted entry declares 320,000 expanded
+bytes against 304 referenced PackInfo bytes, and a streaming-before-retain test
+that rejects the crossing chunk without changing the retained buffer/count.
+
+Staging contracts pass for single-open/lock/ownership, published final-stage
+orphan cleanup, and missing-root no-op. Cleanup excludes building directories:
+pre-lock cleanup would race an active install, so crash-before-lock directories
+may leak; the attempted building-orphan RED/branch was rejected and reverted
+before commit. Registry contracts pass for idempotency, conflict, replacement
+rollback, busy, private no mutation, builtin immutable, corrupt BLOB, and
+uninstall.
+
+Final local gates: `cargo fmt --all --check` GREEN;
+`cargo clippy --workspace --all-targets -- -D warnings` GREEN;
+`cargo test --workspace` GREEN in the already-authorized non-sandbox
+environment because of the known OAuth/local-bind sandbox restriction; and
+`cargo build --workspace --bins` GREEN. Locked `hya`, `hya-backend`, and
+`hya-ts` bins are GREEN, with every `--version` reporting 0.34.9.
+`bash scripts/verify-no-http.sh` is GREEN outside the sandbox because of the
+known ptrace restriction. TUI `bun run typecheck` and `bun run build` are
+GREEN; `CI=true bun test` is 49/49 GREEN outside the sandbox because of the
+known PTY/local-bind restriction. Locked/offline Cargo metadata and the sevenz
+feature tree are GREEN. Trellis validation is GREEN (`implement.jsonl`: 49;
+`check.jsonl`: 57), as are JSONL validation and `git diff --check`. Commit,
+push, and exact-SHA CI remain pending.
