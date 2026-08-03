@@ -1062,11 +1062,12 @@ const RESOLVER_SEMANTICS_V1: &[u8] = b"ResolverSemanticsV1";
 const EMPTY_CATEGORY_IDENTITY_V1: &[u8] = b"CategoryRegistryEmptyV1";
 #[allow(dead_code)]
 const EMPTY_PROVIDER_IDENTITY_V1: &[u8] = b"ProviderRouterEmptyV1";
+#[allow(dead_code)]
+const CATEGORY_RESOLUTION_IDENTITY_V1: &[u8] = b"CategoryResolutionV1";
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmissionResolutionContextError {
-    NonEmptyCategoryRegistry,
     NonEmptyProviderRouter,
     CanonicalLengthOverflow,
 }
@@ -1083,6 +1084,7 @@ struct AdmissionResolutionContext {
     base_model_len: u64,
     base_system_prompt_len: u64,
     base_reasoning_len: u64,
+    category_resolution: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -1092,9 +1094,6 @@ impl AdmissionResolutionContext {
         categories: Arc<CategoryRegistry>,
         router: Arc<ProviderRouter>,
     ) -> Result<Self, AdmissionResolutionContextError> {
-        if !categories.is_empty() {
-            return Err(AdmissionResolutionContextError::NonEmptyCategoryRegistry);
-        }
         if !router.is_empty() {
             return Err(AdmissionResolutionContextError::NonEmptyProviderRouter);
         }
@@ -1102,6 +1101,7 @@ impl AdmissionResolutionContext {
         let base_model_len = canonical_length(base.model.as_str().as_bytes())?;
         let base_system_prompt_len = canonical_length(base.system_prompt.as_bytes())?;
         let base_reasoning_len = canonical_length(base_reasoning(&base).as_bytes())?;
+        let category_resolution = canonical_category_resolution(&categories)?;
 
         Ok(Self {
             base,
@@ -1110,6 +1110,7 @@ impl AdmissionResolutionContext {
             base_model_len,
             base_system_prompt_len,
             base_reasoning_len,
+            category_resolution,
         })
     }
 
@@ -1133,7 +1134,7 @@ impl AdmissionResolutionContext {
             base_reasoning(&self.base).as_bytes(),
             self.base_reasoning_len,
         );
-        canonical.extend_from_slice(EMPTY_CATEGORY_IDENTITY_V1);
+        canonical.extend_from_slice(&self.category_resolution);
         canonical.extend_from_slice(EMPTY_PROVIDER_IDENTITY_V1);
         Sha256::digest(canonical).into()
     }
@@ -1146,6 +1147,12 @@ impl AdmissionResolutionContext {
     ) -> Result<AgentSpec, CoreError> {
         engine.agent_spec_for_binding(binding, &self.base, stable_id)
     }
+
+    fn resolve_category_for_admission(&self, category: &str) -> Option<ModelRef> {
+        self.categories
+            .resolve_servable(category, |model| self.router.resolve(model).is_some())
+            .map(|resolved| resolved.model)
+    }
 }
 
 #[allow(dead_code)]
@@ -1154,9 +1161,46 @@ fn canonical_length(bytes: &[u8]) -> Result<u64, AdmissionResolutionContextError
 }
 
 #[allow(dead_code)]
+fn canonical_count(count: usize) -> Result<u64, AdmissionResolutionContextError> {
+    u64::try_from(count).map_err(|_| AdmissionResolutionContextError::CanonicalLengthOverflow)
+}
+
+#[allow(dead_code)]
 fn append_len_prefixed(canonical: &mut Vec<u8>, bytes: &[u8], length: u64) {
     canonical.extend_from_slice(&length.to_be_bytes());
     canonical.extend_from_slice(bytes);
+}
+
+#[allow(dead_code)]
+fn canonical_category_resolution(
+    categories: &CategoryRegistry,
+) -> Result<Vec<u8>, AdmissionResolutionContextError> {
+    let entries = categories.resolution_candidates();
+    if entries.is_empty() {
+        return Ok(EMPTY_CATEGORY_IDENTITY_V1.to_vec());
+    }
+
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(CATEGORY_RESOLUTION_IDENTITY_V1);
+    canonical.extend_from_slice(&canonical_count(entries.len())?.to_be_bytes());
+    for (category, candidates) in entries {
+        let category_bytes = category.as_bytes();
+        append_len_prefixed(
+            &mut canonical,
+            category_bytes,
+            canonical_length(category_bytes)?,
+        );
+        canonical.extend_from_slice(&canonical_count(candidates.len())?.to_be_bytes());
+        for candidate in candidates {
+            let candidate_bytes = candidate.as_str().as_bytes();
+            append_len_prefixed(
+                &mut canonical,
+                candidate_bytes,
+                canonical_length(candidate_bytes)?,
+            );
+        }
+    }
+    Ok(canonical)
 }
 
 #[allow(dead_code)]
@@ -2536,6 +2580,133 @@ mod tests {
             overwritten_expected.system_prompt
         );
         assert_eq!(overwritten.reasoning, overwritten_expected.reasoning);
+    }
+
+    #[test]
+    fn admission_binding_category_fields_match_resolution_semantics() {
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fixture/base"),
+            system_prompt: "captured harness base".to_string(),
+            workdir: PathBuf::from("fixture-workdir"),
+            reasoning: Some(ReasoningEffort::High),
+        };
+        let entry =
+            |model: &str, fallback: &[&str], prompt_append: &str, token_budget: Option<u64>| {
+                CategoryEntry {
+                    model: ModelRef::new(model),
+                    fallback: fallback
+                        .iter()
+                        .map(|candidate| ModelRef::new(*candidate))
+                        .collect(),
+                    prompt_append: prompt_append.to_string(),
+                    token_budget,
+                }
+            };
+        let categories = |primary_key: &str, primary: CategoryEntry, secondary: CategoryEntry| {
+            let mut entries = HashMap::new();
+            entries.insert(primary_key.to_string(), primary);
+            entries.insert("secondary".to_string(), secondary);
+            CategoryRegistry::from_entries(entries)
+        };
+        let capture = |categories: CategoryRegistry| {
+            AdmissionResolutionContext::capture(
+                base.clone(),
+                Arc::new(categories),
+                Arc::new(ProviderRouter::new()),
+            )
+            .expect("category context must capture")
+        };
+        let select = |context: &AdmissionResolutionContext, category: &str| {
+            context.resolve_category_for_admission(category)
+        };
+        let runtime_fingerprint = [0x5a; 32];
+
+        let baseline = capture(categories(
+            "primary",
+            entry("provider/first", &["provider/second"], "", None),
+            entry("provider/secondary", &[], "", None),
+        ));
+        let reversed = {
+            let mut entries = HashMap::new();
+            entries.insert(
+                "secondary".to_string(),
+                entry("provider/secondary", &[], "", None),
+            );
+            entries.insert(
+                "primary".to_string(),
+                entry("provider/first", &["provider/second"], "", None),
+            );
+            capture(CategoryRegistry::from_entries(entries))
+        };
+        let swapped = capture(categories(
+            "primary",
+            entry("provider/second", &["provider/first"], "", None),
+            entry("provider/secondary", &[], "", None),
+        ));
+        let renamed = capture(categories(
+            "renamed",
+            entry("provider/first", &["provider/second"], "", None),
+            entry("provider/secondary", &[], "", None),
+        ));
+        let shaping_only = capture(categories(
+            "primary",
+            entry(
+                "provider/first",
+                &["provider/second"],
+                "unused prompt",
+                Some(42),
+            ),
+            entry("provider/secondary", &[], "unused secondary", Some(7)),
+        ));
+
+        let baseline_fingerprint = baseline.admission_binding_fingerprint_v1(runtime_fingerprint);
+        assert_eq!(
+            baseline_fingerprint,
+            reversed.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+        assert_eq!(
+            select(&baseline, "primary"),
+            Some(ModelRef::new("provider/first"))
+        );
+        assert_eq!(
+            select(&baseline, "secondary"),
+            Some(ModelRef::new("provider/secondary"))
+        );
+        assert_eq!(select(&reversed, "primary"), select(&baseline, "primary"));
+        assert_eq!(
+            select(&reversed, "secondary"),
+            select(&baseline, "secondary")
+        );
+        assert_ne!(
+            baseline_fingerprint,
+            swapped.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+        assert_eq!(
+            select(&swapped, "primary"),
+            Some(ModelRef::new("provider/second"))
+        );
+        assert_ne!(
+            baseline_fingerprint,
+            renamed.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+        assert_eq!(select(&renamed, "primary"), None);
+        assert_eq!(
+            select(&renamed, "renamed"),
+            Some(ModelRef::new("provider/first"))
+        );
+        assert_eq!(
+            baseline_fingerprint,
+            shaping_only.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+        assert_eq!(
+            select(&shaping_only, "primary"),
+            select(&baseline, "primary")
+        );
+        assert_eq!(
+            select(&shaping_only, "secondary"),
+            select(&baseline, "secondary")
+        );
     }
 
     struct RuntimeMarker(&'static str);
