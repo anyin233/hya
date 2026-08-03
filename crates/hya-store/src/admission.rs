@@ -680,9 +680,26 @@ impl SessionStore {
     ) -> Result<Vec<AdmissionRecord>, StoreError> {
         let rows = sqlx::query(
             "UPDATE admission_journal \
-             SET state = CASE WHEN state = 'accepted' THEN 'queued' ELSE 'aborted' END, \
-                 logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
-                 terminal_reason = CASE WHEN state = 'accepted' THEN NULL ELSE ? END, \
+             SET state = CASE \
+                     WHEN state = 'started' THEN 'aborted' \
+                     WHEN state = 'accepted' \
+                          AND runtime_fingerprint_version IS NOT NULL \
+                          AND runtime_fingerprint IS NOT NULL \
+                          AND admission_binding_fingerprint_version IS NOT NULL \
+                          AND admission_binding_fingerprint IS NOT NULL \
+                          AND spawn_intent IS NOT NULL THEN 'queued' \
+                     ELSE 'aborted' \
+                 END, \
+                 logical_released = CASE WHEN state = 'started' THEN 1 ELSE 0 END, \
+                 terminal_reason = CASE \
+                     WHEN state = 'accepted' \
+                          AND runtime_fingerprint_version IS NOT NULL \
+                          AND runtime_fingerprint IS NOT NULL \
+                          AND admission_binding_fingerprint_version IS NOT NULL \
+                          AND admission_binding_fingerprint IS NOT NULL \
+                          AND spawn_intent IS NOT NULL THEN NULL \
+                     ELSE ? \
+                 END, \
                  updated_at = ? \
              WHERE actor_id IS NULL AND state IN ('accepted', 'started') \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
