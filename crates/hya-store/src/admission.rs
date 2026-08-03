@@ -503,6 +503,89 @@ impl SessionStore {
         decode_admission_counts(&row)
     }
 
+    pub async fn promote_queued_admissions(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<AdmissionLaunch>, StoreError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let counts = decode_admission_counts(
+            &sqlx::query(ADMISSION_COUNTS_SQL)
+                .fetch_one(&mut *tx)
+                .await?,
+        )?;
+        let max_total = MAX_ACTIVE_ADMISSIONS
+            .checked_add(MAX_NON_ACTIVE_ADMISSIONS)
+            .ok_or_else(|| {
+                StoreError::AdmissionData("admission capacity exceeds u32 range".to_string())
+            })?;
+        let current_total = counts
+            .active
+            .checked_add(counts.non_active)
+            .ok_or_else(|| {
+                StoreError::AdmissionData("admission counts exceed u32 range".to_string())
+            })?;
+        if counts.active > MAX_ACTIVE_ADMISSIONS
+            || counts.non_active > MAX_NON_ACTIVE_ADMISSIONS
+            || current_total > max_total
+        {
+            tx.rollback().await?;
+            return Err(StoreError::AdmissionData(
+                "durable admission counts exceed fixed capacity".to_string(),
+            ));
+        }
+
+        let promotion_limit = limit.min(MAX_ACTIVE_ADMISSIONS - counts.active);
+        if promotion_limit == 0 {
+            tx.commit().await?;
+            return Ok(Vec::new());
+        }
+        let selected = sqlx::query(
+            "SELECT operation_id, member_ordinal FROM admission_journal \
+             WHERE state = 'queued' \
+               AND runtime_fingerprint_version IS NOT NULL \
+               AND runtime_fingerprint IS NOT NULL \
+               AND admission_binding_fingerprint_version IS NOT NULL \
+               AND admission_binding_fingerprint IS NOT NULL \
+               AND spawn_intent IS NOT NULL \
+             ORDER BY rowid LIMIT ?",
+        )
+        .bind(i64::from(promotion_limit))
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let now = now_millis();
+        let mut launches = Vec::with_capacity(selected.len());
+        for row in selected {
+            let operation_id: Vec<u8> = row.try_get("operation_id")?;
+            let member_ordinal: i64 = row.try_get("member_ordinal")?;
+            let updated = sqlx::query(
+                "UPDATE admission_journal SET state = 'accepted', updated_at = ? \
+                 WHERE operation_id = ? AND member_ordinal = ? AND state = 'queued' \
+                 RETURNING operation_id, source_tool_call_id, root_session_id, \
+                           request_fingerprint, member_ordinal, batch_size, state, \
+                           admission_units, logical_released, terminal_reason, created_at, \
+                           updated_at, actor_id, actor_epoch, runtime_fingerprint_version, \
+                           runtime_fingerprint, admission_binding_fingerprint_version, \
+                           admission_binding_fingerprint, spawn_intent",
+            )
+            .bind(now)
+            .bind(operation_id)
+            .bind(member_ordinal)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(updated) = updated else {
+                tx.rollback().await?;
+                return Err(StoreError::AdmissionData(
+                    "queued admission changed during promotion".to_string(),
+                ));
+            };
+            launches.push(decode_admission_launch(updated)?);
+        }
+
+        tx.commit().await?;
+        Ok(launches)
+    }
+
     pub async fn start_admission(
         &self,
         operation_id: OperationId,
@@ -760,6 +843,67 @@ fn decode_admission_counts(row: &sqlx::sqlite::SqliteRow) -> Result<AdmissionCou
         active: decode_admission_count(row.try_get("active")?, "active")?,
         non_active: decode_admission_count(row.try_get("non_active")?, "non_active")?,
         total: decode_admission_count(row.try_get("total")?, "total")?,
+    })
+}
+
+fn decode_admission_launch(row: sqlx::sqlite::SqliteRow) -> Result<AdmissionLaunch, StoreError> {
+    let runtime_fingerprint_version: i64 = row
+        .try_get::<Option<i64>, _>("runtime_fingerprint_version")?
+        .ok_or_else(|| {
+            StoreError::AdmissionData("runtime fingerprint version is missing".to_string())
+        })?;
+    let runtime_fingerprint_version = u32::try_from(runtime_fingerprint_version).map_err(|_| {
+        StoreError::AdmissionData("runtime fingerprint version exceeds u32 range".to_string())
+    })?;
+    let runtime_fingerprint: [u8; 32] = row
+        .try_get::<Option<Vec<u8>>, _>("runtime_fingerprint")?
+        .ok_or_else(|| StoreError::AdmissionData("runtime fingerprint is missing".to_string()))?
+        .try_into()
+        .map_err(|_| {
+            StoreError::AdmissionData("runtime fingerprint must contain 32 bytes".to_string())
+        })?;
+    let admission_binding_fingerprint_version: i64 = row
+        .try_get::<Option<i64>, _>("admission_binding_fingerprint_version")?
+        .ok_or_else(|| {
+            StoreError::AdmissionData(
+                "admission binding fingerprint version is missing".to_string(),
+            )
+        })?;
+    let admission_binding_fingerprint_version =
+        u32::try_from(admission_binding_fingerprint_version).map_err(|_| {
+            StoreError::AdmissionData(
+                "admission binding fingerprint version exceeds u32 range".to_string(),
+            )
+        })?;
+    let admission_binding_fingerprint: [u8; 32] = row
+        .try_get::<Option<Vec<u8>>, _>("admission_binding_fingerprint")?
+        .ok_or_else(|| {
+            StoreError::AdmissionData("admission binding fingerprint is missing".to_string())
+        })?
+        .try_into()
+        .map_err(|_| {
+            StoreError::AdmissionData(
+                "admission binding fingerprint must contain 32 bytes".to_string(),
+            )
+        })?;
+    let spawn_intent = row
+        .try_get::<Option<Vec<u8>>, _>("spawn_intent")?
+        .ok_or_else(|| StoreError::AdmissionData("spawn intent is missing".to_string()))?;
+    if spawn_intent.is_empty() || spawn_intent.len() > MAX_ADMISSION_INTENT_BYTES {
+        return Err(StoreError::AdmissionData(
+            "spawn intent size must be within the admission intent limit".to_string(),
+        ));
+    }
+
+    Ok(AdmissionLaunch {
+        record: decode_record(row)?,
+        intent: AdmissionIntent {
+            runtime_fingerprint_version,
+            runtime_fingerprint,
+            admission_binding_fingerprint_version,
+            admission_binding_fingerprint,
+            spawn_intent,
+        },
     })
 }
 

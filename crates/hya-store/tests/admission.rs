@@ -1016,3 +1016,85 @@ async fn batch_member_start_is_exactly_once_and_queued_cannot_cross() {
     assert_eq!(counts.non_active, 1);
     assert_eq!(counts.total, 101);
 }
+
+#[tokio::test]
+async fn recovered_queued_member_promotes_to_one_exact_launch() {
+    let temp_db = AdmissionTempDb::new();
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let mut admission = claim(ToolCallId::new(), 41);
+    admission.admission_units = 1;
+    let intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x41; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xa1; 32],
+        spawn_intent: vec![0xde, 0xad, 0xbe, 0xef],
+    };
+
+    let launches = match store
+        .claim_admission_batch(&admission, vec![intent.clone()])
+        .await
+        .unwrap()
+    {
+        AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+        other => panic!("expected one accepted launch, got {other:?}"),
+    };
+    assert_eq!(launches.len(), 1);
+    let launch = launches.into_iter().next().unwrap();
+    assert_eq!(launch.record.state, AdmissionState::Accepted);
+    assert_eq!(launch.intent, intent);
+
+    let recovered = store
+        .recover_nonterminal_admissions("startup recovery")
+        .await
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    let recovered_record = recovered.into_iter().next().unwrap();
+    assert_eq!(recovered_record.operation_id, admission.operation_id);
+    assert_eq!(recovered_record.state, AdmissionState::Queued);
+    let recovered_counts = store.admission_counts().await.unwrap();
+    assert_eq!(recovered_counts.active, 0);
+    assert_eq!(recovered_counts.non_active, 1);
+    assert_eq!(recovered_counts.total, 1);
+
+    let promoted = store.promote_queued_admissions(1).await.unwrap();
+    assert_eq!(promoted.len(), 1);
+    let promoted_launch = promoted.into_iter().next().unwrap();
+    assert_eq!(promoted_launch.record.operation_id, admission.operation_id);
+    assert_eq!(
+        promoted_launch.record.source_tool_call_id,
+        admission.source_tool_call_id
+    );
+    assert_eq!(promoted_launch.record.root_session, admission.root_session);
+    assert_eq!(
+        promoted_launch.record.request_fingerprint,
+        admission.request_fingerprint
+    );
+    assert_eq!(promoted_launch.record.member_ordinal, 0);
+    assert_eq!(promoted_launch.record.batch_size, 1);
+    assert_eq!(promoted_launch.record.admission_units, 1);
+    assert_eq!(promoted_launch.record.state, AdmissionState::Accepted);
+    assert!(promoted_launch.record.actor.is_none());
+    assert_eq!(promoted_launch.intent, intent);
+
+    let persisted = store
+        .admission(admission.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted, promoted_launch.record);
+    let promoted_counts = store.admission_counts().await.unwrap();
+    assert_eq!(promoted_counts.active, 1);
+    assert_eq!(promoted_counts.non_active, 0);
+    assert_eq!(promoted_counts.total, 1);
+
+    let repeated = store.promote_queued_admissions(1).await.unwrap();
+    assert!(repeated.is_empty());
+    let repeated_record = store
+        .admission(admission.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repeated_record, promoted_launch.record);
+    assert_eq!(repeated_record.state, AdmissionState::Accepted);
+}
