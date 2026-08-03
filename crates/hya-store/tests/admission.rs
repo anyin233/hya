@@ -837,3 +837,111 @@ async fn durable_batch_persists_binding_and_returns_only_accepted_launches() {
         .collect::<Vec<_>>();
     assert_eq!(stored_rows_after_conflict, stored_rows);
 }
+
+#[tokio::test]
+async fn batch_member_start_is_exactly_once_and_queued_cannot_cross() {
+    let temp_db = AdmissionTempDb::new();
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let mut batch = claim(ToolCallId::new(), 33);
+    batch.admission_units = 101;
+    let intents: Vec<AdmissionIntent> = (0_u32..101)
+        .map(|ordinal| AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [ordinal as u8; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [ordinal as u8 ^ 0x5a; 32],
+            spawn_intent: vec![0xa5, ordinal as u8],
+        })
+        .collect();
+
+    let outcome = store.claim_admission_batch(&batch, intents).await.unwrap();
+    let launches = match outcome {
+        AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+        other => panic!("expected claimed launch instructions, got {other:?}"),
+    };
+    assert_eq!(launches.len(), 100);
+    assert!(launches.iter().all(|launch| {
+        launch.record.state == AdmissionState::Accepted && launch.record.member_ordinal < 100
+    }));
+
+    let left_future = async {
+        let outcome: Result<AdmissionStartOutcome, StoreError> = store
+            .start_admission_member(batch.operation_id, 42, None)
+            .await;
+        outcome
+    };
+    let right_future = async {
+        let outcome: Result<AdmissionStartOutcome, StoreError> = store
+            .start_admission_member(batch.operation_id, 42, None)
+            .await;
+        outcome
+    };
+    let (left, right) = tokio::join!(left_future, right_future);
+    let outcomes = [left.unwrap(), right.unwrap()];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, AdmissionStartOutcome::Started(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                AdmissionStartOutcome::Existing(record)
+                    if record.state == AdmissionState::Started
+            ))
+            .count(),
+        1
+    );
+    assert!(outcomes.iter().all(|outcome| match outcome {
+        AdmissionStartOutcome::Started(record) | AdmissionStartOutcome::Existing(record) => {
+            record.member_ordinal == 42
+        }
+    }));
+
+    let independent = store
+        .start_admission_member(batch.operation_id, 99, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        independent,
+        AdmissionStartOutcome::Started(record)
+            if record.member_ordinal == 99 && record.state == AdmissionState::Started
+    ));
+
+    let queued = store
+        .start_admission_member(batch.operation_id, 100, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        queued,
+        AdmissionStartOutcome::Existing(record)
+            if record.member_ordinal == 100 && record.state == AdmissionState::Queued
+    ));
+
+    let records = store.admissions(batch.operation_id).await.unwrap();
+    assert_eq!(records.len(), 101);
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.member_ordinal)
+            .collect::<Vec<_>>(),
+        (0_u32..101).collect::<Vec<_>>()
+    );
+    for record in &records {
+        match record.member_ordinal {
+            42 | 99 => assert_eq!(record.state, AdmissionState::Started),
+            0..=98 => assert_eq!(record.state, AdmissionState::Accepted),
+            100 => assert_eq!(record.state, AdmissionState::Queued),
+            _ => unreachable!(),
+        }
+    }
+
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 1);
+    assert_eq!(counts.total, 101);
+}
