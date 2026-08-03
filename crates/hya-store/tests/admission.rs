@@ -156,9 +156,23 @@ async fn terminal_transition_is_immutable_idempotent_and_releases_only_started()
 #[tokio::test]
 async fn startup_recovery_requeues_accepted_aborts_started_and_is_idempotent() {
     let store = SessionStore::connect_memory().await.unwrap();
-    let accepted = claim(ToolCallId::new(), 12);
+    let mut accepted = claim(ToolCallId::new(), 12);
+    accepted.admission_units = 1;
     let started = claim(ToolCallId::new(), 13);
-    store.claim_admission(&accepted).await.unwrap();
+    let accepted_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [12; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [13; 32],
+        spawn_intent: vec![0x12],
+    };
+    assert!(matches!(
+        store
+            .claim_admission_batch(&accepted, vec![accepted_intent])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
     store.claim_admission(&started).await.unwrap();
     store
         .start_admission(started.operation_id, None)
@@ -201,6 +215,63 @@ async fn startup_recovery_requeues_accepted_aborts_started_and_is_idempotent() {
             .is_empty()
     );
     assert!(store.replay(started.root_session).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn startup_recovery_aborts_unbound_accepted_without_rebinding() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let accepted = claim(ToolCallId::new(), 34);
+    store.claim_admission(&accepted).await.unwrap();
+
+    let recovered = store
+        .recover_nonterminal_admissions("startup recovery")
+        .await
+        .unwrap();
+    assert_eq!(recovered.len(), 1);
+    let recovered_record = recovered
+        .into_iter()
+        .find(|record| record.operation_id == accepted.operation_id)
+        .unwrap();
+    assert_eq!(recovered_record.state, AdmissionState::Aborted);
+    assert!(!recovered_record.logical_released);
+    assert_eq!(
+        recovered_record.terminal_reason.as_deref(),
+        Some("startup recovery")
+    );
+
+    let persisted = store
+        .admission(accepted.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted, recovered_record);
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 0);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 0);
+    assert!(
+        store
+            .replay(accepted.root_session)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let repeated = store
+        .recover_nonterminal_admissions("startup recovery")
+        .await
+        .unwrap();
+    assert!(repeated.is_empty());
+    let repeated_record = store
+        .admission(accepted.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repeated_record, persisted);
+    assert_eq!(
+        repeated_record.terminal_reason.as_deref(),
+        Some("startup recovery")
+    );
 }
 
 #[tokio::test]
