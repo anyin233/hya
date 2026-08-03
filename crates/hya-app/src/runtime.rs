@@ -1054,6 +1054,109 @@ fn spawn_request_fingerprint(req: &SpawnRequest) -> Result<[u8; 32], serde_json:
     Ok(Sha256::digest(canonical).into())
 }
 
+#[allow(dead_code)]
+const ADMISSION_BINDING_DOMAIN_V1: &[u8] = b"hya.admission-binding.v1";
+#[allow(dead_code)]
+const RESOLVER_SEMANTICS_V1: &[u8] = b"ResolverSemanticsV1";
+#[allow(dead_code)]
+const EMPTY_CATEGORY_IDENTITY_V1: &[u8] = b"CategoryRegistryEmptyV1";
+#[allow(dead_code)]
+const EMPTY_PROVIDER_IDENTITY_V1: &[u8] = b"ProviderRouterEmptyV1";
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionResolutionContextError {
+    NonEmptyCategoryRegistry,
+    NonEmptyProviderRouter,
+    CanonicalLengthOverflow,
+}
+
+/// Immutable app-owned inputs used to resolve and fingerprint one admission.
+///
+/// The runtime and store layers receive only the resulting opaque fingerprint;
+/// these exact objects remain private to the app resolution seam.
+#[allow(dead_code)]
+struct AdmissionResolutionContext {
+    base: AgentSpec,
+    categories: Arc<CategoryRegistry>,
+    router: Arc<ProviderRouter>,
+    base_model_len: u64,
+    base_system_prompt_len: u64,
+    base_reasoning_len: u64,
+}
+
+#[allow(dead_code)]
+impl AdmissionResolutionContext {
+    fn capture(
+        base: AgentSpec,
+        categories: Arc<CategoryRegistry>,
+        router: Arc<ProviderRouter>,
+    ) -> Result<Self, AdmissionResolutionContextError> {
+        if !categories.is_empty() {
+            return Err(AdmissionResolutionContextError::NonEmptyCategoryRegistry);
+        }
+        if !router.is_empty() {
+            return Err(AdmissionResolutionContextError::NonEmptyProviderRouter);
+        }
+
+        let base_model_len = canonical_length(base.model.as_str().as_bytes())?;
+        let base_system_prompt_len = canonical_length(base.system_prompt.as_bytes())?;
+        let base_reasoning_len = canonical_length(base_reasoning(&base).as_bytes())?;
+
+        Ok(Self {
+            base,
+            categories,
+            router,
+            base_model_len,
+            base_system_prompt_len,
+            base_reasoning_len,
+        })
+    }
+
+    fn admission_binding_fingerprint_v1(&self, runtime_fingerprint: [u8; 32]) -> [u8; 32] {
+        let mut canonical = Vec::new();
+        canonical.extend_from_slice(ADMISSION_BINDING_DOMAIN_V1);
+        canonical.extend_from_slice(RESOLVER_SEMANTICS_V1);
+        append_len_prefixed(&mut canonical, &runtime_fingerprint, 32);
+        append_len_prefixed(
+            &mut canonical,
+            self.base.model.as_str().as_bytes(),
+            self.base_model_len,
+        );
+        append_len_prefixed(
+            &mut canonical,
+            self.base.system_prompt.as_bytes(),
+            self.base_system_prompt_len,
+        );
+        append_len_prefixed(
+            &mut canonical,
+            base_reasoning(&self.base).as_bytes(),
+            self.base_reasoning_len,
+        );
+        canonical.extend_from_slice(EMPTY_CATEGORY_IDENTITY_V1);
+        canonical.extend_from_slice(EMPTY_PROVIDER_IDENTITY_V1);
+        Sha256::digest(canonical).into()
+    }
+}
+
+#[allow(dead_code)]
+fn canonical_length(bytes: &[u8]) -> Result<u64, AdmissionResolutionContextError> {
+    u64::try_from(bytes.len()).map_err(|_| AdmissionResolutionContextError::CanonicalLengthOverflow)
+}
+
+#[allow(dead_code)]
+fn append_len_prefixed(canonical: &mut Vec<u8>, bytes: &[u8], length: u64) {
+    canonical.extend_from_slice(&length.to_be_bytes());
+    canonical.extend_from_slice(bytes);
+}
+
+#[allow(dead_code)]
+fn base_reasoning(base: &AgentSpec) -> &'static str {
+    base.reasoning
+        .map(ReasoningEffort::as_str)
+        .unwrap_or("none")
+}
+
 struct ResolvedSpawnMember {
     request: SpawnMember,
     authorized_target: AgentName,
@@ -2293,6 +2396,31 @@ mod tests {
             !first.bundles().is_empty(),
             "shared embedded catalog must not be empty"
         );
+    }
+
+    #[test]
+    fn admission_binding_fingerprint_is_stable_for_fresh_equivalent_contexts() {
+        let make_context = || {
+            AdmissionResolutionContext::capture(
+                AgentSpec {
+                    name: AgentName::new("build"),
+                    model: ModelRef::new("fixture/model"),
+                    system_prompt: "captured harness base".to_string(),
+                    workdir: PathBuf::from("fixture-workdir"),
+                    reasoning: Some(ReasoningEffort::High),
+                },
+                Arc::new(CategoryRegistry::default()),
+                Arc::new(ProviderRouter::new()),
+            )
+            .expect("an empty configured router has a deterministic semantic identity")
+        };
+        let runtime_fingerprint = [0x5a; 32];
+
+        let first = make_context().admission_binding_fingerprint_v1(runtime_fingerprint);
+        let reconstructed = make_context().admission_binding_fingerprint_v1(runtime_fingerprint);
+
+        assert_eq!(first, reconstructed);
+        assert_ne!(first, [0; 32]);
     }
 
     struct RuntimeMarker(&'static str);

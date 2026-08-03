@@ -18,6 +18,11 @@ impl ProviderRouter {
     }
 
     #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
+
+    #[must_use]
     pub fn with(mut self, provider: Arc<dyn Provider>) -> Self {
         self.providers.push(provider);
         self
