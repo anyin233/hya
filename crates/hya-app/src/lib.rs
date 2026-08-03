@@ -13,6 +13,7 @@ pub mod permission;
 pub mod plugins;
 pub mod runtime;
 mod runtime_reconcile;
+mod spawn_intent;
 
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use installed_bundle_refresh::{InstalledBundleRefresh, bundle_registry_path};
