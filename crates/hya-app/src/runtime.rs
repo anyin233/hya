@@ -1063,12 +1063,14 @@ const EMPTY_CATEGORY_IDENTITY_V1: &[u8] = b"CategoryRegistryEmptyV1";
 #[allow(dead_code)]
 const EMPTY_PROVIDER_IDENTITY_V1: &[u8] = b"ProviderRouterEmptyV1";
 #[allow(dead_code)]
+const PROVIDER_RESOLUTION_IDENTITY_V1: &[u8] = b"ProviderResolutionV1";
+#[allow(dead_code)]
 const CATEGORY_RESOLUTION_IDENTITY_V1: &[u8] = b"CategoryResolutionV1";
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmissionResolutionContextError {
-    NonEmptyProviderRouter,
+    ProviderIdentityUnavailable,
     CanonicalLengthOverflow,
 }
 
@@ -1085,6 +1087,7 @@ struct AdmissionResolutionContext {
     base_system_prompt_len: u64,
     base_reasoning_len: u64,
     category_resolution: Vec<u8>,
+    provider_resolution: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -1094,14 +1097,11 @@ impl AdmissionResolutionContext {
         categories: Arc<CategoryRegistry>,
         router: Arc<ProviderRouter>,
     ) -> Result<Self, AdmissionResolutionContextError> {
-        if !router.is_empty() {
-            return Err(AdmissionResolutionContextError::NonEmptyProviderRouter);
-        }
-
         let base_model_len = canonical_length(base.model.as_str().as_bytes())?;
         let base_system_prompt_len = canonical_length(base.system_prompt.as_bytes())?;
         let base_reasoning_len = canonical_length(base_reasoning(&base).as_bytes())?;
         let category_resolution = canonical_category_resolution(&categories)?;
+        let provider_resolution = canonical_provider_resolution(&router)?;
 
         Ok(Self {
             base,
@@ -1111,6 +1111,7 @@ impl AdmissionResolutionContext {
             base_system_prompt_len,
             base_reasoning_len,
             category_resolution,
+            provider_resolution,
         })
     }
 
@@ -1135,7 +1136,7 @@ impl AdmissionResolutionContext {
             self.base_reasoning_len,
         );
         canonical.extend_from_slice(&self.category_resolution);
-        canonical.extend_from_slice(EMPTY_PROVIDER_IDENTITY_V1);
+        canonical.extend_from_slice(&self.provider_resolution);
         Sha256::digest(canonical).into()
     }
 
@@ -1199,6 +1200,27 @@ fn canonical_category_resolution(
                 canonical_length(candidate_bytes)?,
             );
         }
+    }
+    Ok(canonical)
+}
+
+#[allow(dead_code)]
+fn canonical_provider_resolution(
+    router: &ProviderRouter,
+) -> Result<Vec<u8>, AdmissionResolutionContextError> {
+    let identities = router
+        .configured_identities_v1()
+        .ok_or(AdmissionResolutionContextError::ProviderIdentityUnavailable)?;
+    if identities.is_empty() {
+        return Ok(EMPTY_PROVIDER_IDENTITY_V1.to_vec());
+    }
+
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(PROVIDER_RESOLUTION_IDENTITY_V1);
+    canonical.extend_from_slice(&canonical_count(identities.len())?.to_be_bytes());
+    for identity in identities {
+        let identity_len = canonical_length(&identity)?;
+        append_len_prefixed(&mut canonical, &identity, identity_len);
     }
     Ok(canonical)
 }
@@ -2342,7 +2364,7 @@ mod tests {
         Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, OwnerRunId, RosterStatus,
         SubagentMode, ToolName, ToolSchema,
     };
-    use hya_provider::{FakeProvider, FakeStep};
+    use hya_provider::{FakeProvider, FakeStep, HttpProvider, ProviderKind};
     use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry};
     use hya_tool::{
         AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
@@ -2707,6 +2729,185 @@ mod tests {
             select(&shaping_only, "secondary"),
             select(&baseline, "secondary")
         );
+    }
+
+    #[test]
+    fn admission_binding_provider_fields_match_resolution_semantics() {
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fixture/base"),
+            system_prompt: "captured harness base".to_string(),
+            workdir: PathBuf::from("fixture-workdir"),
+            reasoning: Some(ReasoningEffort::High),
+        };
+        let mut entries = HashMap::new();
+        entries.insert(
+            "quality".to_string(),
+            CategoryEntry {
+                model: ModelRef::new("route/primary"),
+                fallback: vec![ModelRef::new("route/fallback")],
+                prompt_append: String::new(),
+                token_budget: None,
+            },
+        );
+        let categories = Arc::new(CategoryRegistry::from_entries(entries));
+
+        let first_resolver_called = Arc::new(AtomicBool::new(false));
+        let first_resolver_flag = Arc::clone(&first_resolver_called);
+        let first_provider = HttpProvider::new(
+            "route",
+            ProviderKind::OpenAiCompatible,
+            "https://route.example/v1/",
+            "credential-a".to_string(),
+            ["primary".to_string(), "fallback".to_string()],
+        )
+        .expect("first HTTP route must construct")
+        .with_bearer_resolver(Arc::new(move || {
+            first_resolver_flag.store(true, Ordering::SeqCst);
+            Ok("live-token-a".to_string())
+        }));
+        let first_router = Arc::new(ProviderRouter::new().with(Arc::new(first_provider)));
+
+        let first_context = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::clone(&first_router),
+        )
+        .expect("configured provider router must capture");
+        let runtime_fingerprint = [0x5a; 32];
+        let first_fingerprint = first_context.admission_binding_fingerprint_v1(runtime_fingerprint);
+
+        let second_resolver_called = Arc::new(AtomicBool::new(false));
+        let second_resolver_flag = Arc::clone(&second_resolver_called);
+        let second_provider = HttpProvider::new(
+            "route",
+            ProviderKind::OpenAiCompatible,
+            "https://route.example/v1",
+            "credential-b".to_string(),
+            ["primary".to_string(), "fallback".to_string()],
+        )
+        .expect("second HTTP route must construct")
+        .with_bearer_resolver(Arc::new(move || {
+            second_resolver_flag.store(true, Ordering::SeqCst);
+            Ok("live-token-b".to_string())
+        }));
+        let second_router = Arc::new(ProviderRouter::new().with(Arc::new(second_provider)));
+        let second_context = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::clone(&second_router),
+        )
+        .expect("equivalent configured provider router must capture");
+        let second_fingerprint =
+            second_context.admission_binding_fingerprint_v1(runtime_fingerprint);
+
+        assert_eq!(first_fingerprint, second_fingerprint);
+        assert!(!first_resolver_called.load(Ordering::SeqCst));
+        assert!(!second_resolver_called.load(Ordering::SeqCst));
+        assert_eq!(
+            first_context.resolve_category_for_admission("quality"),
+            Some(ModelRef::new("route/primary"))
+        );
+        assert_eq!(
+            second_context.resolve_category_for_admission("quality"),
+            Some(ModelRef::new("route/primary"))
+        );
+        assert!(!first_resolver_called.load(Ordering::SeqCst));
+        assert!(!second_resolver_called.load(Ordering::SeqCst));
+
+        let endpoint_provider = HttpProvider::new(
+            "route",
+            ProviderKind::OpenAiCompatible,
+            "https://route.example/v2",
+            "credential-a".to_string(),
+            ["primary".to_string(), "fallback".to_string()],
+        )
+        .expect("changed-endpoint HTTP route must construct");
+        let endpoint_context = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::new(ProviderRouter::new().with(Arc::new(endpoint_provider))),
+        )
+        .expect("changed-endpoint provider router must capture");
+        assert_ne!(
+            first_fingerprint,
+            endpoint_context.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+
+        let fallback_provider = HttpProvider::new(
+            "route",
+            ProviderKind::OpenAiCompatible,
+            "https://route.example/v1",
+            "credential-a".to_string(),
+            ["fallback".to_string()],
+        )
+        .expect("fallback-only HTTP route must construct");
+        let fallback_context = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::new(ProviderRouter::new().with(Arc::new(fallback_provider))),
+        )
+        .expect("fallback-only provider router must capture");
+        assert_ne!(
+            first_fingerprint,
+            fallback_context.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+        assert_eq!(
+            fallback_context.resolve_category_for_admission("quality"),
+            Some(ModelRef::new("route/fallback"))
+        );
+
+        let route_a = || {
+            HttpProvider::new(
+                "route-a",
+                ProviderKind::OpenAiCompatible,
+                "https://route.example/shared",
+                "credential".to_string(),
+                ["primary".to_string()],
+            )
+            .expect("route-a HTTP provider must construct")
+        };
+        let route_b = || {
+            HttpProvider::new(
+                "route-b",
+                ProviderKind::OpenAiCompatible,
+                "https://route.example/shared",
+                "credential".to_string(),
+                ["primary".to_string()],
+            )
+            .expect("route-b HTTP provider must construct")
+        };
+        let router_ab = Arc::new(
+            ProviderRouter::new()
+                .with(Arc::new(route_a()))
+                .with(Arc::new(route_b())),
+        );
+        let router_ba = Arc::new(
+            ProviderRouter::new()
+                .with(Arc::new(route_b()))
+                .with(Arc::new(route_a())),
+        );
+        let context_ab =
+            AdmissionResolutionContext::capture(base.clone(), Arc::clone(&categories), router_ab)
+                .expect("route-a then route-b provider router must capture");
+        let context_ba = AdmissionResolutionContext::capture(base.clone(), categories, router_ba)
+            .expect("route-b then route-a provider router must capture");
+        assert_ne!(
+            context_ab.admission_binding_fingerprint_v1(runtime_fingerprint),
+            context_ba.admission_binding_fingerprint_v1(runtime_fingerprint)
+        );
+
+        let fake_router =
+            Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
+        let fake_error = match AdmissionResolutionContext::capture(
+            base,
+            Arc::new(CategoryRegistry::default()),
+            fake_router,
+        ) {
+            Ok(_) => panic!("a provider without configured identity must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(format!("{fake_error:?}"), "ProviderIdentityUnavailable");
     }
 
     struct RuntimeMarker(&'static str);
