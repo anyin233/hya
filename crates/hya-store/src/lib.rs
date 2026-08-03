@@ -21,8 +21,9 @@ use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 pub use admission::{
-    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionFinalizeOutcome,
-    AdmissionRecord, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionCounts,
+    AdmissionFinalizeOutcome, AdmissionRecord, AdmissionStartOutcome, AdmissionState,
+    AdmissionTerminal,
 };
 pub use bundle_registry::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleRegistryRecord,
