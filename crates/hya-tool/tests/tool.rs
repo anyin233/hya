@@ -196,6 +196,72 @@ fn candidate_builder_mutation_does_not_change_a_frozen_snapshot() {
 }
 
 #[test]
+fn dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools() {
+    let first = ToolRegistry::builtins().snapshot();
+    let second = ToolRegistry::builtins().snapshot();
+    let mut canonical_names = first
+        .canonical_tools()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>();
+    canonical_names.sort();
+    assert!(!canonical_names.is_empty());
+
+    for canonical in canonical_names {
+        let first_identity = first.dispatch_identity_v1(&canonical);
+        let second_identity = second.dispatch_identity_v1(&canonical);
+        assert_eq!(first_identity, second_identity);
+        let Some(identity) = first_identity else {
+            panic!("builtin tool `{canonical}` must expose dispatch identity");
+        };
+        assert_ne!(identity, [0_u8; 32]);
+    }
+
+    let registry = ToolRegistry::builtins();
+    registry
+        .register_with_permission(
+            Arc::new(NamedTestTool("unidentified_runtime_tool")),
+            ToolPermission::Tool,
+        )
+        .expect("register unidentified runtime tool");
+    let snapshot = registry.snapshot();
+    assert_eq!(
+        snapshot.dispatch_identity_v1("unidentified_runtime_tool"),
+        None
+    );
+}
+
+#[test]
+fn explicit_dispatch_identity_is_canonical_snapshot_metadata() {
+    let registry = ToolRegistry::builtins();
+    registry
+        .register_with_permission_and_aliases_and_dispatch_identity(
+            Arc::new(NamedTestTool("identified_runtime_tool")),
+            ToolPermission::Mcp,
+            &["identified_alias".to_string()],
+            [0x42_u8; 32],
+        )
+        .expect("register identified runtime tool");
+    let frozen = registry.snapshot();
+    assert_eq!(
+        frozen.dispatch_identity_v1("identified_runtime_tool"),
+        Some([0x42_u8; 32])
+    );
+    assert_eq!(frozen.dispatch_identity_v1("identified_alias"), None);
+
+    registry.remove("identified_runtime_tool");
+    let after_remove = registry.snapshot();
+    assert_eq!(
+        after_remove.dispatch_identity_v1("identified_runtime_tool"),
+        None
+    );
+    assert_eq!(
+        frozen.dispatch_identity_v1("identified_runtime_tool"),
+        Some([0x42_u8; 32])
+    );
+}
+
+#[test]
 fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
     let registry = ToolRegistry::builtins();
 

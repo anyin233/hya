@@ -5,6 +5,7 @@ use std::sync::Arc;
 use hya_proto::{MessageId, PermissionRequestId, SessionId, ToolCallId};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -402,6 +403,11 @@ impl RememberScope {
 
 #[async_trait::async_trait]
 pub trait PermissionInterceptor: Send + Sync {
+    #[must_use]
+    fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        None
+    }
+
     async fn intercept(
         &self,
         session: Option<SessionId>,
@@ -461,6 +467,35 @@ impl PermissionPlane {
     #[must_use]
     pub fn snapshot_rules(&self) -> PermissionRules {
         self.snapshot.as_ref().clone()
+    }
+
+    /// Returns a stable identity for the immutable permission policy semantics.
+    #[must_use]
+    pub fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PERMISSION_SEMANTIC_IDENTITY_DOMAIN_V1);
+        append_permission_rules(&mut bytes, self.snapshot.as_ref())?;
+        match self.invocation_policy.as_deref() {
+            None => bytes.push(0),
+            Some(policy) => {
+                bytes.push(1);
+                append_permission_model(&mut bytes, policy.model);
+                append_count(&mut bytes, policy.rules.len())?;
+                for rule in &policy.rules {
+                    append_permission_target(&mut bytes, rule.target);
+                    append_bytes(&mut bytes, rule.selector.as_str().as_bytes())?;
+                    append_mode(&mut bytes, rule.permission);
+                }
+            }
+        }
+        match self.interceptor.as_deref() {
+            None => bytes.push(0),
+            Some(interceptor) => {
+                bytes.push(1);
+                append_bytes(&mut bytes, &interceptor.semantic_identity_v1()?)?;
+            }
+        }
+        Some(Sha256::digest(bytes).into())
     }
 
     #[must_use]
@@ -628,6 +663,75 @@ impl PermissionPlane {
             }),
         }
     }
+}
+
+const PERMISSION_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.permission.semantic-identity/v1";
+
+fn append_permission_rules(bytes: &mut Vec<u8>, rules: &PermissionRules) -> Option<()> {
+    append_count(bytes, rules.rules.len())?;
+    for rule in &rules.rules {
+        append_action(bytes, rule.action);
+        append_bytes(bytes, rule.resource_pattern.as_bytes())?;
+        append_mode(bytes, rule.mode);
+    }
+    Some(())
+}
+
+fn append_count(bytes: &mut Vec<u8>, count: usize) -> Option<()> {
+    let count = u64::try_from(count).ok()?;
+    bytes.extend_from_slice(&count.to_be_bytes());
+    Some(())
+}
+
+fn append_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Option<()> {
+    let length = u64::try_from(value.len()).ok()?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(value);
+    Some(())
+}
+
+fn append_action(bytes: &mut Vec<u8>, action: Action) {
+    bytes.push(match action {
+        Action::Tool => 0,
+        Action::Read => 1,
+        Action::Edit => 2,
+        Action::Glob => 3,
+        Action::Grep => 4,
+        Action::Bash => 5,
+        Action::Task => 6,
+        Action::Mcp => 7,
+        Action::WebFetch => 8,
+        Action::WebSearch => 9,
+        Action::TodoWrite => 10,
+        Action::Skill => 11,
+        Action::Lsp => 12,
+        Action::ExternalDirectory => 13,
+    });
+}
+
+fn append_mode(bytes: &mut Vec<u8>, mode: Mode) {
+    bytes.push(match mode {
+        Mode::Allow => 0,
+        Mode::Ask => 1,
+        Mode::Deny => 2,
+    });
+}
+
+fn append_permission_model(bytes: &mut Vec<u8>, model: PermissionModel) {
+    bytes.push(match model {
+        PermissionModel::Allow => 0,
+        PermissionModel::Default => 1,
+        PermissionModel::Strict => 2,
+        PermissionModel::Danger => 3,
+    });
+}
+
+fn append_permission_target(bytes: &mut Vec<u8>, target: PermissionTarget) {
+    bytes.push(match target {
+        PermissionTarget::Tool => 0,
+        PermissionTarget::Mcp => 1,
+        PermissionTarget::Command => 2,
+    });
 }
 
 #[cfg(test)]
