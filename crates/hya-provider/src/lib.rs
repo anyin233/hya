@@ -70,6 +70,49 @@ pub struct Capabilities {
     pub max_context: u32,
 }
 
+pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
+    let length = u64::try_from(bytes.len()).ok()?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(bytes);
+    Some(())
+}
+
+pub(crate) fn append_identity_count(output: &mut Vec<u8>, count: usize) -> Option<()> {
+    let count = u64::try_from(count).ok()?;
+    output.extend_from_slice(&count.to_be_bytes());
+    Some(())
+}
+
+pub(crate) fn append_identity_optional_bytes(
+    output: &mut Vec<u8>,
+    value: Option<&str>,
+) -> Option<()> {
+    match value {
+        Some(value) => {
+            output.push(1);
+            append_identity_bytes(output, value.as_bytes())?;
+        }
+        None => output.push(0),
+    }
+    Some(())
+}
+
+pub(crate) fn append_capabilities_identity(
+    output: &mut Vec<u8>,
+    caps: &Capabilities,
+) -> Option<()> {
+    output.extend_from_slice(&[
+        u8::from(caps.streaming_tool_calls),
+        u8::from(caps.parallel_tool_calls),
+        u8::from(caps.usage_reporting),
+        u8::from(caps.json_output),
+        u8::from(caps.reasoning_stream),
+        u8::from(caps.reasoning_request),
+    ]);
+    output.extend_from_slice(&caps.max_context.to_be_bytes());
+    Some(())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderModel {
     pub provider_id: String,
@@ -298,6 +341,13 @@ pub struct CompactedWindow {
 pub trait Provider: Send + Sync {
     fn id(&self) -> &str;
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>;
+
+    /// Return deterministic configured routing identity, excluding secrets and
+    /// transient live state. Providers without a complete identity fail closed.
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        None
+    }
+
     fn catalog(&self) -> Vec<ProviderModel> {
         Vec::new()
     }

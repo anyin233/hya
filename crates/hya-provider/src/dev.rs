@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use futures::stream;
 use hya_proto::{Event, FinishReason, Message, MessageId, ModelRef, Part, PartId, Role, SessionId};
 
-use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
+use crate::{
+    Capabilities, CompletionRequest, EventStream, Provider, ProviderError,
+    append_capabilities_identity, append_identity_bytes,
+};
 
 #[derive(Default)]
 pub struct DevProvider;
@@ -45,6 +48,16 @@ fn reply_for(messages: &[Message]) -> String {
     }
 }
 
+fn dev_capabilities() -> Capabilities {
+    Capabilities {
+        streaming_tool_calls: true,
+        parallel_tool_calls: true,
+        usage_reporting: true,
+        max_context: 200_000,
+        ..Capabilities::default()
+    }
+}
+
 #[async_trait]
 impl Provider for DevProvider {
     fn id(&self) -> &str {
@@ -52,13 +65,17 @@ impl Provider for DevProvider {
     }
 
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
-        Some(Capabilities {
-            streaming_tool_calls: true,
-            parallel_tool_calls: true,
-            usage_reporting: true,
-            max_context: 200_000,
-            ..Capabilities::default()
-        })
+        Some(dev_capabilities())
+    }
+
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        let mut identity = Vec::new();
+        append_identity_bytes(&mut identity, b"hya.provider.dev.configured.v1")?;
+        append_identity_bytes(&mut identity, env!("CARGO_PKG_VERSION").as_bytes())?;
+        append_identity_bytes(&mut identity, b"dev")?;
+        append_identity_bytes(&mut identity, b"any-model")?;
+        append_capabilities_identity(&mut identity, &dev_capabilities())?;
+        Some(identity)
     }
 
     async fn stream(
