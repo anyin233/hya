@@ -12,6 +12,7 @@ const SPAWN_INTENT_RUNTIME_FINGERPRINT_VERSION: u32 = 1;
 const SPAWN_INTENT_ADMISSION_BINDING_FINGERPRINT_VERSION: u32 = 1;
 const SPAWN_INTENT_RESOLVER_VERSION: u32 = 1;
 const SPAWN_INTENT_INTEGRITY_WIDTH: usize = 32;
+const MAX_SPAWN_INTENT_BYTES_V1: usize = 1_048_576;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PriorStartV1 {
@@ -27,6 +28,8 @@ enum SpawnIntentError {
     UnsupportedVersion { field: &'static str, found: u32 },
     #[error("non-canonical spawn intent")]
     NonCanonical,
+    #[error("spawn intent encoded size {encoded} exceeds limit {limit}")]
+    EncodedSizeExceeded { encoded: usize, limit: usize },
     #[error("spawn intent length overflow")]
     LengthOverflow,
 }
@@ -117,35 +120,42 @@ impl SpawnIntentV1 {
             return Err(SpawnIntentError::NonCanonical);
         }
 
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(SPAWN_INTENT_DOMAIN_V1);
-        push_u32(&mut bytes, SPAWN_INTENT_FORMAT_VERSION);
-        push_u32(&mut bytes, SPAWN_INTENT_RUNTIME_FINGERPRINT_VERSION);
-        bytes.extend_from_slice(&self.runtime_fingerprint);
+        let mut bytes = SpawnIntentByteSinkV1::new();
+        bytes.slice(SPAWN_INTENT_DOMAIN_V1)?;
+        push_u32(&mut bytes, SPAWN_INTENT_FORMAT_VERSION)?;
+        push_u32(&mut bytes, SPAWN_INTENT_RUNTIME_FINGERPRINT_VERSION)?;
+        bytes.slice(&self.runtime_fingerprint)?;
         push_u32(
             &mut bytes,
             SPAWN_INTENT_ADMISSION_BINDING_FINGERPRINT_VERSION,
-        );
-        bytes.extend_from_slice(&self.admission_binding_fingerprint);
-        push_u32(&mut bytes, SPAWN_INTENT_RESOLVER_VERSION);
-        push_u64(&mut bytes, self.diagnostic_generation);
+        )?;
+        bytes.slice(&self.admission_binding_fingerprint)?;
+        push_u32(&mut bytes, SPAWN_INTENT_RESOLVER_VERSION)?;
+        push_u64(&mut bytes, self.diagnostic_generation)?;
 
         encode_member(&mut bytes, &self.member)?;
         push_string(&mut bytes, &self.parent.to_string())?;
         push_string(&mut bytes, self.stable_target.as_str())?;
-        push_bool(&mut bytes, self.background);
+        push_bool(&mut bytes, self.background)?;
         push_string(&mut bytes, &self.source_tool_call_id.to_string())?;
         push_string(&mut bytes, &self.operation_id)?;
-        push_u32(&mut bytes, self.member_ordinal);
-        push_u32(&mut bytes, self.batch_cardinality);
-        push_prior_start(&mut bytes, self.prior_start);
+        push_u32(&mut bytes, self.member_ordinal)?;
+        push_u32(&mut bytes, self.batch_cardinality)?;
+        push_prior_start(&mut bytes, self.prior_start)?;
 
-        let integrity = integrity_digest(&bytes);
-        bytes.extend_from_slice(&integrity);
-        Ok(bytes)
+        let integrity = integrity_digest(bytes.as_slice());
+        bytes.slice(&integrity)?;
+        Ok(bytes.finish())
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, SpawnIntentError> {
+        let encoded = checked_encoded_end_v1(0, bytes.len())?;
+        if encoded > MAX_SPAWN_INTENT_BYTES_V1 {
+            return Err(SpawnIntentError::EncodedSizeExceeded {
+                encoded,
+                limit: MAX_SPAWN_INTENT_BYTES_V1,
+            });
+        }
         if bytes.len() < SPAWN_INTENT_INTEGRITY_WIDTH {
             return Err(SpawnIntentError::NonCanonical);
         }
@@ -245,6 +255,12 @@ impl SpawnIntentV1 {
     }
 }
 
+fn encode_spawn_intent_batch_v1(
+    intents: &[SpawnIntentV1],
+) -> Result<Vec<Vec<u8>>, SpawnIntentError> {
+    intents.iter().map(SpawnIntentV1::encode).collect()
+}
+
 impl PartialEq for SpawnIntentV1 {
     fn eq(&self, other: &Self) -> bool {
         members_equal(&self.member, &other.member)
@@ -296,7 +312,50 @@ fn inline_agents_equal(left: Option<&InlineAgent>, right: Option<&InlineAgent>) 
     }
 }
 
-fn encode_member(bytes: &mut Vec<u8>, member: &SpawnMember) -> Result<(), SpawnIntentError> {
+fn checked_encoded_end_v1(current: usize, additional: usize) -> Result<usize, SpawnIntentError> {
+    current
+        .checked_add(additional)
+        .ok_or(SpawnIntentError::LengthOverflow)
+}
+
+struct SpawnIntentByteSinkV1 {
+    bytes: Vec<u8>,
+}
+
+impl SpawnIntentByteSinkV1 {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn byte(&mut self, value: u8) -> Result<(), SpawnIntentError> {
+        self.slice(&[value])
+    }
+
+    fn slice(&mut self, value: &[u8]) -> Result<(), SpawnIntentError> {
+        let end = checked_encoded_end_v1(self.bytes.len(), value.len())?;
+        if end > MAX_SPAWN_INTENT_BYTES_V1 {
+            return Err(SpawnIntentError::EncodedSizeExceeded {
+                encoded: end,
+                limit: MAX_SPAWN_INTENT_BYTES_V1,
+            });
+        }
+        self.bytes.extend_from_slice(value);
+        Ok(())
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+fn encode_member(
+    bytes: &mut SpawnIntentByteSinkV1,
+    member: &SpawnMember,
+) -> Result<(), SpawnIntentError> {
     push_string(bytes, &member.description)?;
     push_string(bytes, &member.prompt)?;
     push_string(bytes, &member.subagent_type)?;
@@ -304,19 +363,18 @@ fn encode_member(bytes: &mut Vec<u8>, member: &SpawnMember) -> Result<(), SpawnI
     push_option_string(bytes, member.model.as_deref())?;
     push_option_string(bytes, member.category.as_deref())?;
     match member.inline_agent.as_ref() {
-        None => bytes.push(0),
+        None => bytes.byte(0)?,
         Some(inline) => {
-            bytes.push(1);
+            bytes.byte(1)?;
             push_string(bytes, &inline.name)?;
             push_string(bytes, &inline.prompt)?;
             push_option_string(bytes, inline.description.as_deref())?;
             push_option_string(bytes, inline.category.as_deref())?;
             push_option_string(bytes, inline.model.as_deref())?;
-            push_option_bool(bytes, inline.resident);
+            push_option_bool(bytes, inline.resident)?;
         }
     }
-    push_bool(bytes, member.resident);
-    Ok(())
+    push_bool(bytes, member.resident)
 }
 
 fn decode_member(cursor: &mut Cursor<'_>) -> Result<SpawnMember, SpawnIntentError> {
@@ -351,51 +409,60 @@ fn decode_member(cursor: &mut Cursor<'_>) -> Result<SpawnMember, SpawnIntentErro
     })
 }
 
-fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-    bytes.extend_from_slice(&value.to_be_bytes());
+fn push_u32(bytes: &mut SpawnIntentByteSinkV1, value: u32) -> Result<(), SpawnIntentError> {
+    bytes.slice(&value.to_be_bytes())
 }
 
-fn push_u64(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_be_bytes());
+fn push_u64(bytes: &mut SpawnIntentByteSinkV1, value: u64) -> Result<(), SpawnIntentError> {
+    bytes.slice(&value.to_be_bytes())
 }
 
-fn push_string(bytes: &mut Vec<u8>, value: &str) -> Result<(), SpawnIntentError> {
+fn push_string(bytes: &mut SpawnIntentByteSinkV1, value: &str) -> Result<(), SpawnIntentError> {
     let length = u32::try_from(value.len()).map_err(|_| SpawnIntentError::LengthOverflow)?;
-    push_u32(bytes, length);
-    bytes.extend_from_slice(value.as_bytes());
-    Ok(())
+    push_u32(bytes, length)?;
+    bytes.slice(value.as_bytes())
 }
 
-fn push_option_string(bytes: &mut Vec<u8>, value: Option<&str>) -> Result<(), SpawnIntentError> {
+fn push_option_string(
+    bytes: &mut SpawnIntentByteSinkV1,
+    value: Option<&str>,
+) -> Result<(), SpawnIntentError> {
     match value {
-        None => bytes.push(0),
+        None => bytes.byte(0)?,
         Some(value) => {
-            bytes.push(1);
+            bytes.byte(1)?;
             push_string(bytes, value)?;
         }
     }
     Ok(())
 }
 
-fn push_option_bool(bytes: &mut Vec<u8>, value: Option<bool>) {
+fn push_option_bool(
+    bytes: &mut SpawnIntentByteSinkV1,
+    value: Option<bool>,
+) -> Result<(), SpawnIntentError> {
     match value {
-        None => bytes.push(0),
+        None => bytes.byte(0)?,
         Some(value) => {
-            bytes.push(1);
-            push_bool(bytes, value);
+            bytes.byte(1)?;
+            push_bool(bytes, value)?;
         }
     }
+    Ok(())
 }
 
-fn push_bool(bytes: &mut Vec<u8>, value: bool) {
-    bytes.push(u8::from(value));
+fn push_bool(bytes: &mut SpawnIntentByteSinkV1, value: bool) -> Result<(), SpawnIntentError> {
+    bytes.byte(u8::from(value))
 }
 
-fn push_prior_start(bytes: &mut Vec<u8>, value: PriorStartV1) {
-    bytes.push(match value {
+fn push_prior_start(
+    bytes: &mut SpawnIntentByteSinkV1,
+    value: PriorStartV1,
+) -> Result<(), SpawnIntentError> {
+    bytes.byte(match value {
         PriorStartV1::NeverStarted => 0,
         PriorStartV1::PreviouslyStarted => 1,
-    });
+    })
 }
 
 fn integrity_digest(payload: &[u8]) -> [u8; SPAWN_INTENT_INTEGRITY_WIDTH] {
@@ -509,8 +576,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        PriorStartV1, SPAWN_INTENT_DOMAIN_V1, SPAWN_INTENT_INTEGRITY_DOMAIN_V1, SpawnIntentError,
-        SpawnIntentInputV1, SpawnIntentV1,
+        MAX_SPAWN_INTENT_BYTES_V1, PriorStartV1, SPAWN_INTENT_DOMAIN_V1,
+        SPAWN_INTENT_INTEGRITY_DOMAIN_V1, SpawnIntentError, SpawnIntentInputV1, SpawnIntentV1,
+        checked_encoded_end_v1, encode_spawn_intent_batch_v1,
     };
 
     #[test]
@@ -682,5 +750,69 @@ mod tests {
                 Err(SpawnIntentError::IntegrityMismatch)
             );
         }
+    }
+
+    #[test]
+    fn spawn_intent_v1_enforces_exact_size_and_batch_preparation() {
+        const FINGERPRINT_WIDTH: usize = 32;
+
+        let parent: SessionId = "ses_018f032a3d2f7a21a05c2e61fc57dced"
+            .parse()
+            .expect("deterministic parent session id");
+        let source_tool_call: ToolCallId = "tc_018f032a3d2f7a21a05c2e61fc57dced"
+            .parse()
+            .expect("deterministic source tool call id");
+        let fixture = |prompt: String, member_ordinal: u32| {
+            SpawnIntentV1::new(SpawnIntentInputV1 {
+                member: SpawnMember {
+                    prompt,
+                    ..SpawnMember::default()
+                },
+                parent,
+                stable_target: AgentName::new("stable-target-alpha"),
+                background: false,
+                operation: ToolOperation::from_tool_call(source_tool_call),
+                member_ordinal,
+                batch_cardinality: 2,
+                prior_start: PriorStartV1::NeverStarted,
+                runtime_fingerprint: [0x11; FINGERPRINT_WIDTH],
+                admission_binding_fingerprint: [0x22; FINGERPRINT_WIDTH],
+                diagnostic_generation: 42,
+            })
+            .expect("valid deterministic spawn intent fixture")
+        };
+
+        let empty = fixture(String::new(), 0);
+        let baseline_encoded = empty.encode().expect("empty-prompt fixture encoding");
+        let prompt_len = MAX_SPAWN_INTENT_BYTES_V1
+            .checked_sub(baseline_encoded.len())
+            .expect("baseline encoding leaves prompt capacity");
+        let exact = fixture("x".repeat(prompt_len), 0);
+        let exact_encoded = exact.encode().expect("exact-sized row encoding");
+        assert_eq!(exact_encoded.len(), 1_048_576);
+
+        let oversized = fixture("x".repeat(prompt_len + 1), 1);
+        let expected_size_error = SpawnIntentError::EncodedSizeExceeded {
+            encoded: 1_048_577,
+            limit: 1_048_576,
+        };
+        assert_eq!(oversized.encode(), Err(expected_size_error.clone()));
+        assert_eq!(
+            SpawnIntentV1::decode(&vec![0_u8; 1_048_577]),
+            Err(expected_size_error.clone())
+        );
+        assert_eq!(
+            checked_encoded_end_v1(usize::MAX, 1),
+            Err(SpawnIntentError::LengthOverflow)
+        );
+        assert_eq!(
+            encode_spawn_intent_batch_v1(&[exact.clone(), oversized]),
+            Err(expected_size_error)
+        );
+
+        let exact_batch =
+            encode_spawn_intent_batch_v1(&[exact]).expect("one-member exact batch encoding");
+        assert_eq!(exact_batch.len(), 1);
+        assert_eq!(exact_batch[0].len(), 1_048_576);
     }
 }
