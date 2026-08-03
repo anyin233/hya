@@ -15,13 +15,13 @@ const SPAWN_INTENT_INTEGRITY_WIDTH: usize = 32;
 const MAX_SPAWN_INTENT_BYTES_V1: usize = hya_store::MAX_ADMISSION_INTENT_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PriorStartV1 {
+pub(crate) enum PriorStartV1 {
     NeverStarted,
     PreviouslyStarted,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-enum SpawnIntentError {
+pub(crate) enum SpawnIntentError {
     #[error("spawn intent integrity mismatch")]
     IntegrityMismatch,
     #[error("unsupported spawn intent {field} version {found}")]
@@ -35,22 +35,22 @@ enum SpawnIntentError {
 }
 
 #[derive(Clone, Debug)]
-struct SpawnIntentInputV1 {
-    member: SpawnMember,
-    parent: SessionId,
-    stable_target: AgentName,
-    background: bool,
-    operation: ToolOperation,
-    member_ordinal: u32,
-    batch_cardinality: u32,
-    prior_start: PriorStartV1,
-    runtime_fingerprint: [u8; 32],
-    admission_binding_fingerprint: [u8; 32],
-    diagnostic_generation: u64,
+pub(crate) struct SpawnIntentInputV1 {
+    pub(crate) member: SpawnMember,
+    pub(crate) parent: SessionId,
+    pub(crate) stable_target: AgentName,
+    pub(crate) background: bool,
+    pub(crate) operation: ToolOperation,
+    pub(crate) member_ordinal: u32,
+    pub(crate) batch_cardinality: u32,
+    pub(crate) prior_start: PriorStartV1,
+    pub(crate) runtime_fingerprint: [u8; 32],
+    pub(crate) admission_binding_fingerprint: [u8; 32],
+    pub(crate) diagnostic_generation: u64,
 }
 
 #[derive(Clone, Debug)]
-struct SpawnIntentV1 {
+pub(crate) struct SpawnIntentV1 {
     member: SpawnMember,
     parent: SessionId,
     stable_target: AgentName,
@@ -66,7 +66,7 @@ struct SpawnIntentV1 {
 }
 
 impl SpawnIntentV1 {
-    fn new(input: SpawnIntentInputV1) -> Result<Self, SpawnIntentError> {
+    pub(crate) fn new(input: SpawnIntentInputV1) -> Result<Self, SpawnIntentError> {
         let SpawnIntentInputV1 {
             member,
             parent,
@@ -146,6 +146,20 @@ impl SpawnIntentV1 {
         let integrity = integrity_digest(bytes.as_slice());
         bytes.slice(&integrity)?;
         Ok(bytes.finish())
+    }
+
+    pub(crate) fn into_admission_intent(
+        self,
+    ) -> Result<hya_store::AdmissionIntent, SpawnIntentError> {
+        let spawn_intent = self.encode()?;
+        Ok(hya_store::AdmissionIntent {
+            runtime_fingerprint_version: SPAWN_INTENT_RUNTIME_FINGERPRINT_VERSION,
+            runtime_fingerprint: self.runtime_fingerprint,
+            admission_binding_fingerprint_version:
+                SPAWN_INTENT_ADMISSION_BINDING_FINGERPRINT_VERSION,
+            admission_binding_fingerprint: self.admission_binding_fingerprint,
+            spawn_intent,
+        })
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, SpawnIntentError> {

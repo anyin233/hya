@@ -379,6 +379,11 @@ impl SessionEngine {
         self.runtime.clone()
     }
 
+    #[must_use]
+    pub fn runtime_semantic_fingerprint_v1(&self, binding: &TurnBinding) -> Option<[u8; 32]> {
+        binding.semantic_fingerprint_v1(&self.permission)
+    }
+
     pub fn bind_runtime(&self, workdir: &std::path::Path) -> Result<TurnBinding, CoreError> {
         Ok(self.runtime.bind_turn(workdir)?)
     }
