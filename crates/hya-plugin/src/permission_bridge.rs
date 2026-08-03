@@ -7,9 +7,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::SessionId;
 use hya_tool::{Action, Decision, PermissionInterceptor, Resource};
+use sha2::{Digest, Sha256};
 
 use crate::host::PluginHost;
-use crate::messages::{HookName, PermissionAskParams, PermissionOutcomeWire, WireResource};
+use crate::messages::{
+    HookName, HookPosture, PermissionAskParams, PermissionOutcomeWire, WireResource,
+};
+
+const PERMISSION_BRIDGE_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
+    b"hya.plugin.permission-bridge.semantic-identity/v1";
 
 pub struct PermissionBridge {
     host: Arc<PluginHost>,
@@ -24,6 +30,10 @@ impl PermissionBridge {
 
 #[async_trait]
 impl PermissionInterceptor for PermissionBridge {
+    fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        self.host.permission_semantic_identity_v1()
+    }
+
     async fn intercept(
         &self,
         session: Option<SessionId>,
@@ -35,6 +45,39 @@ impl PermissionInterceptor for PermissionBridge {
 }
 
 impl PluginHost {
+    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        let prepared = self.prepared_plugins();
+        let participants = self
+            .plugins()
+            .iter()
+            .zip(prepared.iter())
+            .filter_map(|(conn, plugin)| {
+                conn.posture(HookName::PermissionAsk)
+                    .map(|posture| (plugin, posture))
+            })
+            .collect::<Vec<_>>();
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(PERMISSION_BRIDGE_SEMANTIC_IDENTITY_DOMAIN_V1);
+        bytes.push(1); // participant count field
+        append_identity_count(&mut bytes, participants.len())?;
+
+        for (plugin, posture) in participants {
+            bytes.push(1); // participant record
+            bytes.push(1); // stable plugin ID field
+            append_identity_bytes(&mut bytes, plugin.id().as_bytes())?;
+            bytes.push(2); // canonical declaration field
+            append_identity_bytes(&mut bytes, plugin.canonical_declaration())?;
+            bytes.push(3); // effective permission.ask posture field
+            bytes.push(match posture {
+                HookPosture::Safe => 0,
+                HookPosture::Open => 1,
+            });
+        }
+
+        Some(Sha256::digest(bytes).into())
+    }
+
     pub async fn permission_ask(
         &self,
         session: Option<SessionId>,
@@ -71,6 +114,18 @@ impl PluginHost {
         }
         None
     }
+}
+
+fn append_identity_count(bytes: &mut Vec<u8>, count: usize) -> Option<()> {
+    let count = u64::try_from(count).ok()?;
+    bytes.extend_from_slice(&count.to_be_bytes());
+    Some(())
+}
+
+fn append_identity_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Option<()> {
+    append_identity_count(bytes, value.len())?;
+    bytes.extend_from_slice(value);
+    Some(())
 }
 
 fn resource_to_wire(resource: &Resource) -> WireResource {
