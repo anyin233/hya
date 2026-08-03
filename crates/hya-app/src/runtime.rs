@@ -1395,6 +1395,14 @@ where
 
 #[allow(dead_code)]
 impl<T> InstalledAdmissionTask<T> {
+    async fn cancel(&mut self) {
+        self.start_signal.take();
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
+
     async fn start(
         mut self,
         store: &SessionStore,
@@ -1406,6 +1414,7 @@ impl<T> InstalledAdmissionTask<T> {
         {
             Ok(hya_store::AdmissionStartOutcome::Started(record)) => record,
             Ok(hya_store::AdmissionStartOutcome::Existing(_)) | Err(_) => {
+                self.cancel().await;
                 return Err(SpawnError::Unavailable);
             }
         };
@@ -1413,20 +1422,23 @@ impl<T> InstalledAdmissionTask<T> {
             || started.member_ordinal != self.member_ordinal
             || started.state != hya_store::AdmissionState::Started
         {
+            self.cancel().await;
             return Err(SpawnError::Unavailable);
         }
 
         let Some(start_signal) = self.start_signal.take() else {
-            return Err(SpawnError::Unavailable);
-        };
-        let Some(handle) = self.handle.take() else {
+            self.cancel().await;
             return Err(SpawnError::Unavailable);
         };
         if start_signal.send(()).is_err() {
-            handle.abort();
-            let _ = handle.await;
+            self.cancel().await;
             return Err(SpawnError::Unavailable);
         }
+
+        let Some(handle) = self.handle.take() else {
+            self.cancel().await;
+            return Err(SpawnError::Unavailable);
+        };
         Ok(handle)
     }
 }
@@ -3708,6 +3720,146 @@ mod tests {
             .expect("started admission row must exist");
         assert_eq!(after_start.state, hya_store::AdmissionState::Started);
         assert!(after_start.actor.is_none());
+    }
+
+    #[tokio::test]
+    async fn pre_started_admission_failure_cancels_task_before_recovery() {
+        struct DropSentinel(Arc<AtomicUsize>);
+
+        impl Drop for DropSentinel {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let database = tempdir().join("pre-start-failure.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let root_session = SessionId::new();
+        let intent = SpawnIntentV1::new(SpawnIntentInputV1 {
+            member: SpawnMember {
+                description: "pre-start-failure-description".to_string(),
+                prompt: "pre-start-failure-prompt".to_string(),
+                subagent_type: "general".to_string(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            },
+            parent: root_session,
+            stable_target: AgentName::new("general"),
+            background: true,
+            operation,
+            member_ordinal: 0,
+            batch_cardinality: 1,
+            prior_start: PriorStartV1::NeverStarted,
+            runtime_fingerprint: [0x11; 32],
+            admission_binding_fingerprint: [0x22; 32],
+            diagnostic_generation: 7,
+        })
+        .expect("one-member intent must be canonical")
+        .into_admission_intent()
+        .expect("one-member intent must encode");
+        let claim = hya_store::AdmissionClaim {
+            operation_id: operation.operation_id(),
+            source_tool_call_id: operation.source_tool_call_id(),
+            root_session,
+            request_fingerprint: [0x33; 32],
+            admission_units: 1,
+            actor_claim: None,
+        };
+        let launches = match store
+            .claim_admission_batch(&claim, vec![intent])
+            .await
+            .expect("one-member admission claim must succeed")
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh temporary store must claim one admission launch")
+            }
+        };
+        assert_eq!(launches.len(), 1);
+        let launch = launches.into_iter().next().unwrap();
+        assert_eq!(launch.record.state, hya_store::AdmissionState::Accepted);
+        assert!(launch.record.actor.is_none());
+
+        let drop_count = Arc::new(AtomicUsize::new(0));
+        let work_count = Arc::new(AtomicUsize::new(0));
+        let sentinel = DropSentinel(Arc::clone(&drop_count));
+        let work_count_for_task = Arc::clone(&work_count);
+        let work_future = async move {
+            let _sentinel = sentinel;
+            work_count_for_task.fetch_add(1, Ordering::SeqCst);
+        };
+        let installed = install_admission_task(&launch, work_future);
+
+        tokio::task::yield_now().await;
+        assert_eq!(work_count.load(Ordering::SeqCst), 0);
+        assert_eq!(drop_count.load(Ordering::SeqCst), 0);
+        let before_start = store
+            .admission(operation.operation_id())
+            .await
+            .expect("read accepted admission row")
+            .expect("accepted admission row must exist");
+        assert_eq!(before_start.state, hya_store::AdmissionState::Accepted);
+        assert!(before_start.actor.is_none());
+
+        let stale_actor_claim = hya_store::ActorClaim {
+            actor_id: SessionId::new(),
+            epoch: hya_proto::ActorEpoch::from_storage(1),
+            owner_run_id: OwnerRunId::new(),
+        };
+        match installed.start(&store, Some(&stale_actor_claim)).await {
+            Err(SpawnError::Unavailable) => {}
+            Ok(_) => panic!("stale actor claim must not start an admission task"),
+            Err(error) => panic!("unexpected admission start error: {error:?}"),
+        }
+        assert_eq!(work_count.load(Ordering::SeqCst), 0);
+        assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+        let after_start_failure = store
+            .admission(operation.operation_id())
+            .await
+            .expect("read accepted admission row after failed start")
+            .expect("accepted admission row must remain present");
+        assert_eq!(
+            after_start_failure.state,
+            hya_store::AdmissionState::Accepted
+        );
+        assert!(after_start_failure.actor.is_none());
+
+        let recovered = store
+            .recover_nonterminal_admissions("pre-start failure recovery")
+            .await
+            .expect("accepted admission recovery must succeed");
+        assert_eq!(recovered.len(), 1);
+        let recovered_record = recovered.into_iter().next().unwrap();
+        assert_eq!(recovered_record.operation_id, operation.operation_id());
+        assert_eq!(recovered_record.state, hya_store::AdmissionState::Queued);
+        assert!(recovered_record.actor.is_none());
+        assert_eq!(
+            store.admission_counts().await.unwrap(),
+            hya_store::AdmissionCounts {
+                active: 0,
+                non_active: 1,
+                total: 1,
+            }
+        );
+
+        let repeated = store
+            .recover_nonterminal_admissions("pre-start failure recovery")
+            .await
+            .expect("repeated admission recovery must succeed");
+        assert!(repeated.is_empty());
+        let persisted = store
+            .admission(operation.operation_id())
+            .await
+            .expect("read recovered admission row")
+            .expect("recovered admission row must remain present");
+        assert_eq!(persisted, recovered_record);
+        assert_eq!(persisted.state, hya_store::AdmissionState::Queued);
     }
 
     struct RuntimeMarker(&'static str);
