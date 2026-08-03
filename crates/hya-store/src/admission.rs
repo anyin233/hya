@@ -508,13 +508,36 @@ impl SessionStore {
         operation_id: OperationId,
         actor_claim: Option<&ActorClaim>,
     ) -> Result<AdmissionStartOutcome, StoreError> {
+        self.start_admission_member_impl(operation_id, 0, actor_claim, true)
+            .await
+    }
+
+    pub async fn start_admission_member(
+        &self,
+        operation_id: OperationId,
+        member_ordinal: u32,
+        actor_claim: Option<&ActorClaim>,
+    ) -> Result<AdmissionStartOutcome, StoreError> {
+        self.start_admission_member_impl(operation_id, member_ordinal, actor_claim, false)
+            .await
+    }
+
+    async fn start_admission_member_impl(
+        &self,
+        operation_id: OperationId,
+        member_ordinal: u32,
+        actor_claim: Option<&ActorClaim>,
+        single_row_only: bool,
+    ) -> Result<AdmissionStartOutcome, StoreError> {
+        let single_row_filter = if single_row_only { 1_i64 } else { 0_i64 };
         let mut tx = self.pool.begin().await?;
         if let Some(actor_claim) = actor_claim {
             fence_actor_claim(&mut tx, actor_claim).await?;
         }
         let row = sqlx::query(
             "UPDATE admission_journal SET state = 'started', updated_at = ? \
-             WHERE operation_id = ? AND member_ordinal = 0 AND batch_size = 1 \
+             WHERE operation_id = ? AND member_ordinal = ? \
+               AND (? = 0 OR batch_size = 1) \
                AND state = 'accepted' \
                AND ((? IS NULL AND actor_id IS NULL) OR (actor_id = ? AND actor_epoch = ?)) \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
@@ -523,6 +546,8 @@ impl SessionStore {
         )
         .bind(now_millis())
         .bind(operation_id.as_uuid().as_bytes().as_slice())
+        .bind(i64::from(member_ordinal))
+        .bind(single_row_filter)
         .bind(actor_claim.map(|claim| claim.actor_id.storage_key()))
         .bind(actor_claim.map(|claim| claim.actor_id.storage_key()))
         .bind(
@@ -547,9 +572,12 @@ impl SessionStore {
                     member_ordinal, batch_size, state, admission_units, logical_released, \
                     terminal_reason, created_at, updated_at, actor_id, actor_epoch \
              FROM admission_journal \
-             WHERE operation_id = ? AND member_ordinal = 0 AND batch_size = 1",
+             WHERE operation_id = ? AND member_ordinal = ? \
+               AND (? = 0 OR batch_size = 1)",
         )
         .bind(operation_id.as_uuid().as_bytes().as_slice())
+        .bind(i64::from(member_ordinal))
+        .bind(single_row_filter)
         .fetch_optional(&mut *tx)
         .await?
         .map(decode_record)
