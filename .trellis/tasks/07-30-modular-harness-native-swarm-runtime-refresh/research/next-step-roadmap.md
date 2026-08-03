@@ -1121,7 +1121,7 @@ split 0.34.10-transient/0.34.11-resident statement above.
        + one activation-scoped Bun extension sidecar
        + exact existing-v1 declared closure
        + existing PermissionPlane/admission/epoch/recovery          ACTIVE
-      -> 0.34.12 100-active/256-envelope certification only
+      -> 0.34.12 minimal durable 100/156/256 admission + R10 certification
         -> 0.34.13 independent updater only
 ```
 
@@ -1152,3 +1152,15 @@ that app resolves/materializes from the captured snapshot catalog while core
 start carries only activation ID/lifecycle. It retains the shipped
 `hya-core -> hya-bundle`, `hya-plugin -> hya-core`, and `hya-app ->` both edges,
 keeps `hya-bundle` independent, and adds no `hya-core -> hya-plugin` edge.
+
+## Consult27 authoritative R10 entry correction
+
+R10 no longer assumes a capacity authority that HEAD does not have. Its entry work is narrowly the fixed durable admission state machine required to make the matrix truthful: `Queued`/`Waiting` non-active envelopes, `Accepted`/`Started` active leases, atomic batches and parent suspension, persisted bounded round-robin promotion, non-borrowing 100-general/28-reserved provider streams, and deterministic restart reconciliation. R10 then runs the full certification matrix at the same exact SHA. No other product surface opens, and R11/0.34.13 remains the independent updater.
+
+## Consult28 restart-identity correction for R10
+
+Before R10 launch/restart work, implement and prove `RuntimeSemanticFingerprintV1`: semantic equality across different process-local generations and insertion/publication order; inequality for each Bundle, resource/schema/dispatch/permission, workdir-skill, plugin, MCP, or capability-view semantic change; deterministic unavailability for uncodable sources; and integrity-protected persistence with exact post-hook spawn intent. Matching restart reconstruction pins one current snapshot; mismatch/unavailability terminalizes once before allocation. This replaces ordinal equality only and does not add catalog history. REDs 1-2 remain unchanged; RED 3 and restart convergence incorporate these prerequisites.
+
+## Consult29 app-resolution prerequisite for R10
+
+Before restart launch RED 3, `hya-app` composes the completed core `RuntimeSemanticFingerprintV1` with behavior-only base/category/configured-provider identities and `ResolverSemanticsV1` into `AdmissionBindingFingerprintV1`. Unused/overwritten fields and transient provider state are excluded; providers without deterministic configured identity fail closed. Every reconstructable row carries both identities and one integrity-protected raw `SpawnIntentV1` capped exactly at 1,048,576 bytes, encoded before the admission transaction. Composite determinism, base/category/provider isolation, unavailable identity, raw-intent round trip, and exact size/batch rollback become non-skippable prerequisites; matching recovery never rebinds, and mismatch/unavailability allocates nothing and terminalizes once.
