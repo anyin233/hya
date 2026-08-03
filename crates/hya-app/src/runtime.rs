@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
-use hya_bundle::{BundleCatalog, PreparedCatalog, SpawnLifecycle};
+use hya_bundle::{BundleCatalog, PreparedAgent, PreparedCatalog, SpawnLifecycle};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
     CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberSpec,
@@ -28,7 +28,7 @@ use hya_proto::{
     AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
 };
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
-use hya_store::{AdmissionTerminal, SessionStore, StoreError};
+use hya_store::{AdmissionIntent, AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, ResolvedTool, Resource,
@@ -46,6 +46,7 @@ use crate::runtime_reconcile::{
     DesiredSource, PreparedFailure, PreparedResult, RuntimeMcpControl, RuntimeReconciler, SourceId,
     prepare_desired_source, prepared_plugin_source,
 };
+use crate::spawn_intent::{PriorStartV1, SpawnIntentInputV1, SpawnIntentV1};
 use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plugins};
 
 const BUILTIN_BUNDLES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-bundles.json"));
@@ -1157,6 +1158,13 @@ impl AdmissionResolutionContext {
 }
 
 #[allow(dead_code)]
+struct PreparedSpawnAdmission {
+    request_fingerprint: [u8; 32],
+    resolution: AdmissionResolutionContext,
+    intents: Vec<AdmissionIntent>,
+}
+
+#[allow(dead_code)]
 fn canonical_length(bytes: &[u8]) -> Result<u64, AdmissionResolutionContextError> {
     u64::try_from(bytes.len()).map_err(|_| AdmissionResolutionContextError::CanonicalLengthOverflow)
 }
@@ -1335,10 +1343,12 @@ struct ResolveSpawnMemberCtx<'a> {
     sidecar_environment: &'a BundleSidecarEnvironment,
 }
 
-fn resolve_spawn_member(
-    ctx: &ResolveSpawnMemberCtx<'_>,
-    member: SpawnMember,
-) -> Result<ResolvedSpawnMember, SpawnError> {
+fn authorize_spawn_target<'a>(
+    binding: &'a TurnBinding,
+    allowed_agents: &[hya_tool::AgentDef],
+    caller: &str,
+    member: &SpawnMember,
+) -> Result<&'a PreparedAgent, SpawnError> {
     let requested = member.subagent_type.trim();
     let requested = if requested.is_empty() {
         "general"
@@ -1346,21 +1356,83 @@ fn resolve_spawn_member(
         requested
     };
     let definition =
-        ctx.binding
+        binding
             .resolve_agent(requested)
             .ok_or_else(|| SpawnError::UnknownAgentId {
                 agent_id: requested.to_string(),
             })?;
-    if !ctx
-        .allowed_agents
+    if !allowed_agents
         .iter()
         .any(|allowed| allowed.name == definition.stable_id.as_str())
     {
         return Err(SpawnError::AgentSpawnNotAllowed {
-            caller: ctx.caller.to_string(),
+            caller: caller.to_string(),
             agent_id: definition.stable_id.as_str().to_string(),
         });
     }
+    Ok(definition)
+}
+
+#[allow(dead_code)]
+fn prepare_spawn_admission(
+    engine: &SessionEngine,
+    binding: &TurnBinding,
+    base: AgentSpec,
+    categories: Arc<CategoryRegistry>,
+    router: Arc<ProviderRouter>,
+    caller: &str,
+    req: &SpawnRequest,
+) -> Result<PreparedSpawnAdmission, SpawnError> {
+    let request_fingerprint =
+        spawn_request_fingerprint(req).map_err(|_| SpawnError::Unavailable)?;
+    let runtime_fingerprint = engine
+        .runtime_semantic_fingerprint_v1(binding)
+        .ok_or(SpawnError::Unavailable)?;
+    let resolution = AdmissionResolutionContext::capture(base, categories, router)
+        .map_err(|_| SpawnError::Unavailable)?;
+    let admission_binding_fingerprint =
+        resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
+    let batch_cardinality = u32::try_from(req.members.len()).map_err(|_| SpawnError::Overloaded)?;
+    let diagnostic_generation = binding.generation().get();
+    let intents = req
+        .members
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(ordinal, member)| {
+            let definition = authorize_spawn_target(binding, req.agents.as_ref(), caller, &member)?;
+            let member_ordinal = u32::try_from(ordinal).map_err(|_| SpawnError::Overloaded)?;
+            SpawnIntentV1::new(SpawnIntentInputV1 {
+                member,
+                parent: req.parent,
+                stable_target: definition.stable_id.clone(),
+                background: req.background,
+                operation: req.operation,
+                member_ordinal,
+                batch_cardinality,
+                prior_start: PriorStartV1::NeverStarted,
+                runtime_fingerprint,
+                admission_binding_fingerprint,
+                diagnostic_generation,
+            })
+            .map_err(|_| SpawnError::Unavailable)?
+            .into_admission_intent()
+            .map_err(|_| SpawnError::Unavailable)
+        })
+        .collect::<Result<Vec<_>, SpawnError>>()?;
+
+    Ok(PreparedSpawnAdmission {
+        request_fingerprint,
+        resolution,
+        intents,
+    })
+}
+
+fn resolve_spawn_member(
+    ctx: &ResolveSpawnMemberCtx<'_>,
+    member: SpawnMember,
+) -> Result<ResolvedSpawnMember, SpawnError> {
+    let definition = authorize_spawn_target(ctx.binding, ctx.allowed_agents, ctx.caller, &member)?;
     let authorized_target = definition.stable_id.clone();
     let sidecar_factory = ctx
         .sidecar_environment
@@ -2920,6 +2992,173 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(format!("{fake_error:?}"), "ProviderIdentityUnavailable");
+    }
+
+    #[tokio::test]
+    async fn spawn_admission_prepares_canonical_intents_before_runtime_resolution() {
+        let workdir = tempdir().join("spawn-admission-workdir-sentinel");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let engine =
+            engine_with_catalog(builtin_catalog().expect("built-in catalog must load")).await;
+        let binding = engine.bind_runtime(&workdir).expect("bind admission turn");
+
+        let base_model = "derived-base-model-sentinel";
+        let base_system_prompt = "derived-base-system-prompt-sentinel";
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new(base_model),
+            system_prompt: base_system_prompt.to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+
+        let categories = Arc::new(CategoryRegistry::default());
+        let provider_endpoint = "https://configured-provider-endpoint-sentinel.example/v1/";
+        let provider_config = "configured-provider-config-sentinel";
+        let bearer_resolver_called = Arc::new(AtomicBool::new(false));
+        let resolver_flag = Arc::clone(&bearer_resolver_called);
+        let provider = HttpProvider::new(
+            "configured-provider-id-sentinel",
+            ProviderKind::OpenAiCompatible,
+            provider_endpoint,
+            provider_config.to_string(),
+            ["configured-provider-model-sentinel".to_string()],
+        )
+        .expect("configured provider must construct")
+        .with_bearer_resolver(Arc::new(move || {
+            resolver_flag.store(true, Ordering::SeqCst);
+            Ok("live-token-sentinel".to_string())
+        }));
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+
+        let agents: Arc<[AgentDef]> = vec![AgentDef {
+            name: "general".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+        }]
+        .into();
+        let guidance = "request-guidance-sentinel";
+        let raw_members: Vec<(String, String)> = (0..101)
+            .map(|ordinal| {
+                (
+                    format!("raw-description-{ordinal}-sentinel"),
+                    format!("raw-prompt-{ordinal}-sentinel"),
+                )
+            })
+            .collect();
+        let members = raw_members
+            .iter()
+            .map(|(description, prompt)| SpawnMember {
+                description: description.clone(),
+                prompt: prompt.clone(),
+                subagent_type: String::new(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            })
+            .collect();
+        let (reply, _reply_rx) = tokio::sync::oneshot::channel();
+        let request = SpawnRequest {
+            parent: SessionId::new(),
+            agents,
+            guidance: Some(Arc::<str>::from(guidance)),
+            operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            members,
+            cancel: CancellationToken::new(),
+            background: true,
+            reply,
+        };
+
+        let expected_request_fingerprint =
+            spawn_request_fingerprint(&request).expect("request fingerprint must serialize");
+        let expected_runtime_fingerprint = engine
+            .runtime_semantic_fingerprint_v1(&binding)
+            .expect("built-in runtime binding must have a semantic fingerprint");
+        let before = engine
+            .store()
+            .admission_counts()
+            .await
+            .expect("read admission counts before preparation");
+        assert_eq!(
+            before,
+            hya_store::AdmissionCounts {
+                active: 0,
+                non_active: 0,
+                total: 0,
+            }
+        );
+
+        let prepared = prepare_spawn_admission(
+            &engine,
+            &binding,
+            base,
+            Arc::clone(&categories),
+            Arc::clone(&router),
+            "build",
+            &request,
+        )
+        .expect("spawn admission preparation must be pure");
+
+        let after = engine
+            .store()
+            .admission_counts()
+            .await
+            .expect("read admission counts after preparation");
+        assert_eq!(after, before);
+        assert_eq!(prepared.request_fingerprint, expected_request_fingerprint);
+        assert!(Arc::ptr_eq(&prepared.resolution.categories, &categories));
+        assert!(Arc::ptr_eq(&prepared.resolution.router, &router));
+        assert_eq!(prepared.intents.len(), 101);
+
+        let expected_admission_fingerprint = prepared
+            .resolution
+            .admission_binding_fingerprint_v1(expected_runtime_fingerprint);
+        let contains = |bytes: &[u8], needle: &str| {
+            bytes
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes())
+        };
+        for (ordinal, intent) in prepared.intents.iter().enumerate() {
+            assert_eq!(intent.runtime_fingerprint_version, 1);
+            assert_eq!(intent.runtime_fingerprint, expected_runtime_fingerprint);
+            assert_ne!(intent.runtime_fingerprint, [0; 32]);
+            assert_eq!(intent.admission_binding_fingerprint_version, 1);
+            assert_eq!(
+                intent.admission_binding_fingerprint,
+                expected_admission_fingerprint
+            );
+
+            let encoded = &intent.spawn_intent;
+            assert!(encoded.len() <= hya_store::MAX_ADMISSION_INTENT_BYTES);
+            assert!(contains(encoded, &raw_members[ordinal].0));
+            assert!(contains(encoded, &raw_members[ordinal].1));
+            assert!(contains(encoded, "general"));
+            assert!(!contains(encoded, base_model));
+            assert!(!contains(encoded, base_system_prompt));
+            assert!(!contains(encoded, provider_endpoint));
+            assert!(!contains(encoded, provider_config));
+            assert!(!contains(encoded, guidance));
+
+            let integrity_width = 32;
+            let suffix =
+                &encoded[encoded.len() - integrity_width - 9..encoded.len() - integrity_width];
+            assert_eq!(
+                u32::from_be_bytes(suffix[0..4].try_into().unwrap()),
+                ordinal as u32
+            );
+            assert_eq!(u32::from_be_bytes(suffix[4..8].try_into().unwrap()), 101);
+            assert_eq!(suffix[8], 0);
+        }
+        assert!(
+            prepared
+                .intents
+                .windows(2)
+                .all(|pair| pair[0].spawn_intent != pair[1].spawn_intent)
+        );
+        assert!(!bearer_resolver_called.load(Ordering::SeqCst));
     }
 
     struct RuntimeMarker(&'static str);
