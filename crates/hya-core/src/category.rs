@@ -89,6 +89,25 @@ impl CategoryRegistry {
         self.entries.is_empty()
     }
 
+    /// Return each category's exact ordered model candidates in canonical key
+    /// order. Prompt and token shaping are intentionally excluded because the
+    /// spawn resolver currently discards those fields.
+    #[must_use]
+    pub fn resolution_candidates(&self) -> Vec<(String, Vec<ModelRef>)> {
+        let mut entries = self
+            .entries
+            .iter()
+            .map(|(category, entry)| {
+                let mut candidates = Vec::with_capacity(1 + entry.fallback.len());
+                candidates.push(entry.model.clone());
+                candidates.extend(entry.fallback.iter().cloned());
+                (category.clone(), candidates)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     /// Resolve a category to its full ordered chain without a servability check
     /// (`model` = the first candidate). Prefer [`Self::resolve_servable`] on the
     /// live spawn path so failover picks the first *configured* provider.
