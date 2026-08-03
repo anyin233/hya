@@ -1137,6 +1137,15 @@ impl AdmissionResolutionContext {
         canonical.extend_from_slice(EMPTY_PROVIDER_IDENTITY_V1);
         Sha256::digest(canonical).into()
     }
+
+    fn resolve_agent_for_binding(
+        &self,
+        engine: &SessionEngine,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<AgentSpec, CoreError> {
+        engine.agent_spec_for_binding(binding, &self.base, stable_id)
+    }
 }
 
 #[allow(dead_code)]
@@ -2421,6 +2430,112 @@ mod tests {
 
         assert_eq!(first, reconstructed);
         assert_ne!(first, [0; 32]);
+    }
+
+    #[tokio::test]
+    async fn admission_binding_base_fields_match_reconstructed_agent() {
+        let binding_workdir = tempdir();
+        let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
+        let binding = engine
+            .bind_runtime(&binding_workdir)
+            .expect("worker binding must be available");
+        let runtime_fingerprint = [0x5a; 32];
+        let make_base = |name: &str,
+                         model: &str,
+                         system_prompt: &str,
+                         workdir: &Path,
+                         reasoning: Option<ReasoningEffort>| AgentSpec {
+            name: AgentName::new(name),
+            model: ModelRef::new(model),
+            system_prompt: system_prompt.to_string(),
+            workdir: workdir.to_path_buf(),
+            reasoning,
+        };
+        let resolve = |base: AgentSpec| {
+            let expected = engine
+                .agent_spec_for_binding(&binding, &base, "worker")
+                .expect("worker definition must resolve");
+            let context = AdmissionResolutionContext::capture(
+                base,
+                Arc::new(CategoryRegistry::default()),
+                Arc::new(ProviderRouter::new()),
+            )
+            .expect("empty category/provider context must capture");
+            let fingerprint = context.admission_binding_fingerprint_v1(runtime_fingerprint);
+            let reconstructed = context
+                .resolve_agent_for_binding(&engine, &binding, "worker")
+                .expect("captured worker context must resolve");
+            (fingerprint, expected, reconstructed)
+        };
+
+        let baseline_base = make_base(
+            "build",
+            "fixture/base",
+            "base prompt",
+            Path::new("/tmp/base-workdir"),
+            Some(ReasoningEffort::High),
+        );
+        let model_base = make_base(
+            "build",
+            "fixture/model-change",
+            "base prompt",
+            Path::new("/tmp/base-workdir"),
+            Some(ReasoningEffort::High),
+        );
+        let prompt_base = make_base(
+            "build",
+            "fixture/base",
+            "prompt change",
+            Path::new("/tmp/base-workdir"),
+            Some(ReasoningEffort::High),
+        );
+        let reasoning_base = make_base(
+            "build",
+            "fixture/base",
+            "base prompt",
+            Path::new("/tmp/base-workdir"),
+            Some(ReasoningEffort::Low),
+        );
+        let overwritten_base = make_base(
+            "renamed",
+            "fixture/base",
+            "base prompt",
+            Path::new("/tmp/overwritten-workdir"),
+            Some(ReasoningEffort::High),
+        );
+
+        let (baseline_fingerprint, baseline_expected, baseline) = resolve(baseline_base.clone());
+        let (model_fingerprint, model_expected, model) = resolve(model_base.clone());
+        let (prompt_fingerprint, prompt_expected, prompt) = resolve(prompt_base.clone());
+        let (reasoning_fingerprint, reasoning_expected, reasoning) =
+            resolve(reasoning_base.clone());
+        let (overwritten_fingerprint, overwritten_expected, overwritten) =
+            resolve(overwritten_base.clone());
+
+        assert_ne!(baseline_fingerprint, model_fingerprint);
+        assert_ne!(baseline_fingerprint, prompt_fingerprint);
+        assert_ne!(baseline_fingerprint, reasoning_fingerprint);
+        assert_eq!(baseline.model, baseline_expected.model);
+        assert_eq!(baseline.system_prompt, baseline_expected.system_prompt);
+        assert_eq!(baseline.reasoning, baseline_expected.reasoning);
+        assert_eq!(model.model, model_expected.model);
+        assert_eq!(model.system_prompt, model_expected.system_prompt);
+        assert_eq!(model.reasoning, model_expected.reasoning);
+        assert_eq!(prompt.model, prompt_expected.model);
+        assert_eq!(prompt.system_prompt, prompt_expected.system_prompt);
+        assert_eq!(prompt.reasoning, prompt_expected.reasoning);
+        assert_eq!(reasoning.model, reasoning_expected.model);
+        assert_eq!(reasoning.system_prompt, reasoning_expected.system_prompt);
+        assert_eq!(reasoning.reasoning, reasoning_expected.reasoning);
+        assert_eq!(overwritten_fingerprint, baseline_fingerprint);
+        assert_eq!(overwritten.name.as_str(), "worker");
+        assert_eq!(overwritten.workdir, binding.workdir());
+        assert_eq!(overwritten.model, overwritten_expected.model);
+        assert_eq!(
+            overwritten.system_prompt,
+            overwritten_expected.system_prompt
+        );
+        assert_eq!(overwritten.reasoning, overwritten_expected.reasoning);
     }
 
     struct RuntimeMarker(&'static str);
