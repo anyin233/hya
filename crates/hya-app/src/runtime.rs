@@ -1361,6 +1361,85 @@ struct ResolvedAdmissionLaunch {
     resolved: ResolvedSpawnMember,
 }
 
+#[allow(dead_code)]
+struct InstalledAdmissionTask<T> {
+    operation_id: hya_proto::OperationId,
+    member_ordinal: u32,
+    start_signal: Option<tokio::sync::oneshot::Sender<()>>,
+    handle: Option<tokio::task::JoinHandle<T>>,
+}
+
+#[allow(dead_code)]
+fn install_admission_task<F, T>(
+    launch: &AdmissionLaunch,
+    work_future: F,
+) -> InstalledAdmissionTask<T>
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (start_signal, signal) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        match signal.await {
+            Ok(()) => work_future.await,
+            Err(_) => std::future::pending::<T>().await,
+        }
+    });
+    InstalledAdmissionTask {
+        operation_id: launch.record.operation_id,
+        member_ordinal: launch.record.member_ordinal,
+        start_signal: Some(start_signal),
+        handle: Some(handle),
+    }
+}
+
+#[allow(dead_code)]
+impl<T> InstalledAdmissionTask<T> {
+    async fn start(
+        mut self,
+        store: &SessionStore,
+        actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<tokio::task::JoinHandle<T>, SpawnError> {
+        let started = match store
+            .start_admission_member(self.operation_id, self.member_ordinal, actor_claim)
+            .await
+        {
+            Ok(hya_store::AdmissionStartOutcome::Started(record)) => record,
+            Ok(hya_store::AdmissionStartOutcome::Existing(_)) | Err(_) => {
+                return Err(SpawnError::Unavailable);
+            }
+        };
+        if started.operation_id != self.operation_id
+            || started.member_ordinal != self.member_ordinal
+            || started.state != hya_store::AdmissionState::Started
+        {
+            return Err(SpawnError::Unavailable);
+        }
+
+        let Some(start_signal) = self.start_signal.take() else {
+            return Err(SpawnError::Unavailable);
+        };
+        let Some(handle) = self.handle.take() else {
+            return Err(SpawnError::Unavailable);
+        };
+        if start_signal.send(()).is_err() {
+            handle.abort();
+            let _ = handle.await;
+            return Err(SpawnError::Unavailable);
+        }
+        Ok(handle)
+    }
+}
+
+impl<T> Drop for InstalledAdmissionTask<T> {
+    fn drop(&mut self) {
+        self.start_signal.take();
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 fn authorize_spawn_target<'a>(
     binding: &'a TurnBinding,
     allowed_agents: &[hya_tool::AgentDef],
@@ -3521,6 +3600,114 @@ mod tests {
                 .iter()
                 .all(|record| record.state != hya_store::AdmissionState::Started)
         );
+    }
+
+    #[tokio::test]
+    async fn accepted_admission_task_executes_only_after_started_commit() {
+        let database = tempdir().join("accepted-admission-task.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+        let engine = SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new()),
+            runtime,
+            permission,
+            EventBus::default(),
+        );
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let root_session = SessionId::new();
+        let intent = SpawnIntentV1::new(SpawnIntentInputV1 {
+            member: SpawnMember {
+                description: "accepted-admission-task-description".to_string(),
+                prompt: "accepted-admission-task-prompt".to_string(),
+                subagent_type: "general".to_string(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            },
+            parent: root_session,
+            stable_target: AgentName::new("general"),
+            background: true,
+            operation,
+            member_ordinal: 0,
+            batch_cardinality: 1,
+            prior_start: PriorStartV1::NeverStarted,
+            runtime_fingerprint: [0x11; 32],
+            admission_binding_fingerprint: [0x22; 32],
+            diagnostic_generation: 7,
+        })
+        .expect("one-member intent must be canonical")
+        .into_admission_intent()
+        .expect("one-member intent must encode");
+        let claim = hya_store::AdmissionClaim {
+            operation_id: operation.operation_id(),
+            source_tool_call_id: operation.source_tool_call_id(),
+            root_session,
+            request_fingerprint: [0x33; 32],
+            admission_units: 1,
+            actor_claim: None,
+        };
+        let launches = match store
+            .claim_admission_batch(&claim, vec![intent])
+            .await
+            .expect("one-member admission claim must succeed")
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh temporary store must claim one admission launch")
+            }
+        };
+        assert_eq!(launches.len(), 1);
+        let launch = launches.into_iter().next().unwrap();
+        assert_eq!(launch.record.state, hya_store::AdmissionState::Accepted);
+        assert!(launch.record.actor.is_none());
+
+        let work_polls = Arc::new(AtomicUsize::new(0));
+        let observed_store = store.clone();
+        let observed_operation = operation.operation_id();
+        let work_polls_for_task = Arc::clone(&work_polls);
+        let work_future = async move {
+            work_polls_for_task.fetch_add(1, Ordering::SeqCst);
+            observed_store
+                .admission(observed_operation)
+                .await
+                .expect("admission row must remain readable")
+                .map(|record| record.state)
+        };
+        let installed = install_admission_task(&launch, work_future);
+
+        tokio::task::yield_now().await;
+        assert_eq!(work_polls.load(Ordering::SeqCst), 0);
+        let before_start = store
+            .admission(operation.operation_id())
+            .await
+            .expect("read accepted admission row")
+            .expect("accepted admission row must exist");
+        assert_eq!(before_start.state, hya_store::AdmissionState::Accepted);
+        assert!(before_start.actor.is_none());
+
+        let handle = installed
+            .start(engine.store(), None)
+            .await
+            .expect("starting accepted admission task must commit the barrier");
+        let observed_state = handle.await.expect("admission task must finish");
+        assert_eq!(observed_state, Some(hya_store::AdmissionState::Started));
+        assert_eq!(work_polls.load(Ordering::SeqCst), 1);
+        let after_start = store
+            .admission(operation.operation_id())
+            .await
+            .expect("read started admission row")
+            .expect("started admission row must exist");
+        assert_eq!(after_start.state, hya_store::AdmissionState::Started);
+        assert!(after_start.actor.is_none());
     }
 
     struct RuntimeMarker(&'static str);
