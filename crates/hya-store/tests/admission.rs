@@ -2,10 +2,10 @@
 
 use hya_proto::{OperationId, OwnerRunId, SessionId, ToolCallId};
 use hya_store::{
-    AdmissionClaim, AdmissionClaimOutcome, AdmissionStartOutcome, AdmissionState,
-    AdmissionTerminal, SessionStore, StoreError,
+    AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionClaimOutcome, AdmissionIntent,
+    AdmissionStartOutcome, AdmissionState, AdmissionTerminal, SessionStore, StoreError,
 };
-use sqlx::{Connection, SqliteConnection};
+use sqlx::{Connection, Row, SqliteConnection};
 
 struct AdmissionTempDb {
     path: String,
@@ -455,7 +455,19 @@ async fn atomic_capacity_commits_100_active_156_non_active_and_rejects_item_257(
     let mut batch = claim(ToolCallId::new(), 26);
     batch.admission_units = 256;
 
-    let members = store.claim_admission_batch(&batch).await.unwrap();
+    let intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [1; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [2; 32],
+            spawn_intent: vec![1],
+        };
+        256
+    ];
+    let outcome = store.claim_admission_batch(&batch, intents).await.unwrap();
+    assert!(matches!(outcome, AdmissionBatchClaimOutcome::Claimed(_)));
+    let members = store.admissions(batch.operation_id).await.unwrap();
     assert_eq!(members.len(), 256);
     assert_eq!(
         members
@@ -489,8 +501,17 @@ async fn atomic_capacity_commits_100_active_156_non_active_and_rejects_item_257(
 
     let mut rejected = claim(ToolCallId::new(), 27);
     rejected.admission_units = 1;
+    let rejected_intents = vec![AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [11; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [12; 32],
+        spawn_intent: vec![6],
+    }];
     assert!(matches!(
-        store.claim_admission_batch(&rejected).await,
+        store
+            .claim_admission_batch(&rejected, rejected_intents)
+            .await,
         Err(StoreError::AdmissionCapacityExceeded { .. })
     ));
     assert!(
@@ -513,10 +534,26 @@ async fn full_capacity_batch_retry_is_idempotent() {
     let mut batch = claim(ToolCallId::new(), 28);
     batch.admission_units = 256;
 
-    let first = store.claim_admission_batch(&batch).await.unwrap();
-    let retry = store.claim_admission_batch(&batch).await.unwrap();
-    assert_eq!(retry, first);
-    assert_eq!(store.admissions(batch.operation_id).await.unwrap(), first);
+    let intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [3; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [4; 32],
+            spawn_intent: vec![2],
+        };
+        256
+    ];
+    let first = store
+        .claim_admission_batch(&batch, intents.clone())
+        .await
+        .unwrap();
+    assert!(matches!(first, AdmissionBatchClaimOutcome::Claimed(_)));
+    let retry = store.claim_admission_batch(&batch, intents).await.unwrap();
+    assert!(matches!(retry, AdmissionBatchClaimOutcome::Existing));
+    let records = store.admissions(batch.operation_id).await.unwrap();
+    assert_eq!(records.len(), 256);
+    assert!(records.iter().all(|record| record.batch_size == 256));
 
     let counts = store.admission_counts().await.unwrap();
     assert_eq!(counts.active, 100);
@@ -530,7 +567,24 @@ async fn batch_crossing_non_active_capacity_rolls_back_every_member() {
     let store = SessionStore::connect(temp_db.path()).await.unwrap();
     let mut first = claim(ToolCallId::new(), 29);
     first.admission_units = 255;
-    store.claim_admission_batch(&first).await.unwrap();
+    let first_intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [5; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [6; 32],
+            spawn_intent: vec![3],
+        };
+        255
+    ];
+    let first_outcome = store
+        .claim_admission_batch(&first, first_intents)
+        .await
+        .unwrap();
+    assert!(matches!(
+        first_outcome,
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
 
     let counts = store.admission_counts().await.unwrap();
     assert_eq!(counts.active, 100);
@@ -539,8 +593,18 @@ async fn batch_crossing_non_active_capacity_rolls_back_every_member() {
 
     let mut second = claim(ToolCallId::new(), 30);
     second.admission_units = 2;
+    let second_intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [7; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [8; 32],
+            spawn_intent: vec![4],
+        };
+        2
+    ];
     assert!(matches!(
-        store.claim_admission_batch(&second).await,
+        store.claim_admission_batch(&second, second_intents).await,
         Err(StoreError::AdmissionCapacityExceeded { .. })
     ));
     assert!(
@@ -564,14 +628,34 @@ async fn batch_source_tool_call_cannot_be_rebound_to_another_operation() {
     let source_tool_call_id = ToolCallId::new();
     let mut first = claim(source_tool_call_id, 31);
     first.admission_units = 2;
-    let first_records = store.claim_admission_batch(&first).await.unwrap();
+    let first_intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [9; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [10; 32],
+            spawn_intent: vec![5],
+        };
+        2
+    ];
+    let first_outcome = store
+        .claim_admission_batch(&first, first_intents.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        first_outcome,
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    let first_records = store.admissions(first.operation_id).await.unwrap();
     let first_counts = store.admission_counts().await.unwrap();
 
     let mut second = first.clone();
     second.operation_id = OperationId::from_storage_uuid(uuid::Uuid::now_v7());
     second.request_fingerprint = [32; 32];
     assert!(matches!(
-        store.claim_admission_batch(&second).await,
+        store
+            .claim_admission_batch(&second, first_intents)
+            .await,
         Err(StoreError::OperationIdConflict { operation_id })
             if operation_id == second.operation_id
     ));
@@ -590,4 +674,166 @@ async fn batch_source_tool_call_cannot_be_rebound_to_another_operation() {
     assert_eq!(first_counts.active, 2);
     assert_eq!(first_counts.non_active, 0);
     assert_eq!(first_counts.total, 2);
+}
+
+#[tokio::test]
+async fn durable_batch_persists_binding_and_returns_only_accepted_launches() {
+    let temp_db = AdmissionTempDb::new();
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let mut batch = claim(ToolCallId::new(), 32);
+    batch.admission_units = 101;
+    let intents: Vec<AdmissionIntent> = (0_u32..101)
+        .map(|ordinal| AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [ordinal as u8; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [ordinal as u8 ^ 0x5a; 32],
+            spawn_intent: vec![0xa5, ordinal as u8],
+        })
+        .collect();
+
+    let outcome = store
+        .claim_admission_batch(&batch, intents.clone())
+        .await
+        .unwrap();
+    let launches = match outcome {
+        AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+        other => panic!("expected claimed launch instructions, got {other:?}"),
+    };
+    assert_eq!(launches.len(), 100);
+    for (ordinal, (launch, expected_intent)) in launches.iter().zip(&intents).enumerate() {
+        assert_eq!(launch.record.member_ordinal, ordinal as u32);
+        assert_eq!(launch.record.state, AdmissionState::Accepted);
+        assert_eq!(&launch.intent, expected_intent);
+    }
+    assert!(
+        launches
+            .iter()
+            .all(|launch| launch.record.member_ordinal < 100)
+    );
+
+    let records = store.admissions(batch.operation_id).await.unwrap();
+    assert_eq!(records.len(), 101);
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.member_ordinal)
+            .collect::<Vec<_>>(),
+        (0_u32..101).collect::<Vec<_>>()
+    );
+    assert!(
+        records
+            .iter()
+            .take(100)
+            .all(|record| record.state == AdmissionState::Accepted)
+    );
+    assert_eq!(records[100].state, AdmissionState::Queued);
+
+    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
+        .await
+        .unwrap();
+    let rows = sqlx::query(
+        "SELECT member_ordinal, runtime_fingerprint_version, runtime_fingerprint, \
+                admission_binding_fingerprint_version, admission_binding_fingerprint, spawn_intent \
+         FROM admission_journal WHERE operation_id = ? ORDER BY member_ordinal",
+    )
+    .bind(batch.operation_id.as_uuid().as_bytes().as_slice())
+    .fetch_all(&mut connection)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), intents.len());
+    let stored_rows = rows
+        .iter()
+        .map(|row| {
+            (
+                row.try_get::<i64, _>("member_ordinal").unwrap(),
+                row.try_get::<i64, _>("runtime_fingerprint_version")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("runtime_fingerprint").unwrap(),
+                row.try_get::<i64, _>("admission_binding_fingerprint_version")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("admission_binding_fingerprint")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("spawn_intent").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (
+        ordinal,
+        (
+            member_ordinal,
+            runtime_fingerprint_version,
+            runtime_fingerprint,
+            admission_binding_fingerprint_version,
+            admission_binding_fingerprint,
+            spawn_intent,
+        ),
+    ) in stored_rows.iter().enumerate()
+    {
+        let intent = &intents[ordinal];
+        assert_eq!(*member_ordinal, ordinal as i64);
+        assert_eq!(*runtime_fingerprint_version, 1);
+        assert_eq!(
+            runtime_fingerprint.as_slice(),
+            intent.runtime_fingerprint.as_slice()
+        );
+        assert_eq!(*admission_binding_fingerprint_version, 1);
+        assert_eq!(
+            admission_binding_fingerprint.as_slice(),
+            intent.admission_binding_fingerprint.as_slice()
+        );
+        assert_eq!(spawn_intent.as_slice(), intent.spawn_intent.as_slice());
+    }
+
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 1);
+    assert_eq!(counts.total, 101);
+
+    let retry = store
+        .claim_admission_batch(&batch, intents.clone())
+        .await
+        .unwrap();
+    assert!(matches!(retry, AdmissionBatchClaimOutcome::Existing));
+    assert_eq!(store.admissions(batch.operation_id).await.unwrap(), records);
+    assert_eq!(store.admission_counts().await.unwrap(), counts);
+
+    let mut conflicting_intents = intents.clone();
+    conflicting_intents[100].spawn_intent[0] ^= 1;
+    assert!(matches!(
+        store
+            .claim_admission_batch(&batch, conflicting_intents)
+            .await,
+        Err(StoreError::OperationIdConflict { operation_id })
+            if operation_id == batch.operation_id
+    ));
+    assert_eq!(store.admissions(batch.operation_id).await.unwrap(), records);
+    assert_eq!(store.admission_counts().await.unwrap(), counts);
+
+    let rows_after_conflict = sqlx::query(
+        "SELECT member_ordinal, runtime_fingerprint_version, runtime_fingerprint, \
+                admission_binding_fingerprint_version, admission_binding_fingerprint, spawn_intent \
+         FROM admission_journal WHERE operation_id = ? ORDER BY member_ordinal",
+    )
+    .bind(batch.operation_id.as_uuid().as_bytes().as_slice())
+    .fetch_all(&mut connection)
+    .await
+    .unwrap();
+    let stored_rows_after_conflict = rows_after_conflict
+        .iter()
+        .map(|row| {
+            (
+                row.try_get::<i64, _>("member_ordinal").unwrap(),
+                row.try_get::<i64, _>("runtime_fingerprint_version")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("runtime_fingerprint").unwrap(),
+                row.try_get::<i64, _>("admission_binding_fingerprint_version")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("admission_binding_fingerprint")
+                    .unwrap(),
+                row.try_get::<Vec<u8>, _>("spawn_intent").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(stored_rows_after_conflict, stored_rows);
 }

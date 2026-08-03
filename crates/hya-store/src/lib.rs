@@ -13,6 +13,8 @@ mod permission;
 mod resident_claim;
 mod sync;
 
+pub const MAX_ADMISSION_INTENT_BYTES: usize = 1_048_576;
+
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -21,9 +23,9 @@ use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 pub use admission::{
-    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionCounts,
-    AdmissionFinalizeOutcome, AdmissionRecord, AdmissionStartOutcome, AdmissionState,
-    AdmissionTerminal,
+    AdmissionActorBinding, AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionClaimOutcome,
+    AdmissionCounts, AdmissionFinalizeOutcome, AdmissionIntent, AdmissionLaunch, AdmissionRecord,
+    AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
 };
 pub use bundle_registry::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleRegistryRecord,
