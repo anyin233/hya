@@ -23,6 +23,19 @@ impl ProviderRouter {
     }
 
     #[must_use]
+    pub fn configured_identities_v1(&self) -> Option<Vec<Vec<u8>>> {
+        let mut identities = Vec::with_capacity(self.providers.len());
+        for provider in &self.providers {
+            let identity = provider.configured_identity_v1()?;
+            if identity.is_empty() {
+                return None;
+            }
+            identities.push(identity);
+        }
+        Some(identities)
+    }
+
+    #[must_use]
     pub fn with(mut self, provider: Arc<dyn Provider>) -> Self {
         self.providers.push(provider);
         self

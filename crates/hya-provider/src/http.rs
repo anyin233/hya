@@ -23,7 +23,8 @@ use crate::openai::{
 };
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, Protocol, Provider,
-    ProviderError, ProviderModel,
+    ProviderError, ProviderModel, append_capabilities_identity, append_identity_bytes,
+    append_identity_count, append_identity_optional_bytes,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +363,92 @@ impl HttpProvider {
         }
         None
     }
+
+    fn configured_identity_bytes_v1(&self) -> Option<Vec<u8>> {
+        let mut identity = Vec::new();
+        append_identity_bytes(&mut identity, b"hya.provider.http.configured.v1")?;
+        append_identity_bytes(&mut identity, env!("CARGO_PKG_VERSION").as_bytes())?;
+        append_identity_bytes(&mut identity, self.id.as_bytes())?;
+        append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
+        append_identity_bytes(&mut identity, self.endpoint.as_bytes())?;
+        append_identity_optional_bytes(&mut identity, self.google_base.as_deref())?;
+        append_identity_bytes(&mut identity, b"alias/bare-model-id")?;
+        append_identity_bytes(&mut identity, b"alias/provider-prefixed-model-id")?;
+        append_identity_bytes(&mut identity, b"alias/nonempty-variant-suffix")?;
+
+        let mut models = self.models.iter().collect::<Vec<_>>();
+        models.sort_unstable();
+        append_identity_count(&mut identity, models.len())?;
+        for model in models {
+            append_identity_bytes(&mut identity, model.as_bytes())?;
+        }
+
+        append_identity_count(&mut identity, self.model_reasoning_variants.len())?;
+        for (model, variants) in &self.model_reasoning_variants {
+            append_identity_bytes(&mut identity, model.as_bytes())?;
+            append_identity_count(&mut identity, variants.len())?;
+            for variant in variants {
+                append_identity_bytes(&mut identity, variant.as_bytes())?;
+            }
+        }
+
+        append_capabilities_identity(&mut identity, &self.caps)?;
+        append_auth_identity(&mut identity, &self.auth)?;
+        append_identity_bytes(&mut identity, b"bearer-resolver-slot")?;
+        match &self.bearer_resolver {
+            Some(_) => {
+                identity.push(1);
+                append_identity_bytes(&mut identity, self.id.as_bytes())?;
+            }
+            None => identity.push(0),
+        }
+        Some(identity)
+    }
+}
+
+fn provider_kind_identity(kind: ProviderKind) -> &'static [u8] {
+    match kind {
+        ProviderKind::OpenAiCompatible => b"openai-compatible",
+        ProviderKind::OpenAiResponse => b"openai-response",
+        ProviderKind::OpenAiCodex => b"openai-codex",
+        ProviderKind::GrokBuild => b"grok-build",
+        ProviderKind::Anthropic => b"anthropic",
+        ProviderKind::Google => b"google",
+    }
+}
+
+fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
+    match auth {
+        AuthStyle::Bearer(key) => {
+            append_identity_bytes(output, b"bearer")?;
+            output.push(u8::from(!key.expose_secret().is_empty()));
+        }
+        AuthStyle::CodexSession { token, account_id } => {
+            append_identity_bytes(output, b"codex-session")?;
+            output.push(u8::from(!token.expose_secret().is_empty()));
+            append_identity_optional_bytes(output, account_id.as_deref())?;
+        }
+        AuthStyle::GrokSession {
+            token,
+            client_version,
+            client_identifier,
+        } => {
+            append_identity_bytes(output, b"grok-session")?;
+            output.push(u8::from(!token.expose_secret().is_empty()));
+            append_identity_bytes(output, client_version.as_bytes())?;
+            append_identity_bytes(output, client_identifier.as_bytes())?;
+        }
+        AuthStyle::Anthropic { key, version } => {
+            append_identity_bytes(output, b"anthropic")?;
+            output.push(u8::from(!key.expose_secret().is_empty()));
+            append_identity_bytes(output, version.as_bytes())?;
+        }
+        AuthStyle::Google(key) => {
+            append_identity_bytes(output, b"google")?;
+            output.push(u8::from(!key.expose_secret().is_empty()));
+        }
+    }
+    Some(())
 }
 
 #[async_trait]
@@ -372,6 +459,10 @@ impl Provider for HttpProvider {
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         self.served_model_id(model).map(|_| self.caps.clone())
+    }
+
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        self.configured_identity_bytes_v1()
     }
 
     fn catalog(&self) -> Vec<ProviderModel> {
@@ -491,6 +582,8 @@ impl Provider for HttpProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DevProvider, FakeProvider, ProviderRouter};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn provider() -> Result<HttpProvider, ProviderError> {
         HttpProvider::new(
@@ -553,5 +646,312 @@ mod tests {
             ["minimal", "low", "medium", "high", "xhigh"]
         );
         assert_eq!(ProviderKind::Google.reasoning_variants(), ["high", "max"]);
+    }
+
+    #[test]
+    fn configured_provider_identity_covers_routes_without_secrets_or_live_state() {
+        fn configured_identities(router: &ProviderRouter) -> Option<Vec<Vec<u8>>> {
+            router.configured_identities_v1()
+        }
+
+        let route = |id: &str, kind: ProviderKind, base: &str, key: &str, models: &[&str]| {
+            match HttpProvider::new(
+                id,
+                kind,
+                base,
+                key.to_string(),
+                models.iter().map(|model| (*model).to_string()),
+            ) {
+                Ok(provider) => provider,
+                Err(error) => panic!("test HTTP provider route: {error}"),
+            }
+        };
+        let router = |provider: HttpProvider| ProviderRouter::new().with(Arc::new(provider));
+
+        let empty = ProviderRouter::new();
+        assert_eq!(configured_identities(&empty), Some(Vec::new()));
+
+        let equivalent_a = router(route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1/",
+            "secret-a",
+            &["model-b", "model-a"],
+        ));
+        let equivalent_b = router(route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1",
+            "secret-b",
+            &["model-a", "model-b"],
+        ));
+        assert!(
+            configured_identities(&equivalent_a)
+                .as_ref()
+                .is_some_and(|identities| !identities.is_empty())
+        );
+        assert_eq!(
+            configured_identities(&equivalent_a),
+            configured_identities(&equivalent_b)
+        );
+
+        let empty_key = router(route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1",
+            "",
+            &["model-a", "model-b"],
+        ));
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&empty_key)
+        );
+
+        let insertion_a = route(
+            "first",
+            ProviderKind::OpenAiCompatible,
+            "https://first.test/v1",
+            "key",
+            &["model"],
+        );
+        let insertion_b = route(
+            "second",
+            ProviderKind::OpenAiCompatible,
+            "https://second.test/v1",
+            "key",
+            &["model"],
+        );
+        let insertion_ab = ProviderRouter::new()
+            .with(Arc::new(insertion_a))
+            .with(Arc::new(insertion_b));
+        let insertion_ba = ProviderRouter::new()
+            .with(Arc::new(route(
+                "second",
+                ProviderKind::OpenAiCompatible,
+                "https://second.test/v1",
+                "key",
+                &["model"],
+            )))
+            .with(Arc::new(route(
+                "first",
+                ProviderKind::OpenAiCompatible,
+                "https://first.test/v1",
+                "key",
+                &["model"],
+            )));
+        assert_ne!(
+            configured_identities(&insertion_ab),
+            configured_identities(&insertion_ba)
+        );
+
+        let id_changed = router(route(
+            "gateway-renamed",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1",
+            "secret-a",
+            &["model-a", "model-b"],
+        ));
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&id_changed)
+        );
+
+        let kind_changed = router(route(
+            "gateway",
+            ProviderKind::OpenAiResponse,
+            "https://example.test/v1",
+            "secret-a",
+            &["model-a", "model-b"],
+        ));
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&kind_changed)
+        );
+
+        let endpoint_changed = router(route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://other.test/v1",
+            "secret-a",
+            &["model-a", "model-b"],
+        ));
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&endpoint_changed)
+        );
+
+        let models_changed = router(route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1",
+            "secret-a",
+            &["model-a", "model-c"],
+        ));
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&models_changed)
+        );
+
+        let mut caps_changed_route = route(
+            "gateway",
+            ProviderKind::OpenAiCompatible,
+            "https://example.test/v1",
+            "secret-a",
+            &["model-a", "model-b"],
+        );
+        caps_changed_route.caps.json_output = true;
+        let caps_changed = router(caps_changed_route);
+        assert_ne!(
+            configured_identities(&equivalent_a),
+            configured_identities(&caps_changed)
+        );
+
+        let codex_account_absent = router(
+            route(
+                "codex",
+                ProviderKind::OpenAiCodex,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_codex_session_auth(None),
+        );
+        let codex_account_present = router(
+            route(
+                "codex",
+                ProviderKind::OpenAiCodex,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_codex_session_auth(Some("account-a".to_string())),
+        );
+        let codex_account_changed = router(
+            route(
+                "codex",
+                ProviderKind::OpenAiCodex,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_codex_session_auth(Some("account-b".to_string())),
+        );
+        assert_ne!(
+            configured_identities(&codex_account_absent),
+            configured_identities(&codex_account_present)
+        );
+        assert_ne!(
+            configured_identities(&codex_account_present),
+            configured_identities(&codex_account_changed)
+        );
+
+        let grok_client_a = router(
+            route(
+                "grok",
+                ProviderKind::GrokBuild,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_grok_session_auth("client-v1", "client-a"),
+        );
+        let grok_client_b = router(
+            route(
+                "grok",
+                ProviderKind::GrokBuild,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_grok_session_auth("client-v1", "client-b"),
+        );
+        assert_ne!(
+            configured_identities(&grok_client_a),
+            configured_identities(&grok_client_b)
+        );
+
+        assert!(
+            configured_identities(&equivalent_a).is_some_and(|identities| {
+                identities.iter().any(|identity| {
+                    identity
+                        .windows("hya.provider.http.configured.v1".len())
+                        .any(|bytes| bytes == b"hya.provider.http.configured.v1")
+                        && identity
+                            .windows(env!("CARGO_PKG_VERSION").len())
+                            .any(|bytes| bytes == env!("CARGO_PKG_VERSION").as_bytes())
+                })
+            })
+        );
+
+        let resolver_count_a = Arc::new(AtomicUsize::new(0));
+        let resolver_count_b = Arc::new(AtomicUsize::new(0));
+        let resolver_route_a = {
+            let counter = Arc::clone(&resolver_count_a);
+            route(
+                "resolver",
+                ProviderKind::OpenAiCompatible,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_bearer_resolver(Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok("live-token-a".to_string())
+            }))
+        };
+        let resolver_route_b = {
+            let counter = Arc::clone(&resolver_count_b);
+            route(
+                "resolver",
+                ProviderKind::OpenAiCompatible,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )
+            .with_bearer_resolver(Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok("live-token-b".to_string())
+            }))
+        };
+        let resolver_router_a = router(resolver_route_a);
+        let resolver_router_b = router(resolver_route_b);
+        assert_eq!(
+            configured_identities(&resolver_router_a),
+            configured_identities(&resolver_router_b)
+        );
+        assert_eq!(resolver_count_a.load(Ordering::SeqCst), 0);
+        assert_eq!(resolver_count_b.load(Ordering::SeqCst), 0);
+        assert_ne!(
+            configured_identities(&resolver_router_a),
+            configured_identities(&router(route(
+                "resolver",
+                ProviderKind::OpenAiCompatible,
+                "https://example.test/v1",
+                "secret",
+                &["model"],
+            )))
+        );
+
+        let fake_router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new())));
+        assert_eq!(configured_identities(&fake_router), None);
+
+        let dev_router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
+        assert!(
+            configured_identities(&dev_router)
+                .as_ref()
+                .is_some_and(|identities| !identities.is_empty())
+        );
+
+        assert!(equivalent_a.resolve(&ModelRef::new("model-a")).is_some());
+        assert!(
+            equivalent_a
+                .resolve(&ModelRef::new("gateway/model-a"))
+                .is_some()
+        );
+        assert!(
+            equivalent_a
+                .resolve(&ModelRef::new("foreign/model-a"))
+                .is_none()
+        );
     }
 }
