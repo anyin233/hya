@@ -131,6 +131,84 @@ fn zero_bundle_prepared_document_never_yields_empty_catalog() {
 }
 
 #[test]
+fn only_verified_prepared_catalogs_supply_catalog_semantic_identity() {
+    let prepared = prepare_builtins(vec![source(
+        "catalog-semantic-identity",
+        "hya/catalog-semantic-identity",
+        "catalog-semantic-identity",
+        "catalog docs",
+    )]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+
+    let verified = BundleCatalog::from_verified_catalogs(&[&prepared]);
+    let Ok(verified) = verified else {
+        panic!("verified catalog construction failed: {verified:?}");
+    };
+    let verified_again = BundleCatalog::from_verified_catalogs(&[&prepared]);
+    let Ok(verified_again) = verified_again else {
+        panic!("verified catalog construction failed: {verified_again:?}");
+    };
+    let unverified = BundleCatalog::from_prepared(prepared.bundles());
+    let Ok(unverified) = unverified else {
+        panic!("catalog construction failed: {unverified:?}");
+    };
+
+    let Some(identity) = verified.semantic_identity_v1() else {
+        panic!("verified catalog must expose semantic identity bytes");
+    };
+    let Some(identity_again) = verified_again.semantic_identity_v1() else {
+        panic!("verified catalog must expose semantic identity bytes");
+    };
+    assert!(!identity.is_empty());
+    assert_eq!(identity, identity_again);
+    assert_eq!(unverified.semantic_identity_v1(), None);
+}
+
+#[test]
+fn verified_catalog_merge_matches_flat_verified_construction() {
+    let builtins = prepare_builtins(vec![source(
+        "catalog-merge-builtin",
+        "hya/catalog-merge-builtin",
+        "catalog-merge-builtin",
+        "builtin docs",
+    )]);
+    let Ok(builtins) = builtins else {
+        panic!("builtin preparation failed: {builtins:?}");
+    };
+    let installed = prepare_package(source(
+        "catalog-merge-installed",
+        "hya/catalog-merge-installed",
+        "catalog-merge-installed",
+        "installed docs",
+    ));
+    let Ok(installed) = installed else {
+        panic!("installed preparation failed: {installed:?}");
+    };
+
+    let direct = BundleCatalog::from_verified_catalogs(&[&builtins, &installed]);
+    let Ok(direct) = direct else {
+        panic!("direct catalog construction failed: {direct:?}");
+    };
+    let base = BundleCatalog::from_verified_catalogs(&[&builtins]);
+    let Ok(base) = base else {
+        panic!("base catalog construction failed: {base:?}");
+    };
+    let merged = base.with_verified_catalogs(&[&installed]);
+    let Ok(merged) = merged else {
+        panic!("catalog merge failed: {merged:?}");
+    };
+
+    assert_eq!(merged.bundles(), direct.bundles());
+    let Some(identity) = merged.semantic_identity_v1() else {
+        panic!("merged catalog must expose semantic identity bytes");
+    };
+    assert!(!identity.is_empty());
+    assert_eq!(merged.semantic_identity_v1(), direct.semantic_identity_v1());
+}
+
+#[test]
 fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
     let prepared = prepare_builtins(vec![source(
         "catalog-mcp",

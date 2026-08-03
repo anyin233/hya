@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::{BundleCatalog, BundleOrigin, PreparedBundle, PreparedCatalog};
+use hya_bundle::{BundleCatalog, BundleOrigin, PreparedCatalog};
 use hya_core::{CoreError, RuntimeCatalogRefresh, RuntimeRegistry};
 use hya_store::BundleRegistry;
 use tokio::sync::{Mutex, OnceCell};
@@ -21,14 +21,14 @@ pub fn bundle_registry_path() -> PathBuf {
 /// Lazily publishes installed Bundle catalog changes at root binding boundaries.
 pub struct InstalledBundleRefresh {
     registry_path: PathBuf,
-    builtins: Vec<PreparedBundle>,
+    builtins: Arc<BundleCatalog>,
     registry: OnceCell<BundleRegistry>,
     applied_generation: Mutex<u64>,
 }
 
 impl InstalledBundleRefresh {
     #[must_use]
-    pub fn new(registry_path: PathBuf, builtins: Vec<PreparedBundle>) -> Self {
+    pub fn new(registry_path: PathBuf, builtins: Arc<BundleCatalog>) -> Self {
         Self {
             registry_path,
             builtins,
@@ -62,7 +62,7 @@ impl InstalledBundleRefresh {
         if snapshot.generation == *applied_generation {
             return Ok(false);
         }
-        let mut bundles = self.builtins.clone();
+        let mut prepared_catalogs = Vec::with_capacity(snapshot.bundles.len());
         for record in snapshot.bundles {
             let prepared =
                 PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;
@@ -83,9 +83,12 @@ impl InstalledBundleRefresh {
                     record.bundle_id
                 )));
             }
-            bundles.push(bundle.clone());
+            prepared_catalogs.push(prepared);
         }
-        let catalog = BundleCatalog::from_prepared(&bundles)?;
+        let prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
+        let catalog = self
+            .builtins
+            .with_verified_catalogs(&prepared_catalog_refs)?;
         runtime.publish_catalog(Arc::new(catalog))?;
         *applied_generation = snapshot.generation;
         Ok(true)

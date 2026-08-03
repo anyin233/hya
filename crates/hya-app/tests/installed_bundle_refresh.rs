@@ -79,10 +79,13 @@ You are the installed agent.
 async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
     let prepared_builtins = prepare_builtins(vec![builtin_source()]).expect("prepare builtins");
     let builtins = prepared_builtins.bundles().to_vec();
-    let catalog = BundleCatalog::from_prepared(&builtins).expect("build builtin catalog");
+    let catalog = Arc::new(
+        BundleCatalog::from_verified_catalogs(&[&prepared_builtins])
+            .expect("build builtin catalog"),
+    );
     let runtime = Arc::new(RuntimeRegistry::new(
         ToolRegistry::builtins(),
-        Arc::new(catalog),
+        Arc::clone(&catalog),
     ));
     let registry_path = temp_path("registry.db");
     let registry =
@@ -91,7 +94,7 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
             .expect("connect bundle registry");
     let refresh = Arc::new(hya_app::InstalledBundleRefresh::new(
         registry_path,
-        builtins.clone(),
+        Arc::clone(&catalog),
     ));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = SessionEngine::new(
@@ -138,6 +141,12 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
     assert_eq!(fresh_binding.generation().get(), old_generation.get() + 1);
     assert!(fresh_binding.resolve_agent("installed-agent").is_some());
     assert!(old_binding.resolve_agent("installed-agent").is_none());
+    assert!(
+        fresh_binding
+            .agent_catalog()
+            .semantic_identity_v1()
+            .is_some_and(|identity| !identity.is_empty())
+    );
 
     let unchanged_binding = engine
         .bind_root_runtime(&workdir)

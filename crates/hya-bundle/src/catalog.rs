@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BundleError, PreparedAgent, PreparedBundle, PreparedResource, prepare::validate_hook_local_id,
+    BundleError, BundleOrigin, PreparedAgent, PreparedBundle, PreparedCatalog, PreparedResource,
+    prepare::validate_hook_local_id,
 };
+
+const SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.bundle-catalog.semantic-identity/v1";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExportKind {
@@ -32,6 +35,8 @@ pub struct BundleCatalog {
     agents: BTreeMap<String, (usize, usize)>,
     resources: BTreeMap<(ExportKind, String), (usize, usize)>,
     local_resources: BTreeMap<(String, ExportKind, String), String>,
+    semantic_identity_v1: Option<Vec<u8>>,
+    verified_catalog_records: Option<Vec<Vec<u8>>>,
 }
 
 impl BundleCatalog {
@@ -44,6 +49,8 @@ impl BundleCatalog {
             agents: BTreeMap::new(),
             resources: BTreeMap::new(),
             local_resources: BTreeMap::new(),
+            semantic_identity_v1: None,
+            verified_catalog_records: None,
         };
         let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
@@ -122,6 +129,51 @@ impl BundleCatalog {
             }
         }
         Ok(catalog)
+    }
+
+    pub fn from_verified_catalogs(catalogs: &[&PreparedCatalog]) -> Result<Self, BundleError> {
+        let bundles = catalogs
+            .iter()
+            .flat_map(|catalog| catalog.bundles.iter().cloned())
+            .collect::<Vec<_>>();
+        let mut catalog = Self::from_prepared(&bundles)?;
+        let records = encode_verified_catalog_records(catalogs)?;
+        catalog.semantic_identity_v1 = Some(encode_semantic_identity_v1(&records)?);
+        catalog.verified_catalog_records = Some(records);
+        Ok(catalog)
+    }
+
+    pub fn with_verified_catalogs(
+        &self,
+        catalogs: &[&PreparedCatalog],
+    ) -> Result<Self, BundleError> {
+        let Some(existing_records) = self.verified_catalog_records.as_ref() else {
+            return Err(BundleError::PreparedEncode {
+                detail: "verified catalog provenance unavailable".to_string(),
+            });
+        };
+        let bundles = self
+            .bundles
+            .iter()
+            .cloned()
+            .chain(
+                catalogs
+                    .iter()
+                    .flat_map(|catalog| catalog.bundles.iter().cloned()),
+            )
+            .collect::<Vec<_>>();
+        let mut merged = Self::from_prepared(&bundles)?;
+        let mut records = existing_records.clone();
+        records.extend(encode_verified_catalog_records(catalogs)?);
+        records.sort();
+        merged.semantic_identity_v1 = Some(encode_semantic_identity_v1(&records)?);
+        merged.verified_catalog_records = Some(records);
+        Ok(merged)
+    }
+
+    #[must_use]
+    pub fn semantic_identity_v1(&self) -> Option<&[u8]> {
+        self.semantic_identity_v1.as_deref()
     }
 
     #[must_use]
@@ -259,4 +311,89 @@ fn unknown_resource(bundle_id: &str, kind: ExportKind, reference: &str) -> Bundl
         kind: kind.as_str().to_string(),
         reference: reference.to_string(),
     }
+}
+
+fn encode_verified_catalog_records(
+    catalogs: &[&PreparedCatalog],
+) -> Result<Vec<Vec<u8>>, BundleError> {
+    let mut records = Vec::with_capacity(catalogs.len());
+    for catalog in catalogs {
+        let mut record = Vec::new();
+        append_bytes(&mut record, catalog.digest.as_bytes())?;
+
+        let mut bundles = catalog.bundles.iter().collect::<Vec<_>>();
+        bundles.sort_by(|left, right| compare_bundle_identity(left, right));
+        append_count(&mut record, bundles.len())?;
+        for bundle in bundles {
+            append_bytes(&mut record, bundle.identity.id.as_bytes())?;
+            append_bytes(&mut record, bundle.identity.version.as_bytes())?;
+            append_bytes(&mut record, bundle.identity.publisher.as_bytes())?;
+            append_bytes(&mut record, bundle_origin_bytes(bundle.origin))?;
+            append_flag(&mut record, bundle.immutable);
+            append_bytes(&mut record, bundle.digest.as_bytes())?;
+        }
+        records.push(record);
+    }
+    records.sort();
+    Ok(records)
+}
+
+fn encode_semantic_identity_v1(records: &[Vec<u8>]) -> Result<Vec<u8>, BundleError> {
+    let mut identity = Vec::new();
+    append_bytes(&mut identity, SEMANTIC_IDENTITY_DOMAIN_V1)?;
+    append_count(&mut identity, records.len())?;
+    for record in records {
+        append_bytes(&mut identity, record)?;
+    }
+    Ok(identity)
+}
+
+fn compare_bundle_identity(left: &PreparedBundle, right: &PreparedBundle) -> std::cmp::Ordering {
+    left.identity
+        .id
+        .as_bytes()
+        .cmp(right.identity.id.as_bytes())
+        .then_with(|| {
+            left.identity
+                .version
+                .as_bytes()
+                .cmp(right.identity.version.as_bytes())
+        })
+        .then_with(|| {
+            left.identity
+                .publisher
+                .as_bytes()
+                .cmp(right.identity.publisher.as_bytes())
+        })
+        .then_with(|| bundle_origin_bytes(left.origin).cmp(bundle_origin_bytes(right.origin)))
+        .then_with(|| left.immutable.cmp(&right.immutable))
+        .then_with(|| left.digest.as_bytes().cmp(right.digest.as_bytes()))
+}
+
+fn bundle_origin_bytes(origin: BundleOrigin) -> &'static [u8] {
+    match origin {
+        BundleOrigin::Builtin => b"builtin",
+        BundleOrigin::Installed => b"installed",
+    }
+}
+
+fn append_count(bytes: &mut Vec<u8>, count: usize) -> Result<(), BundleError> {
+    let count = u64::try_from(count).map_err(|_| BundleError::PreparedEncode {
+        detail: "semantic identity count exceeds u64".to_string(),
+    })?;
+    bytes.extend_from_slice(&count.to_be_bytes());
+    Ok(())
+}
+
+fn append_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), BundleError> {
+    let length = u64::try_from(value.len()).map_err(|_| BundleError::PreparedEncode {
+        detail: "semantic identity field length exceeds u64".to_string(),
+    })?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(value);
+    Ok(())
+}
+
+fn append_flag(bytes: &mut Vec<u8>, value: bool) {
+    bytes.push(u8::from(value));
 }

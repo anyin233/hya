@@ -58,7 +58,7 @@ const BUILTIN_BUNDLES_DIGEST: &str =
 fn builtin_catalog_from(bytes: &[u8], expected_digest: &str) -> anyhow::Result<Arc<BundleCatalog>> {
     let prepared = PreparedCatalog::decode(bytes, expected_digest)
         .context("decode embedded built-in AgentBundle catalog")?;
-    let catalog = BundleCatalog::from_prepared(prepared.bundles())
+    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
         .context("validate embedded built-in AgentBundle catalog")?;
     Ok(Arc::new(catalog))
 }
@@ -76,7 +76,7 @@ pub fn builtin_catalog() -> anyhow::Result<Arc<BundleCatalog>> {
     static EMBEDDED_CATALOG: OnceLock<Result<Arc<BundleCatalog>, BundleError>> = OnceLock::new();
     match EMBEDDED_CATALOG.get_or_init(|| {
         PreparedCatalog::decode(BUILTIN_BUNDLES, BUILTIN_BUNDLES_DIGEST)
-            .and_then(|prepared| BundleCatalog::from_prepared(prepared.bundles()))
+            .and_then(|prepared| BundleCatalog::from_verified_catalogs(&[&prepared]))
             .map(Arc::new)
     }) {
         Ok(catalog) => Ok(Arc::clone(catalog)),
@@ -1984,7 +1984,7 @@ async fn build_session_engine_with_mcp_defer(
     let runtime = Arc::new(RuntimeRegistry::new(registry, Arc::clone(&catalog)));
     let catalog_refresh = Arc::new(InstalledBundleRefresh::new(
         bundle_registry_path(),
-        catalog.bundles().to_vec(),
+        Arc::clone(&catalog),
     ));
 
     let rules = PermissionRules::new(vec![
@@ -2470,6 +2470,18 @@ mod tests {
         assert!(
             !first.bundles().is_empty(),
             "shared embedded catalog must not be empty"
+        );
+    }
+
+    #[test]
+    fn embedded_builtin_catalog_retains_verified_semantic_identity() {
+        let catalog = builtin_catalog_from(BUILTIN_BUNDLES, BUILTIN_BUNDLES_DIGEST)
+            .expect("embedded catalog must load");
+        assert!(
+            catalog
+                .semantic_identity_v1()
+                .is_some_and(|identity| !identity.is_empty()),
+            "embedded catalog must retain verified semantic identity"
         );
     }
 
