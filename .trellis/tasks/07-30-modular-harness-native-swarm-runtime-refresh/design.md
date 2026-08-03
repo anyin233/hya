@@ -1177,4 +1177,26 @@ The strict 0.34.11 order is method-role lock, ACK gate, process ownership,
 schema opening, archive closure, app materialization, atomic publication,
 namespace/permission routing, hook/event fan-out, transient E2E, resident E2E,
 loss/cancellation recovery, stop/drift behavior, then invariant/full gates.
-0.34.12 remains certification only and 0.34.13 remains updater only.
+0.34.12 owns only the missing minimal durable 100/156/256 admission authority plus integrated R10 certification; 0.34.13 remains updater only.
+
+## 21. Consult27 durable capacity authority
+
+`admission_journal` is the sole durable queue and active-lease authority. Its fixed state-derived resource vector is `Accepted|Started = one active`, `Queued|Waiting = one non-active`, terminal states = zero, with hard bounds 100 active, 156 non-active, and 256 total. Root/lead work is outside that vector. Writer-ordered bounded transactions atomically admit whole batches, suspend waiting parents, promote at most one eligible row per released active lease, terminalize/refund once, and reconcile restart. No task or execution resource exists for `Queued`; `Accepted` yields one launch instruction behind a barrier and becomes `Started` only after task installation.
+
+Promotion is deterministic without clocks: oldest eligible original sequence within each root, one successful promotion per least-recently-promoted eligible root per round, stable root/admission ties, and ineligible-row skipping. Waiting preserves original order and re-enters through `Queued`. The provider plane is separately partitioned into non-borrowing 100 subagent-general and 28 root/control/recovery permits; only a durable active lease authorizes a general permit. These semaphores are reconstructed caches, not acceptance truth.
+
+Restart requeues stale pre-start `Accepted`, aborts stale `Started` under the existing epoch/effect fence, and retains ordered `Queued`/`Waiting` work. The current single projection, stable Events, RuntimeSnapshot catalog Arc, captured binding, PermissionPlane, resident stop order, and sidecar lifetime remain unchanged. Exact R10 certification is permitted only after this authority and the complete 100/156/257, fairness, parent-wait, cancellation, provider-reserve, restart, regression, resource, and SLO matrix are green at the release SHA.
+
+## 22. Consult28 runtime semantic fingerprint
+
+Cross-process binding identity is a private derived value, not a publication ordinal. `RuntimeSemanticFingerprintV1` hashes deterministic, length-prefixed, sorted sections for the full BundleCatalog, all none/basic/full effective resource and immutable permission identities, all effective skills including workdir precedence/content, all built-in/plugin/MCP declarations/resources/collision order, and remaining reachable agent/source declarations. It is computed only after normal refresh/reconciliation/discovery converges. Unstable process state and secrets are excluded; an unidentifiable behavior source makes the fingerprint unavailable.
+
+The versioned spawn intent stores the fingerprint version/value and diagnostic generation under its integrity hash for every nonterminal row eligible for restart reconstruction, including pre-`Started` `Accepted` work. Recovery captures exactly one current snapshot, matches the fingerprint before exact target resolution, and pins the reconstructed binding and descendants to that Arc. Mismatch/unavailability fails closed before allocation; no generation comparison, latest-catalog rebind, historical catalog retention, second authority, or public Event/wire change is permitted. Previously started `Waiting` parents remain non-replayable and abort under stale-running fencing.
+
+## 23. Consult29 app-owned admission binding identity
+
+`RuntimeSemanticFingerprintV1` remains the core-owned `TurnBinding` runtime-view identity. App-owned base/category/provider inputs also affect accepted child resolution, so `hya-app` composes it into a private `AdmissionBindingFingerprintV1` from one immutable `AdmissionResolutionContext`. The context holds the exact base `AgentSpec`, category registry, and deterministic configured-routing view used by the same resolution attempt; it is not stored and does not widen `RuntimeSnapshot` or create another catalog/runtime authority.
+
+The composite hashes only behavior consumed by the current resolver: inheritable base model/prompt/reasoning; canonical ordered category candidates; deterministic ordered provider implementation/configuration/capability identity; and `ResolverSemanticsV1`. Overwritten base name/workdir, unused category prompt/token fields, secrets, and transient provider state are excluded. Missing deterministic provider identity makes restart-reconstructable admission unavailable. Store/core see only opaque versioned 32-byte identities and bounded raw intent bytes.
+
+One canonical `SpawnIntentV1` row is capped at 1,048,576 bytes and contains raw accepted post-hook intent plus both fingerprints, resolver version, diagnostic generation, and integrity metadata—never a resolved/effective `AgentSpec`, selected model/prompt/reasoning, provider object, or runtime handle. Encode and bound every member before the writer transaction; one failure rolls back the whole batch. Recovery compares both identities before resolution/allocation and never rebinds to newer semantics.

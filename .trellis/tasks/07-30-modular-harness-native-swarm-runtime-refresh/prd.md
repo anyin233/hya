@@ -457,3 +457,17 @@ permission expansion, arbitrary command/env, persisted process/context state,
 TTL/heartbeat/reclaim/watchers, and 0.34.12/0.34.13 work remain non-goals.
 0.34.12 is only 100/256 certification and 0.34.13 is only the independent
 updater.
+
+## Consult27 authoritative 0.34.12 scope correction
+
+The literal “certification only” description is superseded narrowly. Release 0.34.12 owns only the minimal durable 100-active/156-non-active/256-envelope admission authority missing from HEAD plus the complete R10 certification at the same exact SHA. Lead/root work is outside those subagent counts; provider capacity is a non-borrowing 100-general/28-reserved split. Admission batches are atomic, promotion is persisted bounded round-robin, waiting parents retain a non-active envelope, and restart converges `Accepted -> Queued`, stale `Started -> Aborted`, with `Queued`/`Waiting` retained. No other feature enters 0.34.12; 0.34.13 remains the independent updater.
+
+## Consult28 authoritative cross-process binding identity
+
+Restartable 0.34.12 admission envelopes are accepted only when one normally reconstructed current `RuntimeSnapshot` has the same private `RuntimeSemanticFingerprintV1` as the fingerprint atomically persisted with the accepted spawn intent. `ConfigGeneration` is diagnostic only. The fingerprint covers the complete deterministic semantics of the active BundleCatalog, none/basic/full resource views and permission identities, effective skills including workdir discovery, built-in/plugin/MCP sources, and uncovered agent/source declarations. Any behavior-affecting source without a canonical identity makes the fingerprint unavailable and causes atomic no-allocation rejection or exactly-once recovery abort. There is no latest-generation rebind, historical catalog store, or reduced Bundle-only identity. Every pre-`Started` `Accepted` row that startup may requeue must carry the same protected fingerprint/intent; otherwise it aborts rather than requeues.
+
+## Consult29 authoritative app-resolution identity correction
+
+Cross-process reconstruction requires a private `AdmissionBindingFingerprintV1` owned by `hya-app`, not `RuntimeSemanticFingerprintV1` alone. The composite embeds the core runtime-view fingerprint and deterministic identities for only the current spawn resolver's behavior-affecting base model/prompt/reasoning, ordered category candidates, configured provider routing/capabilities, and resolver algorithm. Unused category prompt/token fields, overwritten base name/workdir, secrets, and transient provider state do not participate. Missing deterministic configured-provider identity rejects fail closed.
+
+Each restart-reconstructable member atomically carries one integrity-protected raw `SpawnIntentV1`, both fingerprints, resolver version, and diagnostic generation. Its exact canonical uncompressed maximum is 1,048,576 bytes; 1,048,577 or one unavailable identity rejects the full batch before any row/allocation. No resolved/effective launch state is persisted, and mismatch/unavailability aborts once before resolution/allocation without generation fallback, latest rebind, compression/chunking, or auxiliary storage.
