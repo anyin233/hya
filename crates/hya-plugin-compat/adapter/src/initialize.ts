@@ -13,7 +13,12 @@ import {
 import { loadLocalPluginHooks, type CompatHooks } from "./loader/init"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import { hookRegistrationsFrom } from "./registration"
-import type { HandledRequest, RequestContext, RuntimeEnv } from "./runtime_types"
+import type {
+  ActivationMetadata,
+  HandledRequest,
+  RequestContext,
+  RuntimeEnv,
+} from "./runtime_types"
 import { buildToolRegistry } from "./tool"
 
 export const PROTOCOL_VERSION = 1
@@ -25,8 +30,19 @@ const InitializeParamsSchema = z
       name: z.string(),
       version: z.string(),
     }),
+    activation_id: z.string().min(1).optional(),
+    lifecycle: z.enum(["transient", "resident"]).optional(),
   })
   .strict()
+  .superRefine((params, refinement) => {
+    if ((params.activation_id === undefined) !== (params.lifecycle === undefined)) {
+      refinement.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "activation_id and lifecycle must be supplied together",
+        path: ["activation_id"],
+      })
+    }
+  })
 
 type LoadedHooksResult =
   | {
@@ -57,7 +73,14 @@ export async function handleInitialize(
       shouldExit: false,
     }
   }
-  const loaded = await loadConfiguredHooks(context, request.id)
+  const activation: ActivationMetadata | undefined =
+    params.data.activation_id !== undefined && params.data.lifecycle !== undefined
+      ? {
+          activation_id: params.data.activation_id,
+          lifecycle: params.data.lifecycle,
+        }
+      : undefined
+  const loaded = await loadConfiguredHooks(context, request.id, activation)
   if (loaded.response !== undefined) {
     return loaded.response
   }
@@ -67,6 +90,7 @@ export async function handleInitialize(
   for (const [name, tool] of registry.tools) {
     context.tools.set(name, tool)
   }
+  context.activation = activation
   return {
     response: okResponse(request.id, {
       protocol_version: PROTOCOL_VERSION,
@@ -86,7 +110,30 @@ export async function handleInitialize(
 async function loadConfiguredHooks(
   context: RequestContext,
   id: number,
+  activation: ActivationMetadata | undefined,
 ): Promise<LoadedHooksResult> {
+  if (activation !== undefined) {
+    const loaded = await loadLocalPluginHooks(
+      context.bundleExtensions,
+      Object.freeze({}),
+    )
+    if (loaded.errors.length > 0) {
+      return {
+        response: {
+          response: errorResponse(
+            id,
+            ERROR_CODES.INTERNAL_ERROR,
+            loaded.errors
+              .map((error) => `${error.spec}: ${error.message}`)
+              .join("; "),
+          ),
+          shouldExit: false,
+        },
+      }
+    }
+    return { hooks: loaded.hooks, workspaceAdapters: [] }
+  }
+
   let options: ReturnType<typeof parseAdapterOptions>
   try {
     options = parseAdapterOptions(context.env.HYA_COMPAT_OPTIONS_JSON)

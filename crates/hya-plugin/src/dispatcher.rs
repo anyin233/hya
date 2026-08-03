@@ -227,14 +227,14 @@ fn wire_to_request(wire: WireCompletionRequest, original: &CompletionRequest) ->
     }
 }
 
-fn outcome_to_wire(outcome: ToolOutcomeNative) -> WireToolResult {
+pub(crate) fn outcome_to_wire(outcome: ToolOutcomeNative) -> WireToolResult {
     match outcome {
         ToolOutcomeNative::Ok { output, time_ms } => WireToolResult::Ok { output, time_ms },
         ToolOutcomeNative::Err { message } => WireToolResult::Err { message },
     }
 }
 
-fn wire_to_outcome(wire: WireToolResult) -> ToolOutcomeNative {
+pub(crate) fn wire_to_outcome(wire: WireToolResult) -> ToolOutcomeNative {
     match wire {
         WireToolResult::Ok { output, time_ms } => ToolOutcomeNative::Ok { output, time_ms },
         WireToolResult::Err { message } => ToolOutcomeNative::Err { message },

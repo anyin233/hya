@@ -1106,3 +1106,75 @@ implementation claim.
 | Markdown/JS/Rust `AgentBundle` | Generation/catalog + binding + existing PermissionPlane + admission/effects | `0.34.8` native built-ins, `0.34.9` packaging, `0.34.10` external main/transient, `0.34.11` resident |
 | Atomic runtime refresh | Generation + binding + existing PermissionPlane | `0.34.5`–`0.34.6`, package generation in `0.34.8`–`0.34.9`, churn proof in `0.34.12` |
 | Secure self-update | Independent update TCB plus generation/drain/fencing contracts | `0.34.13` implementation/activation gate after `0.34.12` certification |
+
+## 20. Consult26 authoritative `0.34.11` sidecar architecture
+
+This section supersedes the unresolved external-execution owner gate and every
+older 0.34.10/0.34.11 runner placement in sections 5.2, 16, 17, 18, and 19.
+Release 0.34.10 is closed as CLI plus lazy public-static catalog publication.
+Release 0.34.11 owns public transient and resident activation together.
+
+The architecture is one Harness agent runtime with one optional extension
+sidecar per executable activation:
+
+```text
+captured TurnBinding + Bundle AgentSpec
+  -> SessionEngine/Harness model + mailbox + tool loop
+  -> app-owned validated closure materialization
+  -> hya-plugin-owned Bun Compat sidecar
+       initialize { activation_id, lifecycle } -> ACK + declaration validation
+       tool/call and hook/* -> request/reply
+       event -> one-way EventNotificationParams { envelope }
+  -> existing Harness result/event/MemberOutcome/recovery path
+```
+
+The sidecar never receives the agent task or context and never returns an agent
+result. Static-only Bundles remain process-free. Harness remains authoritative
+for spawn/send/wait, admission, cancellation, permission, provider/model work,
+events, projection, resident mailbox, epoch fencing, refund/finalization, and
+recovery. `hya-plugin` owns process/stdio/shutdown/kill/reap; `hya-app` owns
+captured-resource resolution/materialization and construction; core sees only a
+preconfigured factory plus activation identity/lifecycle and an opaque handle.
+There is no second actor, runtime, catalog, loader, DTO, or transport.
+
+One transient activation owns one sidecar through all provider rounds and
+Bundle tool/hook/event activity, then shuts it down. A healthy resident reuses
+one sidecar across mailbox messages. Idle loss parks without a process and the
+next durable message lazily creates/ACKs a replacement. Running loss aborts the
+whole item through the existing actor-epoch fence without replay; queued-after
+work remains durable and ordered under the original pinned binding. Explicit
+stop is final/idempotent and cancels queued work; host shutdown preserves queued
+resident work but never PID/stdio state. There is no TTL, heartbeat, idle
+reclaim, watcher, or restart loop.
+
+Public package closure is root bundle.hya.md plus exactly the paths represented by the existing v1 agent/resource/Extension contract. Directory/archive preparation must be identity/digest equivalent for that declared closure. The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Undeclared directory files are ignored, unreferenced archive files reject, activation never executes the authoring tree, and no source/IR/runtime expansion or import scanner is authorized. Private activation, raw Rust, Bundle MCP, unmapped resource profiles, arbitrary commands/env, compile-on-activation, dylibs, terminal/artifact results, child send/wait, and sandbox claims remain unsupported. Existing PermissionPlane/plugin policy remains the final gate before sidecar RPC.
+
+Retain the shipped `hya-core -> hya-bundle` dependency and
+`RuntimeSnapshot`-owned `Arc<BundleCatalog>`; the 0.34.11 sidecar lifecycle/
+start seam must introduce no new Bundle, package, `PreparedResource`, source,
+path, digest, or `hya-plugin` types.
+`hya-app` resolves and materializes from the captured snapshot/
+binding catalog, while core start carries only `activation_id` and lifecycle.
+The existing `hya-plugin -> hya-core` and `hya-app ->` both directions remain;
+`hya-bundle` stays independent of core/app/server; no `hya-core -> hya-plugin`
+edge or cycle is introduced.
+
+A follow-up item-14 source audit found that selected executable main agents were exact-bound but never reached `BundleSidecarEnvironment::factory_for`; root compilation therefore received an empty sidecar binding. The controlling option-A correction reuses that one semantic interface: `hya-app` injects it once into `SessionEngine`, and each real root turn calls it exactly once after capturing its sole binding and exact stable `AgentName`. No second resolver/cache/replacement API or server callback is allowed. Static effective views return `None`; executable views return one opaque bound factory and start one transient sidecar before model polling. Actor synthesis remains process-free, while executable root and resident-child activations own distinct processes.
+
+Root-main acceptance is ordered as: resolver/ACK gate; capability and ownership matrix; generation pinning; pre-model failure/cleanup table; then selected-main Bun E2E. All existing Consult26 method-role, package, permission, recovery, private/Rust/MCP, event-notification, catalog-authority, and dependency invariants remain unchanged.
+
+The item-14 explicit-stop audit adds one controlling linearization invariant. Resident MailSent acceptance and stop finalization are ordered by SQLite writer transactions, not TeamState: send commits first and is canceled by stop, or stop atomically terminalizes/releases first and send rejects. One private stop-finalization command fences the claim, accounts for earlier accepted work/mail, applies existing cancel/abort/refund/finalize records once, appends existing Failed activity, releases the claim last, and commits atomically. Shared in-memory completion only makes duplicate callers await the same durable-plus-cleanup Result. Ordinary mail stays epoch-independent, channel bytes/replay stay stable, and the two-phase accepting_mail fallback is forbidden unless the one-transaction feasibility proof fails.
+
+The controlling hook/resource-isolation invariant is capability-selected activation closure. Existing v1 `hook_refs` resolve to canonical stable Hook resource IDs, whose exact supported `local_id` is also the protocol name: `event`, `tool.execute.before`, or `tool.execute.after`. Selected Tool and Hook resources exact-path join only to an `extensions.js` resource in the referenced resource's owning bundle. The captured compiled view retains canonical selected Tool/Hook identities; app deduplicates and canonically sorts only their matching Extension entrypoints. Staging does not activate an Extension, aliases do not rename hooks, and all-Bundle Extension/tool loading is forbidden.
+
+AgentBundle v1 hook_refs select Bundle-local Hook resources only. Every accepted ref resolves and canonicalizes through the existing Bundle resource resolver; every harness:hook/* spelling rejects before publication. Harness-owned host hooks remain in existing Harness/plugin ownership. Core and app gain no prefix branch, translation, compatibility plane, or fallback.
+
+Initialize must report tool and hook declarations that independently equal those captured expected sets, ignoring order but rejecting duplicates, missing, extra, unsupported, and unselected names before model polling. The same immutable view drives schema, dispatch, hook/event routing, and entrypoint selection, while existing `PermissionPlane` remains the final tool-call gate. Controlled cross-kind same-path reuse represents one physical package file and one digest authority; no second schema, DTO, protocol, provenance map, import scan, catalog, or resolver is introduced.
+
+That reuse is one selected self-contained entrypoint, not a helper carrier. Activation rematerializes only the selected captured-generation Extension bytes into fresh staging; unselected Extensions and authoring-tree-only files remain unavailable. Missing relative imports fail before ACK/model/dispatch through existing sidecar cleanup, and no dependency installation, network, portability, or sandbox guarantee is implied.
+
+The strict 0.34.11 order is method-role lock, ACK gate, process ownership,
+schema opening, archive closure, app materialization, atomic publication,
+namespace/permission routing, hook/event fan-out, transient E2E, resident E2E,
+loss/cancellation recovery, stop/drift behavior, then invariant/full gates.
+0.34.12 remains certification only and 0.34.13 remains updater only.

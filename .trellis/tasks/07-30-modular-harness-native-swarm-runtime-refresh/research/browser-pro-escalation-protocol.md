@@ -1547,3 +1547,179 @@ denominator, `packed=0, expanded=0` accepts and `packed=0, expanded>0` rejects;
   scalar contract, real-fixture metadata preflight, and streaming helper test
   are sufficient evidence, so the mutation probe is not part of the accepted
   proof or product surface.
+
+### `CONSULT-2026-08-02-AGENTBUNDLE-SIDECAR-ACTIVATION-26`
+
+```text
+consultation_id: CONSULT-2026-08-02-AGENTBUNDLE-SIDECAR-ACTIVATION-26
+received_by_fuji1_date_utc: 2026-08-02
+source_control_thread: 019fb513-c030-7073-b073-0ad5442b7db4
+remote_execution_thread: 019fbf81-c41e-7450-8c17-e4036548bc33
+displayed_model_label_exact: Pro
+question_summary: choose the external AgentBundle execution owner, method roles, transient/resident process lifetime, package closure, recovery semantics, and dependency seam after 0.34.10 public-static publication
+pro_conclusion: choose one Harness-native agent runtime with one activation-scoped Bun extension sidecar; the sidecar supplies Bundle-local tools/hooks/event handlers through the existing plugin protocol and never runs the agent/model loop
+source_correction: this corrected decision supersedes the initial result wherever it treated event as an invocation, delegated the agent loop, or assumed a terminal/artifact result envelope
+coordinator_disposition: adopted for release 0.34.11; external execution and resident behavior stay in one release, 0.34.12 remains 100/256 certification, and 0.34.13 remains the independent updater
+ruling_scope: public-only JS/Bun extension sidecars for transient and resident Bundle agents; no private activation, raw Rust activation, Bundle MCP owner, sandbox, second runtime, or later-stage work
+verification_state: source-verified method roles, current process/catalog seams, and corrected dependency direction; implementation and exact-SHA CI pending
+```
+
+#### Corrected runtime and protocol authority
+
+- `SessionEngine`/Harness remains the sole agent runtime and owns the Bundle
+  `AgentSpec`, prompt/model/provider loop, tool dispatch, mailbox, spawn/send/
+  wait, admission, cancellation, events, `MemberOutcome`, and recovery.
+- The child is one activation-scoped extension sidecar. It may supply only
+  Bundle-local public JS/Bun tools, hooks, and event handlers through the
+  existing newline-delimited JSON-RPC v1 transport. Static-only Bundles start no
+  child.
+- There is no `agent/invoke`, delegated task/model loop, sidecar send/wait/step,
+  terminal agent result, artifact result, or child-produced `MemberOutcome`.
+  Bare or malformed stdout is protocol failure; stderr is bounded diagnostic
+  data only.
+- The only activation-specific wire addition is top-level initialize metadata
+  `{ activation_id, lifecycle }`. Activation ACK requires a successful
+  initialize response and declaration-drift validation before the first item
+  becomes running or the model driver is polled.
+- `initialize`, `tool/call`, and `hook/*` remain request/reply. `event` remains
+  exactly the existing one-way `EventNotificationParams { envelope }` sent by
+  `PluginClient::notify`, with no JSON-RPC id/result and no task/completion
+  meaning. The existing `shutdown` operation gains an explicit lifecycle
+  method; no second shutdown protocol is added.
+- Preserve the 1 MiB frame cap, 5-second initialize timeout, and 30-second
+  request/reply timeout. A Bundle tool/hook timeout taints the sidecar and
+  requires terminate/reap plus the existing Harness running-work recovery.
+  Bundle mode disables transparent client respawn/replay.
+
+#### Process lifetime, context, permissions, and recovery
+
+- `hya-plugin` owns the raw child, stdio reader/writer tasks, bounded stderr,
+  exit observation, graceful shutdown, terminate/reap, kill-on-drop, and
+  process loss. `hya-app` resolves/materializes the captured package closure
+  and constructs the bound implementation. Harness/core retains only an opaque
+  lifecycle handle and logical transitions.
+- There is exactly one sidecar per executable agent activation: one child for a
+  complete transient activation, or one healthy child reused across a
+  resident's mailbox messages. There is no process per package/generation,
+  pool, multiplexing, cross-activation reuse, TTL, heartbeat, idle reclaim,
+  watcher, or sweeper.
+- The sidecar receives no prompt, task, transcript, summary, model state,
+  `TurnBinding`, `RuntimeSnapshot`, history, grants, or `MemberOutcome`. Its
+  only new initialize context is activation ID and lifecycle; later it receives
+  only existing tool/hook/event payloads. PID, stdio, stderr, process memory,
+  activation metadata, and staging mutations are never persisted.
+- Bundle tool resolution uses the activation's captured `TurnBinding`.
+  Existing `PermissionPlane`/plugin policy runs before RPC; denial prevents the
+  call. Hooks/events are activation-bound. The child cannot request Harness
+  tools. Host tools/static skills/host MCP remain available through the
+  compiled view; Bundle-declared MCP remains unsupported.
+- Idle resident sidecar loss parks the logical resident without a process; the
+  next accepted durable message lazily creates and ACKs a replacement. Loss or
+  timeout during running work aborts that whole item under the existing actor
+  epoch fence, with no model/tool/hook/event replay and exactly-once terminal/
+  refund behavior. Durable queued-after work remains ordered and resumes only
+  after a fresh PID/stdio/staging/ACK under a new actor epoch while retaining
+  the original pinned `TurnBinding`/catalog generation.
+- Replacement initialize/declaration failure disables/stops the activation,
+  fails queued work once, releases the claim, and never loops restart. Explicit
+  stop is final and idempotent: reject new sends, fence, abort current once,
+  cancel queued items, stop/reap the child, remove resident/team-map/staging,
+  and release claim/admission once. Host shutdown aborts running work but
+  preserves durable queued resident work; startup never adopts a PID.
+
+#### Package closure and supported implementation
+
+- Release 0.34.11 keeps the strict public archive at one root bundle.hya.md plus exactly each path represented by the existing v1 agent prompt/resource/Extension contract. It reuses the existing source/prepared paths, contents, IDs, aliases, digests, cross-reference validation, staging, and current 7z limits; there is no generic helper or dependency closure.
+- Missing declared entries and unreferenced archive entries, wrapper directories, normalized duplicates, traversal/absolute paths, non-regular entries, symlinks, hardlinks, and devices reject. Undeclared directory files are ignored. Directory and archive forms of the same declared closure produce identical prepared identities and canonical digests; validation precedes atomic publication, so failure preserves generation.
+- Bun Compat is the only executable sidecar implementation admitted in this
+  release. Private activation/publication, raw Rust activation, Bundle MCP,
+  compile-on-activation, dylib/native command routes, arbitrary env, and
+  resource profiles without an enforceable host mapping remain typed
+  unsupported. The Rust example remains explicitly non-activatable.
+
+#### Corrected dependency seam
+
+Retain the shipped `hya-core -> hya-bundle` dependency and
+`RuntimeSnapshot`-owned `Arc<BundleCatalog>`. The 0.34.11 sidecar lifecycle/
+start seam must introduce no new Bundle, package, `PreparedResource`, source,
+path, digest, or `hya-plugin` types. Its core-facing factory is preconfigured by
+`hya-app`; start receives only activation identity/lifecycle, and the opaque
+handle exposes ready/ACK, graceful shutdown, terminate/reap, and exit
+observation. No command, cwd, env, manifest, `PluginClient`, copied package DTO,
+or second RPC abstraction crosses that request.
+
+The source-correction follow-up chose option A after direct HEAD verification:
+keep `hya-core -> hya-bundle`, `hya-plugin -> hya-core`, and `hya-app ->` both;
+keep `hya-bundle` independent of core/app/server; introduce no
+`hya-core -> hya-plugin` edge or cycle; and retain one snapshot-owned catalog
+authority. This supersedes the initial literal/global “no hya-core ->
+hya-bundle” sentence and any test that would remove the shipped edge.
+
+#### Executable selected-main follow-up arbitration
+
+A source-backed follow-up selected option A for the root/main gap discovered during item-14 review. `hya-core` owns one dependency-light sidecar-resolution/lifecycle interface injected once by `hya-app`; reuse the existing `BundleSidecarEnvironment::factory_for` responsibility rather than adding a parallel resolver, cache, replacement API, server callback, or live catalog closure. After exact main `AgentName` resolution and the single root `TurnBinding` capture, each real root `run_turn` calls that interface exactly once with the captured binding and stable name. The app returns `None` for a static effective view or an opaque already-bound JS/Bun factory; core starts only `{ activation_id, lifecycle: transient }`.
+
+An executable selected main owns exactly one transient sidecar for the full root turn. ACK and declaration-drift validation precede executable schema/dispatch and model polling. Normal completion shuts down/reaps; cancellation, process/protocol failure, in-flight failure, or post-ACK compilation failure terminates/reaps exactly once. Static main turns stay process-free. `ensure_main` actor synthesis remains `sidecar_factory: None`; a coordinating main does not borrow a resident child's process, and executable root and resident-child activations never share handles, IDs, or processes.
+
+The exact dependency invariant is: retain the shipped `hya-core -> hya-bundle` dependency and `RuntimeSnapshot`-owned sole `Arc<BundleCatalog>`; core defines, stores, and calls only the one dependency-light sidecar resolution/lifecycle interface, app resolves/materializes from the captured binding and supplies an opaque factory, plugin owns the child, no `hya-core -> hya-plugin` edge is introduced, and no new Bundle/package/`PreparedResource`/source/path/content/digest/plugin type crosses the start seam.
+
+The follow-up RED order is: (1) one captured binding/name, one resolver call, one transient start, and zero compilation/model polling before ACK; (2) static-main/process-free-coordinator/executable-root-plus-resident ownership matrix; (3) N/N+1 root generation pinning; (4) table-driven pre-model failure and exactly-once cleanup; (5) real Bun selected-main E2E through Harness permission/tool/hook/event/MemberOutcome and shutdown with no task/send/`agent/invoke`/terminal-result RPC.
+
+#### Explicit-stop/mail linearization follow-up arbitration
+
+The item-14 stop/mail race follow-up selects C public semantics with A-style SQLite writer serialization. A resident send linearizes only when its transaction commits the existing MailSent event. Explicit stop linearizes only when one bounded private BEGIN IMMEDIATE-equivalent transaction commits every existing queued/running cancellation/finalization record, the existing Failed activity, and claim release. The earlier TeamState stop_request/cancel is local coordination only. A send that owns the writer first commits before stop and must be canceled by that stop; a stop that owns it first releases the claim before commit, so the later send rechecks inside its transaction and rejects without MailSent. Ordinary mail remains epoch-independent.
+
+The first stop caller installs one TeamState-scoped shared completion and starts an operation independent of any caller wait future. Duplicates await the same exact Result; no caller returns Ok before the durable commit plus sidecar/task/slot cleanup. SQLite/event storage remains the sole acceptance, ordering, terminalization, and restart authority. Direct resident target resolution, active-claim check, recipient validation, and MailSent append occur under one writer transaction. Channel resolution takes the same writer order, includes only resident subscribers with an active claim, retains nonresident recipients, preserves existing MailSent bytes and empty-recipient behavior, and never epoch-binds mail.
+
+The required single store command acquires the writer before reads, validates/fences the current claim, accounts for all earlier accepted mail and queued/running work, applies existing abort/cancel/refund/finalize effects exactly once, appends the existing terminal activity, releases the claim last, and commits or fully rolls back. Process shutdown, task join, slot removal, and staging cleanup stay outside the transaction; shared completion publishes only afterward. A two-phase accepting_mail/stopping claim guard is conditionally authorized only if direct source proves authoritative delivery cannot be fully accounted/canceled in one bounded transaction; consolidation of existing split store calls is not infeasibility. No new public Event/API/DTO, event-byte change, second inbox/projection, epoch-bound mail, global lock, polling, or retry protocol is authorized.
+
+Minimum REDs cover send-first, stop-first, duplicate completion/failure/retry, channel ordering, epoch independence, and transaction rollback/exactly-once. The fallback crash-recovery RED exists only if the feasibility proof activates that fallback.
+
+#### Hook identity and activation-closure follow-up arbitration
+
+The item-14 hook/resource isolation follow-up chooses the minimal A+B contract. During prepare, every existing v1 `hook_refs` spelling is resolved by the existing local/alias/canonical resolver, kind-checked as Hook, canonicalized back into the stable Hook resource ID, and duplicate-checked after canonicalization. The resolved Hook `local_id` is also the exact case-sensitive protocol name and must be one of `event`, `tool.execute.before`, or `tool.execute.after`; aliases select but never rename capability, and `audit` is invalid. `CompiledResourceView` retains these canonical Hook IDs alongside its selected Tool identities without importing plugin types into core.
+
+For one captured activation, only selected Tool resources plus those canonical Hook resources participate. Each selector's normalized source path must exact-match exactly one `extensions.js` resource in that selector's owning bundle; cross-bundle refs therefore join in the referenced resource's namespace, never the selecting agent's bundle. The matched Extension is the Bun entrypoint. The activation deduplicates matched Extension stable IDs, sorts by canonical bundle/resource identity, and loads only those paths. A shared Extension may implement several selected capabilities at the same path, but generic or staged-only extensions are never auto-loaded. Every Extension must be reachable from at least one same-owner Tool/Hook selector, and every selected selector must have exactly one match; zero, ambiguous, prefix, basename, alias, equal-digest/different-path, and wrong-owner matches reject. Controlled Tool/Hook-to-Extension cross-kind same-path reuse stages one selected entrypoint file and preserves directory/archive digest equivalence; it does not create a helper-file carrier.
+
+#### Self-contained JS entrypoint source correction
+
+The helper-file follow-up chooses option A. The normative profile is: “The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.” V1 source grammar and PreparedBundle/PreparedResource remain unchanged: no resources.files, helpers, dependencies, import list, generic bytes, or dependency graph. A selected Extension may implement several co-path selected Tool/Hook capabilities; distinct Extensions are independent entrypoints.
+
+Strict closure remains bundle.hya.md plus exactly existing v1 agent/resource/extension paths. An undeclared directory helper is ignored and never enters prepared bytes/digest; the same unreferenced file in an archive is UnsafePackage. Declaring such a file as Extension makes it an independently selected/reachable entrypoint, never a helper. Directory/archive identity equivalence covers the declared closure only.
+
+Every activation rematerializes only deduplicated selected Extension paths from the captured generation's PreparedResource bytes into a fresh staging directory; it never executes the authoring tree or stages unselected Extensions as import aids. Missing static relative imports fail during load/initialize before ACK, model polling, or dispatch with existing exactly-once process/staging cleanup. Deferred or dynamic relative imports are unsupported ordinary sidecar failures. Existing Bun/Node builtins or external dependencies retain only existing Compat behavior; 0.34.11 adds no packaging, pinning, availability, installation, portability, network, scanner, graph, or sandbox guarantee.
+
+Required evidence is: unknown helper/dependency fields reject; directory extras are absent from prepared/catalog identity while archive extras reject; directory-source and archive activation both omit helpers and fail before ACK; one self-contained co-path Extension stages once for its aggregate exact declarations; other-agent and unreachable Extensions remain inactive/rejected; a misdeclared helper Extension is either unreachable or an exact-declaration entrypoint; and captured PreparedResource content wins over source mutation or N+1 publication. Generic Bundle files or a JS dependency closure are deferred to a separately assigned release and must not reserve a placeholder now.
+
+#### Harness-prefixed hook_ref source correction
+
+A second source-backed follow-up chooses option A and removes both prior harness:hook/* bypasses. Every accepted v1 PreparedAgent.hook_ref must use the existing Bundle resource-reference grammar, resolve to exactly one ExportKind::Hook resource, canonicalize to that Bundle Hook stable ID, and have local_id exactly event, tool.execute.before, or tool.execute.after. Valid local, alias, and canonical Bundle Hook refs remain unchanged; no harness-prefixed form is accepted. Harness-owned host hooks remain entirely under existing Harness/plugin ownership and outside AgentBundle hook_refs.
+
+Source preparation and canonical PreparedCatalog validation both route every hook_ref through the normal reference parser, Bundle Hook resolution, kind check, canonical rewrite, duplicate-after-canonicalization check, supported-name validation, and exact-path Extension join. Existing invalid-reference, unknown-resource, wrong-kind, and supported-name errors keep their normal precedence; no compatibility or UnsupportedBundleFeature error is added. Invalid install/stage/publication preserves the last good generation, catalog Arc, and pinned bindings. Core adds no prefix filter and app adds no translation or fallback.
+
+Required evidence covers all three supported-looking harness spellings plus unknown, empty, and minimally malformed suffixes; hand-crafted prepared forms; unchanged canonicalization and duplicate/name/path validation for real Bundle Hooks; generation/catalog/binding preservation; and a runtime boundary proving rejected input creates neither filter/fallback, sidecar, nor model polling.
+
+After initialize, actual Hook registrations must equal the order-insensitive expected set derived from selected canonical `hook_refs`, and actual Tool declarations must independently equal the selected expected Tool set. Duplicate, missing, extra, unsupported, or unselected declarations reject before model polling or dispatch. Tool-only activations report zero hooks, hook-only activations report zero tools, and an empty executable selection starts no sidecar. Schema, dispatch, hooks, event fan-out, and entrypoint selection all consume the same captured `TurnBinding`/compiled view; `PermissionPlane` remains final before `tool/call`, static skills and host MCP remain available under existing policy, and Bundle MCP remains unsupported.
+
+This correction removes the WIP all-Bundle tool/Extension binding without adding a second manifest, schema field, sidecar DTO, HookName mapping, provenance protocol, import scanner, catalog, or live resolver. Its strict RED order is prepare canonicalization; exact-path join/package closure; captured-view disjointness and N/N+1 pinning; exact tool/hook declaration sets; dispatch/permission isolation; deterministic split-entrypoint Bun E2E; then static/private/Rust/MCP/generation regressions. Earlier method-role and one-way-event evidence remains valid.
+
+#### Strict RED order and release map
+
+The required order is: (1) plugin method-role lock; (2) Harness ACK gate/no
+delegated loop; (3) physical process ownership; (4) schema opening for
+JS/Bun tools/hooks while unsupported combinations stay rejected; (5) exact
+archive closure; (6) app-owned materialization with a seam-scoped proof that
+core start sees only activation ID/lifecycle while the app resolves from the
+captured catalog; (7) atomic executable publication; (8) namespace plus
+`PermissionPlane`; (9) activation-bound hooks/event fan-out; (10) transient
+E2E; (11) resident E2E; (12) cancellation/process-loss recovery; (13) explicit
+stop and replacement-drift terminal behavior; (14) private/replay/admission/
+epoch/dependency/full-gate regression. No boundary opens before its predecessor
+is GREEN.
+
+The release map is fixed: 0.34.9 inspector/registry and 0.34.10 CLI/lazy
+public-static publication are closed; 0.34.11 owns public transient and resident
+JS/Bun extension sidecars together; 0.34.12 is only 100/256 certification; and
+0.34.13 is only the independent updater. The first Pro response's delegated
+agent loop, `agent/invoke`, terminal/artifact envelope, sidecar send/wait, and
+split transient/resident releases are rejected.

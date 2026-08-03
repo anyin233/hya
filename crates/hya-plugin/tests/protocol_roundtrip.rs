@@ -58,6 +58,27 @@ fn frame_parse_classifies_by_shape() {
 }
 
 #[test]
+fn parse_rejects_non_jsonrpc_2_frames() {
+    let frames = [
+        r#"{"jsonrpc":"1.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"1.0","method":"event","params":{}}"#,
+        r#"{"jsonrpc":"1.0","id":1,"result":{}}"#,
+    ];
+
+    for line in frames {
+        assert!(Frame::parse(line).is_err());
+    }
+}
+
+#[test]
+fn parse_rejects_response_with_result_and_error() {
+    assert!(Frame::parse(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true},"error":{"code":-32600,"message":"invalid request"}}"#
+    )
+    .is_err());
+}
+
+#[test]
 fn hook_name_uses_dotted_wire_form() {
     assert_eq!(
         serde_json::to_string(&HookName::ToolExecuteBefore).unwrap(),

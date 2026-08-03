@@ -2275,3 +2275,153 @@ test/product change was made for the flake.
 Trellis validation is GREEN (`implement.jsonl`: 49; `check.jsonl`: 74), as are
 JSONL validation and `git diff --check`. Exact staging, commit, push, and
 exact-SHA remote CI remain pending/unclaimed.
+
+## 18.5 Active release — `0.34.11` public JS/Bun extension sidecars
+
+### 18.5.1 Closed entry baseline and authority
+
+Release 0.34.10 is closed at clean HEAD/upstream/PR head
+`63c5c7b0d0267b1e811e9b6a45e0b978362c3115`; exact-SHA CI run `30724050897`
+attempt 2 is fully GREEN. Workspace/TUI version is 0.34.10. Protected main
+remains `267bfc3c6c66e46fe8514e2e70657489f853b7f0` with exactly 20 user-owned
+status entries, and the three preserved stashes remain unchanged.
+
+Consult26 chooses one Harness-native agent runtime with one optional
+activation-scoped Bun Compat extension sidecar. Its source-corrected ruling
+supersedes the older unresolved owner gate, the old 0.34.10 runner placement,
+the transient/resident release split, and every `agent/invoke` or terminal/
+artifact-result proposal. Sol owns architecture, decision records, RED/GREEN
+acceptance, review, handoff, commit/push, and exact-SHA CI. Bounded
+`luna-worker` agents may execute only explicit deterministic edits/tests/gates
+and may not interpret the ruling or decide stage completion.
+
+### 18.5.2 Strict TDD implementation order
+
+No item opens before the preceding item is independently GREEN:
+
+1. Plugin duplex method-role lock: initialize carries exactly activation ID and
+   lifecycle as a request/reply; `tool/call` and `hook/*` are request/reply;
+   `event` is a no-id/no-result notification; no `agent/invoke` exists.
+2. Harness ACK/no-delegated-loop gate: a barrier fake proves no running
+   transition or model poll before initialize-plus-declaration ACK, the task
+   stays in Harness, the sidecar receives no task/result, resident send uses
+   the mailbox, and transient send rejects.
+3. Real process ownership fixtures: per-activation PID/cwd, bounded stderr,
+   explicit shutdown, terminate/reap, drop fallback, exit observation, no
+   transparent retry, distinct transient PIDs, and one healthy resident PID.
+4. Open the existing schema/prepared decode only for supported JS/Bun extension
+   resources, tools, and hooks while preserving paths/content/IDs/aliases/
+   digests/references; private, raw Rust, Bundle MCP, and unenforced resource
+   profiles remain activation-rejected.
+5. Strict public archive closure: root manifest plus exactly the existing-v1
+   declared agent prompt/resource/Extension paths; reject missing declared or
+   unreferenced archive entries, wrapper/traversal/non-regular/duplicate paths;
+   prove directory/archive identity/digest equality and unchanged 7z limits.
+   Undeclared directory files stay outside prepared bytes/digests; no helper or
+   import closure is introduced.
+6. Seam-scoped app materialization: app resolves/materializes from the captured
+   `RuntimeSnapshot`/`TurnBinding` catalog and constructs the bound plugin
+   implementation; the core-facing start request contains only `activation_id`
+   and lifecycle and adds no Bundle/package/`PreparedResource`/source/path/
+   digest/`hya-plugin` type. Do not remove the shipped core-to-bundle edge.
+7. Atomic executable publication through the existing registry/CLI; unsupported
+   or invalid candidates preserve generation and old/new bindings remain
+   pinned.
+8. Namespace and `PermissionPlane`: canonical Bundle precedence from the
+   captured binding, denial before RPC, allowed `tool/call` through the existing
+   Harness result path, static skills/host MCP retained, Bundle MCP rejected.
+9. Activation-bound hook dispatch and exact one-way event notification, with no
+   result, task meaning, or `MemberOutcome` gate.
+10. Transient E2E: ACK, Harness model, permission, sidecar tool call, Harness
+    result and `MemberOutcome`, graceful shutdown/reap; the child receives no
+    task and returns no agent result.
+11. Resident E2E: two durable mailbox messages/model loops reuse one healthy
+    sidecar PID; no sidecar send, per-message process, pool, or idle reclaim.
+12. Cancellation/process-loss recovery: kill/timeout aborts running work under
+    epoch fencing, refunds/finalizes once, rejects stale results, replays no
+    RPC/event, preserves queued-after work, then uses fresh PID/ACK and the same
+    pinned binding; idle replacement is lazy and startup recovery idempotent.
+13. Explicit stop and terminal incompatibility: final/idempotent stop rejects
+    sends, cancels queued work, removes map/staging, releases claim once;
+    replacement declaration drift disables/fails once with no restart loop.
+14. Full invariant regression: private/generation preservation, stable
+    `AgentName`/event/replay, admission/epoch, permission interception, and
+    dependency audit retaining `hya-core -> hya-bundle`, `hya-plugin ->
+    hya-core`, and `hya-app ->` both while `hya-bundle` remains independent,
+    `hya-core -> hya-plugin` stays absent, and `RuntimeSnapshot` remains the sole
+    catalog owner; then Rust/Compat/TUI/executable/strace/zero-INET/full CI.
+
+Item-14 executable-main correction follows five strict slices: (1) root resolver/ACK gate with one captured binding/name and no model poll before ACK; (2) static/coordinator/executable-root-plus-resident ownership matrix; (3) old/new root generation pinning; (4) pre-model failure and exactly-once cleanup table; (5) supported Bun selected-main E2E. It must reuse the single app-injected `BundleSidecarEnvironment::factory_for` responsibility, keep `ensure_main` process-free, and never share root and resident-child handles. This is an additive root activation seam, not a catalog migration or server callback.
+
+### 18.5.3 Delivery boundary
+
+The stage must update runtime/plugin/package/CLI/user documentation, README,
+newest-only 0.34.11 changelog with archived 0.34.10 history, the built-in
+`agent-bundle-authoring` skill, deterministic transient/resident Bun examples,
+the retained static-only example, and invalid closure fixtures. The Rust
+example remains explicitly non-activatable. Every executable example uses the
+same Harness agent loop and the existing plugin transport.
+
+No private/key work, 0.34.12/0.34.13 work, external model loop, terminal or
+artifact ABI, sidecar send/wait, pool/shared process, second catalog/runtime/
+loader/manifest/DTO/transport, core-to-plugin dependency, raw Rust/Bundle MCP,
+compile-on-activation, arbitrary env/command, cancellation RPC, streaming,
+inbound child requests, result replay, PID/context persistence, TTL/heartbeat/
+reclaim/watcher, permission expansion, sandbox claim, or stable event/identity
+change belongs in 0.34.11.
+
+Item 7 TDD evidence: `public_bun_bundle_install_publishes_resources_atomically` first completed real public 7z inspection/install and generation-1 prepared-BLOB validation, then failed only because `bundle info` omitted executable resource rows. GREEN keeps the existing atomic registry/publication path and extends the shared deterministic info projection to tool/MCP/hook/extension stable IDs; existing `bundle_registry` rollback/idempotency tests and runtime-refresh old/new-binding tests remain the nonduplicated generation/pinning evidence. Focused 1/1, bundle CLI 7/7, touched Clippy/fmt/diff, hya-app 91 unit plus all integration, and hya-core full-crate gates are green.
+
+Item 8 TDD evidence: the compiled-resource RED first exited 101 only because the intended `compile_agent_resources_with_sidecar_tools` seam was absent. GREEN builds one immutable schema/dispatch map from the captured `TurnBinding`, gives Bundle-local tools short-name precedence, retains exact Bundle and Harness qualified names, and keeps existing static-skill and host-MCP behavior. The transient permission RED first exited 101 only because the opaque handle exposed no tool bindings; GREEN captures declarations after initialize, validates them before ACK, and sends the same resolved tools into the existing Harness turn. A denied canonical Bundle tool produces the existing persisted `ToolError` and performs zero sidecar calls. The raw transport RED exited 101 only because `PluginClient::call_tool` was absent; GREEN reuses the existing `tool/call` request/reply path without Bundle-mode retry. The app binding RED exited 101 only because `bind_bundle_sidecar_tools` was absent; GREEN exact-binds initialized declarations to captured prepared resources, checks canonical `PermissionPlane` identity before RPC, and rejects drift before ACK without consulting the live catalog.
+
+Resident propagation has an independent behavioral RED: one durable mailbox message deterministically reached `RosterStatus::Failed` instead of `Idle` because the healthy resident handle's tool bindings were dropped before resource compilation. GREEN captures that Arc once after ACK and reuses it for resolved resident turns; the exact test now observes public `echo`, one allowed canonical dispatch, and the existing persisted `ToolResult`. Focused map/permission/transport/app/resident tests, the 14/14 subagent suite, full hya-core and hya-plugin suites, fmt, touched all-target Clippy, and diff checks are GREEN. The sandboxed hya-app suite was 91/92 with only OAuth loopback bind `Operation not permitted`; the one authorized exact non-sandbox rerun was fully GREEN (92 unit tests plus all integration suites).
+
+Item 9 TDD evidence: the core RED exited 101 only because `SidecarHandle::hook_dispatcher` was absent. GREEN captures one dispatcher after ACK, scopes it task-locally to the child `SessionId`, chains existing global then activation-local tool before/after hooks, forwards only exact matching child envelopes, and reuses the same healthy resident hook Arc; command, message-user, chat-params, and text-complete calls never reach the activation dispatcher. The raw-plugin RED exited 101 only because `ActivationHookDispatcher` was absent. GREEN uses the already-initialized `PluginClient` without respawn/replay, preserves hook request/reply posture semantics, and drains exact `event` notifications through one bounded ordered activation queue with no ID or result. The app RED first failed because initialized hook declarations still yielded `None`; GREEN exposes the dispatcher only after compatibility and declaration validation. Independent behavioral REDs then proved task-context hooks and duplicate hook names were accepted; GREEN permits only `tool.execute.before`, `tool.execute.after`, and `event`, rejects unsupported or duplicate declarations before ACK, terminates the child, and removes staging on failure. Focused core/plugin/app tests, full hya-core and hya-plugin suites, touched all-target Clippy, rustfmt, and diff checks are GREEN. The post-change hya-app lib run passed 93/94; its sole failure was the already-accounted sandbox-only OAuth loopback bind `Operation not permitted`, while all runtime-reconcile tests passed.
+
+Item 10 TDD evidence: the explicit lifecycle RED first failed to compile only because the opaque `SidecarHandle` exposed no `shutdown`; GREEN adds one dependency-free async lifecycle method, keeps raw process ownership in `hya-plugin::ChildGuard`, reaps before returning, and removes activation staging idempotently. The core ordering RED then failed `calls left 0 right 1`; GREEN carries the transient opaque handle through the successful member task, appends the canonical `MemberFinished` exactly once, and only then performs graceful shutdown/reap. Error and cancellation recovery remain item 12.
+
+The Bun Bundle-mode RED ran the real adapter and received only the hostile normal-discovery `leak` tool instead of the explicit `echo` extension. GREEN adds a narrow internal `--bundle-extension` startup path that loads only app-materialized absolute files with empty initialization input; normal Compat discovery remains unchanged and no wire method or second transport was added. The app launch RED reached initialize but failed declaration validation with `expected 1, got 0`; GREEN passes those materialized extension paths to the same bundled adapter command after creating the per-activation cwd.
+
+The final transient composition test uses the real bundled Bun adapter plus a two-round `FakeProvider`: Harness polls the model only after ACK, applies the canonical Bundle-tool permission, sends `tool/call`, persists the normalized existing `ToolResult`, completes the second Harness model round, emits one Done `MemberFinished` with the child session, and removes activation staging after shutdown/reap. The child fixture rejects nonempty initialization or tool input, receives no agent task, and returns no agent outcome. Its final focused result is 1/1 GREEN.
+
+Touched gates are GREEN: core subagent 16/16 and full hya-core; full hya-plugin; non-sandbox hya-app 98 unit tests plus every integration suite; adapter typecheck and an isolated-HOME full adapter run at 64/64 with 153 assertions; rustfmt, touched all-target Clippy, and `git diff --check`. The first sandbox app run also exposed two pre-existing reconcile tests whose generation oracle crossed `bind_turn` HOME-based skill discovery; both passed alone. The test-only correction now measures the reconciler's effective manifest immediately around failure, preserving tool/pinned-binding assertions without changing product concurrency. The only remaining sandbox failure was the known OAuth loopback `Operation not permitted`.
+
+Item 11 composition evidence is deliberately honest: the earlier item 8 resident-propagation RED had already supplied the missing product behavior, so the first correct item 11 invocation was GREEN rather than a fabricated failure. The real Bun fixture starts with no initial directive, receives exactly two durable mailbox messages, and runs two Harness-owned provider/tool loops through one resident activation. Its module-scoped counter returns `pid:1` then `pid:2`; child replay contains exactly two normalized `ToolResult` events, both PIDs are identical and nonempty, no `ToolError` exists, and the resident returns to `Idle` after each event-barrier wait. No sleep, poll, timeout, sidecar send, per-message process, pool, or idle reclaim was introduced.
+
+Item 11 gates are GREEN: focused 1/1; non-sandbox hya-app 99/99 unit tests plus 28/28 integration tests (127 total); rustfmt, hya-app all-target Clippy with `-D warnings`, and `git diff --check`. Explicit resident stop/reap/staging removal remains item 13 and was not claimed by this healthy-reuse proof.
+
+Item 12 TDD evidence: a Bundle-mode tool timeout first left the same client callable; GREEN taints and closes the process with no transparent retry. Independent idle-loss and running-loss tests then proved lazy fresh-process ACK, epoch fencing, once-only abort/refund, stale rejection, queued-after preservation, a fresh PID, and the original pinned TurnBinding. Activation-local before-hook, after-hook, and event transport-loss REDs each crossed their real dispatch seam; GREEN checks the captured dispatcher before provider polling and after each request/reply hook, so a lost sidecar cannot commit a tool result, append later actor state, or trigger replay. Global hooks remain unchanged.
+
+The startup-recovery RED used an installed executable resident plus durable queued mail: current recovery consumed the mail but never initialized its extension because the recreated slot discarded roster/resource/factory context. GREEN exact-resolves the recorded stable AgentName from one current TurnBinding, derives its roster, resource policy, and optional bound factory from that same binding, and stores the existing ResolvedResidentRuntime in the recovered slot; guidance, PID, stdio, and process memory remain non-durable. The real Bun extension ACK marker now precedes queued-mail completion. Focused recovery tests, hya-app 129/129, hya-core 166 passed with one ignored worktree lifecycle test, rustfmt, touched all-target Clippy, and diff checks are GREEN.
+
+Item 13 TDD evidence: the idle-stop RED first exited 101 only because ResidentSupervisor exposed no stop_resident seam. GREEN adds one slot-local cancellation root, one explicit stop request, actor-epoch fencing through the existing recover/terminalize path, exactly one Failed activity transition, full-tuple claim release, graceful idle shutdown, active terminate/reap, slot removal, and pre-append rejection of mail to terminal residents. Repeating a completed stop is projection-idempotent. The running-stop RED then failed only with Invalid("resident stop already in progress"); GREEN treats an already accepted stop request as idempotent without a second fence, release, notification, or cleanup. A blocked provider plus queued-after mail proved one terminate, no queued admission or provider rerun, no late stale append, released claim, and final send rejection.
+
+The existing running-loss regression then produced [Cancelled, Cancelled] instead of [Cancelled, Stop]. Direct source review showed BundleSidecarTool cancels its ToolCtx token on transport loss, while the new slot token had been reused across mailbox turns. GREEN keeps the slot token as the team-derived stop root but gives every RunPlan a fresh child token, so loss cancels only the current turn and explicit stop still cancels the active child. The declaration-drift RED reached the opaque factory ACK failure and failed only because the child claim and resident slot remained active. GREEN preserves one actor-fenced Failed event, releases the current claim once, removes the Busy slot, and exits with no restart loop; app-owned factory tests independently retain real child reap and activation-staging cleanup on shutdown or declaration rejection.
+
+Item 13 gates are GREEN: focused idle/running/drift tests; hya-core 169 passed with one ignored worktree lifecycle test; hya-app 129/129 including bundle_sidecar_handle_shutdown_reaps_child_and_removes_activation_staging and bundle_sidecar_rejects_task_context_hook_before_ack; rustfmt, hya-core+hya-app all-target Clippy with -D warnings, and git diff --check. The first post-change app run exposed the running-loss cancellation regression above plus a secondary poisoned shared EnvGuard; after the product correction, the exact socket-based focused test passed in its one authorized non-sandbox run and the full non-sandbox app suite was clean.
+
+The earlier item-14 concurrency diagnosis that described a stop request preceding split durable recovery is superseded by the implemented C semantics and the source audit below. TeamState installs one shared completion and issues only a local cancellation signal; that signal is not a durable or public linearization point. The leader then calls one bounded SessionStore stop finalizer under BEGIN IMMEDIATE. That transaction fences the exact active claim, appends existing actor cancellation effects, aborts/refunds bound admissions exactly once, appends the existing Failed resident activity, releases the claim last, and commits atomically. Only after that commit does the resident consume its cleanup request, shut down or terminate/reap its activation, remove its slot, and publish the shared completion Result. Duplicate callers wait on that same completion through cleanup; failure is shared and a later retry resumes cleanup against the already-terminal durable state without duplicating terminal/refund writes.
+
+Direct and channel resident sends each acquire the same SQLite writer order with BEGIN IMMEDIATE before replaying roster/claim state, require an active resident claim, append the unchanged MailSent event, and report success only after commit. Therefore send-first mail is visible to the later stop and becomes non-processable through the existing reducer/cursor terminal semantics; stop-first releases the claim before commit and a later sender rechecks and rejects or excludes that resident. Mail remains epoch-independent, channel events keep stable bytes, and SQLite/event replay remains the sole acceptance and restart authority. The single-transaction feasibility audit found no separate authoritative inbox table, so the accepting_mail/stopping two-phase fallback is not activated.
+
+The final focused evidence is GREEN without another product change: resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactly_once; resident_mail_remains_epoch_independent_until_explicit_stop; resident_direct_send_committed_before_stop_is_durably_cancelled; resident_stop_commits_before_stale_direct_send_rechecks_and_rejects; channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber; duplicate_stop_shares_cleanup_failure_and_later_retries_cleanup_without_reterminalizing; and explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_mail each passed 1/1. cargo fmt --all --check and git diff --check also passed. These tests cover send-first, stop-first, active-plus-stopped channel ordering and replay, shared duplicate failure/cleanup retry, epoch independence, every durable write-boundary rollback, once-only terminal/refund/release, queued-mail cancellation, and post-stop rejection.
+
+Item-14 hook/resource-isolation follow-up is now controlling over the earlier broad all-Bundle materialization behavior. The accepted A+B sequence is: (1) canonicalize local/alias/canonical `hook_refs` to stable Hook IDs, reject wrong-kind/ambiguous/duplicate refs, and admit only exact local IDs `event`, `tool.execute.before`, and `tool.execute.after`; (2) exact-path join selected Tool/Hook resources to exactly one same-owner `extensions.js`, reject unreachable/zero/ambiguous/wrong-owner matches, and stage controlled cross-kind path reuse once; (3) extend the captured `CompiledResourceView` with canonical Hook IDs and prove two agents receive disjoint deterministic closures pinned across N/N+1 publication; (4) validate initialized tool and hook declarations as independent exact sets, including duplicate/missing/extra/unsupported and tool-only/hook-only cases; (5) prove unselected dispatch isolation and `PermissionPlane` denial before RPC; (6) run deterministic split-entrypoint Bun Compat E2E and reject a generic superset module before model polling; (7) regress static process-free, shared selected Extension load-once, private/Rust/Bundle-MCP rejection, and generation pinning.
+
+The implementation must remove all-Bundle tool/Extension binding and derive the activation closure only from the captured agent resource policy/view and `TurnBinding`. No `extension_refs`, implementation/provenance field, free HookName mapping, second DTO/loader/catalog/transport, import graph, or permission plane is authorized. Existing one-way `event` and method-role tests remain valid; this follow-up reopens only identity, entrypoint selection, declaration equality, and dispatch isolation.
+
+The helper-file arbitration is resolved as self-contained-entrypoint-only. No source/IR/runtime field is opened. Pending item-14 evidence must prove: helper/dependency unknown fields reject; undeclared directory files do not enter PreparedBundle/digest while archive extras reject; directory and archive activations omit relative helpers and fail before ACK/model/dispatch with once-only cleanup; a co-path self-contained Extension stages once for aggregate selected declarations; distinct/other-agent/unreachable/misdeclared Extensions preserve selected-entrypoint isolation; and captured PreparedResource bytes remain pinned across source mutation and N+1 publication. The exact normative sentence is: “The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.”
+
+The harness-prefixed hook_ref arbitration is also resolved as option A. Both prepare/validation bypasses must be deleted; all supported-looking, unknown, empty, and minimally malformed harness:hook spellings reject through existing normal-reference errors. Follow with hand-crafted PreparedCatalog rejection, unchanged real Bundle Hook canonicalization/duplicate/name/path regressions, generation/catalog/binding preservation, and no runtime filter/fallback/sidecar/model polling. No new error, compatibility plane, schema migration, or runtime branch is authorized.
+
+Item-14 self-contained-entrypoint evidence is GREEN. `prepared_decode_rejects_unknown_bundle_collections` injects `files`, `helpers`, `dependencies`, and `imports` into digest-rebound prepared bytes and proves decode rejects every invented collection. `public_archive_matches_directory_source_prepared_identity_and_ignores_undeclared_helper` proves an authoring-only helper never enters a `PreparedResource`, prompt source, prepared bytes, or digest while directory/archive declared identity stays identical. `directory_bundle_importing_undeclared_authoring_helper_fails_before_ack` uses a real directory source whose selected entrypoint imports that helper; captured-generation rematerialization omits it, initialization fails before ACK/model/dispatch, and cleanup leaves activation staging empty. Existing co-path shared-Extension, disjoint-agent, generic-superset, unreachable-Extension, declaration-order, and N/N+1 captured-content tests provide the nonduplicated remaining isolation evidence.
+
+The authoring docs/skill contract REDs compiled and failed only because the exact self-contained-JS and Bundle-local-hook wording was absent. GREEN records the normative self-contained sentence, external single-file bundling, authoring-tree isolation, directory/archive asymmetry, pre-ACK helper-import failure, rejection of all `harness:hook/*` spellings, host-hook ownership, and unchanged private/raw-Rust/MCP/no-sandbox/no-permission-expansion boundaries. Focused docs contract 1/1, complete `docs_example` 5/5, built-in skill contract 1/1, rustfmt, and `git diff --check` are GREEN.
+
+Final Standards/Spec review closed two concrete regressions without opening a new product boundary. Source and prepared resource-view validation had retained a second `harness:hook/*` bypass after `hook_refs` itself was corrected. The source RED and hand-crafted prepared RED each compiled and failed only because `harness:hook/event` still resolved; GREEN removed `hook` from both Harness-prefix allow-lists so all such spellings now follow the existing normal-reference error path. Real Bundle Hook canonicalization, exact-path Extension selection, and runtime behavior remain unchanged. The complete hya-bundle suite passed 93 tests, with all-target Clippy, rustfmt, and diff checks GREEN.
+
+The final transient-cancellation RED proved that `run_member` discarded `FinishReason::Cancelled`, emitted `MemberRunStatus::Done`, and selected graceful sidecar shutdown. GREEN captures the finish reason from all four bound/resolved actor/non-actor turn paths, maps only `Cancelled` to the existing `CoreError::Cancelled` path, records Failed evidence plus `MemberRunStatus::Cancelled`, and terminates the activation handle exactly once with no graceful shutdown. The focused test passed 1/1; the complete hya-core suite, hya-core all-target Clippy, rustfmt, and diff checks are GREEN.
+
+The final Compat gate also exposed host-environment leakage in eight subprocess test helpers: an unsandboxed run inherited real HOME/XDG plugin discovery and added unrelated default hooks while every product assertion remained intact. The existing failures served as the RED. GREEN gives each helper its existing temporary HOME/XDG root and disables project discovery without changing product code or expected declarations. Unsandboxed Compat verification passed typecheck and 64/64 tests.
+
+Local 0.34.11 CI-equivalent gates are GREEN. The locked hya/hya-backend/hya-ts binary build, workspace rustfmt, workspace all-target Clippy with `-D warnings`, workspace build, unsandboxed serial workspace tests, and final workspace-bin build all exited zero. The initial sandbox workspace test failed only at prohibited localhost/process operations and consequent shared-lock poisoning; the exact unsandboxed rerun was clean. TypeScript TUI frozen install/typecheck/build and unsandboxed tests passed 49/49; Compat passed 64/64; `scripts/verify-no-http.sh` reported `OK: zero inet sockets`; final diff checks are clean. Workspace/TUI/root changelog remain 0.34.11 with archived 0.34.10 history. Canonical HEAD equals upstream `63c5c7b0d0267b1e811e9b6a45e0b978362c3115`; protected main retains its exact 20 user-owned status paths and the three preserved stash hashes. Current status is `LOCAL-GATES-GREEN / READY-TO-COMMIT-PUSH-CI`; commit, push, and exact-SHA remote CI remain unclaimed.

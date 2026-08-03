@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -383,150 +384,195 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
         ArchiveReaderOptions::strict(),
     )
     .map_err(map_archive_error)?;
-    let (
-        archive_file_count,
-        expected_entry_name,
-        expected_entry_size,
-        expected_entry_crc,
-        packed_bytes,
-    ) = {
+    let (expected_entries, declared_expanded_bytes, archive_paths) = {
         let archive = reader.archive();
-        if archive.files.len() != 1 {
+        if archive.files.is_empty()
+            || archive
+                .files
+                .iter()
+                .filter(|entry| entry.name == "bundle.hya.md")
+                .count()
+                != 1
+        {
             return Err(BundleError::UnsafePackage);
         }
-        if archive.is_solid || archive.blocks.len() != 1 {
+        if archive.is_solid || archive.blocks.len() != archive.files.len() {
             return Err(BundleError::InvalidPackageFormat);
         }
-
-        let entry = archive
-            .files
-            .first()
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        if entry.name != "bundle.hya.md" {
-            return Err(BundleError::UnsafePackage);
-        }
-        if !entry.has_stream
-            || entry.is_directory
-            || entry.is_anti_item
-            || !entry.has_crc
-            || entry.name.len() > PUBLIC_MANIFEST_MAX_PATH_BYTES
-            || entry.name.split('/').count() > PUBLIC_MANIFEST_MAX_PATH_DEPTH
-            || entry.size > PUBLIC_MANIFEST_MAX_BYTES
+        if archive.stream_map.file_block_index.len() != archive.files.len()
+            || archive.stream_map.block_first_file_index.len() != archive.blocks.len()
+            || archive.stream_map.block_first_pack_stream_index().len() != archive.blocks.len()
         {
             return Err(BundleError::InvalidPackageFormat);
         }
 
-        if entry.has_windows_attributes {
-            let attributes = entry.windows_attributes;
-            if attributes
-                & (WINDOWS_ATTRIBUTE_DIRECTORY
-                    | WINDOWS_ATTRIBUTE_DEVICE
-                    | WINDOWS_ATTRIBUTE_REPARSE_POINT)
-                != 0
-            {
-                return Err(BundleError::InvalidPackageFormat);
-            }
-
-            let unix_file_type = (attributes >> 16) & UNIX_FILE_TYPE_MASK;
-            if unix_file_type != 0 && unix_file_type != UNIX_REGULAR_FILE_TYPE {
-                return Err(BundleError::InvalidPackageFormat);
-            }
-        }
-
-        let block = archive
-            .blocks
-            .first()
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        if block.coders.is_empty() || block.coders.len() > 2 {
-            return Err(BundleError::InvalidPackageFormat);
-        }
-        for coder in &block.coders {
-            let coder_id = coder.encoder_method_id();
-            if coder_id != EncoderMethod::ID_COPY
-                && coder_id != EncoderMethod::ID_LZMA
-                && coder_id != EncoderMethod::ID_LZMA2
-            {
-                return Err(BundleError::InvalidPackageFormat);
-            }
-        }
-
-        let block_index = archive
-            .stream_map
-            .file_block_index
-            .first()
-            .copied()
-            .flatten()
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        if block_index != 0 {
-            return Err(BundleError::InvalidPackageFormat);
-        }
         let pack_stream_starts = archive.stream_map.block_first_pack_stream_index();
-        let first_pack_stream_index = pack_stream_starts
-            .get(block_index)
-            .copied()
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        let next_block_index = block_index
-            .checked_add(1)
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        let next_pack_stream_index = pack_stream_starts
-            .get(next_block_index)
-            .copied()
-            .unwrap_or_else(|| archive.pack_sizes().len());
-        let referenced_pack_sizes = archive
-            .pack_sizes()
-            .get(first_pack_stream_index..next_pack_stream_index)
-            .ok_or(BundleError::InvalidPackageFormat)?;
-        if referenced_pack_sizes.is_empty() {
+        let pack_sizes = archive.pack_sizes();
+        if pack_stream_starts.first().copied() != Some(0) {
             return Err(BundleError::InvalidPackageFormat);
         }
-        let packed_bytes = referenced_pack_sizes
-            .iter()
-            .try_fold(0_u64, |total, packed_size| {
-                total
-                    .checked_add(*packed_size)
-                    .ok_or(BundleError::InvalidPackageFormat)
-            })?;
-        if !within_expansion_ratio(entry.size, packed_bytes) {
-            return Err(BundleError::PackageLimitExceeded {
-                limit: "expansion ratio",
-            });
+        if archive.blocks.is_empty() || pack_sizes.is_empty() {
+            return Err(BundleError::InvalidPackageFormat);
         }
 
-        (
-            archive.files.len(),
-            entry.name.clone(),
-            entry.size,
-            entry.crc,
-            packed_bytes,
-        )
+        let mut names = BTreeSet::new();
+        let mut ascii_case_names = BTreeSet::new();
+        let mut used_blocks = vec![false; archive.blocks.len()];
+        let mut expected_entries = Vec::with_capacity(archive.files.len());
+        let mut declared_expanded_bytes = 0_usize;
+        for (file_index, entry) in archive.files.iter().enumerate() {
+            if !valid_public_archive_path(&entry.name) || !names.insert(entry.name.clone()) {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+            if !ascii_case_names.insert(entry.name.to_ascii_lowercase()) {
+                return Err(BundleError::UnsafePackage);
+            }
+            if !entry.has_stream
+                || entry.is_directory
+                || entry.is_anti_item
+                || !entry.has_crc
+                || entry.size > PUBLIC_MANIFEST_MAX_BYTES
+            {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+
+            if entry.has_windows_attributes {
+                let attributes = entry.windows_attributes;
+                if attributes
+                    & (WINDOWS_ATTRIBUTE_DIRECTORY
+                        | WINDOWS_ATTRIBUTE_DEVICE
+                        | WINDOWS_ATTRIBUTE_REPARSE_POINT)
+                    != 0
+                {
+                    return Err(BundleError::InvalidPackageFormat);
+                }
+
+                let unix_file_type = (attributes >> 16) & UNIX_FILE_TYPE_MASK;
+                if unix_file_type != 0 && unix_file_type != UNIX_REGULAR_FILE_TYPE {
+                    return Err(BundleError::InvalidPackageFormat);
+                }
+            }
+
+            let block_index = archive
+                .stream_map
+                .file_block_index
+                .get(file_index)
+                .copied()
+                .flatten()
+                .ok_or(BundleError::InvalidPackageFormat)?;
+            if block_index >= archive.blocks.len()
+                || used_blocks[block_index]
+                || archive.stream_map.block_first_file_index[block_index] != file_index
+            {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+            used_blocks[block_index] = true;
+
+            let block = archive
+                .blocks
+                .get(block_index)
+                .ok_or(BundleError::InvalidPackageFormat)?;
+            if block.coders.is_empty() || block.coders.len() > 2 {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+            for coder in &block.coders {
+                let coder_id = coder.encoder_method_id();
+                if coder_id != EncoderMethod::ID_COPY
+                    && coder_id != EncoderMethod::ID_LZMA
+                    && coder_id != EncoderMethod::ID_LZMA2
+                {
+                    return Err(BundleError::InvalidPackageFormat);
+                }
+            }
+
+            let first_pack_stream_index = pack_stream_starts
+                .get(block_index)
+                .copied()
+                .ok_or(BundleError::InvalidPackageFormat)?;
+            let next_pack_stream_index = pack_stream_starts
+                .get(block_index + 1)
+                .copied()
+                .unwrap_or(pack_sizes.len());
+            if first_pack_stream_index >= next_pack_stream_index
+                || next_pack_stream_index > pack_sizes.len()
+            {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+            let referenced_pack_sizes = pack_sizes
+                .get(first_pack_stream_index..next_pack_stream_index)
+                .ok_or(BundleError::InvalidPackageFormat)?;
+            let packed_bytes =
+                referenced_pack_sizes
+                    .iter()
+                    .try_fold(0_u64, |total, packed_size| {
+                        total
+                            .checked_add(*packed_size)
+                            .ok_or(BundleError::InvalidPackageFormat)
+                    })?;
+            if !within_expansion_ratio(entry.size, packed_bytes) {
+                return Err(BundleError::PackageLimitExceeded {
+                    limit: "expansion ratio",
+                });
+            }
+
+            let entry_size =
+                usize::try_from(entry.size).map_err(|_| BundleError::InvalidPackageFormat)?;
+            declared_expanded_bytes = declared_expanded_bytes
+                .checked_add(entry_size)
+                .ok_or(BundleError::InvalidPackageFormat)?;
+            if declared_expanded_bytes > PUBLIC_EXPANDED_MAX_BYTES {
+                return Err(BundleError::InvalidPackageFormat);
+            }
+            expected_entries.push((entry.name.clone(), entry.size, entry.crc, packed_bytes));
+        }
+        if used_blocks.iter().any(|used| !used)
+            || pack_stream_starts
+                .windows(2)
+                .any(|window| window[0] >= window[1])
+            || *pack_stream_starts
+                .last()
+                .ok_or(BundleError::InvalidPackageFormat)?
+                >= pack_sizes.len()
+        {
+            return Err(BundleError::InvalidPackageFormat);
+        }
+
+        (expected_entries, declared_expanded_bytes, names)
     };
 
     let mut callback_count = 0_usize;
     let mut expanded_bytes = 0_usize;
     let mut invalid_layout = false;
     let mut callback_error = None;
-    let mut manifest_bytes = Vec::new();
+    let mut source_files = Vec::with_capacity(expected_entries.len());
     reader
         .for_each_entries(|entry, stream| {
             callback_count = callback_count
                 .checked_add(1)
                 .ok_or_else(|| std::io::Error::other("public package callback count overflow"))?;
-            if callback_count != 1
-                || entry.name.as_str() != expected_entry_name.as_str()
+            let Some((expected_entry_name, expected_entry_size, expected_entry_crc, packed_bytes)) =
+                expected_entries.get(callback_count - 1)
+            else {
+                invalid_layout = true;
+                return Ok(false);
+            };
+            if entry.name.as_str() != expected_entry_name.as_str()
                 || !entry.has_stream
                 || entry.is_directory
                 || entry.is_anti_item
                 || !entry.has_crc
-                || entry.size != expected_entry_size
-                || entry.crc != expected_entry_crc
+                || entry.size != *expected_entry_size
+                || entry.crc != *expected_entry_crc
             {
                 invalid_layout = true;
                 return Ok(false);
             }
 
-            let declared_size = usize::try_from(entry.size).map_err(|_| {
+            let declared_size = usize::try_from(*expected_entry_size).map_err(|_| {
                 std::io::Error::other("public package manifest size does not fit usize")
             })?;
+            let mut file_actual = 0_usize;
+            let mut file_bytes = Vec::new();
             let mut buffer = [0_u8; 8 * 1024];
             loop {
                 let read = stream.read(&mut buffer)?;
@@ -537,21 +583,27 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
                 let chunk = buffer.get(..read).ok_or_else(|| {
                     std::io::Error::other("public package stream read exceeded buffer")
                 })?;
-                if let Err(error) = retain_public_chunk(
-                    &mut manifest_bytes,
-                    &mut expanded_bytes,
-                    chunk,
-                    packed_bytes,
-                ) {
+                let next_expanded_bytes = match expanded_bytes.checked_add(chunk.len()) {
+                    Some(next) if next <= PUBLIC_EXPANDED_MAX_BYTES => next,
+                    _ => {
+                        callback_error = Some(BundleError::InvalidPackageFormat);
+                        return Ok(false);
+                    }
+                };
+                if let Err(error) =
+                    retain_public_chunk(&mut file_bytes, &mut file_actual, chunk, *packed_bytes)
+                {
                     callback_error = Some(error);
                     return Ok(false);
                 }
+                expanded_bytes = next_expanded_bytes;
             }
 
-            if manifest_bytes.len() != declared_size {
+            if file_actual != declared_size || file_bytes.len() != declared_size {
                 invalid_layout = true;
                 return Ok(false);
             }
+            source_files.push(SourceFile::new(entry.name.clone(), file_bytes));
 
             Ok(true)
         })
@@ -560,14 +612,55 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
     if let Some(error) = callback_error {
         return Err(error);
     }
-    if invalid_layout || callback_count != 1 || callback_count != archive_file_count {
+    if invalid_layout
+        || callback_count != expected_entries.len()
+        || source_files.len() != expected_entries.len()
+        || expanded_bytes != declared_expanded_bytes
+    {
         return Err(BundleError::InvalidPackageFormat);
     }
 
-    prepare_package(BundleSource::new(
-        "public-package",
-        vec![SourceFile::new("bundle.hya.md", manifest_bytes)],
-    ))
+    let prepared = prepare_package(BundleSource::new("public-package", source_files))?;
+    let mut prepared_paths = BTreeSet::new();
+    prepared_paths.insert("bundle.hya.md".to_string());
+    for bundle in prepared.bundles() {
+        for agent in &bundle.agents {
+            if let Some(prompt_source) = &agent.prompt_source {
+                prepared_paths.insert(prompt_source.clone());
+            }
+        }
+        for resource in bundle
+            .tools
+            .iter()
+            .chain(&bundle.skills)
+            .chain(&bundle.mcp)
+            .chain(&bundle.hooks)
+            .chain(&bundle.extensions)
+        {
+            prepared_paths.insert(resource.source_path.clone());
+        }
+    }
+    if prepared_paths != archive_paths {
+        return Err(BundleError::UnsafePackage);
+    }
+    Ok(prepared)
+}
+
+fn valid_public_archive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > PUBLIC_MANIFEST_MAX_PATH_BYTES
+        || bytes[0] == b'/'
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || bytes.iter().any(|byte| *byte == b'\\' || *byte == 0)
+    {
+        return false;
+    }
+    let mut segments = path.split('/');
+    if segments.clone().count() > PUBLIC_MANIFEST_MAX_PATH_DEPTH {
+        return false;
+    }
+    segments.all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
 fn private_bytes<const LENGTH: usize>(

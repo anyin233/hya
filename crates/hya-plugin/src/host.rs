@@ -18,8 +18,7 @@ use crate::client::{ChildGuard, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
-    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, METHOD_TOOL_CALL,
-    ToolCallParams, ToolCallReply, ToolInfo,
+    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, ToolCallReply, ToolInfo,
 };
 use crate::plugin_tool::PluginTool;
 
@@ -121,17 +120,11 @@ impl PluginConn {
         input: Value,
     ) -> Result<ToolCallReply, PluginError> {
         let client = self.ensure_client().await?;
-        let params = serde_json::to_value(ToolCallParams {
-            tool: tool.to_string(),
-            session,
-            call,
-            input,
-        })
-        .map_err(|error| PluginError::Json(error.to_string()))?;
-        match client.call(METHOD_TOOL_CALL, params, self.timeout).await {
-            Ok(value) => {
-                serde_json::from_value(value).map_err(|error| PluginError::Json(error.to_string()))
-            }
+        match client
+            .call_tool_with_timeout(tool, session, call, input, self.timeout)
+            .await
+        {
+            Ok(reply) => Ok(reply),
             Err(error) => {
                 if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
                     *self.live.lock().await = None;

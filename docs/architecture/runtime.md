@@ -103,7 +103,7 @@ closed.
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. For installed bundles,
 `hya-app` reads the bundle registry generation before binding each new root turn
 and before TUI/catalog refresh, builds one complete built-ins-plus-installed
-public-static candidate, and publishes it atomically. An unchanged generation
+public candidate, and publishes it atomically. An unchanged generation
 is a no-op; validation or load failure preserves the old snapshot. In-flight
 turns and child turns retain their pinned snapshot. There is no bundle watcher,
 per-provider-round or per-tool-call database check, or second catalog authority.
@@ -113,6 +113,45 @@ parent `TurnBinding` through the application supervisor into both transient and
 resident execution. The child path does not query the bundle registry database
 for a generation or bind whichever runtime is current when a queued request
 runs.
+
+## AgentBundle activation sidecars (0.34.11)
+
+`RuntimeSnapshot` retains the sole `Arc<BundleCatalog>` authority and the
+shipped `hya-core -> hya-bundle` dependency. For an executable public Bundle,
+`hya-app` resolves and materializes the validated resources from the captured
+snapshot/`TurnBinding` and constructs the activation-bound factory. The
+core-facing start request carries only `activation_id` and `lifecycle`; the
+factory returns an opaque lifecycle handle. It introduces no Bundle, package,
+path, digest, or `hya-plugin` types. `hya-plugin` owns the child, stdio,
+bounded stderr, shutdown, termination, and reap. `hya-app` depends on and
+coordinates `hya-core`, `hya-plugin`, and existing `hya-bundle` catalog types.
+Dependency directions remain `hya-core -> hya-bundle`, `hya-plugin -> hya-core`,
+`hya-app -> hya-core`, and `hya-app -> hya-plugin`; `hya-bundle` remains
+independent and no `hya-core -> hya-plugin` edge is added.
+
+Prepared canonical hook IDs are limited to `event`, `tool.execute.before`, and
+`tool.execute.after`. Selected Tool/Hook resources exact-path join to exactly
+one JS Extension in the referenced resource's owning bundle; the captured
+`TurnBinding` determines a deduplicated canonical entrypoint list, and
+staged-but-unselected Extensions never activate. Independently initialized
+Tool and Hook sets must each exactly equal the selected expected sets before
+model polling. A static selected view starts no process, and old bindings stay
+generation-pinned. There is no second resolver, catalog, DTO, or import scan.
+
+Harness remains the sole agent/model/task/mailbox/event/`MemberOutcome` and
+recovery runtime. The sidecar wire is newline-delimited JSON-RPC 2.0 using hya
+plugin protocol version 1. Initialize remains request/reply: initialize retains
+existing `protocol_version` and `host` fields, and the only activation-specific
+metadata is `{ activation_id, lifecycle }`. Declaration drift fails before
+Running or model polling. `tool/call` and `hook/*` are request/reply and `event` is a
+one-way notification without an id or result. A transient activation owns one
+child through its whole activation and then shuts down/reaps it. A healthy resident
+reuses one child across mailbox messages; idle loss lazily creates a fresh child,
+running loss aborts and fences the current item without replay, and queued-after
+work resumes with a fresh ACK on the same pinned binding. Explicit stop is final
+and idempotent, canceling queued work, removing the resident, and releasing its
+claim. There is no TTL, heartbeat, reclaim, second runtime, or persisted process
+state.
 
 ## Resident recovery and actor fencing
 

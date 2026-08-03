@@ -16,6 +16,7 @@ use hya_proto::{
 use hya_provider::ProviderRouter;
 use hya_store::{AdmissionState, AdmissionTerminal, OwnerRunId, SessionStore, StoreError};
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use sqlx::{Connection, SqliteConnection};
 use tokio_util::sync::CancellationToken;
 
 async fn engine(store: SessionStore) -> SessionEngine {
@@ -373,6 +374,128 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 }
 
 #[tokio::test]
+async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomically() {
+    let db_dir = support::TestDir::new("resident-recovery-atomic");
+    let db_path = db_dir.path().join("sessions.db");
+    let db_path = db_path.to_string_lossy().into_owned();
+    let store = SessionStore::connect(&db_path).await.unwrap();
+    let engine = engine(store.clone()).await;
+    let root = SessionId::new();
+    let actor = SessionId::new();
+    let handle = "recovery-atomic-1";
+
+    let old_claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+    store
+        .append_event(
+            root,
+            &Event::AgentRegistered {
+                session: root,
+                agent_session: actor,
+                handle: handle.to_string(),
+                agent_type: AgentName::new("resident"),
+                mode: SubagentMode::Resident,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            root,
+            &Event::MailSent {
+                session: root,
+                from: "main".to_string(),
+                to: MailEndpoint::Handle(handle.to_string()),
+                kind: MailKind::Message,
+                body: "recovery".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            actor,
+            &Event::MessageStarted {
+                session: actor,
+                message: MessageId::new(),
+                role: hya_proto::Role::Assistant,
+            },
+        )
+        .await
+        .unwrap();
+    engine
+        .commit_resident_mutation(
+            &old_claim,
+            root,
+            vec![
+                Event::ResidentWorkStarted {
+                    session: root,
+                    actor_session: actor,
+                    handle: handle.to_string(),
+                    epoch: old_claim.epoch,
+                    inbox_through: 1,
+                },
+                Event::AgentActivityChanged {
+                    session: root,
+                    handle: handle.to_string(),
+                    status: RosterStatus::Busy,
+                    current_task: Some("mail from main".to_string()),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let source = ToolCallId::new();
+    let operation = OperationId::from_tool_call(source);
+    assert_eq!(
+        engine
+            .begin_spawn_admission(
+                actor,
+                hya_tool::ToolOperation::from_tool_call(source),
+                [117; 32],
+                1,
+                Some(old_claim),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        SpawnAdmissionOutcome::Started
+    );
+
+    let recovered = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let root_before = store.replay(root).await.unwrap();
+    let actor_before = store.replay(actor).await.unwrap();
+
+    let mut connection = SqliteConnection::connect(&format!("sqlite://{db_path}"))
+        .await
+        .unwrap();
+    let trigger = format!(
+        "CREATE TRIGGER test_resident_recovery_atomic_failure \
+         BEFORE INSERT ON event_log \
+         WHEN instr(NEW.payload, '\"type\":\"agent_activity_changed\"') > 0 \
+           AND instr(NEW.payload, '\"session\":\"{root}\"') > 0 \
+           AND instr(NEW.payload, '\"current_task\":\"aborted by resident recovery\"') > 0 \
+         BEGIN SELECT RAISE(ABORT, 'test recovery root failure'); END;"
+    );
+    sqlx::query(&trigger)
+        .execute(&mut connection)
+        .await
+        .unwrap();
+
+    let result = engine
+        .recover_resident_actor(&recovered, root, handle)
+        .await;
+    assert!(result.is_err());
+    assert_eq!(store.replay(root).await.unwrap(), root_before);
+    assert_eq!(store.replay(actor).await.unwrap(), actor_before);
+    let admission = store.admission(operation).await.unwrap().unwrap();
+    assert_eq!(admission.state, AdmissionState::Started);
+    assert!(!admission.logical_released);
+    assert!(store.validate_actor_claim(&recovered.claim).await.is_ok());
+    assert!(store.active_actor_ids().await.unwrap().contains(&actor));
+}
+
+#[tokio::test]
 async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicate_terminal_events()
 {
     let store = SessionStore::connect_memory().await.unwrap();
@@ -457,9 +580,10 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
         SpawnAdmissionOutcome::Started
     );
 
-    let first_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let _first_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let second_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let first = engine
-        .recover_resident_actor(&first_claim, root, "repeat-1")
+        .recover_resident_actor(&second_claim, root, "repeat-1")
         .await
         .unwrap();
     assert_eq!(
@@ -472,9 +596,9 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
     assert_eq!(first.aborted_operations, 1);
     let projection_after_first = store.read_projection(root).await.unwrap();
 
-    let second_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
+    let third_claim = store.recover_claim(actor, OwnerRunId::new()).await.unwrap();
     let second = engine
-        .recover_resident_actor(&second_claim, root, "repeat-1")
+        .recover_resident_actor(&third_claim, root, "repeat-1")
         .await
         .unwrap();
     assert_eq!(second.work, ResidentRecovery::Idle);

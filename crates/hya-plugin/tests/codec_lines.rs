@@ -1,8 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use hya_plugin::PluginError;
 use hya_plugin::codec::{FrameReader, MAX_LINE_BYTES};
 use hya_plugin::protocol::Frame;
+use tokio::io::{AsyncWriteExt, duplex};
+use tokio::sync::{Barrier, oneshot};
 
 #[tokio::test]
 async fn reads_valid_frames_then_eofs() {
@@ -36,6 +41,32 @@ async fn oversized_line_errors() {
     assert!(matches!(
         reader.next().await,
         Err(PluginError::OversizedLine(_))
+    ));
+}
+
+#[tokio::test]
+async fn oversized_open_line_is_rejected_before_writer_eof() {
+    let (mut writer, reader_io) = duplex(8 * 1024);
+    let payload = vec![b'x'; MAX_LINE_BYTES + 1];
+    let barrier = Arc::new(Barrier::new(2));
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+    let writer_barrier = Arc::clone(&barrier);
+    let writer_task = tokio::spawn(async move {
+        writer_barrier.wait().await;
+        writer.write_all(&payload).await.unwrap();
+        let _ = release_rx.await;
+    });
+
+    let mut reader = FrameReader::new(reader_io);
+    barrier.wait().await;
+    let result = tokio::time::timeout(Duration::from_millis(250), reader.next()).await;
+
+    drop(release_tx);
+    writer_task.abort();
+    let _ = writer_task.await;
+    assert!(matches!(
+        result,
+        Ok(Err(PluginError::OversizedLine(MAX_LINE_BYTES)))
     ));
 }
 

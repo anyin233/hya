@@ -371,29 +371,8 @@ impl SessionStore {
     ) -> Result<Vec<AdmissionRecord>, StoreError> {
         let mut tx = self.pool.begin().await?;
         fence_actor_claim(&mut tx, &recovered.claim).await?;
-        let previous_epoch = i64::try_from(recovered.previous_epoch.get()).map_err(|_| {
-            StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
-        })?;
-        let rows = sqlx::query(
-            "UPDATE admission_journal \
-             SET state = 'aborted', \
-                 logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
-                 terminal_reason = ?, updated_at = ? \
-             WHERE actor_id = ? AND actor_epoch = ? AND state IN ('accepted', 'started') \
-             RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                       state, admission_units, logical_released, terminal_reason, created_at, updated_at, \
-                       actor_id, actor_epoch",
-        )
-        .bind(reason)
-        .bind(now_millis())
-        .bind(recovered.claim.actor_id.storage_key())
-        .bind(previous_epoch)
-        .fetch_all(&mut *tx)
-        .await?;
-        let records = rows
-            .into_iter()
-            .map(decode_record)
-            .collect::<Result<Vec<_>, _>>()?;
+        let records =
+            abort_recovered_actor_admissions_in_transaction(&mut tx, recovered, reason).await?;
         tx.commit().await?;
         Ok(records)
     }
@@ -416,6 +395,35 @@ impl SessionStore {
         .await?;
         rows.into_iter().map(decode_record).collect()
     }
+}
+
+pub(crate) async fn abort_recovered_actor_admissions_in_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    recovered: &crate::RecoveredActorClaim,
+    reason: &str,
+) -> Result<Vec<AdmissionRecord>, StoreError> {
+    let previous_epoch = i64::try_from(recovered.previous_epoch.get()).map_err(|_| {
+        StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
+    })?;
+    let rows = sqlx::query(
+        "UPDATE admission_journal \
+         SET state = 'aborted', \
+             logical_released = CASE WHEN state = 'started' THEN 1 ELSE logical_released END, \
+             terminal_reason = ?, updated_at = ? \
+         WHERE actor_id = ? AND actor_epoch <= ? AND state IN ('accepted', 'started') \
+         RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
+                   state, admission_units, logical_released, terminal_reason, created_at, updated_at, \
+                   actor_id, actor_epoch",
+    )
+    .bind(reason)
+    .bind(now_millis())
+    .bind(recovered.claim.actor_id.storage_key())
+    .bind(previous_epoch)
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter()
+        .map(decode_record)
+        .collect::<Result<Vec<_>, _>>()
 }
 
 impl AdmissionRecord {

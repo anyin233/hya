@@ -45,10 +45,21 @@ afterEach(async () => {
 async function runAdapter(
   requests: readonly unknown[],
   env?: Readonly<Record<string, string>>,
+  argv: readonly string[] = [],
 ): Promise<readonly z.infer<typeof AdapterResponseSchema>[]> {
-  const proc = Bun.spawn([process.execPath, "run", "src/main.ts"], {
+  const runRoot = await makeTempDir()
+  const scriptArgs = argv.length === 0 ? [] : ["--", ...argv]
+  const proc = Bun.spawn([process.execPath, "run", "src/main.ts", ...scriptArgs], {
     cwd: import.meta.dir.replace(/\/test$/, ""),
-    env: { ...process.env, ...env },
+    env: {
+      ...process.env,
+      HOME: runRoot,
+      XDG_CONFIG_HOME: path.join(runRoot, "xdg"),
+      HYA_DIRECTORY: runRoot,
+      HYA_WORKTREE: runRoot,
+      COMPAT_DISABLE_PROJECT_CONFIG: "1",
+      ...env,
+    },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -60,6 +71,7 @@ async function runAdapter(
   for (const request of requests) {
     stdin.write(`${JSON.stringify(request)}\n`)
   }
+  await stdin.flush()
   stdin.end()
 
   const [stdout, exitCode] = await Promise.all([
@@ -95,6 +107,131 @@ test("initialize returns hya compat plugin identity", async () => {
   expect(result.plugin.kind).toBe("compat")
   expect(result.hooks).toEqual([])
   expect(result.tools).toEqual([])
+})
+
+test("bundle activation initialize accepts exact operational metadata", async () => {
+  const responses = await runAdapter([
+    {
+      jsonrpc: "2.0",
+      id: 13,
+      method: "initialize",
+      params: {
+        protocol_version: 1,
+        host: { name: "hya", version: "0.34.11-test" },
+        activation_id: "activation-test",
+        lifecycle: "resident",
+      },
+    },
+    { jsonrpc: "2.0", id: 14, method: "shutdown", params: {} },
+  ])
+
+  expect(responses).toHaveLength(2)
+  const first = responses[0]
+  expect(first?.id).toBe(13)
+  expect(first?.error).toBeUndefined()
+  const result = InitializeResultSchema.parse(first?.result)
+  expect(result.plugin.id).toBe("compat")
+  expect(result.plugin.kind).toBe("compat")
+})
+
+test("bundle activation loads only explicit materialized extension", async () => {
+  const root = await makeTempDir()
+  const extensionFile = path.join(root, "bundle-extension.ts")
+  const normalPluginFile = path.join(root, "normal-plugin.ts")
+  await writeFile(
+    extensionFile,
+    [
+      "export default {",
+      '  id: "bundle-extension",',
+      "  server: async (input) => {",
+      '    if (input === null || typeof input !== "object" || Object.keys(input).length !== 0) {',
+      '      throw new Error("bundle extension received unexpected initialization input")',
+      "    }",
+      "    return {",
+      "      tool: {",
+      "        echo: {",
+      '          description: "Bundle echo",',
+      '          execute: async () => "bundle-echo",',
+      "        },",
+      "      },",
+      "    }",
+      "  },",
+      "}",
+    ].join("\n"),
+  )
+  await writeFile(
+    normalPluginFile,
+    [
+      "export default {",
+      '  id: "normal-plugin",',
+      "  server: async () => ({",
+      "    tool: {",
+      "      leak: {",
+      '        description: "Normal plugin leak",',
+      '        execute: async () => "normal-leak",',
+      "      },",
+      "    },",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 51,
+        method: "initialize",
+        params: {
+          protocol_version: 1,
+          host: { name: "hya", version: "0.34.11-test" },
+          activation_id: "activation-bundle-test",
+          lifecycle: "transient",
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 52,
+        method: "tool/call",
+        params: {
+          tool: "echo",
+          session: "session-bundle-test",
+          call: "call-bundle-test",
+          input: {},
+        },
+      },
+      { jsonrpc: "2.0", id: 53, method: "shutdown", params: {} },
+    ],
+    {
+      HYA_COMPAT_OPTIONS_JSON: JSON.stringify({
+        plugin: [pathToFileURL(normalPluginFile).href],
+      }),
+      HYA_DIRECTORY: root,
+      HYA_WORKTREE: root,
+      HOME: root,
+      XDG_CONFIG_HOME: path.join(root, "xdg"),
+    },
+    ["--bundle-extension", extensionFile],
+  )
+
+  expect(responses).toHaveLength(3)
+  const initialized = responses[0]
+  expect(initialized?.id).toBe(51)
+  expect(initialized?.error).toBeUndefined()
+  const result = InitializeResultSchema.parse(initialized?.result)
+  expect(result.tools).toEqual([
+    {
+      name: "echo",
+      description: "Bundle echo",
+      inputSchema: { type: "object", properties: {}, required: [] },
+    },
+  ])
+  expect(responses[1]?.id).toBe(52)
+  expect(responses[1]?.error).toBeUndefined()
+  expect(responses[1]?.result).toMatchObject({
+    ok: true,
+    output: { output: "bundle-echo" },
+  })
 })
 
 test("initialize declares hooks from configured local plugins", async () => {

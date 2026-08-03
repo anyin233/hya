@@ -2,6 +2,9 @@
 //! out-of-process by `hya-plugin`) plus the native payload/outcome types.
 
 use async_trait::async_trait;
+use std::future::Future;
+use std::sync::Arc;
+
 use hya_proto::{Envelope, MessageId, PartId, SessionId, ToolCallId};
 use hya_provider::CompletionRequest;
 use serde_json::Value;
@@ -9,6 +12,9 @@ use serde_json::Value;
 #[async_trait]
 pub trait HookDispatcher: Send + Sync {
     fn dispatch_event(&self, envelope: &Envelope);
+    fn is_healthy(&self) -> bool {
+        true
+    }
     async fn command_execute_before(
         &self,
         input: CommandExecuteBeforeInput,
@@ -18,6 +24,44 @@ pub trait HookDispatcher: Send + Sync {
     async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome;
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome;
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome;
+}
+
+#[derive(Clone)]
+struct ActivationHookContext {
+    session: SessionId,
+    hooks: Arc<dyn HookDispatcher>,
+}
+
+tokio::task_local! {
+    static ACTIVATION_HOOK_CONTEXT: ActivationHookContext;
+}
+
+pub(crate) async fn scope_activation_hooks<F, T>(
+    session: SessionId,
+    hooks: Arc<dyn HookDispatcher>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    ACTIVATION_HOOK_CONTEXT
+        .scope(ActivationHookContext { session, hooks }, future)
+        .await
+}
+
+pub(crate) fn activation_hook_for(session: SessionId) -> Option<Arc<dyn HookDispatcher>> {
+    ACTIVATION_HOOK_CONTEXT
+        .try_with(|context| (context.session == session).then(|| Arc::clone(&context.hooks)))
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn dispatch_activation_event(envelope: &Envelope) {
+    if let Some(session) = envelope.event.session()
+        && let Some(hooks) = activation_hook_for(session)
+    {
+        hooks.dispatch_event(envelope);
+    }
 }
 
 pub struct CommandExecuteBeforeInput {

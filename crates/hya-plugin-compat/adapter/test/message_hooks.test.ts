@@ -69,6 +69,9 @@ async function runAdapter(
     cwd: import.meta.dir.replace(/\/test$/, ""),
     env: {
       ...process.env,
+      HOME: root,
+      XDG_CONFIG_HOME: path.join(root, "xdg"),
+      COMPAT_DISABLE_PROJECT_CONFIG: "1",
       HYA_COMPAT_OPTIONS_JSON: JSON.stringify({
         plugin: [pathToFileURL(pluginFile).href],
       }),

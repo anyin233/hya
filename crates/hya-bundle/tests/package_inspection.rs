@@ -1,15 +1,23 @@
+use std::fs;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hya_bundle::{
-    BundleError, PackageFormat, PrivatePackageAuthentication, PrivatePackageInspection,
-    PrivatePackagePayload, detect_package_format, inspect_private_package, inspect_public_package,
+    BundleError, BundleSource, PackageFormat, PrivatePackageAuthentication,
+    PrivatePackageInspection, PrivatePackagePayload, detect_package_format,
+    inspect_private_package, inspect_public_package, prepare_package,
 };
-use sevenz_rust2::{ArchiveReader, ArchiveReaderOptions, EncoderMethod, Password};
+use sevenz_rust2::{
+    ArchiveEntry, ArchiveReader, ArchiveReaderOptions, ArchiveWriter, EncoderConfiguration,
+    EncoderMethod, Password,
+};
 
 const PRIVATE_V1_ZERO_CIPHERTEXT_DIGEST: [u8; 32] = [
     0x6e, 0x34, 0x0b, 0x9c, 0xff, 0xb3, 0x7a, 0x98, 0x9c, 0xa5, 0x44, 0xe6, 0xbb, 0x78, 0x0a, 0x2c,
     0x78, 0x90, 0x1d, 0x3f, 0xb3, 0x37, 0x38, 0x76, 0x85, 0x11, 0xa3, 0x06, 0x17, 0xaf, 0xa0, 0x1d,
 ];
+
+static NEXT_DIRECTORY_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 // Deterministically generated with vendored sevenz-rust2 0.20.2: one non-solid
 // LZMA2+CRC bundle.hya.md over a 320,000-byte repetitive prepare-valid manifest.
@@ -41,6 +49,63 @@ const PUBLIC_RATIO_PREFLIGHT_LZMA2: [u8; 409] = [
     0x00, 0x64, 0x00, 0x6c, 0x00, 0x65, 0x00, 0x2e, 0x00, 0x68, 0x00, 0x79, 0x00, 0x61, 0x00, 0x2e,
     0x00, 0x6d, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
+
+const PUBLIC_ARCHIVE_MANIFEST: &[u8] = br#"---
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/archive-js
+  version: 1.0.0
+  publisher: hya
+resources:
+  tools:
+    - id: echo
+      path: extensions/runtime.js
+      aliases:
+        - say
+  hooks:
+    - id: event
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    resource_view:
+      allow:
+        - echo
+        - runtime
+    hook_refs:
+      - bundle:hya/archive-js/hook/event
+---
+Archive JS lead.
+"#;
+
+fn public_copy_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = match ArchiveWriter::new(Cursor::new(Vec::new())) {
+        Ok(writer) => writer,
+        Err(error) => panic!("archive writer construction failed: {error}"),
+    };
+    writer.set_encrypt_header(false);
+    writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::COPY)]);
+    for (name, bytes) in entries {
+        if let Err(error) =
+            writer.push_archive_entry(ArchiveEntry::new_file(name), Some(Cursor::new(*bytes)))
+        {
+            panic!("archive entry `{name}` failed: {error}");
+        }
+    }
+
+    match writer.finish() {
+        Ok(output) => output.into_inner(),
+        Err(error) => panic!("archive finish failed: {error}"),
+    }
+}
 
 fn private_v1_envelope(ciphertext: u8) -> Vec<u8> {
     let target = "x86_64-unknown-linux-gnu";
@@ -155,6 +220,295 @@ fn public_root_manifest_is_fully_decoded_and_prepared() {
     let bytes = include_bytes!("fixtures/packages/valid_public_bundle_copy.7z");
 
     assert!(inspect_public_package(bytes).is_ok());
+}
+
+#[test]
+fn public_archive_accepts_root_manifest_and_exact_referenced_files() {
+    let bytes = public_copy_archive(&[
+        ("bundle.hya.md", PUBLIC_ARCHIVE_MANIFEST),
+        ("extensions/runtime.js", b"export const runtime = true;\n"),
+    ]);
+    let prepared = match inspect_public_package(&bytes) {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("archive inspection failed: {error:?}"),
+    };
+
+    assert_eq!(prepared.bundles().len(), 1);
+    let Some(bundle) = prepared.bundles().first() else {
+        panic!("inspection must prepare one bundle");
+    };
+    assert_eq!(bundle.tools.len(), 1);
+    assert_eq!(bundle.hooks.len(), 1);
+    assert_eq!(bundle.extensions.len(), 1);
+    let Some(tool) = bundle.tools.first() else {
+        panic!("prepared bundle must contain the echo tool");
+    };
+    assert_eq!(tool.source_path, "extensions/runtime.js");
+    assert_eq!(tool.content, "export const runtime = true;\n");
+    let Some(hook) = bundle.hooks.first() else {
+        panic!("prepared bundle must contain the event hook");
+    };
+    assert_eq!(hook.source_path, "extensions/runtime.js");
+    assert_eq!(hook.content, "export const runtime = true;\n");
+    let Some(extension) = bundle.extensions.first() else {
+        panic!("prepared bundle must contain the runtime extension");
+    };
+    assert_eq!(extension.source_path, "extensions/runtime.js");
+    assert_eq!(extension.content, "export const runtime = true;\n");
+    assert_eq!(hook.digest, tool.digest);
+    assert_eq!(extension.digest, tool.digest);
+}
+
+#[test]
+fn public_archive_rejects_unreferenced_regular_file() {
+    let bytes = public_copy_archive(&[
+        ("bundle.hya.md", PUBLIC_ARCHIVE_MANIFEST),
+        ("extensions/runtime.js", b"export const runtime = true;\n"),
+        ("notes.txt", b"unreferenced\n"),
+    ]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::UnsafePackage)
+    ));
+}
+
+#[test]
+fn public_archive_rejects_ascii_case_colliding_paths() {
+    let manifest = br#"---
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/archive-case
+  version: 1.0.0
+  publisher: hya
+resources:
+  tools:
+    - id: echo
+      path: tools/echo.js
+    - id: upper-echo
+      path: Tools/Echo.js
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    resource_view:
+      allow:
+        - echo
+        - upper-echo
+---
+Archive case lead.
+"#;
+    let bytes = public_copy_archive(&[
+        ("bundle.hya.md", manifest),
+        ("tools/echo.js", b"export const echo = true;\n"),
+        ("Tools/Echo.js", b"export const upperEcho = true;\n"),
+    ]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::UnsafePackage)
+    ));
+}
+
+#[test]
+fn public_archive_rejects_missing_referenced_file() {
+    let bytes = public_copy_archive(&[("bundle.hya.md", PUBLIC_ARCHIVE_MANIFEST)]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::MissingReference { path, .. }) if path == "extensions/runtime.js"
+    ));
+}
+
+#[test]
+fn public_archive_rejects_wrapper_root() {
+    let bytes = public_copy_archive(&[("wrapper/bundle.hya.md", PUBLIC_ARCHIVE_MANIFEST)]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::UnsafePackage)
+    ));
+}
+
+#[test]
+fn public_archive_rejects_traversal_path() {
+    let manifest = br#"---
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/archive-traversal
+  version: 1.0.0
+  publisher: hya
+resources:
+  tools:
+    - id: escape
+      path: ../escape.js
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    resource_view:
+      allow:
+        - escape
+---
+Traversal lead.
+"#;
+    let bytes = public_copy_archive(&[
+        ("bundle.hya.md", manifest),
+        ("../escape.js", b"export const escape = true;\n"),
+    ]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::InvalidPackageFormat)
+    ));
+}
+
+#[test]
+fn public_archive_rejects_exact_duplicate_path() {
+    let manifest = br#"---
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/archive-duplicate
+  version: 1.0.0
+  publisher: hya
+resources:
+  tools:
+    - id: echo
+      path: tools/echo.js
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    resource_view:
+      allow:
+        - echo
+---
+Duplicate lead.
+"#;
+    let bytes = public_copy_archive(&[
+        ("bundle.hya.md", manifest),
+        ("tools/echo.js", b"export const echo = true;\n"),
+        ("tools/echo.js", b"export const duplicate = true;\n"),
+    ]);
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::InvalidPackageFormat)
+    ));
+}
+
+#[test]
+fn public_archive_rejects_directory_entry() {
+    let mut writer = match ArchiveWriter::new(Cursor::new(Vec::new())) {
+        Ok(writer) => writer,
+        Err(error) => panic!("archive writer construction failed: {error}"),
+    };
+    writer.set_encrypt_header(false);
+    writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::COPY)]);
+    if let Err(error) = writer.push_archive_entry(
+        ArchiveEntry::new_file("bundle.hya.md"),
+        Some(Cursor::new(PUBLIC_ARCHIVE_MANIFEST)),
+    ) {
+        panic!("manifest archive entry failed: {error}");
+    }
+    if let Err(error) =
+        writer.push_archive_entry(ArchiveEntry::new_directory("tools"), None::<Cursor<&[u8]>>)
+    {
+        panic!("directory archive entry failed: {error}");
+    }
+    let bytes = match writer.finish() {
+        Ok(output) => output.into_inner(),
+        Err(error) => panic!("archive finish failed: {error}"),
+    };
+
+    assert!(matches!(
+        inspect_public_package(&bytes),
+        Err(BundleError::InvalidPackageFormat)
+    ));
+}
+
+#[test]
+fn public_archive_matches_directory_source_prepared_identity_and_ignores_undeclared_helper() {
+    let archive_bytes = public_copy_archive(&[
+        ("bundle.hya.md", PUBLIC_ARCHIVE_MANIFEST),
+        ("extensions/runtime.js", b"export const runtime = true;\n"),
+    ]);
+    let archive_prepared = match inspect_public_package(&archive_bytes) {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("archive inspection failed: {error:?}"),
+    };
+
+    let sequence = NEXT_DIRECTORY_FIXTURE.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "hya-bundle-package-inspection-{}-{sequence}",
+        std::process::id()
+    ));
+    let mut root_created = false;
+    let setup_result = (|| -> std::io::Result<()> {
+        fs::create_dir(&root)?;
+        root_created = true;
+        fs::create_dir_all(root.join("extensions"))?;
+        fs::write(root.join("bundle.hya.md"), PUBLIC_ARCHIVE_MANIFEST)?;
+        fs::write(
+            root.join("extensions/runtime.js"),
+            b"export const runtime = true;\n",
+        )?;
+        fs::write(
+            root.join("extensions/helper.js"),
+            b"export const helper = true;\n",
+        )?;
+        Ok(())
+    })();
+    if let Err(error) = setup_result {
+        if root_created && let Err(cleanup_error) = fs::remove_dir_all(&root) {
+            panic!("directory fixture cleanup failed after setup error: {cleanup_error}");
+        }
+        panic!("directory fixture setup failed: {error}");
+    }
+
+    let directory_result = match BundleSource::read_directory(&root) {
+        Ok(source) => prepare_package(source),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = fs::remove_dir_all(&root) {
+        panic!("directory fixture cleanup failed: {error}");
+    }
+    let directory_prepared = match directory_result {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("directory preparation failed: {error:?}"),
+    };
+
+    for prepared in [&archive_prepared, &directory_prepared] {
+        for bundle in prepared.bundles() {
+            for resource in bundle
+                .tools
+                .iter()
+                .chain(bundle.skills.iter())
+                .chain(bundle.mcp.iter())
+                .chain(bundle.hooks.iter())
+                .chain(bundle.extensions.iter())
+            {
+                assert_ne!(resource.source_path, "extensions/helper.js");
+            }
+            for agent in &bundle.agents {
+                assert_ne!(agent.prompt_source.as_deref(), Some("extensions/helper.js"));
+            }
+        }
+    }
+
+    assert_eq!(archive_prepared.bytes(), directory_prepared.bytes());
+    assert_eq!(archive_prepared.digest(), directory_prepared.digest());
+    assert_eq!(archive_prepared.bundles(), directory_prepared.bundles());
+    assert_eq!(archive_prepared.index(), directory_prepared.index());
 }
 
 #[test]

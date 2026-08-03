@@ -153,30 +153,38 @@ impl SessionEngine {
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
-        // Count recipients from the membership snapshot BEFORE the append; a direct
-        // send always has exactly one recipient.
-        let recipients = match &to {
-            MailEndpoint::Handle(_) => 1,
-            MailEndpoint::Channel(channel) => self
-                .read_projection(root)
-                .await?
-                .team
-                .channels
-                .get(channel)
-                .map_or(0, |ch| ch.members.len()),
+        #[cfg(test)]
+        if matches!(&to, MailEndpoint::Handle(_))
+            && let Some(gate) = self.direct_mail_pre_append_gate.as_ref()
+        {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        if let MailEndpoint::Handle(handle) = &to {
+            let envelope = self
+                .store()
+                .append_direct_mail(root, from.clone(), handle.clone(), kind, body, actor_claim)
+                .await?;
+            self.publish_envelope(envelope);
+            return Ok(MailReceipt {
+                from,
+                to,
+                recipients: 1,
+            });
+        }
+        let channel = match &to {
+            MailEndpoint::Channel(channel) => channel.clone(),
+            MailEndpoint::Handle(_) => {
+                return Err(CoreError::Invalid(
+                    "mail endpoint was not a channel after direct delivery".to_string(),
+                ));
+            }
         };
-        self.emit_for_actor(
-            actor_claim,
-            root,
-            Event::MailSent {
-                session: root,
-                from: from.clone(),
-                to: to.clone(),
-                kind,
-                body,
-            },
-        )
-        .await?;
+        let (envelope, recipients) = self
+            .store()
+            .append_channel_mail(root, from.clone(), channel, kind, body, actor_claim)
+            .await?;
+        self.publish_envelope(envelope);
         Ok(MailReceipt {
             from,
             to,
@@ -260,16 +268,19 @@ impl SessionEngine {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use std::path::PathBuf;
     use std::sync::Arc;
 
-    use hya_proto::{AgentName, ModelRef, Projection};
+    use hya_proto::{AgentName, ModelRef, OwnerRunId, Projection};
     use hya_provider::ProviderRouter;
     use hya_store::SessionStore;
     use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
     use super::*;
+    use crate::AgentSpec;
     use crate::bus::EventBus;
-    use crate::engine::{CreateSession, SessionEngine};
+    use crate::engine::{CreateSession, DirectMailPreAppendGate, SessionEngine};
+    use crate::resident::ResidentSupervisor;
 
     async fn engine() -> SessionEngine {
         let store = SessionStore::connect_memory().await.unwrap();
@@ -358,6 +369,16 @@ mod tests {
             .channel_join(reviewer_2, "build".to_string(), None)
             .await
             .unwrap();
+        let reviewer_1_claim = engine
+            .store()
+            .try_claim_new(reviewer_1, OwnerRunId::new())
+            .await
+            .unwrap();
+        let reviewer_2_claim = engine
+            .store()
+            .try_claim_new(reviewer_2, OwnerRunId::new())
+            .await
+            .unwrap();
         let receipt = engine
             .mail_send(
                 root,
@@ -393,6 +414,245 @@ mod tests {
         // A fresh replay from the store reconstructs identical team state.
         let replayed = Projection::from_events(&engine.replay(root).await.unwrap());
         assert_eq!(replayed.team, projection.team);
+        engine
+            .store()
+            .release_claim(&reviewer_1_claim)
+            .await
+            .unwrap();
+        engine
+            .store()
+            .release_claim(&reviewer_2_claim)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        let stopped = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new("resident"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        let active = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new("resident"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: stopped,
+                    handle: "stopped-1".to_string(),
+                    agent_type: AgentName::new("resident"),
+                    mode: SubagentMode::Resident,
+                },
+            )
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: active,
+                    handle: "active-1".to_string(),
+                    agent_type: AgentName::new("resident"),
+                    mode: SubagentMode::Resident,
+                },
+            )
+            .await
+            .unwrap();
+        engine
+            .channel_join(stopped, "build".to_string(), None)
+            .await
+            .unwrap();
+        engine
+            .channel_join(active, "build".to_string(), None)
+            .await
+            .unwrap();
+
+        let stopped_claim = engine
+            .store()
+            .try_claim_new(stopped, OwnerRunId::new())
+            .await
+            .unwrap();
+        let active_claim = engine
+            .store()
+            .try_claim_new(active, OwnerRunId::new())
+            .await
+            .unwrap();
+        engine
+            .store()
+            .finalize_resident_stop(&stopped_claim, root, "stopped-1")
+            .await
+            .unwrap();
+
+        let body = "after stop".to_string();
+        let receipt = engine
+            .mail_send(
+                root,
+                MailEndpoint::Channel("build".to_string()),
+                MailKind::Announcement,
+                body.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.recipients, 1);
+
+        let projection = engine.read_projection(root).await.unwrap();
+        let replayed = Projection::from_events(&engine.replay(root).await.unwrap());
+        assert_eq!(replayed, projection);
+        let inbox_body = |handle: &str| {
+            projection
+                .team
+                .inboxes
+                .get(handle)
+                .map(|inbox| inbox.iter().filter(|message| message.body == body).count())
+                .unwrap_or_default()
+        };
+        assert_eq!(inbox_body("stopped-1"), 0);
+        assert_eq!(inbox_body("active-1"), 1);
+
+        let send_first = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new("resident"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: send_first,
+                    handle: "send-first-1".to_string(),
+                    agent_type: AgentName::new("resident"),
+                    mode: SubagentMode::Resident,
+                },
+            )
+            .await
+            .unwrap();
+        engine
+            .channel_join(send_first, "build".to_string(), None)
+            .await
+            .unwrap();
+        let send_first_claim = engine
+            .store()
+            .try_claim_new(send_first, OwnerRunId::new())
+            .await
+            .unwrap();
+
+        let second_body = "before send-first stop".to_string();
+        let second_receipt = engine
+            .mail_send(
+                root,
+                MailEndpoint::Channel("build".to_string()),
+                MailKind::Announcement,
+                second_body.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_receipt.recipients, 2);
+
+        engine
+            .store()
+            .finalize_resident_stop(&send_first_claim, root, "send-first-1")
+            .await
+            .unwrap();
+        let projection = engine.read_projection(root).await.unwrap();
+        let send_first_inbox = projection.team.inboxes.get("send-first-1").unwrap();
+        assert_eq!(
+            send_first_inbox
+                .iter()
+                .map(|message| message.body.clone())
+                .collect::<Vec<_>>(),
+            vec![second_body.clone()]
+        );
+        assert_eq!(
+            projection
+                .team
+                .roster
+                .get("send-first-1")
+                .unwrap()
+                .resident_cursor,
+            send_first_inbox.len() as u64
+        );
+        assert_eq!(
+            projection
+                .team
+                .inboxes
+                .get("active-1")
+                .unwrap()
+                .iter()
+                .filter(|message| message.body == second_body)
+                .count(),
+            1
+        );
+        assert_eq!(
+            projection
+                .team
+                .inboxes
+                .get("stopped-1")
+                .map(|inbox| {
+                    inbox
+                        .iter()
+                        .filter(|message| message.body == second_body)
+                        .count()
+                })
+                .unwrap_or_default(),
+            0
+        );
+
+        let replay = engine.replay(root).await.unwrap();
+        let replayed = Projection::from_events(&replay);
+        assert_eq!(replayed, projection);
+        let channel_events = replay
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    &envelope.event,
+                    Event::MailSent {
+                        to: MailEndpoint::Channel(channel),
+                        body: event_body,
+                        ..
+                    } if channel == "build" && event_body == &body
+                )
+            })
+            .count();
+        assert_eq!(channel_events, 1);
+        let second_channel_events = replay
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    &envelope.event,
+                    Event::MailSent {
+                        to: MailEndpoint::Channel(channel),
+                        body: event_body,
+                        ..
+                    } if channel == "build" && event_body == &second_body
+                )
+            })
+            .count();
+        assert_eq!(second_channel_events, 1);
+        engine.store().release_claim(&active_claim).await.unwrap();
     }
 
     /// A session that was never spawned/registered cannot use the mailbox — its
@@ -419,5 +679,173 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(CoreError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn direct_mail_to_transient_member_is_rejected_before_append() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        engine.ensure_root_registered(root).await.unwrap();
+        let child = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new("reviewer"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: child,
+                    handle: "transient-1".to_string(),
+                    agent_type: AgentName::new("reviewer"),
+                    mode: SubagentMode::Transient,
+                },
+            )
+            .await
+            .unwrap();
+
+        let before_len = engine.replay(root).await.unwrap().len();
+        let result = engine
+            .mail_send(
+                root,
+                MailEndpoint::Handle("transient-1".to_string()),
+                MailKind::Message,
+                "hi".to_string(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
+        ));
+
+        let after_len = engine.replay(root).await.unwrap().len();
+        assert_eq!(after_len, before_len);
+        let projection = engine.read_projection(root).await.unwrap();
+        assert!(!projection.team.inboxes.contains_key("transient-1"));
+    }
+
+    #[tokio::test]
+    async fn direct_mail_to_unknown_handle_is_rejected_before_append() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        engine.ensure_root_registered(root).await.unwrap();
+
+        let before_len = engine.replay(root).await.unwrap().len();
+        let result = engine
+            .mail_send(
+                root,
+                MailEndpoint::Handle("missing-1".to_string()),
+                MailKind::Message,
+                "hi".to_string(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
+        ));
+
+        let after_len = engine.replay(root).await.unwrap().len();
+        assert_eq!(after_len, before_len);
+        let projection = engine.read_projection(root).await.unwrap();
+        assert!(!projection.team.inboxes.contains_key("missing-1"));
+    }
+
+    #[tokio::test]
+    async fn resident_stop_commits_before_stale_direct_send_rechecks_and_rejects() {
+        let db_path =
+            std::env::temp_dir().join(format!("hya-core-mailbox-stop-{}.db", SessionId::new()));
+        let db_path = db_path.to_string_lossy().into_owned();
+        let make_engine = |store: SessionStore, bus: EventBus| {
+            let router = Arc::new(ProviderRouter::new());
+            let runtime = crate::test_support::runtime(ToolRegistry::builtins());
+            let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+            SessionEngine::new(store, router, runtime, permission, bus)
+        };
+
+        let primary = Arc::new(make_engine(
+            SessionStore::connect(&db_path).await.unwrap(),
+            EventBus::default(),
+        ));
+        let root = root_team(&primary).await;
+        let agent = AgentSpec {
+            name: AgentName::new("resident"),
+            model: ModelRef::new("fake"),
+            system_prompt: String::new(),
+            workdir: PathBuf::from("."),
+            reasoning: None,
+        };
+        let binding = primary.bind_runtime(&agent.workdir).unwrap();
+        let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+        let supervisor = ResidentSupervisor::start(primary.clone());
+        let (child, handle) = supervisor
+            .spawn_resident(
+                root,
+                agent,
+                (binding, Arc::from([]), resources, None),
+                String::new(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sender = Arc::new(
+            make_engine(
+                SessionStore::connect(&db_path).await.unwrap(),
+                EventBus::default(),
+            )
+            .with_direct_mail_pre_append_gate(DirectMailPreAppendGate::new(
+                entered.clone(),
+                release.clone(),
+            )),
+        );
+        let sender_handle = handle.clone();
+        let send = tokio::spawn(async move {
+            sender
+                .mail_send(
+                    root,
+                    MailEndpoint::Handle(sender_handle),
+                    MailKind::Message,
+                    "stale direct mail".to_string(),
+                )
+                .await
+        });
+        entered.notified().await;
+
+        let stop_result = supervisor.stop_resident(root, &handle).await;
+        assert!(
+            stop_result.is_ok(),
+            "resident stop must complete before stale send resumes: {stop_result:?}"
+        );
+        assert!(
+            !primary
+                .store()
+                .active_actor_ids()
+                .await
+                .unwrap()
+                .contains(&child)
+        );
+
+        release.notify_one();
+        let send_result = send.await.unwrap();
+        assert!(matches!(
+            send_result,
+            Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
+        ));
+
+        let replay = primary.replay(root).await.unwrap();
+        assert!(
+            !replay
+                .iter()
+                .any(|envelope| matches!(&envelope.event, Event::MailSent { .. }))
+        );
     }
 }

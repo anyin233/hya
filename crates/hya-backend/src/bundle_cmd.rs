@@ -287,6 +287,18 @@ fn print_static_info(bundle: &PreparedBundle, separator: &str) {
     for skill in &bundle.skills {
         println!("skill{separator}{}", skill.stable_id);
     }
+    for tool in &bundle.tools {
+        println!("tool{separator}{}", tool.stable_id);
+    }
+    for mcp in &bundle.mcp {
+        println!("mcp{separator}{}", mcp.stable_id);
+    }
+    for hook in &bundle.hooks {
+        println!("hook{separator}{}", hook.stable_id);
+    }
+    for extension in &bundle.extensions {
+        println!("extension{separator}{}", extension.stable_id);
+    }
 }
 
 fn decode_installed_bundle(record: &BundleRegistryRecord) -> anyhow::Result<PreparedBundle> {

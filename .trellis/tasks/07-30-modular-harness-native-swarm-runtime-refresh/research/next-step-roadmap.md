@@ -1108,3 +1108,47 @@ the viable designs:
 MCP/plugin compatibility, 100/256 certification, updater activation, owner
 authorization, permission expansion, irreversible migration, or rollback
 gates.
+
+## Consult26 authoritative release-map override
+
+This section supersedes every “external runner deferred/version unassigned” or
+split 0.34.10-transient/0.34.11-resident statement above.
+
+```text
+0.34.9 strict package inspector + registry core                    CLOSED
+  -> 0.34.10 four-command CLI + lazy public-static publication     CLOSED
+    -> 0.34.11 public transient/resident Harness agents
+       + one activation-scoped Bun extension sidecar
+       + exact existing-v1 declared closure
+       + existing PermissionPlane/admission/epoch/recovery          ACTIVE
+      -> 0.34.12 100-active/256-envelope certification only
+        -> 0.34.13 independent updater only
+```
+
+0.34.11 uses the existing plugin JSON-RPC transport only for Bundle-local
+JS/Bun tools, hooks, and one-way event notifications. SessionEngine/Harness
+retains the agent/model/mailbox/spawn/send/wait/result runtime. Static-only
+Bundles stay process-free. One sidecar belongs to one activation; transient and
+resident differ only in Harness lifecycle and healthy process retention.
+Private, raw Rust, Bundle MCP, second runtime/transport/catalog, sandbox,
+TTL/heartbeat/reclaim, terminal/artifact ABI, and sidecar send/wait remain
+excluded.
+
+The item-14 hook isolation correction narrows executable activation to the captured agent's selected capability closure. Canonical `hook_refs` may resolve only to Hook local IDs `event`, `tool.execute.before`, and `tool.execute.after`. Selected Tool/Hook resources exact-path join to same-owner `extensions.js` resources; matched entrypoints are deduplicated and canonically sorted, while staged-but-unselected or unreachable Extensions reject. Initialized Tool and Hook declarations must independently equal the captured expected sets before model polling. The same compiled view drives visibility and dispatch, and existing permission policy remains final. No all-Bundle loading, alias renaming, generic superset module, second schema/DTO/loader/catalog, or import scanner is allowed.
+
+Every accepted AgentBundle hook_ref now names a real Bundle Hook resource. All harness:hook/* spellings reject through the existing normal-reference error path; host Harness hooks stay outside AgentBundle metadata, and no core/app compatibility branch is introduced. Evidence covers source and hand-crafted prepared rejection, unchanged real Bundle Hook canonicalization, atomic publication preservation, and the no-sidecar/no-model runtime boundary.
+
+The source-corrected 0.34.11 JS profile is self-contained selected Extension files only. V1 gains no helper/files/dependency/import field or generic prepared bytes. Directory extras are ignored, archive extras reject, only captured selected Extension paths are rematerialized, and source-tree relative helpers cannot become activation dependencies. Evidence proceeds through unknown-field/closure rejection, directory/archive source isolation before ACK, co-path load-once, independent/unreachable entrypoints, exact declaration drift, and N/N+1 captured-content pinning.
+
+Focused item-14 evidence is GREEN: invented helper/dependency collections reject at source and prepared decode; directory-only undeclared helpers stay outside prepared bytes/digests; archive extras reject; a real selected entrypoint importing an authoring-only helper fails before ACK/model/dispatch with empty activation staging; co-path, disjoint, unreachable, declaration-drift, and captured N/N+1 tests retain selected-entrypoint isolation. Bundle-local Hook references reject every harness-prefixed spelling at both source and prepared boundaries. Final cancellation evidence preserves Cancelled rather than Done and terminates the transient sidecar exactly once.
+
+The complete 0.34.11 local gate is GREEN: locked binaries, workspace fmt/Clippy/build/tests/bins, Compat 64/64, TUI 49/49, and zero-INET all pass in their required execution environment. Release metadata is aligned at 0.34.11 and protected main/stashes are unchanged. Atomic commit/push and exact-SHA remote CI remain pending and unclaimed.
+
+Execution follows the non-skippable fourteen-boundary sequence recorded in
+Consult26: method roles; ACK gate; process owner; schema; archive closure; app
+materialization; publication; namespace/permission; hook/event; transient E2E;
+resident E2E; loss recovery; stop/drift; invariant/full gates. Boundary 6 proves
+that app resolves/materializes from the captured snapshot catalog while core
+start carries only activation ID/lifecycle. It retains the shipped
+`hya-core -> hya-bundle`, `hya-plugin -> hya-core`, and `hya-app ->` both edges,
+keeps `hya-bundle` independent, and adds no `hya-core -> hya-plugin` edge.

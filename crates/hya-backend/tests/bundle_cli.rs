@@ -152,7 +152,7 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
         "ciphertext_digest: 6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
         "authentication: unverified",
         "payload: opaque",
-        "activation: unsupported-in-0.34.10",
+        "activation: unsupported-in-0.34.11",
     ] {
         assert!(
             info_stdout.lines().any(|line| line == expected),
@@ -476,6 +476,94 @@ You are the resource info lead.
             .any(|line| line == "skill=bundle:hya/resource-info/skill/handbook"),
         "resource bundle info omitted the prepared skill:\n{stdout}"
     );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_bun_bundle_install_publishes_resources_atomically()
+-> Result<(), Box<dyn std::error::Error>> {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let data_root = std::env::temp_dir().join(format!(
+        "hya-backend-bundle-cli-{}-{nanos}",
+        std::process::id()
+    ));
+    fs::create_dir(&data_root)?;
+    let package = data_root.join("archive-js.hyabundle");
+    fs::write(
+        &package,
+        include_bytes!("../../hya-bundle/tests/fixtures/packages/valid_public_bundle_js_copy.7z"),
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert_success("public Bun bundle install", &install);
+    let install_stdout = String::from_utf8(install.stdout)?;
+    for expected in ["hya/archive-js", "1.0.0", "generation=1"] {
+        assert!(
+            install_stdout.contains(expected),
+            "install stdout omitted {expected:?}:\n{install_stdout}"
+        );
+    }
+
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    let snapshot = registry.snapshot().await?;
+    assert_eq!(snapshot.generation, 1);
+    assert_eq!(snapshot.bundles.len(), 1);
+    let Some(record) = snapshot.bundles.first() else {
+        return Err("installed bundle row is missing".into());
+    };
+    assert_eq!(record.bundle_id, "hya/archive-js");
+    let prepared =
+        hya_bundle::PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;
+    assert_eq!(prepared.bundles().len(), 1);
+    let Some(bundle) = prepared.bundles().first() else {
+        return Err("prepared bundle is missing".into());
+    };
+    assert_eq!(bundle.identity.id, "hya/archive-js");
+    assert_eq!(bundle.agents.len(), 1);
+    assert_eq!(bundle.agents[0].stable_id.as_str(), "archive-js-lead");
+    assert_eq!(bundle.tools.len(), 1);
+    assert_eq!(bundle.hooks.len(), 1);
+    assert_eq!(bundle.extensions.len(), 1);
+    assert_eq!(bundle.tools[0].stable_id, "bundle:hya/archive-js/tool/echo");
+    assert_eq!(bundle.tools[0].content, "export const runtime = true;\n");
+    assert_eq!(
+        bundle.hooks[0].stable_id,
+        "bundle:hya/archive-js/hook/event"
+    );
+    assert_eq!(bundle.hooks[0].content, "export const runtime = true;\n");
+    assert_eq!(
+        bundle.extensions[0].stable_id,
+        "bundle:hya/archive-js/extension/runtime"
+    );
+    assert_eq!(
+        bundle.extensions[0].content,
+        "export const runtime = true;\n"
+    );
+    drop(registry);
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/archive-js"])
+        .output()?;
+    assert_success("public Bun bundle info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "agent=archive-js-lead",
+        "tool=bundle:hya/archive-js/tool/echo",
+        "hook=bundle:hya/archive-js/hook/event",
+        "extension=bundle:hya/archive-js/extension/runtime",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
 
     fs::remove_dir_all(&data_root)?;
     Ok(())

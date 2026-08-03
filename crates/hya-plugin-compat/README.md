@@ -43,3 +43,25 @@ Set `BUN` to choose a Bun executable or `HYA_COMPAT_ADAPTER_DIR` to point
 Known limits are tracked in
 [`../../docs/compat-parity.md`](../../docs/compat-parity.md), especially the
 Compat SDK client completeness section.
+
+## AgentBundle sidecar mode (0.34.11)
+
+Configured Compat plugins retain their normal discovery and initialization
+surface. Bundle mode is narrower: `hya-app` materializes one validated public
+Bundle closure for one activation and starts one Bun Compat child with
+`activation_id` and `lifecycle` initialization metadata. The child must ACK
+matching declarations before Harness marks work Running or polls the model.
+
+`initialize`, `tool/call`, and `hook/*` are request/reply; `event` is a one-way
+notification with no id or result. stdout is protocol-only and stderr is a
+bounded diagnostic stream. The sidecar never runs an agent loop, receives a
+task, returns an agent result, or exposes sidecar send/wait. Transient mode
+shuts down and reaps one child after the activation; resident mode reuses one
+healthy child across mailbox messages and explicitly creates a fresh child
+after loss. There is no transparent retry or replay.
+
+`hya-plugin` owns the raw child, stdio tasks, bounded stderr, exit state,
+shutdown, kill-on-drop, and reap. The Bun Compat adapter implements the
+Bundle-mode protocol; `hya-app` owns captured-catalog resolution/materialization;
+Harness owns the logical runtime and permission/result path. Existing
+configured-plugin mode and its tests remain unchanged.

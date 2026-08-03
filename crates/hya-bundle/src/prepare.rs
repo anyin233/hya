@@ -133,10 +133,7 @@ fn prepared_bundle_is_canonical(bundle: &PreparedBundle) -> bool {
                 && is_strictly_sorted(agent.resource_view.allow.iter().map(String::as_str))
                 && is_strictly_sorted(agent.resource_view.deny.iter().map(String::as_str))
         })
-        && bundle.tools.is_empty()
         && bundle.mcp.is_empty()
-        && bundle.hooks.is_empty()
-        && bundle.extensions.is_empty()
         && resources_are_canonical(&bundle.identity.id, "tool", &bundle.tools)
         && resources_are_canonical(&bundle.identity.id, "skill", &bundle.skills)
         && resources_are_canonical(&bundle.identity.id, "mcp", &bundle.mcp)
@@ -166,6 +163,9 @@ fn validate_prepared_references(bundles: &[PreparedBundle]) -> Result<(), Bundle
                     });
                 }
             }
+        }
+        for hook in &bundle.hooks {
+            validate_hook_local_id(&bundle.identity.id, &hook.local_id)?;
         }
         for resource in bundle
             .tools
@@ -205,9 +205,6 @@ fn validate_prepared_references(bundles: &[PreparedBundle]) -> Result<(), Bundle
                 validate_prepared_resource_reference(&bundle.identity.id, reference, &resources)?;
             }
             for reference in &agent.hook_refs {
-                if reference.starts_with("harness:hook/") {
-                    continue;
-                }
                 validate_prepared_resource_reference(&bundle.identity.id, reference, &resources)?;
                 if !reference.contains("/hook/") {
                     return Err(BundleError::UnknownResourceReference {
@@ -227,7 +224,7 @@ fn validate_prepared_resource_reference(
     reference: &str,
     resources: &BTreeSet<&str>,
 ) -> Result<(), BundleError> {
-    let harness_reference = ["tool", "skill", "mcp", "hook"]
+    let harness_reference = ["tool", "skill", "mcp"]
         .iter()
         .any(|kind| reference.starts_with(&format!("harness:{kind}/")));
     if harness_reference || resources.contains(reference) {
@@ -296,8 +293,12 @@ fn validate_prepared_content_digests(bundle: &PreparedBundle) -> Result<(), Bund
 fn resolve_catalog_references(bundles: &mut [PreparedBundle]) -> Result<(), BundleError> {
     let mut agents = BTreeMap::new();
     let mut resources = BTreeSet::new();
-    let mut local_resources = BTreeMap::new();
+    let mut hook_resources = BTreeMap::new();
+    let mut local_resources: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     for bundle in bundles.iter() {
+        for hook in &bundle.hooks {
+            hook_resources.insert(hook.stable_id.clone(), hook.local_id.clone());
+        }
         for agent in &bundle.agents {
             for reference in [
                 agent.stable_id.as_str().to_string(),
@@ -326,10 +327,10 @@ fn resolve_catalog_references(bundles: &mut [PreparedBundle]) -> Result<(), Bund
             for name in std::iter::once(resource.local_id.as_str())
                 .chain(resource.aliases.iter().map(String::as_str))
             {
-                local_resources.insert(
-                    (bundle.identity.id.clone(), name.to_string()),
-                    resource.stable_id.clone(),
-                );
+                local_resources
+                    .entry((bundle.identity.id.clone(), name.to_string()))
+                    .or_default()
+                    .insert(resource.stable_id.clone());
             }
         }
     }
@@ -388,24 +389,45 @@ fn resolve_catalog_references(bundles: &mut [PreparedBundle]) -> Result<(), Bund
                 .collect::<Result<Vec<_>, _>>()?;
             agent.resource_view.deny.sort();
             agent.resource_view.deny.dedup();
+            let mut hook_refs = Vec::with_capacity(agent.hook_refs.len());
             for reference in &agent.hook_refs {
-                if reference.starts_with("harness:hook/") {
-                    continue;
-                }
-                let resolved = resolve_resource_reference(
+                let resolved = match resolve_resource_reference(
                     &bundle.identity.id,
                     reference,
                     &resources,
                     &local_resources,
-                )?;
-                if !resolved.contains("/hook/") {
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(BundleError::UnknownResourceReference { .. }) => {
+                        return Err(BundleError::UnknownResourceReference {
+                            bundle_id: bundle.identity.id.clone(),
+                            kind: "hook".to_string(),
+                            reference: reference.clone(),
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
+                let Some(local_id) = hook_resources.get(&resolved) else {
                     return Err(BundleError::UnknownResourceReference {
                         bundle_id: bundle.identity.id.clone(),
                         kind: "hook".to_string(),
                         reference: reference.clone(),
                     });
-                }
+                };
+                validate_hook_local_id(&bundle.identity.id, local_id)?;
+                hook_refs.push(resolved);
             }
+            hook_refs.sort();
+            if let Some(duplicate) = hook_refs
+                .windows(2)
+                .find_map(|window| (window[0] == window[1]).then_some(window[0].clone()))
+            {
+                return Err(BundleError::AliasCollision {
+                    bundle_id: bundle.identity.id.clone(),
+                    name: duplicate,
+                });
+            }
+            agent.hook_refs = hook_refs;
         }
         bundle.digest = prepared_bundle_digest(bundle)?;
     }
@@ -416,10 +438,10 @@ fn resolve_resource_reference(
     bundle_id: &str,
     reference: &str,
     resources: &BTreeSet<String>,
-    local_resources: &BTreeMap<(String, String), String>,
+    local_resources: &BTreeMap<(String, String), BTreeSet<String>>,
 ) -> Result<String, BundleError> {
     if reference.starts_with("harness:") {
-        let valid = ["tool", "skill", "mcp", "hook"]
+        let valid = ["tool", "skill", "mcp"]
             .iter()
             .any(|kind| reference.starts_with(&format!("harness:{kind}/")));
         if valid {
@@ -429,10 +451,18 @@ fn resolve_resource_reference(
         if resources.contains(reference) {
             return Ok(reference.to_string());
         }
-    } else if let Some(qualified) =
+    } else if let Some(candidates) =
         local_resources.get(&(bundle_id.to_string(), reference.to_string()))
     {
-        return Ok(qualified.clone());
+        if candidates.len() > 1 {
+            return Err(BundleError::AliasCollision {
+                bundle_id: bundle_id.to_string(),
+                name: reference.to_string(),
+            });
+        }
+        if let Some(candidate) = candidates.iter().next() {
+            return Ok(candidate.clone());
+        }
     }
     Err(BundleError::UnknownResourceReference {
         bundle_id: bundle_id.to_string(),
@@ -489,6 +519,14 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
             found: manifest.kind,
         });
     }
+    let markdown_prompt = if markdown_prompt.as_deref() == Some("")
+        && !manifest.agents.is_empty()
+        && manifest.agents.iter().all(|agent| agent.prompt.is_some())
+    {
+        None
+    } else {
+        markdown_prompt
+    };
     if markdown_prompt.is_some()
         && (manifest.agents.len() != 1 || manifest.agents[0].prompt.is_some())
     {
@@ -579,12 +617,73 @@ fn prepare_bundle(
         &source.manifest.extensions,
     )?;
 
+    let tools = prepare_resources(
+        &bundle_id,
+        "tool",
+        &source.files,
+        source.manifest.resources.tools,
+    )?;
     let skills = prepare_resources(
         &bundle_id,
         "skill",
         &source.files,
         source.manifest.resources.skills,
     )?;
+    let hooks = prepare_resources(
+        &bundle_id,
+        "hook",
+        &source.files,
+        source.manifest.resources.hooks,
+    )?;
+    for hook in &hooks {
+        validate_hook_local_id(&bundle_id, &hook.local_id)?;
+    }
+    let extensions = prepare_resources(
+        &bundle_id,
+        "extension",
+        &source.files,
+        source.manifest.extensions.js,
+    )?;
+    let extension_path_counts = extensions
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, resource| {
+            *counts.entry(resource.source_path.as_str()).or_default() += 1;
+            counts
+        });
+    let selected_extension_paths = tools
+        .iter()
+        .chain(&hooks)
+        .map(|resource| resource.source_path.as_str())
+        .collect::<BTreeSet<_>>();
+    for resource in tools.iter().chain(&hooks) {
+        match extension_path_counts
+            .get(resource.source_path.as_str())
+            .copied()
+            .unwrap_or(0)
+        {
+            0 => {
+                return Err(BundleError::UnsupportedBundleFeature {
+                    bundle_id: bundle_id.clone(),
+                    feature: format!("unmatched executable resource:{}", resource.stable_id),
+                });
+            }
+            1 => {}
+            _ => {
+                return Err(BundleError::UnsupportedBundleFeature {
+                    bundle_id: bundle_id.clone(),
+                    feature: format!("ambiguous executable resource:{}", resource.stable_id),
+                });
+            }
+        }
+    }
+    for extension in &extensions {
+        if !selected_extension_paths.contains(extension.source_path.as_str()) {
+            return Err(BundleError::UnsupportedBundleFeature {
+                bundle_id: bundle_id.clone(),
+                feature: format!("unreachable extension:{}", extension.stable_id),
+            });
+        }
+    }
     let mut local_agent_ids = BTreeSet::new();
     let mut agents = source
         .manifest
@@ -602,7 +701,7 @@ fn prepare_bundle(
         })
         .collect::<Result<Vec<_>, _>>()?;
     agents.sort_by(|left, right| left.stable_id.as_str().cmp(right.stable_id.as_str()));
-    validate_resource_views(&bundle_id, &agents, &skills)?;
+    validate_resource_views(&bundle_id, &agents, &tools, &skills)?;
     let mut bundle = PreparedBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: source.manifest.identity,
@@ -610,11 +709,11 @@ fn prepare_bundle(
         immutable,
         digest: String::new(),
         agents,
-        tools: Vec::new(),
+        tools,
         skills,
         mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
+        hooks,
+        extensions,
     };
     bundle.digest = prepared_bundle_digest(&bundle)?;
     Ok(bundle)
@@ -623,10 +722,12 @@ fn prepare_bundle(
 fn validate_resource_views(
     bundle_id: &str,
     agents: &[PreparedAgent],
-    resources: &[PreparedResource],
+    tools: &[PreparedResource],
+    skills: &[PreparedResource],
 ) -> Result<(), BundleError> {
-    let occupied = resources
+    let occupied = tools
         .iter()
+        .chain(skills)
         .flat_map(|resource| {
             std::iter::once(resource.local_id.as_str())
                 .chain(resource.aliases.iter().map(String::as_str))
@@ -674,10 +775,7 @@ fn validate_unsupported(
     extensions: &SourceExtensions,
 ) -> Result<(), BundleError> {
     let unsupported = [
-        (!resources.tools.is_empty(), "resources.tools"),
         (!resources.mcp.is_empty(), "resources.mcp"),
-        (!resources.hooks.is_empty(), "resources.hooks"),
-        (!extensions.js.is_empty(), "extensions.js"),
         (!extensions.rust.is_empty(), "extensions.rust"),
     ];
     if let Some((_, feature)) = unsupported.into_iter().find(|(present, _)| *present) {
@@ -687,6 +785,19 @@ fn validate_unsupported(
         });
     }
     Ok(())
+}
+
+pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<(), BundleError> {
+    if matches!(
+        local_id,
+        "event" | "tool.execute.before" | "tool.execute.after"
+    ) {
+        return Ok(());
+    }
+    Err(BundleError::UnsupportedBundleFeature {
+        bundle_id: bundle_id.to_string(),
+        feature: format!("hook:{local_id}"),
+    })
 }
 
 fn prepare_agent(
@@ -735,7 +846,6 @@ fn prepare_agent(
     source.can_spawn.sort();
     source.can_spawn.dedup();
     source.hook_refs.sort();
-    source.hook_refs.dedup();
     source.resource_view.allow.sort();
     source.resource_view.allow.dedup();
     source.resource_view.deny.sort();

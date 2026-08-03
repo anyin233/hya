@@ -8,6 +8,7 @@
 mod admission;
 mod bundle_registry;
 pub mod error;
+mod mailbox;
 mod permission;
 mod resident_claim;
 mod sync;
@@ -29,6 +30,7 @@ pub use bundle_registry::{
 };
 pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};
+pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use permission::SavedPermission;
 pub use resident_claim::RecoveredActorClaim;
 

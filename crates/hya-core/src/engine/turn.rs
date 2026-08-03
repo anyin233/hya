@@ -1,23 +1,25 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage};
+use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage, ToolCallId};
 use hya_store::ActorClaim;
-use hya_tool::{Action, AgentDef, Mode, PermissionPlane, Rule, ToolCtx, ToolError};
+use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{
     AgentSpec, FixedSystemAgent, SessionEngine, agent_roster, agent_with_bound_skills,
-    agent_with_guidance_layer, authorize_tool_call, effective_agent_for_binding,
+    agent_with_guidance_layer, authorize_tool_call, effective_agent_for_binding_with_sidecar_tools,
     fixed_system_agent, session_workdir, summarize_options_from_definition,
 };
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    ChatParamsInput, ChatParamsOutcome, HookDispatcher, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    activation_hook_for, scope_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
+use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
 mod messages;
@@ -35,6 +37,60 @@ struct TurnExecution<'a> {
     guidance: Option<Arc<str>>,
 }
 
+struct ToolHookContext<'a> {
+    session: SessionId,
+    message: MessageId,
+    call: ToolCallId,
+    tool: &'a str,
+}
+
+async fn apply_tool_execute_before_hooks(
+    global: Option<&Arc<dyn HookDispatcher>>,
+    activation: Option<&Arc<dyn HookDispatcher>>,
+    context: &ToolHookContext<'_>,
+    mut input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    for hooks in [global, activation].into_iter().flatten() {
+        match hooks
+            .tool_execute_before(ToolExecuteBeforeInput {
+                session: context.session,
+                message: context.message,
+                call: context.call,
+                tool: context.tool.to_string(),
+                input,
+            })
+            .await
+        {
+            ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
+            ToolExecuteBeforeOutcome::Veto { reason } => return Err(reason),
+        }
+    }
+    Ok(input)
+}
+
+async fn apply_tool_execute_after_hooks(
+    global: Option<&Arc<dyn HookDispatcher>>,
+    activation: Option<&Arc<dyn HookDispatcher>>,
+    context: &ToolHookContext<'_>,
+    input: serde_json::Value,
+    mut result: ToolOutcomeNative,
+) -> ToolOutcomeNative {
+    for hooks in [global, activation].into_iter().flatten() {
+        let ToolExecuteAfterOutcome::Continue { result: next } = hooks
+            .tool_execute_after(ToolExecuteAfterInput {
+                session: context.session,
+                message: context.message,
+                call: context.call,
+                tool: context.tool.to_string(),
+                input: input.clone(),
+                result,
+            })
+            .await;
+        result = next;
+    }
+    result
+}
+
 enum TurnActivation {
     Root,
     Bound(TurnBinding),
@@ -42,7 +98,58 @@ enum TurnActivation {
         binding: TurnBinding,
         agents: Arc<[AgentDef]>,
         resources: AgentResourcePolicy,
+        sidecar_tools: Arc<[ResolvedTool]>,
     },
+}
+
+async fn start_root_sidecar(
+    environment: Option<&Arc<dyn SidecarEnvironment>>,
+    binding: &TurnBinding,
+    stable_id: &str,
+    cancel: &CancellationToken,
+) -> Result<(Option<Box<dyn SidecarHandle>>, Arc<[ResolvedTool]>), CoreError> {
+    let Some(environment) = environment else {
+        return Ok((None, Arc::from([])));
+    };
+    let Some(factory) = environment.factory_for(binding, stable_id)? else {
+        return Ok((None, Arc::from([])));
+    };
+    let mut handle = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+        result = factory.start(SidecarStart::transient()) => result?,
+    };
+    let ready = tokio::select! {
+        result = handle.ready() => result,
+        _ = cancel.cancelled() => Err(CoreError::Cancelled),
+    };
+    if let Err(error) = ready {
+        let _ = handle.terminate().await;
+        return Err(error);
+    }
+    if handle
+        .loss_token()
+        .is_some_and(|loss_token| loss_token.is_cancelled())
+    {
+        let _ = handle.terminate().await;
+        return Err(CoreError::Cancelled);
+    }
+    let tools = handle.tool_bindings();
+    Ok((Some(handle), tools))
+}
+
+async fn terminate_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) {
+    if let Some(mut handle) = handle.take() {
+        let _ = handle.terminate().await;
+    }
+}
+
+async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result<(), CoreError> {
+    if let Some(mut handle) = handle.take() {
+        handle.shutdown().await
+    } else {
+        Ok(())
+    }
 }
 
 impl SessionEngine {
@@ -145,15 +252,20 @@ impl SessionEngine {
         .await
     }
 
-    pub(crate) async fn run_resolved_turn(
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools(
         &self,
         session: SessionId,
         agent: &AgentSpec,
-        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
+        resolved: (
+            TurnBinding,
+            Arc<[AgentDef]>,
+            AgentResourcePolicy,
+            Arc<[ResolvedTool]>,
+        ),
         cancel: CancellationToken,
         guidance: Option<Arc<str>>,
     ) -> Result<FinishReason, CoreError> {
-        let (binding, agents, resources) = resolved;
+        let (binding, agents, resources, sidecar_tools) = resolved;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
@@ -164,21 +276,27 @@ impl SessionEngine {
                 binding,
                 agents,
                 resources,
+                sidecar_tools,
             },
         )
         .await
     }
 
-    pub(crate) async fn run_resolved_turn_for_actor(
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor(
         &self,
         session: SessionId,
         agent: &AgentSpec,
-        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
+        resolved: (
+            TurnBinding,
+            Arc<[AgentDef]>,
+            AgentResourcePolicy,
+            Arc<[ResolvedTool]>,
+        ),
         claim: &ActorClaim,
         cancel: CancellationToken,
         guidance: Option<Arc<str>>,
     ) -> Result<FinishReason, CoreError> {
-        let (binding, agents, resources) = resolved;
+        let (binding, agents, resources, sidecar_tools) = resolved;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
@@ -189,6 +307,7 @@ impl SessionEngine {
                 binding,
                 agents,
                 resources,
+                sidecar_tools,
             },
         )
         .await
@@ -207,97 +326,180 @@ impl SessionEngine {
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let (binding, resolved) = match activation {
-            TurnActivation::Root => (self.bind_root_runtime(&workdir).await?, None),
-            TurnActivation::Bound(binding) => (binding, None),
-            TurnActivation::Resolved {
-                binding,
-                agents,
-                resources,
-            } => (binding, Some((agents, resources))),
-        };
-        let guidance_text = guidance.as_deref();
-        let (agent, agents, resources) = match resolved {
-            Some((agents, policy)) => {
-                let resources = binding.compile_agent_resources(&policy)?;
-                // Resolved activation reuses caller-owned agent_base; optional
-                // inherited guidance composed once, then skills.
-                let agent = agent_with_guidance_layer(agent.clone(), guidance_text);
-                (
-                    agent_with_bound_skills(agent, resources.as_ref()),
-                    agents,
-                    resources,
-                )
-            }
-            None => {
+        let (binding, resolved, root_sidecar_tools, mut sidecar_handle) = match activation {
+            TurnActivation::Root => {
+                let binding = self.bind_root_runtime(&workdir).await?;
                 let stable_id = projection
                     .session
                     .agent
                     .as_ref()
                     .unwrap_or(&agent.name)
-                    .as_str();
-                let (agent, resources) =
-                    effective_agent_for_binding(agent, stable_id, &binding, guidance_text)?;
-                let agents = agent_roster(&binding, stable_id)?;
-                (agent, agents, resources)
+                    .as_str()
+                    .to_string();
+                let (sidecar_handle, sidecar_tools) = start_root_sidecar(
+                    self.sidecar_environment.as_ref(),
+                    &binding,
+                    &stable_id,
+                    &cancel,
+                )
+                .await?;
+                (binding, None, sidecar_tools, sidecar_handle)
             }
+            TurnActivation::Bound(binding) => (binding, None, Arc::from([]), None),
+            TurnActivation::Resolved {
+                binding,
+                agents,
+                resources,
+                sidecar_tools,
+            } => (
+                binding,
+                Some((agents, resources, sidecar_tools)),
+                Arc::from([]),
+                None,
+            ),
         };
-        let message = MessageId::new();
-        self.emit_for_actor(
-            actor_claim,
-            session,
-            Event::MessageStarted {
+        let sidecar_hooks = sidecar_handle
+            .as_ref()
+            .and_then(|handle| handle.hook_dispatcher());
+        let sidecar_loss = sidecar_handle
+            .as_ref()
+            .and_then(|handle| handle.loss_token());
+        let post_ack = async {
+            let guidance_text = guidance.as_deref();
+            let prepared: Result<_, CoreError> = match resolved {
+                Some((agents, policy, sidecar_tools)) => {
+                    binding
+                        .compile_agent_resources_with_sidecar_tools(&policy, &sidecar_tools)
+                        .map_err(CoreError::from)
+                        .map(|resources| {
+                            // Resolved activation reuses caller-owned agent_base; optional
+                            // inherited guidance composed once, then skills.
+                            let agent = agent_with_guidance_layer(agent.clone(), guidance_text);
+                            (
+                                agent_with_bound_skills(agent, resources.as_ref()),
+                                agents,
+                                resources,
+                            )
+                        })
+                }
+                None => {
+                    let stable_id = projection
+                        .session
+                        .agent
+                        .as_ref()
+                        .unwrap_or(&agent.name)
+                        .as_str();
+                    effective_agent_for_binding_with_sidecar_tools(
+                        agent,
+                        stable_id,
+                        &binding,
+                        guidance_text,
+                        &root_sidecar_tools,
+                    )
+                    .and_then(|(agent, resources)| {
+                        agent_roster(&binding, stable_id).map(|agents| (agent, agents, resources))
+                    })
+                }
+            };
+            let (agent, agents, resources) = prepared?;
+            let message = MessageId::new();
+            self.emit_for_actor(
+                actor_claim,
                 session,
-                message,
-                role: Role::Assistant,
-            },
-        )
-        .await?;
-        self.emit_for_actor(
-            actor_claim,
-            session,
-            Event::TurnBindingRecorded {
-                session,
-                message,
-                generation: binding.generation(),
-            },
-        )
-        .await?;
-
-        let outcome = self
-            .run_turn_rounds(
-                session,
-                message,
-                &agent,
-                TurnExecution {
-                    binding: &binding,
-                    resources: &resources,
-                    agents: &agents,
-                    cancel: &cancel,
-                    external_dirs,
-                    actor_claim,
-                    // Same Arc for nested spawn scope; no re-discovery.
-                    guidance: guidance.clone(),
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
                 },
             )
-            .await;
-        if outcome.is_err() {
-            // A provider/tool error after MessageStarted must still close the assistant
-            // message, else UI clients (e.g. the hya TUI) wait forever for a finish event.
-            let _ = self
-                .emit_for_actor(
-                    actor_claim,
+            .await?;
+            self.emit_for_actor(
+                actor_claim,
+                session,
+                Event::TurnBindingRecorded {
                     session,
-                    Event::MessageFinished {
+                    message,
+                    generation: binding.generation(),
+                },
+            )
+            .await?;
+
+            let execution = TurnExecution {
+                binding: &binding,
+                resources: &resources,
+                agents: &agents,
+                cancel: &cancel,
+                external_dirs,
+                actor_claim,
+                // Same Arc for nested spawn scope; no re-discovery.
+                guidance: guidance.clone(),
+            };
+            let (outcome, sidecar_lost) = match sidecar_loss {
+                Some(loss_token) => {
+                    tokio::select! {
+                        biased;
+                        _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
+                        outcome = self.run_turn_rounds(session, message, &agent, execution) => (outcome, false),
+                    }
+                }
+                None => (
+                    self.run_turn_rounds(session, message, &agent, execution)
+                        .await,
+                    false,
+                ),
+            };
+            if sidecar_lost
+                && let Ok(projection) = self.store.read_projection(session).await
+                && projection
+                    .session
+                    .messages
+                    .iter()
+                    .any(|entry| entry.id == message && entry.finish.is_none())
+            {
+                let _ = self
+                    .emit_for_actor(
+                        actor_claim,
                         session,
-                        message,
-                        role: Role::Assistant,
-                        finish: FinishReason::Error,
-                        tokens: None,
-                    },
-                )
-                .await;
-        }
+                        Event::MessageFinished {
+                            session,
+                            message,
+                            role: Role::Assistant,
+                            finish: FinishReason::Cancelled,
+                            tokens: None,
+                        },
+                    )
+                    .await;
+            }
+            if outcome.is_err() && !matches!(&outcome, Err(CoreError::Cancelled)) {
+                // A provider/tool error after MessageStarted must still close the assistant
+                // message, else UI clients (e.g. the hya TUI) wait forever for a finish event.
+                let _ = self
+                    .emit_for_actor(
+                        actor_claim,
+                        session,
+                        Event::MessageFinished {
+                            session,
+                            message,
+                            role: Role::Assistant,
+                            finish: FinishReason::Error,
+                            tokens: None,
+                        },
+                    )
+                    .await;
+            }
+            outcome
+        };
+        let outcome = if let Some(hooks) = sidecar_hooks {
+            scope_activation_hooks(session, hooks, post_ack).await
+        } else {
+            post_ack.await
+        };
+        let cleanup_result = if matches!(&outcome, Ok(FinishReason::Stop | FinishReason::Length)) {
+            shutdown_sidecar(&mut sidecar_handle).await
+        } else {
+            terminate_sidecar(&mut sidecar_handle).await;
+            Ok(())
+        };
         // A completed top-level (depth-0) turn ends the "run": release its per-run
         // subagent budget so long-lived root sessions do not leak budget entries and
         // the next top-level turn starts with a fresh budget.
@@ -306,6 +508,7 @@ impl SessionEngine {
         {
             self.finalize_root_spawn_admissions(root).await?;
         }
+        cleanup_result?;
         outcome
     }
 
@@ -340,6 +543,9 @@ impl SessionEngine {
         };
         loop {
             self.validate_actor_claim(actor_claim).await?;
+            if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
+                return Err(CoreError::Cancelled);
+            }
             if cancel.is_cancelled() {
                 self.emit_for_actor(
                     actor_claim,
@@ -499,20 +705,30 @@ impl SessionEngine {
 
             for mut tc in stream_round.tool_calls {
                 self.validate_actor_claim(actor_claim).await?;
-                if let Some(hooks) = &self.hooks {
-                    let input = std::mem::take(&mut tc.input);
-                    match hooks
-                        .tool_execute_before(ToolExecuteBeforeInput {
-                            session,
-                            message,
-                            call: tc.call,
-                            tool: tc.name.clone(),
-                            input,
-                        })
-                        .await
+                let activation_hooks = activation_hook_for(session);
+                let hook_context = ToolHookContext {
+                    session,
+                    message,
+                    call: tc.call,
+                    tool: &tc.name,
+                };
+                if self.hooks.is_some() || activation_hooks.is_some() {
+                    let input = apply_tool_execute_before_hooks(
+                        self.hooks.as_ref(),
+                        activation_hooks.as_ref(),
+                        &hook_context,
+                        std::mem::take(&mut tc.input),
+                    )
+                    .await;
+                    if activation_hooks
+                        .as_ref()
+                        .is_some_and(|hooks| !hooks.is_healthy())
                     {
-                        ToolExecuteBeforeOutcome::Continue { input } => tc.input = input,
-                        ToolExecuteBeforeOutcome::Veto { reason } => {
+                        return Err(CoreError::Cancelled);
+                    }
+                    match input {
+                        Ok(input) => tc.input = input,
+                        Err(reason) => {
                             let message_text = format!("blocked by plugin: {reason}");
                             self.emit_for_actor(
                                 actor_claim,
@@ -531,7 +747,8 @@ impl SessionEngine {
                         }
                     }
                 }
-                let input_for_after = self.hooks.as_ref().map(|_| tc.input.clone());
+                let input_for_after =
+                    (self.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
                 let started = std::time::Instant::now();
                 let result = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => match authorize_tool_call(
@@ -582,10 +799,16 @@ impl SessionEngine {
                     None => Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
                 };
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                if actor_claim.is_some()
+                    && matches!(&result, Err(ToolError::Cancelled))
+                    && cancel.is_cancelled()
+                {
+                    return Err(CoreError::Cancelled);
+                }
                 self.validate_actor_claim(actor_claim).await?;
-                let result = if let Some(hooks) = &self.hooks {
+                let result = if self.hooks.is_some() || activation_hooks.is_some() {
                     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
-                    let native = match &result {
+                    let mut native = match &result {
                         Ok(output) => ToolOutcomeNative::Ok {
                             output: output.clone(),
                             time_ms,
@@ -594,20 +817,24 @@ impl SessionEngine {
                             message: e.to_string(),
                         },
                     };
-                    let ToolExecuteAfterOutcome::Continue { result: rewritten } = hooks
-                        .tool_execute_after(ToolExecuteAfterInput {
-                            session,
-                            message,
-                            call: tc.call,
-                            tool: tc.name.clone(),
-                            input: input_for_after.unwrap_or_default(),
-                            result: native,
-                        })
-                        .await;
+                    native = apply_tool_execute_after_hooks(
+                        self.hooks.as_ref(),
+                        activation_hooks.as_ref(),
+                        &hook_context,
+                        input_for_after.unwrap_or_default(),
+                        native,
+                    )
+                    .await;
+                    if activation_hooks
+                        .as_ref()
+                        .is_some_and(|hooks| !hooks.is_healthy())
+                    {
+                        return Err(CoreError::Cancelled);
+                    }
                     if was_permission_err {
                         result
                     } else {
-                        match rewritten {
+                        match native {
                             ToolOutcomeNative::Ok { output, .. } => Ok(output),
                             ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
                         }

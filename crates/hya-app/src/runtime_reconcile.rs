@@ -1142,8 +1142,7 @@ mod tests {
 
         let failing_source = SourceId::mcp("failing");
         let replacement = reconciler.replace_desired(vec![desired(&failing_source, "fails")])?;
-        let after_removal = registry.bind_turn(&workdir)?;
-        assert!(after_removal.resolve_tool("removed_tool").is_none());
+        let after_removal_generation = registry.effective_manifest().generation;
         assert!(old_binding.resolve_tool("removed_tool").is_some());
         assert_eq!(retained_closes.load(Ordering::SeqCst), 0);
 
@@ -1155,8 +1154,9 @@ mod tests {
             failed,
             Err(ReconcileError::PreparationFailed { .. })
         ));
+        let after_failure_generation = registry.effective_manifest().generation;
+        assert_eq!(after_failure_generation, after_removal_generation);
         let after_failure = registry.bind_turn(&workdir)?;
-        assert_eq!(after_failure.generation(), after_removal.generation());
         assert!(after_failure.resolve_tool("removed_tool").is_none());
         assert!(old_binding.resolve_tool("removed_tool").is_some());
         drop(old_binding);
@@ -1178,7 +1178,7 @@ mod tests {
             desired(&failed_source, "failed"),
         ])?;
         let workdir = std::env::temp_dir().join("hya-reconcile-partial-failure");
-        let before = registry.bind_turn(&workdir)?;
+        let before_generation = registry.effective_manifest().generation;
         let partial_closes = Arc::new(AtomicUsize::new(0));
 
         let failed = reconciler.finish_revision(
@@ -1202,9 +1202,8 @@ mod tests {
             Err(ReconcileError::PreparationFailed { .. })
         ));
         assert_eq!(partial_closes.load(Ordering::SeqCst), 1);
-        let after = registry.bind_turn(&workdir)?;
-        assert_eq!(after.generation(), before.generation());
-        assert!(after.resolve_tool("partial_tool").is_none());
+        let after_failure_generation = registry.effective_manifest().generation;
+        assert_eq!(after_failure_generation, before_generation);
         let status = reconciler.status();
         let observed = &status[&failed_source];
         assert_eq!(observed.observed, ObservedState::Failed);
@@ -1213,7 +1212,9 @@ mod tests {
             Some("PLUGIN_INITIALIZE_FAILED")
         );
         assert!(!observed.effective);
-        assert_eq!(observed.effective_generation, after.generation());
+        assert_eq!(observed.effective_generation, after_failure_generation);
+        let after = registry.bind_turn(&workdir)?;
+        assert!(after.resolve_tool("partial_tool").is_none());
         Ok(())
     }
 

@@ -37,9 +37,10 @@ already-loaded config until then.
 
 ## Native agent bundles (not this skill)
 
-0.34.10 runtime does not parse, discover, or migrate legacy agent
+0.34.11 runtime does not parse, discover, or migrate legacy agent
 JSON/JSONC/Markdown definitions. Built-ins come from embedded native
-AgentBundles. External public-static packages must use the exact lowercase
+AgentBundles. External public packages can remain process-free or use one
+activation-scoped Bun Compat sidecar. They must use the exact lowercase
 `.hyabundle` suffix: inspect a package with `hya bundle info -f
 <path>.hyabundle`, then install it with `hya bundle install
 <path>.hyabundle`. For agent authoring, use the built-in

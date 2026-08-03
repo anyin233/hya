@@ -111,6 +111,12 @@ impl Frame {
     pub fn parse(line: &str) -> Result<Self, String> {
         let value: Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
         let obj = value.as_object().ok_or("frame is not a JSON object")?;
+        if obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+            return Err("invalid jsonrpc version".to_string());
+        }
+        if obj.contains_key("result") && obj.contains_key("error") {
+            return Err("frame contains both result and error".to_string());
+        }
         let is_request = obj.contains_key("method") && obj.contains_key("id");
         let is_notification = obj.contains_key("method") && !obj.contains_key("id");
         let is_response = obj.contains_key("result") || obj.contains_key("error");

@@ -1,13 +1,15 @@
+use std::sync::Arc;
+
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Clone, Error, Debug)]
 pub enum CoreError {
     #[error(transparent)]
     Bundle(#[from] hya_bundle::BundleError),
     #[error(transparent)]
-    Provider(#[from] hya_provider::ProviderError),
+    Provider(Arc<hya_provider::ProviderError>),
     #[error(transparent)]
-    Tool(#[from] hya_tool::ToolError),
+    Tool(Arc<hya_tool::ToolError>),
     #[error(transparent)]
     Store(#[from] hya_store::StoreError),
     #[error(transparent)]
@@ -18,4 +20,16 @@ pub enum CoreError {
     AgentDefinitionMissing { agent_id: String },
     #[error("invalid: {0}")]
     Invalid(String),
+}
+
+impl From<hya_provider::ProviderError> for CoreError {
+    fn from(error: hya_provider::ProviderError) -> Self {
+        Self::Provider(Arc::new(error))
+    }
+}
+
+impl From<hya_tool::ToolError> for CoreError {
+    fn from(error: hya_tool::ToolError) -> Self {
+        Self::Tool(Arc::new(error))
+    }
 }

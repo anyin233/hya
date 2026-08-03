@@ -16,11 +16,15 @@ use hya_tool::{
 };
 use serde_json::Value;
 
+#[cfg(test)]
+use tokio::sync::Notify;
+
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
 use crate::error::CoreError;
-use crate::hooks::HookDispatcher;
+use crate::hooks::{HookDispatcher, dispatch_activation_event};
 use crate::runtime_registry::CompiledResourceView;
+use crate::sidecar::SidecarEnvironment;
 use crate::{
     AgentResourcePolicy, RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding,
 };
@@ -93,6 +97,19 @@ pub struct AgentSpec {
     pub system_prompt: String,
     pub workdir: PathBuf,
     pub reasoning: Option<ReasoningEffort>,
+}
+
+#[cfg(test)]
+pub(crate) struct DirectMailPreAppendGate {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[cfg(test)]
+impl DirectMailPreAppendGate {
+    pub(crate) fn new(entered: Arc<Notify>, release: Arc<Notify>) -> Self {
+        Self { entered, release }
+    }
 }
 
 #[async_trait]
@@ -185,6 +202,9 @@ pub struct SessionEngine {
     compaction: CompactionConfig,
     hooks: Option<Arc<dyn HookDispatcher>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
+    sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
+    #[cfg(test)]
+    direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
 }
 
 impl SessionEngine {
@@ -221,12 +241,31 @@ impl SessionEngine {
             compaction: CompactionConfig::default(),
             hooks: None,
             governor: None,
+            sidecar_environment: None,
+            #[cfg(test)]
+            direct_mail_pre_append_gate: None,
         }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_direct_mail_pre_append_gate(
+        mut self,
+        gate: DirectMailPreAppendGate,
+    ) -> Self {
+        self.direct_mail_pre_append_gate = Some(Arc::new(gate));
+        self
     }
 
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
         self.hooks = Some(hooks);
+        self
+    }
+
+    #[must_use]
+    pub fn with_sidecar_environment(mut self, environment: Arc<dyn SidecarEnvironment>) -> Self {
+        self.sidecar_environment = Some(environment);
         self
     }
 
@@ -481,6 +520,7 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             hooks.dispatch_event(&envelope);
         }
+        dispatch_activation_event(&envelope);
         self.bus.publish(envelope);
     }
 
@@ -544,12 +584,26 @@ pub(crate) fn effective_agent_for_binding(
     binding: &TurnBinding,
     guidance: Option<&str>,
 ) -> Result<(AgentSpec, Arc<CompiledResourceView>), CoreError> {
+    effective_agent_for_binding_with_sidecar_tools(agent, stable_id, binding, guidance, &[])
+}
+
+pub(crate) fn effective_agent_for_binding_with_sidecar_tools(
+    agent: &AgentSpec,
+    stable_id: &str,
+    binding: &TurnBinding,
+    guidance: Option<&str>,
+    sidecar_tools: &[ResolvedTool],
+) -> Result<(AgentSpec, Arc<CompiledResourceView>), CoreError> {
     // One composition seam: agent_base (Bundle Some replaces / None keeps
     // Harness base) → nonempty guidance → skill prompt material.
     let effective = agent_from_definition(agent, stable_id, binding)?;
     let effective = agent_with_guidance_layer(effective, guidance);
     let policy = binding.agent_resource_policy(stable_id)?;
-    let resources = binding.compile_agent_resources(&policy)?;
+    let resources = if sidecar_tools.is_empty() {
+        binding.compile_agent_resources(&policy)?
+    } else {
+        binding.compile_agent_resources_with_sidecar_tools(&policy, sidecar_tools)?
+    };
     Ok((
         agent_with_bound_skills(effective, resources.as_ref()),
         resources,

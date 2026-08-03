@@ -180,6 +180,30 @@ impl SessionEngine {
         Ok(records.len())
     }
 
+    pub(crate) async fn recover_resident_actor_durable(
+        &self,
+        recovered: &RecoveredActorClaim,
+        root: SessionId,
+        handle: &str,
+    ) -> Result<(hya_store::RecoveredResidentWork, usize), CoreError> {
+        let outcome = self
+            .store
+            .recover_resident_actor(recovered, root, handle)
+            .await?;
+        for envelope in outcome.envelopes {
+            self.publish_envelope(envelope);
+        }
+        if let Some(governor) = &self.governor {
+            for record in &outcome.admissions {
+                if record.logical_released {
+                    governor.release_operation(record.operation_id);
+                }
+            }
+        }
+        let aborted_operations = outcome.admissions.len();
+        Ok((outcome.work, aborted_operations))
+    }
+
     pub(crate) async fn release_resident_actor_claim(
         &self,
         claim: &ActorClaim,
@@ -187,6 +211,40 @@ impl SessionEngine {
         let records = self.store.release_claim(claim).await?;
         if let Some(governor) = &self.governor {
             for record in records {
+                if record.logical_released {
+                    governor.release_operation(record.operation_id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn finalize_resident_stop(
+        &self,
+        claim: &ActorClaim,
+        root: SessionId,
+        handle: &str,
+    ) -> Result<(), CoreError> {
+        self.finalize_resident_failure(claim, root, handle, "resident stopped")
+            .await
+    }
+
+    pub(crate) async fn finalize_resident_failure(
+        &self,
+        claim: &ActorClaim,
+        root: SessionId,
+        handle: &str,
+        reason: &str,
+    ) -> Result<(), CoreError> {
+        let (envelopes, admissions) = self
+            .store
+            .finalize_resident_failure(claim, root, handle, reason)
+            .await?;
+        for envelope in envelopes {
+            self.publish_envelope(envelope);
+        }
+        if let Some(governor) = &self.governor {
+            for record in admissions {
                 if record.logical_released {
                     governor.release_operation(record.operation_id);
                 }

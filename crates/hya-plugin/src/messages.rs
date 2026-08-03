@@ -108,6 +108,19 @@ pub struct InitializeParams {
     pub host: HostInfo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivationLifecycle {
+    Transient,
+    Resident,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivationMetadata {
+    pub activation_id: String,
+    pub lifecycle: ActivationLifecycle,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostInfo {
     pub name: String,

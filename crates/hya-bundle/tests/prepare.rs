@@ -320,6 +320,140 @@ fn prepared_decode_revalidates_full_catalog_references() {
     );
 }
 
+#[test]
+fn prepared_decode_rejects_unreferenced_unsupported_hook_local_id() {
+    let manifest = br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/prepared-hook
+  version: 1.0.0
+  publisher: hya
+resources:
+  hooks:
+    - id: event
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agents:
+  - local_id: lead
+    stable_id: lead
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#;
+    let prepared = prepare_builtins(vec![BundleSource::new(
+        "prepared-hook",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.as_slice()),
+            SourceFile::new(
+                "extensions/runtime.js",
+                b"export const runtime = true;\n".as_slice(),
+            ),
+        ],
+    )]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(mut document) = document else {
+        panic!("prepared document was not JSON: {document:?}");
+    };
+    document["bundles"][0]["hooks"][0]["local_id"] = serde_json::Value::String("audit".to_string());
+    document["bundles"][0]["hooks"][0]["stable_id"] =
+        serde_json::Value::String("bundle:hya/prepared-hook/hook/audit".to_string());
+
+    let bytes = rehash_first_bundle(&mut document);
+    let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/prepared-hook".to_string(),
+            feature: "hook:audit".to_string(),
+        })
+    );
+}
+
+#[test]
+fn prepared_decode_rejects_harness_prefixed_hook_refs_before_catalog_publication() {
+    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(document) = document else {
+        panic!("prepared document was not JSON: {document:?}");
+    };
+
+    for (raw_ref, kind) in [
+        ("harness:hook/event", "resource"),
+        ("harness:hook/tool.execute.before", "resource"),
+        ("harness:hook/tool.execute.after", "resource"),
+        ("harness:hook/unknown", "resource"),
+        ("harness:hook/", "resource"),
+        ("harness:hook", "resource"),
+    ] {
+        let mut document = document.clone();
+        document["bundles"][0]["agents"][0]["hook_refs"] = serde_json::json!([raw_ref]);
+        let bytes = rehash_first_bundle(&mut document);
+        let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
+        assert_eq!(
+            result.err(),
+            Some(BundleError::UnknownResourceReference {
+                bundle_id: "hya/alpha".to_string(),
+                kind: kind.to_string(),
+                reference: raw_ref.to_string(),
+            })
+        );
+    }
+}
+
+#[test]
+fn prepared_decode_rejects_harness_prefixed_hook_resource_view_reference() {
+    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(mut document) = document else {
+        panic!("prepared document was not JSON: {document:?}");
+    };
+    document["bundles"][0]["agents"][0]["resource_view"]["allow"] =
+        serde_json::json!(["harness:hook/event"]);
+
+    let bytes = rehash_first_bundle(&mut document);
+    let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::UnknownResourceReference {
+            bundle_id: "hya/alpha".to_string(),
+            kind: "resource".to_string(),
+            reference: "harness:hook/event".to_string(),
+        })
+    );
+}
+
+#[test]
+fn prepared_decode_rejects_unknown_bundle_collections() {
+    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(document) = document else {
+        panic!("prepared document was not JSON: {document:?}");
+    };
+
+    for field in ["files", "helpers", "dependencies", "imports"] {
+        let mut document = document.clone();
+        document["bundles"][0][field] = serde_json::json!([]);
+        let bytes = rehash_first_bundle(&mut document);
+        let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
+        assert!(matches!(result, Err(BundleError::PreparedDecode { .. })));
+    }
+}
+
 fn skill_source(resource_path: &str) -> BundleSource {
     let manifest = format!(
         r#"api_version: hya.agent-bundle/v1
