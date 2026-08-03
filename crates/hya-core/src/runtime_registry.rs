@@ -7,11 +7,15 @@ use hya_bundle::{
 };
 use hya_proto::{ConfigGeneration, ToolName, ToolSchema};
 use hya_tool::{
-    DuplicateName, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool, ToolPermission, ToolRegistry,
-    ToolRegistrySnapshot, discover_skills, parse_skill,
+    DuplicateName, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
+    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills, parse_skill,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+const RUNTIME_SOURCE_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.core.runtime-source-dispatch/v1";
+const RUNTIME_SEMANTIC_FINGERPRINT_DOMAIN_V1: &[u8] = b"hya.core.runtime-semantic-fingerprint/v1";
 
 /// A complete immutable configuration view. Turns retain its `Arc` for their
 /// whole lifetime, so publication cannot alter an in-flight lookup.
@@ -381,11 +385,14 @@ impl RuntimeCandidate {
                         export.tool.name()
                     )));
                 }
-                self.tools.register_with_permission_and_aliases(
-                    export.tool.clone(),
-                    export.permission,
-                    &export.aliases,
-                )?;
+                let identity = runtime_source_dispatch_identity(&source, export)?;
+                self.tools
+                    .register_with_permission_and_aliases_and_dispatch_identity(
+                        export.tool.clone(),
+                        export.permission,
+                        &export.aliases,
+                        identity,
+                    )?;
             }
             self.sources.insert(source.id.clone(), source);
         }
@@ -539,6 +546,50 @@ fn sources_match(
 }
 
 impl TurnBinding {
+    /// Return a deterministic identity for the currently supported complete
+    /// runtime view. Views with unidentifiable sources are intentionally
+    /// unavailable until their semantic sections have a canonical encoding.
+    #[must_use]
+    pub fn semantic_fingerprint_v1(&self, permission: &PermissionPlane) -> Option<[u8; 32]> {
+        let catalog_identity = self.snapshot.catalog.semantic_identity_v1()?;
+        let permission_identity = permission.semantic_identity_v1()?;
+        let mut bytes = Vec::new();
+        append_identity_bytes(&mut bytes, RUNTIME_SEMANTIC_FINGERPRINT_DOMAIN_V1).ok()?;
+
+        append_identity_tag(&mut bytes, 1);
+        append_identity_bytes(&mut bytes, catalog_identity).ok()?;
+
+        // The explicit empty section represents the none effective view.
+        append_identity_tag(&mut bytes, 2);
+        append_identity_count(&mut bytes, 0).ok()?;
+
+        append_identity_tag(&mut bytes, 3);
+        append_tool_view_identity(&mut bytes, &self.snapshot.basic_tools)?;
+
+        append_identity_tag(&mut bytes, 4);
+        append_tool_view_identity(&mut bytes, &self.snapshot.tools)?;
+
+        append_identity_tag(&mut bytes, 5);
+        let skills = self
+            .snapshot
+            .skills
+            .get(&self.workdir)
+            .map_or(&[][..], |skills| skills.as_slice());
+        append_skill_view_identity(&mut bytes, skills)?;
+
+        append_identity_tag(&mut bytes, 6);
+        append_runtime_source_view_identity(
+            &mut bytes,
+            &self.snapshot.sources,
+            &self.snapshot.tools,
+        )?;
+
+        append_identity_tag(&mut bytes, 7);
+        append_identity_bytes(&mut bytes, &permission_identity).ok()?;
+
+        Some(Sha256::digest(bytes).into())
+    }
+
     #[must_use]
     pub fn generation(&self) -> ConfigGeneration {
         self.snapshot.generation
@@ -1179,6 +1230,243 @@ fn harness_id(kind: &str, short: &str) -> String {
 
 fn namespace_qualified(namespace: &str, kind: &str, local_id: &str) -> String {
     format!("bundle:{namespace}/{kind}/{local_id}")
+}
+
+fn runtime_source_dispatch_identity(
+    source: &RuntimeSource,
+    export: &RuntimeSourceExport,
+) -> Result<[u8; 32], RuntimeRefreshError> {
+    let mut bytes = Vec::new();
+    append_identity_bytes(&mut bytes, RUNTIME_SOURCE_DISPATCH_IDENTITY_DOMAIN_V1)?;
+    append_identity_tag(&mut bytes, 1);
+    append_identity_tag(
+        &mut bytes,
+        match source.id.kind {
+            RuntimeSourceKind::Mcp => 0,
+            RuntimeSourceKind::Plugin => 1,
+        },
+    );
+    append_identity_tag(&mut bytes, 2);
+    append_identity_bytes(&mut bytes, source.id.configured_id.as_bytes())?;
+    append_identity_tag(&mut bytes, 3);
+    append_identity_bytes(&mut bytes, &source.declaration_digest)?;
+    append_identity_tag(&mut bytes, 4);
+    append_identity_count(&mut bytes, source.resources.len())?;
+    for (key, value) in source.resources.iter() {
+        append_identity_bytes(&mut bytes, key.as_bytes())?;
+        append_canonical_json_value(&mut bytes, value)?;
+    }
+    append_identity_tag(&mut bytes, 5);
+    append_identity_bytes(&mut bytes, export.declared_id.as_bytes())?;
+    append_identity_tag(&mut bytes, 6);
+    append_identity_bytes(&mut bytes, export.canonical_name.as_bytes())?;
+    Ok(Sha256::digest(bytes).into())
+}
+
+fn append_identity_tag(bytes: &mut Vec<u8>, tag: u8) {
+    bytes.push(tag);
+}
+
+fn append_identity_count(bytes: &mut Vec<u8>, count: usize) -> Result<(), RuntimeRefreshError> {
+    let count = u64::try_from(count).map_err(|_| {
+        RuntimeRefreshError::InvalidCandidate(
+            "runtime source dispatch identity count exceeds u64".to_string(),
+        )
+    })?;
+    bytes.extend_from_slice(&count.to_be_bytes());
+    Ok(())
+}
+
+fn append_identity_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), RuntimeRefreshError> {
+    let length = u64::try_from(value.len()).map_err(|_| {
+        RuntimeRefreshError::InvalidCandidate(
+            "runtime source dispatch identity length exceeds u64".to_string(),
+        )
+    })?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(value);
+    Ok(())
+}
+
+fn append_canonical_json_value(
+    bytes: &mut Vec<u8>,
+    value: &Value,
+) -> Result<(), RuntimeRefreshError> {
+    match value {
+        Value::Null => append_identity_tag(bytes, 0),
+        Value::Bool(value) => {
+            append_identity_tag(bytes, 1);
+            append_identity_tag(bytes, u8::from(*value));
+        }
+        Value::Number(value) => {
+            append_identity_tag(bytes, 2);
+            let value = value.to_string();
+            append_identity_bytes(bytes, value.as_bytes())?;
+        }
+        Value::String(value) => {
+            append_identity_tag(bytes, 3);
+            append_identity_bytes(bytes, value.as_bytes())?;
+        }
+        Value::Array(values) => {
+            append_identity_tag(bytes, 4);
+            append_identity_count(bytes, values.len())?;
+            for value in values {
+                append_canonical_json_value(bytes, value)?;
+            }
+        }
+        Value::Object(values) => {
+            append_identity_tag(bytes, 5);
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            append_identity_count(bytes, entries.len())?;
+            for (key, value) in entries {
+                append_identity_bytes(bytes, key.as_bytes())?;
+                append_canonical_json_value(bytes, value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_tool_view_identity(bytes: &mut Vec<u8>, tools: &ToolRegistrySnapshot) -> Option<()> {
+    let mut canonical_tools = tools.canonical_tools();
+    canonical_tools.sort_by(|left, right| left.0.cmp(&right.0));
+    append_identity_count(bytes, canonical_tools.len()).ok()?;
+    for (canonical_name, resolved) in canonical_tools {
+        append_identity_tag(bytes, 1);
+        append_identity_bytes(bytes, canonical_name.as_bytes()).ok()?;
+        append_identity_tag(bytes, 2);
+        append_tool_permission_identity(bytes, resolved.permission);
+
+        let schema = resolved.tool.schema();
+        append_identity_tag(bytes, 3);
+        append_identity_bytes(bytes, schema.name.as_str().as_bytes()).ok()?;
+        append_identity_tag(bytes, 4);
+        append_identity_bytes(bytes, schema.description.as_bytes()).ok()?;
+        append_identity_tag(bytes, 5);
+        append_canonical_json_value(bytes, &schema.input_schema).ok()?;
+        append_identity_tag(bytes, 6);
+        match schema.output_schema {
+            None => append_identity_tag(bytes, 0),
+            Some(output_schema) => {
+                append_identity_tag(bytes, 1);
+                append_canonical_json_value(bytes, &output_schema).ok()?;
+            }
+        }
+
+        append_identity_tag(bytes, 7);
+        let dispatch_identity = tools.dispatch_identity_v1(&canonical_name)?;
+        append_identity_bytes(bytes, &dispatch_identity).ok()?;
+
+        append_identity_tag(bytes, 8);
+        let mut aliases = tools.aliases_for_canonical(&canonical_name);
+        aliases.sort();
+        append_identity_count(bytes, aliases.len()).ok()?;
+        for alias in aliases {
+            append_identity_bytes(bytes, alias.as_bytes()).ok()?;
+        }
+    }
+    Some(())
+}
+
+fn append_tool_permission_identity(bytes: &mut Vec<u8>, permission: ToolPermission) {
+    append_identity_tag(
+        bytes,
+        match permission {
+            ToolPermission::ReadOnly => 0,
+            ToolPermission::Task => 1,
+            ToolPermission::Tool => 2,
+            ToolPermission::Command => 3,
+            ToolPermission::Mcp => 4,
+        },
+    );
+}
+
+fn append_skill_view_identity(bytes: &mut Vec<u8>, skills: &[SkillCatalogEntry]) -> Option<()> {
+    append_identity_count(bytes, skills.len()).ok()?;
+    for skill in skills {
+        append_identity_tag(bytes, 1);
+        append_identity_bytes(bytes, skill.name.as_bytes()).ok()?;
+        append_identity_tag(bytes, 2);
+        append_identity_bytes(bytes, skill.description.as_bytes()).ok()?;
+        append_identity_tag(bytes, 3);
+        let content_digest = Sha256::digest(skill.content.as_bytes());
+        append_identity_bytes(bytes, &content_digest).ok()?;
+        append_identity_tag(bytes, 4);
+        let mut allowed_tools = skill.allowed_tools.clone();
+        allowed_tools.sort();
+        append_identity_count(bytes, allowed_tools.len()).ok()?;
+        for allowed_tool in allowed_tools {
+            append_identity_bytes(bytes, allowed_tool.as_bytes()).ok()?;
+        }
+        append_identity_tag(bytes, 5);
+        match skill.model.as_deref() {
+            None => append_identity_tag(bytes, 0),
+            Some(model) => {
+                append_identity_tag(bytes, 1);
+                append_identity_bytes(bytes, model.as_bytes()).ok()?;
+            }
+        }
+        append_identity_tag(bytes, 6);
+        append_identity_bytes(bytes, skill.path.to_str()?.as_bytes()).ok()?;
+        append_identity_tag(bytes, 7);
+        append_identity_bytes(bytes, skill.dir.to_str()?.as_bytes()).ok()?;
+    }
+    Some(())
+}
+
+fn append_runtime_source_view_identity(
+    bytes: &mut Vec<u8>,
+    sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+    tools: &ToolRegistrySnapshot,
+) -> Option<()> {
+    append_identity_count(bytes, sources.len()).ok()?;
+    for (source_id, source) in sources {
+        append_identity_tag(bytes, 1);
+        append_identity_tag(
+            bytes,
+            match source_id.kind {
+                RuntimeSourceKind::Mcp => 0,
+                RuntimeSourceKind::Plugin => 1,
+            },
+        );
+        append_identity_tag(bytes, 2);
+        append_identity_bytes(bytes, source_id.configured_id.as_bytes()).ok()?;
+        append_identity_tag(bytes, 3);
+        append_identity_bytes(bytes, &source.declaration_digest).ok()?;
+        append_identity_tag(bytes, 4);
+        append_identity_count(bytes, source.resources.len()).ok()?;
+        for (key, value) in source.resources.iter() {
+            append_identity_bytes(bytes, key.as_bytes()).ok()?;
+            append_canonical_json_value(bytes, value).ok()?;
+        }
+
+        append_identity_tag(bytes, 5);
+        append_identity_count(bytes, source.exports.len()).ok()?;
+        for export in &source.exports {
+            append_identity_tag(bytes, 1);
+            append_identity_bytes(bytes, export.declared_id.as_bytes()).ok()?;
+            append_identity_tag(bytes, 2);
+            append_identity_bytes(bytes, export.canonical_name.as_bytes()).ok()?;
+            append_identity_tag(bytes, 3);
+            append_tool_permission_identity(bytes, export.permission);
+            append_identity_tag(bytes, 4);
+            let mut aliases = export.aliases.clone();
+            aliases.sort();
+            append_identity_count(bytes, aliases.len()).ok()?;
+            for alias in aliases {
+                append_identity_bytes(bytes, alias.as_bytes()).ok()?;
+            }
+            append_identity_tag(bytes, 5);
+            let expected = runtime_source_dispatch_identity(source, export).ok()?;
+            let actual = tools.dispatch_identity_v1(&export.canonical_name)?;
+            if actual != expected {
+                return None;
+            }
+            append_identity_bytes(bytes, &expected).ok()?;
+        }
+    }
+    Some(())
 }
 
 fn collect_bundle_tool_candidates(
@@ -1857,11 +2145,15 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleOrigin, ModelPolicy, PreparedAgent, PreparedBundle,
-        PreparedResource, SpawnLifecycle,
+        AgentRole, BundleIdentity, BundleOrigin, BundleSource, ModelPolicy, PreparedAgent,
+        PreparedBundle, PreparedResource, SourceFile, SpawnLifecycle, prepare_builtins,
     };
     use hya_proto::{AgentName, ToolName};
-    use hya_tool::{Tool, ToolCtx, ToolError, ToolRegistry};
+    use hya_tool::{
+        Action, InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionPlane,
+        PermissionRules, PermissionTarget, Rule, Tool, ToolCtx, ToolError, ToolPermission,
+        ToolRegistry,
+    };
     use serde_json::{Value, json};
     use std::path::PathBuf;
 
@@ -1872,6 +2164,45 @@ mod tests {
     impl NoopTool {
         fn new(name: impl Into<String>) -> Self {
             Self { name: name.into() }
+        }
+    }
+
+    struct FingerprintTool {
+        name: String,
+        description: String,
+        input_schema: Value,
+    }
+
+    impl FingerprintTool {
+        fn new(name: impl Into<String>, marker: &str) -> Self {
+            Self {
+                name: name.into(),
+                description: format!("fingerprint schema {marker}"),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"marker": {"const": marker}},
+                }),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for FingerprintTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new(self.name.clone()),
+                description: self.description.clone(),
+                input_schema: self.input_schema.clone(),
+                output_schema: None,
+            }
+        }
+
+        async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
+            Ok(json!({"ok": true}))
         }
     }
 
@@ -1978,6 +2309,723 @@ mod tests {
             before.public_tool_names(),
             after.public_tool_names(),
             "pinned binding must compile an identical public tool set"
+        );
+    }
+
+    #[test]
+    fn runtime_source_dispatch_identity_tracks_authoritative_source_semantics() {
+        let source_identity =
+            |configured_id: &str, declaration_digest: [u8; 32], resource_value: Value| {
+                let catalog = Arc::new(
+                    BundleCatalog::from_prepared(&[bundle_with_agent(
+                        "hya/source-identity",
+                        agent(
+                            "source-identity",
+                            HarnessAccess::Full,
+                            ResourceView::default(),
+                        ),
+                        Vec::new(),
+                    )])
+                    .unwrap(),
+                );
+                let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+                let mut resources = BTreeMap::new();
+                resources.insert("probe".to_string(), resource_value);
+                registry
+                    .refresh(|candidate| {
+                        candidate.upsert_sources(vec![
+                            RuntimeSource::new(
+                                RuntimeSourceId::plugin(configured_id),
+                                declaration_digest,
+                                Arc::new(()),
+                                vec![RuntimeSourceExport::tool(
+                                    "probe",
+                                    "plugin__fixture__probe",
+                                    Vec::new(),
+                                    Arc::new(NoopTool::new("plugin__fixture__probe")),
+                                    ToolPermission::Tool,
+                                )],
+                            )
+                            .with_resources(resources),
+                        ])
+                    })
+                    .unwrap();
+                let identity = registry
+                    .active()
+                    .tools
+                    .dispatch_identity_v1("plugin__fixture__probe");
+                let Some(identity) = identity else {
+                    panic!("plugin source must expose dispatch identity");
+                };
+                assert_ne!(identity, [0_u8; 32]);
+                identity
+            };
+
+        let baseline = source_identity("fixture", [1; 32], json!({"mode": "one"}));
+        let same = source_identity("fixture", [1; 32], json!({"mode": "one"}));
+        assert_eq!(same, baseline);
+        assert_ne!(
+            source_identity("fixture-other", [1; 32], json!({"mode": "one"})),
+            baseline
+        );
+        assert_ne!(
+            source_identity("fixture", [2; 32], json!({"mode": "one"})),
+            baseline
+        );
+        assert_ne!(
+            source_identity("fixture", [1; 32], json!({"mode": "two"})),
+            baseline
+        );
+    }
+
+    #[test]
+    fn runtime_semantic_fingerprint_is_generation_independent_and_base_section_sensitive() {
+        let Some(next_generation) = ConfigGeneration::INITIAL.checked_next() else {
+            panic!("test generation must have a successor");
+        };
+
+        let fixture = |catalog_marker: &str,
+                       schema_marker: &str,
+                       reverse_registration: bool,
+                       first_dispatch_identity: [u8; 32],
+                       permission_mode: Mode,
+                       generation: ConfigGeneration| {
+            let manifest = format!(
+                r#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/runtime-fingerprint
+  version: 1.0.0
+  publisher: hya-tests
+agents:
+  - local_id: fingerprint
+    stable_id: fingerprint
+    description: "manifest {catalog_marker}"
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#
+            );
+            let prepared = prepare_builtins(vec![BundleSource::new(
+                "runtime-fingerprint",
+                vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
+            )]);
+            let Ok(prepared) = prepared else {
+                panic!("runtime fingerprint fixture preparation failed: {prepared:?}");
+            };
+            let catalog = BundleCatalog::from_verified_catalogs(&[&prepared]);
+            let Ok(catalog) = catalog else {
+                panic!("runtime fingerprint verified catalog construction failed: {catalog:?}");
+            };
+
+            let registry = ToolRegistry::builtins();
+            let mut custom_tools = vec![
+                (
+                    Arc::new(FingerprintTool::new("custom_one", schema_marker)) as Arc<dyn Tool>,
+                    first_dispatch_identity,
+                ),
+                (
+                    Arc::new(FingerprintTool::new("custom_two", "stable")) as Arc<dyn Tool>,
+                    [2; 32],
+                ),
+            ];
+            if reverse_registration {
+                custom_tools.reverse();
+            }
+            for (tool, dispatch_identity) in custom_tools {
+                if let Err(error) = registry
+                    .register_with_permission_and_aliases_and_dispatch_identity(
+                        tool,
+                        ToolPermission::Tool,
+                        &[],
+                        dispatch_identity,
+                    )
+                {
+                    panic!("runtime fingerprint tool fixture registration failed: {error}");
+                }
+            }
+
+            let rules =
+                PermissionRules::new(vec![Rule::new(Action::Tool, "custom_one", permission_mode)]);
+            let policy = InvocationPolicy::compile(
+                PermissionModel::Default,
+                vec![InvocationRule::new(
+                    PermissionTarget::Tool,
+                    "^custom_one$",
+                    Mode::Allow,
+                )],
+            );
+            let Ok(policy) = policy else {
+                panic!("runtime fingerprint invocation policy fixture must compile: {policy:?}");
+            };
+            let (permission, _asks) = PermissionPlane::new_with_policy(rules, policy);
+            let tools = registry.snapshot();
+            let snapshot = RuntimeSnapshot {
+                generation,
+                catalog: Arc::new(catalog),
+                basic_tools: tools.clone(),
+                tools,
+                skills: BTreeMap::new(),
+                sources: BTreeMap::new(),
+            };
+            (
+                TurnBinding {
+                    snapshot: Arc::new(snapshot),
+                    workdir: PathBuf::from("/tmp/runtime-fingerprint"),
+                },
+                permission,
+            )
+        };
+
+        let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
+            let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
+                panic!("runtime semantic fingerprint should be available for this fixture");
+            };
+            assert_ne!(fingerprint, [0_u8; 32]);
+            fingerprint
+        };
+
+        let (baseline_binding, baseline_permission) = fixture(
+            "one",
+            "one",
+            false,
+            [1; 32],
+            Mode::Allow,
+            ConfigGeneration::INITIAL,
+        );
+        let baseline = fingerprint(&baseline_binding, &baseline_permission);
+
+        let (equivalent_binding, equivalent_permission) =
+            fixture("one", "one", true, [1; 32], Mode::Allow, next_generation);
+        assert_eq!(
+            fingerprint(&equivalent_binding, &equivalent_permission),
+            baseline,
+            "fresh objects, registration order, and ConfigGeneration must not affect semantics"
+        );
+
+        let (catalog_binding, catalog_permission) = fixture(
+            "two",
+            "one",
+            false,
+            [1; 32],
+            Mode::Allow,
+            ConfigGeneration::INITIAL,
+        );
+        assert_ne!(
+            fingerprint(&catalog_binding, &catalog_permission),
+            baseline,
+            "verified catalog semantics must affect the base fingerprint"
+        );
+
+        let (schema_binding, schema_permission) = fixture(
+            "one",
+            "two",
+            false,
+            [1; 32],
+            Mode::Allow,
+            ConfigGeneration::INITIAL,
+        );
+        assert_ne!(
+            fingerprint(&schema_binding, &schema_permission),
+            baseline,
+            "tool schema semantics must affect the base fingerprint"
+        );
+
+        let (dispatch_binding, dispatch_permission) = fixture(
+            "one",
+            "one",
+            false,
+            [3; 32],
+            Mode::Allow,
+            ConfigGeneration::INITIAL,
+        );
+        assert_ne!(
+            fingerprint(&dispatch_binding, &dispatch_permission),
+            baseline,
+            "explicit dispatch identity must affect the base fingerprint"
+        );
+
+        let (permission_binding, permission_variant) = fixture(
+            "one",
+            "one",
+            false,
+            [1; 32],
+            Mode::Deny,
+            ConfigGeneration::INITIAL,
+        );
+        assert_ne!(
+            fingerprint(&permission_binding, &permission_variant),
+            baseline,
+            "permission-rule semantics must affect the base fingerprint"
+        );
+    }
+
+    #[test]
+    fn runtime_semantic_fingerprint_tracks_selected_workdir_skill_semantics() {
+        let skill_fixture = |name: &str,
+                             description: &str,
+                             content: &str,
+                             allowed_tools: &[&str],
+                             model: Option<&str>,
+                             path: &str| {
+            SkillCatalogEntry {
+                name: name.to_string(),
+                description: description.to_string(),
+                content: content.to_string(),
+                allowed_tools: allowed_tools
+                    .iter()
+                    .map(|tool| (*tool).to_string())
+                    .collect(),
+                model: model.map(str::to_string),
+                path: PathBuf::from(path),
+                dir: PathBuf::from(path)
+                    .parent()
+                    .map_or_else(PathBuf::new, Path::to_path_buf),
+            }
+        };
+        let selected_skills = || {
+            vec![
+                skill_fixture(
+                    "alpha",
+                    "Alpha skill",
+                    "alpha body",
+                    &["custom_one"],
+                    Some("model-a"),
+                    "/tmp/runtime-fingerprint-skills/alpha/SKILL.md",
+                ),
+                skill_fixture(
+                    "beta",
+                    "Beta skill",
+                    "beta body",
+                    &[],
+                    None,
+                    "/tmp/runtime-fingerprint-skills/beta/SKILL.md",
+                ),
+            ]
+        };
+        let fixture = |selected: Vec<SkillCatalogEntry>, unrelated: Vec<SkillCatalogEntry>| {
+            let manifest = r#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/runtime-fingerprint-skills
+  version: 1.0.0
+  publisher: hya-tests
+agents:
+  - local_id: fingerprint
+    stable_id: fingerprint-skills
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#;
+            let prepared = prepare_builtins(vec![BundleSource::new(
+                "runtime-fingerprint-skills",
+                vec![SourceFile::new("bundle.yaml", manifest.as_bytes())],
+            )]);
+            let Ok(prepared) = prepared else {
+                panic!("skill fingerprint fixture preparation failed: {prepared:?}");
+            };
+            let catalog = BundleCatalog::from_verified_catalogs(&[&prepared]);
+            let Ok(catalog) = catalog else {
+                panic!("skill fingerprint verified catalog construction failed: {catalog:?}");
+            };
+            let tools = ToolRegistry::builtins().snapshot();
+            let workdir = PathBuf::from("/tmp/runtime-fingerprint-skills");
+            let mut skills = BTreeMap::new();
+            skills.insert(workdir.clone(), Arc::new(selected));
+            if !unrelated.is_empty() {
+                skills.insert(
+                    PathBuf::from("/tmp/runtime-fingerprint-unrelated"),
+                    Arc::new(unrelated),
+                );
+            }
+            let snapshot = RuntimeSnapshot {
+                generation: ConfigGeneration::INITIAL,
+                catalog: Arc::new(catalog),
+                basic_tools: tools.clone(),
+                tools,
+                skills,
+                sources: BTreeMap::new(),
+            };
+            let (permission, _asks) = PermissionPlane::new_with_policy(
+                PermissionRules::default(),
+                InvocationPolicy::default(),
+            );
+            (
+                TurnBinding {
+                    snapshot: Arc::new(snapshot),
+                    workdir,
+                },
+                permission,
+            )
+        };
+        let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
+            let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
+                panic!("selected workdir skills must be fingerprintable");
+            };
+            assert_ne!(fingerprint, [0_u8; 32]);
+            fingerprint
+        };
+
+        let (baseline_binding, baseline_permission) = fixture(selected_skills(), Vec::new());
+        let baseline = fingerprint(&baseline_binding, &baseline_permission);
+        let (equivalent_binding, equivalent_permission) = fixture(selected_skills(), Vec::new());
+        assert_eq!(
+            fingerprint(&equivalent_binding, &equivalent_permission),
+            baseline,
+            "fresh skill entries, catalogs, and permission planes must match"
+        );
+
+        let mut changed_content = selected_skills();
+        changed_content[0].content = "changed body".to_string();
+        let (content_binding, content_permission) = fixture(changed_content, Vec::new());
+        assert_ne!(
+            fingerprint(&content_binding, &content_permission),
+            baseline,
+            "skill content must affect the fingerprint"
+        );
+
+        let mut renamed = selected_skills();
+        renamed[0].name = "alpha-renamed".to_string();
+        let (rename_binding, rename_permission) = fixture(renamed, Vec::new());
+        assert_ne!(
+            fingerprint(&rename_binding, &rename_permission),
+            baseline,
+            "skill identity must affect the fingerprint"
+        );
+
+        let mut moved = selected_skills();
+        moved[0].path = PathBuf::from("/tmp/runtime-fingerprint-skills/moved/SKILL.md");
+        moved[0].dir = PathBuf::from("/tmp/runtime-fingerprint-skills/moved");
+        let (path_binding, path_permission) = fixture(moved, Vec::new());
+        assert_ne!(
+            fingerprint(&path_binding, &path_permission),
+            baseline,
+            "skill path must affect the fingerprint"
+        );
+
+        let mut changed_description = selected_skills();
+        changed_description[0].description = "changed description".to_string();
+        let (description_binding, description_permission) =
+            fixture(changed_description, Vec::new());
+        assert_ne!(
+            fingerprint(&description_binding, &description_permission),
+            baseline,
+            "skill semantic metadata must affect the fingerprint"
+        );
+
+        let mut changed_allowed_tools = selected_skills();
+        changed_allowed_tools[0].allowed_tools = vec!["custom_two".to_string()];
+        let (allowed_tools_binding, allowed_tools_permission) =
+            fixture(changed_allowed_tools, Vec::new());
+        assert_ne!(
+            fingerprint(&allowed_tools_binding, &allowed_tools_permission),
+            baseline,
+            "skill semantic metadata must affect the fingerprint"
+        );
+
+        let mut changed_model = selected_skills();
+        changed_model[0].model = Some("model-b".to_string());
+        let (model_binding, model_permission) = fixture(changed_model, Vec::new());
+        assert_ne!(
+            fingerprint(&model_binding, &model_permission),
+            baseline,
+            "skill semantic metadata must affect the fingerprint"
+        );
+
+        let mut reversed = selected_skills();
+        reversed.reverse();
+        let (reversed_binding, reversed_permission) = fixture(reversed, Vec::new());
+        assert_ne!(
+            fingerprint(&reversed_binding, &reversed_permission),
+            baseline,
+            "selected skill order must preserve precedence semantics"
+        );
+
+        let unrelated = vec![skill_fixture(
+            "unrelated",
+            "unrelated skill",
+            "unrelated body",
+            &[],
+            None,
+            "/tmp/runtime-fingerprint-unrelated/unrelated/SKILL.md",
+        )];
+        let (unrelated_binding, unrelated_permission) = fixture(selected_skills(), unrelated);
+        assert_eq!(
+            fingerprint(&unrelated_binding, &unrelated_permission),
+            baseline,
+            "skills cached for another workdir must not affect this binding"
+        );
+    }
+
+    #[test]
+    fn runtime_semantic_fingerprint_tracks_plugin_and_mcp_source_semantics() {
+        let nested_value = |marker: &str, reverse: bool| {
+            let mut nested = serde_json::Map::new();
+            let entries = [
+                ("marker", Value::String(marker.to_string())),
+                ("enabled", Value::Bool(true)),
+            ];
+            if reverse {
+                for (key, value) in entries.into_iter().rev() {
+                    nested.insert(key.to_string(), value);
+                }
+            } else {
+                for (key, value) in entries {
+                    nested.insert(key.to_string(), value);
+                }
+            }
+            let mut outer = serde_json::Map::new();
+            if reverse {
+                outer.insert("nested".to_string(), Value::Object(nested));
+                outer.insert("version".to_string(), Value::from(1));
+            } else {
+                outer.insert("version".to_string(), Value::from(1));
+                outer.insert("nested".to_string(), Value::Object(nested));
+            }
+            Value::Object(outer)
+        };
+        let fixture = |plugin_kind: RuntimeSourceKind,
+                       plugin_id: &str,
+                       plugin_digest: [u8; 32],
+                       plugin_resource_marker: &str,
+                       mcp_digest: [u8; 32],
+                       mcp_resource_marker: &str,
+                       include_mcp: bool,
+                       reverse_sources: bool,
+                       reverse_resources: bool| {
+            let manifest = r#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/runtime-fingerprint-sources
+  version: 1.0.0
+  publisher: hya-tests
+agents:
+  - local_id: fingerprint
+    stable_id: fingerprint-sources
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+"#;
+            let prepared = prepare_builtins(vec![BundleSource::new(
+                "runtime-fingerprint-sources",
+                vec![SourceFile::new("bundle.yaml", manifest.as_bytes())],
+            )]);
+            let Ok(prepared) = prepared else {
+                panic!("source fingerprint fixture preparation failed: {prepared:?}");
+            };
+            let catalog = BundleCatalog::from_verified_catalogs(&[&prepared]);
+            let Ok(catalog) = catalog else {
+                panic!("source fingerprint verified catalog construction failed: {catalog:?}");
+            };
+            let registry = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::new(catalog));
+            let mut plugin_resources = BTreeMap::new();
+            plugin_resources.insert(
+                "config".to_string(),
+                nested_value(plugin_resource_marker, reverse_resources),
+            );
+            let plugin = RuntimeSource::new(
+                RuntimeSourceId::new(plugin_kind, plugin_id),
+                plugin_digest,
+                Arc::new(()),
+                vec![RuntimeSourceExport::tool(
+                    "probe",
+                    "plugin__fixture__probe",
+                    vec!["plugin_probe".to_string()],
+                    Arc::new(NoopTool::new("plugin__fixture__probe")),
+                    ToolPermission::Tool,
+                )],
+            )
+            .with_resources(plugin_resources);
+            let mut mcp_resources = BTreeMap::new();
+            mcp_resources.insert(
+                "config".to_string(),
+                nested_value(mcp_resource_marker, reverse_resources),
+            );
+            let mcp = RuntimeSource::new(
+                RuntimeSourceId::mcp("fixture-mcp"),
+                mcp_digest,
+                Arc::new(()),
+                Vec::new(),
+            )
+            .with_resources(mcp_resources);
+            let mut sources = vec![plugin];
+            if include_mcp {
+                sources.push(mcp);
+            }
+            if reverse_sources {
+                sources.reverse();
+            }
+            let refreshed = registry.refresh(|candidate| candidate.upsert_sources(sources));
+            let Ok(_) = refreshed else {
+                panic!("source fingerprint refresh failed: {refreshed:?}");
+            };
+            let tools = registry.active();
+            let (permission, _asks) = PermissionPlane::new_with_policy(
+                PermissionRules::default(),
+                InvocationPolicy::default(),
+            );
+            (
+                TurnBinding {
+                    snapshot: tools,
+                    workdir: PathBuf::from("/tmp/runtime-fingerprint-sources"),
+                },
+                permission,
+            )
+        };
+        let fingerprint = |binding: &TurnBinding, permission: &PermissionPlane| {
+            let Some(fingerprint) = binding.semantic_fingerprint_v1(permission) else {
+                panic!("runtime source semantics must be fingerprintable");
+            };
+            assert_ne!(fingerprint, [0_u8; 32]);
+            fingerprint
+        };
+
+        let (baseline_binding, baseline_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        let baseline = fingerprint(&baseline_binding, &baseline_permission);
+        let (equivalent_binding, equivalent_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            true,
+            true,
+            true,
+        );
+        assert_eq!(
+            fingerprint(&equivalent_binding, &equivalent_permission),
+            baseline,
+            "fresh owners, source order, and nested JSON order must not affect semantics"
+        );
+
+        let (source_kind_binding, source_kind_permission) = fixture(
+            RuntimeSourceKind::Mcp,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&source_kind_binding, &source_kind_permission),
+            baseline,
+            "runtime source kind must affect the fingerprint"
+        );
+
+        let (plugin_id_binding, plugin_id_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin-other",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&plugin_id_binding, &plugin_id_permission),
+            baseline,
+            "plugin configured ID must affect the fingerprint"
+        );
+
+        let (plugin_digest_binding, plugin_digest_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [3; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&plugin_digest_binding, &plugin_digest_permission),
+            baseline,
+            "plugin declaration digest must affect the fingerprint"
+        );
+
+        let (plugin_resource_binding, plugin_resource_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-two",
+            [2; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&plugin_resource_binding, &plugin_resource_permission),
+            baseline,
+            "plugin resource semantics must affect the fingerprint"
+        );
+
+        let (mcp_digest_binding, mcp_digest_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [3; 32],
+            "mcp-one",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&mcp_digest_binding, &mcp_digest_permission),
+            baseline,
+            "zero-export MCP declaration digest must affect the fingerprint"
+        );
+
+        let (mcp_resource_binding, mcp_resource_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-two",
+            true,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&mcp_resource_binding, &mcp_resource_permission),
+            baseline,
+            "zero-export MCP resources must affect the fingerprint"
+        );
+
+        let (without_mcp_binding, without_mcp_permission) = fixture(
+            RuntimeSourceKind::Plugin,
+            "fixture-plugin",
+            [1; 32],
+            "plugin-one",
+            [2; 32],
+            "mcp-one",
+            false,
+            false,
+            false,
+        );
+        assert_ne!(
+            fingerprint(&without_mcp_binding, &without_mcp_permission),
+            baseline,
+            "removing a zero-export MCP source must affect the fingerprint"
         );
     }
 
