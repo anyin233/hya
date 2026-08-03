@@ -28,7 +28,7 @@ use hya_proto::{
     AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
 };
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
-use hya_store::{AdmissionIntent, AdmissionTerminal, SessionStore, StoreError};
+use hya_store::{AdmissionIntent, AdmissionLaunch, AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, ResolvedTool, Resource,
@@ -1340,7 +1340,25 @@ struct ResolveSpawnMemberCtx<'a> {
     categories: &'a CategoryRegistry,
     is_servable: &'a dyn Fn(&ModelRef) -> bool,
     guidance: Option<Arc<str>>,
-    sidecar_environment: &'a BundleSidecarEnvironment,
+    sidecar_environment: &'a dyn SidecarEnvironment,
+}
+
+#[allow(dead_code)]
+struct AdmissionLaunchResolutionCtx<'a> {
+    engine: &'a SessionEngine,
+    binding: &'a TurnBinding,
+    resolution: &'a AdmissionResolutionContext,
+    caller: &'a str,
+    allowed_agents: &'a [hya_tool::AgentDef],
+    guidance: Option<Arc<str>>,
+    sidecar_environment: &'a dyn SidecarEnvironment,
+}
+
+#[allow(dead_code)]
+struct ResolvedAdmissionLaunch {
+    launch: AdmissionLaunch,
+    intent: SpawnIntentV1,
+    resolved: ResolvedSpawnMember,
 }
 
 fn authorize_spawn_target<'a>(
@@ -1433,6 +1451,14 @@ fn resolve_spawn_member(
     member: SpawnMember,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
     let definition = authorize_spawn_target(ctx.binding, ctx.allowed_agents, ctx.caller, &member)?;
+    resolve_authorized_spawn_member(ctx, member, definition)
+}
+
+fn resolve_authorized_spawn_member(
+    ctx: &ResolveSpawnMemberCtx<'_>,
+    member: SpawnMember,
+    definition: &PreparedAgent,
+) -> Result<ResolvedSpawnMember, SpawnError> {
     let authorized_target = definition.stable_id.clone();
     let sidecar_factory = ctx
         .sidecar_environment
@@ -1533,6 +1559,71 @@ fn resolve_spawn_member(
     })
 }
 
+#[allow(dead_code)]
+fn resolve_admission_launches(
+    ctx: &AdmissionLaunchResolutionCtx<'_>,
+    launches: Vec<AdmissionLaunch>,
+) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
+    let runtime_fingerprint = ctx
+        .engine
+        .runtime_semantic_fingerprint_v1(ctx.binding)
+        .ok_or(SpawnError::Unavailable)?;
+    let admission_binding_fingerprint = ctx
+        .resolution
+        .admission_binding_fingerprint_v1(runtime_fingerprint);
+    let is_servable = |model: &ModelRef| ctx.resolution.router.resolve(model).is_some();
+    let resolve_ctx = ResolveSpawnMemberCtx {
+        engine: ctx.engine,
+        binding: ctx.binding,
+        base: &ctx.resolution.base,
+        caller: ctx.caller,
+        allowed_agents: ctx.allowed_agents,
+        categories: &ctx.resolution.categories,
+        is_servable: &is_servable,
+        guidance: ctx.guidance.clone(),
+        sidecar_environment: ctx.sidecar_environment,
+    };
+
+    let decoded = launches
+        .into_iter()
+        .map(|launch| {
+            let intent = SpawnIntentV1::decode_admission_launch(&launch)
+                .map_err(|_| SpawnError::Unavailable)?;
+            if launch.intent.runtime_fingerprint != runtime_fingerprint
+                || launch.intent.admission_binding_fingerprint != admission_binding_fingerprint
+            {
+                return Err(SpawnError::Unavailable);
+            }
+            Ok((launch, intent))
+        })
+        .collect::<Result<Vec<_>, SpawnError>>()?;
+
+    decoded
+        .into_iter()
+        .map(|(launch, intent)| {
+            let definition = authorize_spawn_target(
+                ctx.binding,
+                ctx.allowed_agents,
+                ctx.caller,
+                intent.raw_member(),
+            )?;
+            if definition.stable_id != *intent.stable_target() {
+                return Err(SpawnError::Unavailable);
+            }
+            let resolved = resolve_authorized_spawn_member(
+                &resolve_ctx,
+                intent.raw_member().clone(),
+                definition,
+            )?;
+            Ok(ResolvedAdmissionLaunch {
+                launch,
+                intent,
+                resolved,
+            })
+        })
+        .collect()
+}
+
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -1590,7 +1681,7 @@ fn spawn_team_supervisor_with_environment(
                     categories: &categories,
                     is_servable: &is_servable,
                     guidance: request_guidance.clone(),
-                    sidecar_environment: &sidecar_environment,
+                    sidecar_environment: sidecar_environment.as_ref(),
                 };
                 req.members
                     .iter()
@@ -2446,7 +2537,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::io::AsyncBufReadExt;
     use tokio_util::sync::CancellationToken;
 
@@ -3159,6 +3250,277 @@ mod tests {
                 .all(|pair| pair[0].spawn_intent != pair[1].spawn_intent)
         );
         assert!(!bearer_resolver_called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn accepted_admission_launches_resolve_without_touching_queued_members() {
+        let workdir = tempdir().join("accepted-admission-workdir-sentinel");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let engine =
+            engine_with_catalog(builtin_catalog().expect("built-in catalog must load")).await;
+        let binding = engine.bind_runtime(&workdir).expect("bind admission turn");
+        let base_model = "accepted-base-model-sentinel";
+        let base_system_prompt = "accepted-base-system-prompt-sentinel";
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new(base_model),
+            system_prompt: base_system_prompt.to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let categories = Arc::new(CategoryRegistry::default());
+        let router = Arc::new(ProviderRouter::new());
+        let agents: Arc<[AgentDef]> = vec![AgentDef {
+            name: "general".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+        }]
+        .into();
+        let raw_members: Vec<(String, String)> = (0..101)
+            .map(|ordinal| {
+                (
+                    format!("accepted-description-{ordinal}-sentinel"),
+                    format!("accepted-prompt-{ordinal}-sentinel"),
+                )
+            })
+            .collect();
+        let members = raw_members
+            .iter()
+            .map(|(description, prompt)| SpawnMember {
+                description: description.clone(),
+                prompt: prompt.clone(),
+                subagent_type: "general".to_string(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            })
+            .collect();
+        let parent = SessionId::new();
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let (reply, _reply_rx) = tokio::sync::oneshot::channel();
+        let request = SpawnRequest {
+            parent,
+            agents,
+            guidance: Some(Arc::<str>::from("accepted-guidance-sentinel")),
+            operation,
+            members,
+            cancel: CancellationToken::new(),
+            background: true,
+            reply,
+        };
+        let PreparedSpawnAdmission {
+            request_fingerprint,
+            resolution,
+            intents,
+        } = prepare_spawn_admission(
+            &engine,
+            &binding,
+            base,
+            Arc::clone(&categories),
+            Arc::clone(&router),
+            "build",
+            &request,
+        )
+        .expect("prepare canonical admission intents");
+        let root_session = SessionId::new();
+        assert_ne!(root_session, request.parent);
+        let claim = hya_store::AdmissionClaim {
+            operation_id: request.operation.operation_id(),
+            source_tool_call_id: request.operation.source_tool_call_id(),
+            root_session,
+            request_fingerprint,
+            admission_units: 101,
+            actor_claim: request.operation.actor_claim(),
+        };
+        let claim_outcome = engine
+            .store()
+            .claim_admission_batch(&claim, intents)
+            .await
+            .expect("claim canonical admission batch");
+        let launches = match claim_outcome {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh store-only fixture must claim the admission batch")
+            }
+        };
+        assert_eq!(launches.len(), 100);
+        for (ordinal, launch) in launches.iter().enumerate() {
+            assert_eq!(launch.record.member_ordinal, ordinal as u32);
+            assert_eq!(launch.record.state, hya_store::AdmissionState::Accepted);
+        }
+        let counts = engine
+            .store()
+            .admission_counts()
+            .await
+            .expect("read admitted counts");
+        assert_eq!(
+            counts,
+            hya_store::AdmissionCounts {
+                active: 100,
+                non_active: 1,
+                total: 101,
+            }
+        );
+        let records = engine
+            .store()
+            .admissions(request.operation.operation_id())
+            .await
+            .expect("read admitted rows");
+        assert_eq!(records.len(), 101);
+        for (ordinal, record) in records.iter().enumerate() {
+            assert_eq!(record.member_ordinal, ordinal as u32);
+            assert_eq!(record.root_session, root_session);
+            assert_eq!(
+                record.state,
+                if ordinal < 100 {
+                    hya_store::AdmissionState::Accepted
+                } else {
+                    hya_store::AdmissionState::Queued
+                }
+            );
+            assert!(record.actor.is_none());
+        }
+        assert!(
+            records
+                .iter()
+                .all(|record| record.state != hya_store::AdmissionState::Started)
+        );
+
+        struct CountingSidecarEnvironment {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl SidecarEnvironment for CountingSidecarEnvironment {
+            fn factory_for(
+                &self,
+                _binding: &TurnBinding,
+                _stable_id: &str,
+            ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+        }
+
+        let sidecar_calls = Arc::new(AtomicUsize::new(0));
+        let sidecar_environment = CountingSidecarEnvironment {
+            calls: Arc::clone(&sidecar_calls),
+        };
+        let changed_resolution = AdmissionResolutionContext::capture(
+            AgentSpec {
+                name: AgentName::new("build"),
+                model: ModelRef::new("changed-base-model-sentinel"),
+                system_prompt: "changed-base-system-prompt-sentinel".to_string(),
+                workdir: workdir.clone(),
+                reasoning: None,
+            },
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .expect("changed admission context");
+        let mismatch_ctx = AdmissionLaunchResolutionCtx {
+            engine: &engine,
+            binding: &binding,
+            resolution: &changed_resolution,
+            caller: "build",
+            allowed_agents: request.agents.as_ref(),
+            guidance: request.guidance.clone(),
+            sidecar_environment: &sidecar_environment,
+        };
+        let mismatch_error = match resolve_admission_launches(
+            &mismatch_ctx,
+            vec![launches.first().cloned().expect("accepted launch")],
+        ) {
+            Ok(_) => panic!("mismatched admission context must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(mismatch_error, SpawnError::Unavailable);
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 0);
+
+        let resolution_ctx = AdmissionLaunchResolutionCtx {
+            engine: &engine,
+            binding: &binding,
+            resolution: &resolution,
+            caller: "build",
+            allowed_agents: request.agents.as_ref(),
+            guidance: request.guidance.clone(),
+            sidecar_environment: &sidecar_environment,
+        };
+        let mut corrupt_last_launch = launches.last().cloned().expect("accepted launch");
+        corrupt_last_launch.intent.admission_binding_fingerprint[0] ^= 0x01;
+        let corrupt_error = match resolve_admission_launches(
+            &resolution_ctx,
+            vec![
+                launches.first().cloned().expect("accepted launch"),
+                corrupt_last_launch,
+            ],
+        ) {
+            Ok(_) => panic!("corrupt admission batch must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(corrupt_error, SpawnError::Unavailable);
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 0);
+        let resolved = resolve_admission_launches(&resolution_ctx, launches)
+            .expect("accepted launches must resolve in order");
+        assert_eq!(resolved.len(), 100);
+        for (ordinal, resolved_launch) in resolved.iter().enumerate() {
+            let expected_intent = SpawnIntentV1::new(SpawnIntentInputV1 {
+                member: request.members[ordinal].clone(),
+                parent: request.parent,
+                stable_target: AgentName::new("general"),
+                background: request.background,
+                operation: request.operation,
+                member_ordinal: ordinal as u32,
+                batch_cardinality: 101,
+                prior_start: PriorStartV1::NeverStarted,
+                runtime_fingerprint: resolved_launch.launch.intent.runtime_fingerprint,
+                admission_binding_fingerprint: resolved_launch
+                    .launch
+                    .intent
+                    .admission_binding_fingerprint,
+                diagnostic_generation: binding.generation().get(),
+            })
+            .expect("expected accepted intent");
+            assert_eq!(resolved_launch.launch.record.member_ordinal, ordinal as u32);
+            assert_eq!(
+                resolved_launch.launch.record.state,
+                hya_store::AdmissionState::Accepted
+            );
+            assert_eq!(
+                resolved_launch.launch.intent,
+                expected_intent
+                    .clone()
+                    .into_admission_intent()
+                    .expect("expected store intent")
+            );
+            assert_eq!(resolved_launch.intent, expected_intent);
+            assert_eq!(
+                resolved_launch.resolved.request.description,
+                raw_members[ordinal].0
+            );
+            assert_eq!(
+                resolved_launch.resolved.request.prompt,
+                raw_members[ordinal].1
+            );
+            assert_eq!(
+                resolved_launch.resolved.authorized_target.as_str(),
+                "general"
+            );
+        }
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 100);
+        let records_after = engine
+            .store()
+            .admissions(request.operation.operation_id())
+            .await
+            .expect("read rows after resolution");
+        assert_eq!(records_after, records);
+        assert!(
+            records_after
+                .iter()
+                .all(|record| record.state != hya_store::AdmissionState::Started)
+        );
     }
 
     struct RuntimeMarker(&'static str);
