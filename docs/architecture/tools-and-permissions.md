@@ -125,3 +125,17 @@ publishes the effective immutable view. MCP tools keep the external name
 `mcp__<server>__<tool>`; plugin tool names remain as declared. Both sources use
 the existing permission plane, tool result events, and projection replay as
 builtin tools. Source metadata never becomes a second dispatch registry.
+
+## Bundle sidecars (0.34.11)
+
+Executable public Bundles compile one immutable `CompiledResourceView` from the
+captured `TurnBinding`; it supplies both schema and dispatch. Only selected
+canonical Tool IDs and hook IDs activate, and an alias never renames a hook.
+Bundle-local tools resolve through the canonical namespace and Bundle-local
+precedence, while host tools, static skills, and host-managed MCP remain
+available according to the Harness view. The existing `PermissionPlane` and
+plugin policy run before `tool/call`; denial produces no RPC, while an allowed
+call uses the existing `ToolResult` path. Selected hook request/reply calls and
+one-way event notifications remain activation-bound to the same captured
+binding. Generic superset declarations reject. Bundle-declared MCP remains
+unsupported, and a Bundle adds no permission plane or permission expansion.

@@ -18,7 +18,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.34.10`,
+hya is under active development (workspace version `0.34.11`,
 `MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
 crates.io — build it from source as described below. APIs, config, and command
 surface may still change between versions.
@@ -90,11 +90,15 @@ the full environment-variable reference, and a fully-commented sample config.
 - MCP servers, plugins (including an Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 
-Public-static AgentBundles can be inspected and installed with
-`hya bundle info -f example.hyabundle` and
+Public AgentBundles may remain static/process-free or supply selected
+Bundle-local Bun sidecar capabilities. They can be inspected and installed
+with `hya bundle info -f example.hyabundle` and
 `hya bundle install example.hyabundle`. See the
 [authoring guide](docs/agent-bundle-authoring.md),
-[single-file example](docs/examples/bundle.hya.md), and
+[static example](docs/examples/bundle.hya.md),
+[transient Bun example](docs/examples/bun-transient/),
+[resident Bun example](docs/examples/bun-resident/), and
+[disjoint Bun example](docs/examples/bun-disjoint/) plus the
 [CLI reference](docs/cli.md#bundle-commands).
 
 ## Documentation

@@ -223,20 +223,23 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
             && !customize_surface.contains("creating or fixing compat agents, subagents"),
         "customize-compat must not say this skill creates/fixes compat agents or subagents: {customize_description}"
     );
-    // Native-only agent authority note: 0.34.10 does not parse, discover, or
-    // migrate legacy agent JSON/JSONC/Markdown; external public-static
-    // `.hyabundle` packages use the bundle info/install commands, while agent
-    // authoring remains delegated to agent-bundle-authoring.
+    // Native-only agent authority note: 0.34.11 does not parse, discover, or
+    // migrate legacy agent JSON/JSONC/Markdown; external public packages can
+    // remain process-free or use a Bun Compat sidecar and use the bundle
+    // info/install commands, while authoring remains delegated to
+    // agent-bundle-authoring.
     assert!(
         customize_surface.contains("agent-bundle-authoring")
-            && customize_surface.contains("0.34.10")
+            && customize_surface.contains("0.34.11")
             && customize_surface.contains("does not parse, discover")
             && customize_surface.contains("JSON/JSONC/Markdown")
-            && customize_surface.contains("public-static")
+            && customize_surface.contains("public")
+            && customize_surface.contains("Bun Compat")
+            && customize_surface.contains("process-free")
             && customize_surface.contains(".hyabundle")
             && customize_surface.contains("hya bundle info -f")
             && customize_surface.contains("hya bundle install"),
-        "customize-compat must state 0.34.10 native-only agent boundaries and public-static bundle inspection/install: {customize_surface}"
+        "customize-compat must state 0.34.11 native-only agent boundaries and public bundle inspection/install: {customize_surface}"
     );
     assert!(
         !customize_surface.contains("external bundle distribution is later scope"),
@@ -286,18 +289,106 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
         !authoring_content.trim().is_empty(),
         "agent-bundle-authoring content must be nonempty"
     );
+    let authoring_surface = format!("{authoring_description}\n{authoring_content}");
+    let required_markers = [
+        ("0.34.11", "the release"),
+        ("AgentBundle", "the bundle format"),
+        ("Bun Compat", "the executable sidecar implementation"),
+        ("hya bundle install", "the install command"),
+        ("hya bundle info -f", "the inspect command"),
+        (
+            "Harness remains the agent runtime",
+            "the Harness runtime authority",
+        ),
+        ("one sidecar per activation", "activation ownership"),
+        (
+            "Static-only Bundles remain process-free",
+            "the static-only boundary",
+        ),
+        ("activation_id", "activation identity"),
+        ("lifecycle", "activation lifecycle"),
+        ("newline-delimited JSON-RPC", "the wire protocol"),
+        ("tool/call", "tool request/reply"),
+        ("one-way", "one-way events"),
+        ("stdout is protocol-only", "stdout handling"),
+        ("stderr is diagnostic-only", "stderr handling"),
+        ("referenced", "referenced archive entries"),
+        ("closure", "archive closure validation"),
+        (
+            "The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
+            "the self-contained public JS profile",
+        ),
+        (
+            "external single-file bundling",
+            "external single-file packaging",
+        ),
+        (
+            "activation never executes the authoring tree",
+            "authoring-tree isolation",
+        ),
+        (
+            "undeclared directory files are ignored",
+            "undeclared directory-file omission",
+        ),
+        (
+            "unreferenced archive files are rejected",
+            "unreferenced archive rejection",
+        ),
+        (
+            "missing relative helper import fails before ACK",
+            "pre-ACK relative-import failure",
+        ),
+        (
+            "`hook_refs` select Bundle-local Hook resources only",
+            "Bundle-local hook refs",
+        ),
+        (
+            "all `harness:hook/*` spellings reject",
+            "harness hook rejection",
+        ),
+        (
+            "Harness host hooks stay outside AgentBundle metadata",
+            "Harness host-hook ownership",
+        ),
+        ("volatile", "resident state"),
+        ("explicit stop", "resident stop semantics"),
+        ("authentication=unverified", "private authentication status"),
+        ("payload=opaque", "private payload status"),
+        (
+            "private activation unsupported",
+            "private activation rejection",
+        ),
+        ("raw Rust", "raw Rust rejection"),
+        ("Bundle-declared MCP", "Bundle MCP rejection"),
+        ("unsupported", "unsupported feature handling"),
+        ("no sandbox", "the sandbox boundary"),
+        ("no permission expansion", "the permission boundary"),
+    ];
+    for (marker, requirement) in required_markers {
+        assert!(
+            authoring_surface.contains(marker),
+            "agent-bundle-authoring must state {requirement} (`{marker}`): {authoring_surface}"
+        );
+    }
     assert!(
-        authoring_content.contains("AgentBundle")
-            && authoring_content.contains("0.34.10")
-            && authoring_content.contains("public-static")
-            && authoring_content.contains("hya bundle install")
-            && authoring_content.contains("hya bundle info -f")
-            && authoring_content.contains("does not runtime-scan")
-            && authoring_content.contains("authentication=unverified")
-            && authoring_content.contains("payload=opaque")
-            && authoring_content.contains("activation unsupported-in-0.34.10"),
-        "agent-bundle-authoring content must describe the 0.34.10 static package install/info and private inspection boundaries: {authoring_content}"
+        !authoring_surface.contains("validated transitive referenced closure"),
+        "agent-bundle-authoring must not advertise stale transitive-closure wording: {authoring_surface}"
     );
+    let forbidden_warnings = [
+        (
+            "sidecar never runs the agent/model loop",
+            "the agent/model loop",
+        ),
+        ("no `agent/invoke`", "agent/invoke"),
+        ("no sidecar send/wait", "sidecar send/wait"),
+        ("no terminal/artifact result", "terminal/artifact results"),
+    ];
+    for (warning, subject) in forbidden_warnings {
+        assert!(
+            authoring_surface.contains(warning),
+            "agent-bundle-authoring must explicitly warn against {subject} (`{warning}`): {authoring_surface}"
+        );
+    }
     // Role controls TUI direct-selector visibility only: main is selectable;
     // subagent is hidden from direct selection — never a subagent selector placement.
     // Roster/spawn come from can_spawn, never from role.

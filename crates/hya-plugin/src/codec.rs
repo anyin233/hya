@@ -25,17 +25,9 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     /// `Io` on a read failure, `OversizedLine` past [`MAX_LINE_BYTES`], or
     /// `Json` on an undecodable / unclassifiable line. `Ok(None)` at clean EOF.
     pub async fn next(&mut self) -> Result<Option<Frame>, PluginError> {
-        self.buf.clear();
-        let read = self
-            .inner
-            .read_until(b'\n', &mut self.buf)
-            .await
-            .map_err(|e| PluginError::Io(e.to_string()))?;
+        let read = read_bounded_line(&mut self.inner, &mut self.buf).await?;
         if read == 0 {
             return Ok(None);
-        }
-        if self.buf.len() > MAX_LINE_BYTES {
-            return Err(PluginError::OversizedLine(MAX_LINE_BYTES));
         }
         let line = std::str::from_utf8(self.buf.trim_ascii_end())
             .map_err(|e| PluginError::Json(e.to_string()))?;
@@ -43,6 +35,42 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
             return Ok(None);
         }
         Frame::parse(line).map(Some).map_err(PluginError::Json)
+    }
+}
+
+pub(crate) async fn read_bounded_line<R>(
+    reader: &mut BufReader<R>,
+    buf: &mut Vec<u8>,
+) -> Result<usize, PluginError>
+where
+    R: AsyncRead + Unpin,
+{
+    buf.clear();
+    loop {
+        let (take, has_newline) = {
+            let available = reader
+                .fill_buf()
+                .await
+                .map_err(|error| PluginError::Io(error.to_string()))?;
+            if available.is_empty() {
+                return Ok(buf.len());
+            }
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let take = newline.map_or(available.len(), |index| index + 1);
+            let next_len = buf
+                .len()
+                .checked_add(take)
+                .ok_or(PluginError::OversizedLine(MAX_LINE_BYTES))?;
+            if next_len > MAX_LINE_BYTES {
+                return Err(PluginError::OversizedLine(MAX_LINE_BYTES));
+            }
+            buf.extend_from_slice(&available[..take]);
+            (take, newline.is_some())
+        };
+        reader.consume(take);
+        if has_newline {
+            return Ok(buf.len());
+        }
     }
 }
 

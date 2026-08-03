@@ -30,6 +30,7 @@ use hya_tool::{
     SpawnerPlane, ToolOperation, ToolRegistry,
 };
 use serde_json::json;
+use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Notify;
 
 const TRIGGER_GUIDANCE: &str = "TRIGGERING_TURN_GUIDANCE_MARKER_0_34_8";
@@ -43,6 +44,32 @@ struct AdmissionFixture {
     provider_calls: Arc<AtomicUsize>,
     resident: Arc<ResidentSupervisor>,
     agents: Arc<[AgentDef]>,
+}
+
+struct AdmissionTempDb {
+    path: String,
+}
+
+impl AdmissionTempDb {
+    fn new() -> Self {
+        let path = std::env::temp_dir()
+            .join(format!("hya-app-spawn-admission-{}.db", SessionId::new()))
+            .to_string_lossy()
+            .into_owned();
+        Self { path }
+    }
+
+    fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for AdmissionTempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.path));
+        }
+    }
 }
 
 impl AdmissionFixture {
@@ -548,6 +575,98 @@ async fn admitted_background_resident_uses_the_common_pre_create_path() {
 }
 
 #[tokio::test]
+async fn resident_root_registration_failure_aborts_without_child_side_effects() {
+    let database = AdmissionTempDb::new();
+    let store = SessionStore::connect(database.path()).await.unwrap();
+    let fixture = admission_fixture_with_store(1, store).await;
+    let mut connection = SqliteConnection::connect(&format!("sqlite://{}", database.path()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER test_root_agent_registration_failure
+         BEFORE INSERT ON event_log
+         WHEN json_extract(NEW.payload, '$.type') = 'agent_registered'
+           AND json_extract(NEW.payload, '$.handle') = 'main'
+           AND json_extract(NEW.payload, '$.agent_session') = json_extract(NEW.payload, '$.session')
+         BEGIN SELECT RAISE(ABORT, 'test root registration failure'); END;",
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+
+    let operation = operation();
+    let result = fixture
+        .scoped_spawner()
+        .spawn_background(
+            operation,
+            vec![SpawnMember {
+                description: "root registration failure".to_string(),
+                prompt: "must not run".to_string(),
+                subagent_type: "quick".to_string(),
+                resident: true,
+                ..SpawnMember::default()
+            }],
+            Default::default(),
+        )
+        .await
+        .expect("resident spawn should return an outcome");
+
+    assert_eq!(result.len(), 1, "{result:?}");
+    assert_eq!(result[0].status, "failed", "{result:?}");
+
+    let record = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let record = fixture
+                .engine
+                .store()
+                .admission(operation.operation_id())
+                .await
+                .unwrap()
+                .expect("admission record");
+            if record.state.is_terminal() {
+                break record;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("admission did not finalize");
+
+    let root_events = fixture.engine.replay(fixture.parent).await.unwrap();
+    assert!(
+        !root_events
+            .iter()
+            .any(|envelope| matches!(&envelope.event, Event::AgentRegistered { .. }))
+    );
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        1,
+        "root registration failure must not create a child session"
+    );
+    assert_eq!(
+        fixture.provider_calls.load(Ordering::SeqCst),
+        0,
+        "root registration failure must not poll a provider"
+    );
+    assert!(
+        fixture.resident.team_cancel(fixture.parent).is_none(),
+        "root registration failure must not create a resident team slot"
+    );
+    assert!(
+        fixture
+            .engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .is_empty(),
+        "root registration failure must release any resident actor claim"
+    );
+    assert_eq!(record.state, hya_store::AdmissionState::Aborted);
+    assert!(record.logical_released);
+}
+
+#[tokio::test]
 async fn foreground_completion_uses_one_debit_and_one_finalize() {
     let fixture = admission_fixture(1).await;
     let operation = operation();
@@ -862,14 +981,38 @@ async fn concurrent_retry_debits_and_dispatches_only_once() {
 }
 
 async fn admission_fixture(per_run_budget: u64) -> AdmissionFixture {
-    admission_fixture_with_gate(per_run_budget, None).await
+    admission_fixture_with_store_and_gate(
+        per_run_budget,
+        None,
+        SessionStore::connect_memory().await.unwrap(),
+    )
+    .await
 }
 
 async fn admission_fixture_with_gate(
     per_run_budget: u64,
     gate: Option<Arc<ProviderGate>>,
 ) -> AdmissionFixture {
-    let store = SessionStore::connect_memory().await.unwrap();
+    admission_fixture_with_store_and_gate(
+        per_run_budget,
+        gate,
+        SessionStore::connect_memory().await.unwrap(),
+    )
+    .await
+}
+
+async fn admission_fixture_with_store(
+    per_run_budget: u64,
+    store: SessionStore,
+) -> AdmissionFixture {
+    admission_fixture_with_store_and_gate(per_run_budget, None, store).await
+}
+
+async fn admission_fixture_with_store_and_gate(
+    per_run_budget: u64,
+    gate: Option<Arc<ProviderGate>>,
+    store: SessionStore,
+) -> AdmissionFixture {
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(CountingProvider {
         calls: provider_calls.clone(),

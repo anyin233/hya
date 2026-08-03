@@ -201,6 +201,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
                 directive: format!("work as {cat}"),
                 description: String::new(),
                 session: None,
+                sidecar_factory: None,
             }
         })
         .collect();

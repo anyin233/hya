@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{BundleError, PreparedAgent, PreparedBundle, PreparedResource};
+use crate::{
+    BundleError, PreparedAgent, PreparedBundle, PreparedResource, prepare::validate_hook_local_id,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExportKind {
@@ -46,6 +48,15 @@ impl BundleCatalog {
         let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
+            if !bundle.mcp.is_empty() {
+                return Err(BundleError::UnsupportedBundleFeature {
+                    bundle_id: bundle.identity.id.clone(),
+                    feature: "resources.mcp".to_string(),
+                });
+            }
+            for hook in &bundle.hooks {
+                validate_hook_local_id(&bundle.identity.id, &hook.local_id)?;
+            }
             if !bundle_ids.insert(bundle.identity.id.as_str()) {
                 return Err(BundleError::DuplicateBundleId {
                     bundle_id: bundle.identity.id.clone(),
@@ -197,6 +208,16 @@ impl BundleCatalog {
         kind: ExportKind,
         reference: &str,
     ) -> Result<&PreparedResource, BundleError> {
+        self.resolve_resource_entry(bundle_id, kind, reference)
+            .map(|(_, resource)| resource)
+    }
+
+    pub fn resolve_resource_entry(
+        &self,
+        bundle_id: &str,
+        kind: ExportKind,
+        reference: &str,
+    ) -> Result<(&str, &PreparedResource), BundleError> {
         let qualified = if reference.starts_with("bundle:") {
             reference
         } else {
@@ -211,10 +232,14 @@ impl BundleCatalog {
         let Some((bundle, resource)) = self.resources.get(&(kind, qualified.to_string())) else {
             return Err(unknown_resource(bundle_id, kind, reference));
         };
-        self.bundles
+        let owner = self
+            .bundles
             .get(*bundle)
-            .and_then(|bundle| resources(bundle, kind).get(*resource))
-            .ok_or_else(|| unknown_resource(bundle_id, kind, reference))
+            .ok_or_else(|| unknown_resource(bundle_id, kind, reference))?;
+        let resource = resources(owner, kind)
+            .get(*resource)
+            .ok_or_else(|| unknown_resource(bundle_id, kind, reference))?;
+        Ok((owner.identity.id.as_str(), resource))
     }
 }
 

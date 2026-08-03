@@ -14,6 +14,10 @@ pub fn resolve(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec
     resolve_with_bun(config, dir, find_bun)
 }
 
+pub(crate) fn bundle_sidecar_command() -> Option<Vec<String>> {
+    find_bun().map(|bun| bundled_compat_adapter_command(&bun))
+}
+
 fn resolve_with_bun(
     config: BTreeMap<String, PluginEntry>,
     dir: Option<&Path>,

@@ -8,6 +8,7 @@
 //! `.trellis/tasks/06-21-plugin-host-core/implement.md`). Phase 0 ships the
 //! crate skeleton only.
 
+mod activation_dispatcher;
 pub mod client;
 pub mod codec;
 pub mod config;
@@ -20,6 +21,7 @@ pub mod permission_bridge;
 mod plugin_tool;
 pub mod protocol;
 
+pub use activation_dispatcher::ActivationHookDispatcher;
 pub use client::{ChildGuard, DEFAULT_CALL_TIMEOUT, INITIALIZE_TIMEOUT, PluginClient};
 pub use error::PluginError;
 pub use host::{PluginHost, PluginStatus, PreparedPlugin};

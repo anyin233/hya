@@ -7,11 +7,17 @@ export type TextSink = {
 
 export type RuntimeEnv = Readonly<Record<string, string | undefined>>
 
+export type ActivationMetadata = {
+  readonly activation_id: string
+  readonly lifecycle: "transient" | "resident"
+}
+
 export type RuntimeOptions = {
   readonly input: ReadableStream<Uint8Array>
   readonly stdout: TextSink
   readonly stderr: TextSink
   readonly version: string
+  readonly bundleExtensions: readonly string[]
   readonly env?: RuntimeEnv
 }
 
@@ -26,6 +32,8 @@ export type RequestContext = {
   readonly stderr: TextSink
   readonly hooks: CompatHooks[]
   readonly tools: Map<string, CompatToolDefinition>
+  readonly bundleExtensions: readonly string[]
+  activation: ActivationMetadata | undefined
 }
 
 export function createRequestContext(options: RuntimeOptions): RequestContext {
@@ -35,5 +43,7 @@ export function createRequestContext(options: RuntimeOptions): RequestContext {
     stderr: options.stderr,
     hooks: [],
     tools: new Map<string, CompatToolDefinition>(),
+    bundleExtensions: options.bundleExtensions,
+    activation: undefined,
   }
 }

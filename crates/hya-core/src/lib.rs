@@ -14,6 +14,7 @@ pub mod orchestrator;
 pub mod prompt;
 pub mod resident;
 pub mod runtime_registry;
+pub mod sidecar;
 pub mod subagent;
 pub mod title;
 pub mod workspace;
@@ -57,6 +58,9 @@ pub use runtime_registry::{
     AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError,
     RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
     RuntimeSourceManifest, RuntimeSourceOwner, TurnBinding,
+};
+pub use sidecar::{
+    BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
 };
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,

@@ -104,6 +104,20 @@ pub struct AgentResourcePolicy {
     bundle_id: String,
     harness_access: HarnessAccess,
     resource_view: ResourceView,
+    selected_bundle_tool_ids: Arc<[String]>,
+    canonical_hook_ids: Arc<[String]>,
+}
+
+impl AgentResourcePolicy {
+    #[must_use]
+    pub fn selected_bundle_tool_ids(&self) -> &[String] {
+        self.selected_bundle_tool_ids.as_ref()
+    }
+
+    #[must_use]
+    pub fn canonical_hook_ids(&self) -> &[String] {
+        self.canonical_hook_ids.as_ref()
+    }
 }
 
 /// Immutable per-turn/child resource map compiled once from a retained
@@ -113,12 +127,13 @@ pub(crate) struct CompiledResourceView {
     tools: BTreeMap<String, ResolvedTool>,
     schemas: Vec<ToolSchema>,
     skills: Arc<Vec<SkillCatalogEntry>>,
+    canonical_hook_ids: Arc<[String]>,
     /// Whether the selected view includes the canonical harness skill facade
     /// tool (regardless of any public alias spelling for that tool).
     skill_facade_selected: bool,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum RuntimeRefreshError {
     #[error(transparent)]
     DuplicateTool(#[from] DuplicateName),
@@ -578,20 +593,61 @@ impl TurnBinding {
             .ok_or_else(|| BundleError::UnknownAgentId {
                 agent_id: stable_id.to_string(),
             })?;
-        Ok(AgentResourcePolicy {
+        let mut policy = AgentResourcePolicy {
             bundle_id: bundle_id.to_string(),
             harness_access: agent.harness_access,
             resource_view: agent.resource_view.clone(),
-        })
+            selected_bundle_tool_ids: Arc::from(Vec::<String>::new()),
+            canonical_hook_ids: Arc::from(agent.hook_refs.clone()),
+        };
+        if let Ok(partitions) = self.collect_resource_candidates(&policy)
+            && let Ok(selected) =
+                select_candidates_globally(bundle_id, &partitions, &policy.resource_view)
+        {
+            policy.selected_bundle_tool_ids = Arc::from(
+                selected
+                    .tool
+                    .iter()
+                    .filter(|id| {
+                        partitions
+                            .tool
+                            .get(*id)
+                            .is_some_and(ResourceCandidate::is_bundle_local)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+        }
+        Ok(policy)
     }
 
-    pub(crate) fn compile_agent_resources(
+    /// Report whether the selected agent's effective resource view needs a
+    /// bundle sidecar in order to provide its executable capabilities.
+    pub fn has_selected_bundle_sidecar_capability(
+        &self,
+        stable_id: &str,
+    ) -> Result<bool, BundleError> {
+        let policy = self.agent_resource_policy(stable_id)?;
+        let partitions = self.collect_resource_candidates(&policy)?;
+        let selected = select_candidates_globally(
+            policy.bundle_id.as_str(),
+            &partitions,
+            &policy.resource_view,
+        )?;
+        let selected_bundle_tool = selected.tool.iter().any(|id| {
+            partitions
+                .tool
+                .get(id)
+                .is_some_and(ResourceCandidate::is_bundle_local)
+        });
+        Ok(selected_bundle_tool || !policy.canonical_hook_ids.is_empty())
+    }
+
+    fn collect_resource_candidates(
         &self,
         policy: &AgentResourcePolicy,
-    ) -> Result<Arc<CompiledResourceView>, BundleError> {
-        let view = &policy.resource_view;
+    ) -> Result<CandidatePartitions, BundleError> {
         let bundle_id = policy.bundle_id.as_str();
-        let namespace = view.namespace.as_deref().unwrap_or(bundle_id);
 
         let mut tool_candidates = BTreeMap::new();
         collect_bundle_tool_candidates(
@@ -599,6 +655,30 @@ impl TurnBinding {
             bundle_id,
             &mut tool_candidates,
         )?;
+        for reference in &policy.resource_view.allow {
+            if !reference.starts_with("bundle:")
+                || kind_from_qualified_reference(reference) != Some("tool")
+                || tool_candidates.contains_key(reference)
+            {
+                continue;
+            }
+            let (_, resource) = self.snapshot.catalog.resolve_resource_entry(
+                bundle_id,
+                ExportKind::Tool,
+                reference,
+            )?;
+            tool_candidates.insert(
+                resource.stable_id.clone(),
+                ResourceCandidate::BundleLocal {
+                    local_id: resource.local_id.clone(),
+                    source_path: resource.source_path.clone(),
+                    content: resource.content.clone(),
+                    short_name: resource.local_id.clone(),
+                    qualified_name: resource.stable_id.clone(),
+                    aliases: resource.aliases.clone(),
+                },
+            );
+        }
         collect_harness_tool_candidates(
             policy.harness_access,
             &self.snapshot.basic_tools,
@@ -631,11 +711,44 @@ impl TurnBinding {
             &mut mcp_candidates,
         );
 
-        let partitions = CandidatePartitions {
+        Ok(CandidatePartitions {
             tool: tool_candidates,
             skill: skill_candidates,
             mcp: mcp_candidates,
-        };
+        })
+    }
+
+    pub(crate) fn compile_agent_resources(
+        &self,
+        policy: &AgentResourcePolicy,
+    ) -> Result<Arc<CompiledResourceView>, BundleError> {
+        self.compile_agent_resources_with_sidecar_tools(policy, &[])
+    }
+
+    pub(crate) fn compile_agent_resources_with_sidecar_tools(
+        &self,
+        policy: &AgentResourcePolicy,
+        sidecar_tools: &[ResolvedTool],
+    ) -> Result<Arc<CompiledResourceView>, BundleError> {
+        let view = &policy.resource_view;
+        let bundle_id = policy.bundle_id.as_str();
+        let namespace = view.namespace.as_deref().unwrap_or(bundle_id);
+
+        let mut sidecar_tools_by_name = BTreeMap::new();
+        for resolved in sidecar_tools {
+            let canonical_id = resolved.tool.name().to_string();
+            if sidecar_tools_by_name
+                .insert(canonical_id.clone(), resolved.clone())
+                .is_some()
+            {
+                return Err(BundleError::NamespaceCollision {
+                    bundle_id: bundle_id.to_string(),
+                    name: canonical_id,
+                });
+            }
+        }
+
+        let partitions = self.collect_resource_candidates(policy)?;
         let selected = select_candidates_globally(bundle_id, &partitions, view)?;
 
         if selected.mcp.iter().any(|id| {
@@ -748,10 +861,14 @@ impl TurnBinding {
             })?;
             match candidate {
                 ResourceCandidate::BundleLocal { .. } if kind == "tool" => {
-                    return Err(BundleError::UnsupportedBundleFeature {
-                        bundle_id: bundle_id.to_string(),
-                        feature: "resources.tools".to_string(),
-                    });
+                    if let Some(resolved) = sidecar_tools_by_name.get(canonical_id) {
+                        tools.insert(public_name.clone(), resolved.clone());
+                    } else {
+                        return Err(BundleError::UnsupportedBundleFeature {
+                            bundle_id: bundle_id.to_string(),
+                            feature: "resources.tools".to_string(),
+                        });
+                    }
                 }
                 ResourceCandidate::BundleLocal { .. } => {
                     return Err(BundleError::UnsupportedBundleFeature {
@@ -820,12 +937,15 @@ impl TurnBinding {
             })
             .collect();
 
-        Ok(Arc::new(CompiledResourceView {
+        let compiled = Arc::new(CompiledResourceView {
             tools,
             schemas,
             skills: Arc::new(skills),
+            canonical_hook_ids: Arc::clone(&policy.canonical_hook_ids),
             skill_facade_selected,
-        }))
+        });
+        debug_assert_eq!(compiled.canonical_hook_ids(), policy.canonical_hook_ids());
+        Ok(compiled)
     }
 
     #[must_use]
@@ -874,6 +994,10 @@ impl CompiledResourceView {
 
     pub(crate) fn skills(&self) -> &[SkillCatalogEntry] {
         self.skills.as_slice()
+    }
+
+    pub(crate) fn canonical_hook_ids(&self) -> &[String] {
+        self.canonical_hook_ids.as_ref()
     }
 
     /// Prompt skill exposure for the bound agent. When the selected view
@@ -3267,6 +3391,221 @@ mod tests {
                 .iter()
                 .any(|skill| skill.name == format!("bundle:{bundle_id}/skill/docs"))
         );
+    }
+
+    #[test]
+    fn bundle_sidecar_tool_binding_owns_short_name_and_shares_schema_dispatch_map() {
+        let bundle_id = "hya/sidecar-map";
+        let mut bundle = bundle_with_agent(
+            bundle_id,
+            agent(
+                "sidecar-agent",
+                HarnessAccess::Full,
+                ResourceView::default(),
+            ),
+            Vec::new(),
+        );
+        bundle.tools.push(PreparedResource {
+            local_id: "echo".to_string(),
+            stable_id: format!("bundle:{bundle_id}/tool/echo"),
+            source_path: "tools/echo.js".to_string(),
+            digest: "test-only-digest".to_string(),
+            content: "export default {}".to_string(),
+            aliases: Vec::new(),
+        });
+        let catalog = Arc::new(BundleCatalog::from_prepared(&[bundle]).unwrap());
+
+        let tools = ToolRegistry::builtins();
+        tools
+            .register_with_permission(Arc::new(NoopTool::new("echo")), ToolPermission::Tool)
+            .unwrap();
+        let registry = RuntimeRegistry::new(tools, catalog);
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-sidecar-tool-map"))
+            .unwrap();
+        let policy = binding.agent_resource_policy("sidecar-agent").unwrap();
+        let sidecar_tool = ResolvedTool {
+            tool: Arc::new(NoopTool::new(format!("bundle:{bundle_id}/tool/echo"))),
+            permission: ToolPermission::Tool,
+        };
+        let compiled = binding
+            .compile_agent_resources_with_sidecar_tools(&policy, &[sidecar_tool])
+            .unwrap();
+        let schema_names = compiled
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(schema_names, compiled.public_tool_names());
+
+        let bundle_short = compiled.resolve_tool("echo").unwrap();
+        assert_eq!(
+            bundle_short.tool.name(),
+            format!("bundle:{bundle_id}/tool/echo")
+        );
+        let bundle_qualified = compiled
+            .resolve_tool(&format!("bundle:{bundle_id}/tool/echo"))
+            .unwrap();
+        assert_eq!(
+            bundle_qualified.tool.name(),
+            format!("bundle:{bundle_id}/tool/echo")
+        );
+        let harness_qualified = compiled.resolve_tool("harness:tool/echo").unwrap();
+        assert_eq!(harness_qualified.tool.name(), "echo");
+    }
+
+    #[test]
+    fn captured_agent_resource_policy_retains_disjoint_bundle_tool_and_hook_ids() {
+        let bundle_id = "hya/disjoint-sidecars";
+        let alpha_tool_id = format!("bundle:{bundle_id}/tool/alpha");
+        let beta_tool_id = format!("bundle:{bundle_id}/tool/beta");
+        let alpha_hook_id = format!("bundle:{bundle_id}/hook/event");
+        let beta_hook_id = format!("bundle:{bundle_id}/hook/tool.execute.before");
+
+        let mut alpha = agent(
+            "alpha-agent",
+            HarnessAccess::None,
+            ResourceView {
+                allow: vec![alpha_tool_id.clone()],
+                deny: Vec::new(),
+                aliases: BTreeMap::new(),
+                namespace: None,
+            },
+        );
+        alpha.hook_refs = vec![alpha_hook_id.clone()];
+
+        let mut beta = agent(
+            "beta-agent",
+            HarnessAccess::None,
+            ResourceView {
+                allow: vec![beta_tool_id.clone()],
+                deny: Vec::new(),
+                aliases: BTreeMap::new(),
+                namespace: None,
+            },
+        );
+        beta.hook_refs = vec![beta_hook_id.clone()];
+
+        let mut bundle = bundle_with_agent(bundle_id, alpha, Vec::new());
+        bundle.agents.push(beta);
+        bundle.tools = vec![
+            PreparedResource {
+                local_id: "alpha".to_string(),
+                stable_id: alpha_tool_id.clone(),
+                source_path: "extensions/alpha.js".to_string(),
+                digest: "alpha-tool".to_string(),
+                content: "export default {}".to_string(),
+                aliases: Vec::new(),
+            },
+            PreparedResource {
+                local_id: "beta".to_string(),
+                stable_id: beta_tool_id.clone(),
+                source_path: "extensions/beta.js".to_string(),
+                digest: "beta-tool".to_string(),
+                content: "export default {}".to_string(),
+                aliases: Vec::new(),
+            },
+        ];
+        bundle.hooks = vec![
+            PreparedResource {
+                local_id: "event".to_string(),
+                stable_id: alpha_hook_id.clone(),
+                source_path: "extensions/event.js".to_string(),
+                digest: "alpha-hook".to_string(),
+                content: "export default {}".to_string(),
+                aliases: Vec::new(),
+            },
+            PreparedResource {
+                local_id: "tool.execute.before".to_string(),
+                stable_id: beta_hook_id.clone(),
+                source_path: "extensions/before.js".to_string(),
+                digest: "beta-hook".to_string(),
+                content: "export default {}".to_string(),
+                aliases: Vec::new(),
+            },
+        ];
+
+        let catalog = Arc::new(BundleCatalog::from_prepared(&[bundle]).unwrap());
+        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-disjoint-sidecars"))
+            .unwrap();
+        let alpha_policy = binding.agent_resource_policy("alpha-agent").unwrap();
+        let beta_policy = binding.agent_resource_policy("beta-agent").unwrap();
+
+        let alpha_selected_tools = alpha_policy
+            .selected_bundle_tool_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let beta_selected_tools = beta_policy
+            .selected_bundle_tool_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            alpha_selected_tools,
+            BTreeSet::from([alpha_tool_id.clone()])
+        );
+        assert_eq!(beta_selected_tools, BTreeSet::from([beta_tool_id.clone()]));
+
+        let alpha_hook_ids = alpha_policy
+            .canonical_hook_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let beta_hook_ids = beta_policy
+            .canonical_hook_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(alpha_hook_ids, BTreeSet::from([alpha_hook_id.clone()]));
+        assert_eq!(beta_hook_ids, BTreeSet::from([beta_hook_id.clone()]));
+        assert!(alpha_hook_ids.is_disjoint(&beta_hook_ids));
+
+        let alpha_compiled = binding
+            .compile_agent_resources_with_sidecar_tools(
+                &alpha_policy,
+                &[ResolvedTool {
+                    tool: Arc::new(NoopTool::new(alpha_tool_id.clone())),
+                    permission: ToolPermission::Tool,
+                }],
+            )
+            .unwrap();
+        let beta_compiled = binding
+            .compile_agent_resources_with_sidecar_tools(
+                &beta_policy,
+                &[ResolvedTool {
+                    tool: Arc::new(NoopTool::new(beta_tool_id.clone())),
+                    permission: ToolPermission::Tool,
+                }],
+            )
+            .unwrap();
+
+        let alpha_compiled_hooks = alpha_compiled
+            .canonical_hook_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let beta_compiled_hooks = beta_compiled
+            .canonical_hook_ids()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(alpha_compiled_hooks, alpha_hook_ids);
+        assert_eq!(beta_compiled_hooks, beta_hook_ids);
+
+        let alpha_names = alpha_compiled.public_tool_names();
+        let beta_names = beta_compiled.public_tool_names();
+        assert!(alpha_names.contains("alpha"));
+        assert!(alpha_names.contains(alpha_tool_id.as_str()));
+        assert!(!alpha_names.contains("beta"));
+        assert!(!alpha_names.contains(beta_tool_id.as_str()));
+        assert!(beta_names.contains("beta"));
+        assert!(beta_names.contains(beta_tool_id.as_str()));
+        assert!(!beta_names.contains("alpha"));
+        assert!(!beta_names.contains(alpha_tool_id.as_str()));
+        assert!(alpha_names.is_disjoint(&beta_names));
     }
 
     fn tempfile_skill_workdir(name: &str, body: &str) -> PathBuf {

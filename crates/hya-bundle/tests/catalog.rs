@@ -1,6 +1,6 @@
 use hya_bundle::{
-    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, SourceFile,
-    prepare_builtins, prepare_package,
+    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, PreparedResource,
+    SourceFile, prepare_builtins, prepare_package,
 };
 use sha2::{Digest, Sha256};
 
@@ -127,6 +127,94 @@ fn zero_bundle_prepared_document_never_yields_empty_catalog() {
         BundleCatalog::from_prepared(prepared.bundles()).err(),
         Some(BundleError::EmptyPreparedCatalog),
         "zero bundles must never become an empty BundleCatalog"
+    );
+}
+
+#[test]
+fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
+    let prepared = prepare_builtins(vec![source(
+        "catalog-mcp",
+        "hya/catalog-mcp",
+        "catalog-mcp",
+        "catalog docs",
+    )]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let [prepared_bundle] = prepared.bundles() else {
+        panic!("fixture must prepare exactly one bundle");
+    };
+    let mut bundle = prepared_bundle.clone();
+    let content = "{}";
+    bundle.mcp.push(PreparedResource {
+        local_id: "docs".to_string(),
+        stable_id: "bundle:hya/catalog-mcp/mcp/docs".to_string(),
+        source_path: "resources/mcp/docs.json".to_string(),
+        digest: digest(content.as_bytes()),
+        content: content.to_string(),
+        aliases: Vec::new(),
+    });
+
+    assert_eq!(
+        BundleCatalog::from_prepared(&[bundle]).err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/catalog-mcp".to_string(),
+            feature: "resources.mcp".to_string(),
+        })
+    );
+}
+
+#[test]
+fn catalog_rejects_unsupported_hook_local_id_from_prepared_data() {
+    let prepared = prepare_builtins(vec![BundleSource::new(
+        "catalog-hook",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/catalog-hook
+  version: 1.0.0
+  publisher: hya
+resources:
+  hooks:
+    - id: event
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agents:
+  - local_id: lead
+    stable_id: catalog-hook
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    hook_refs:
+      - bundle:hya/catalog-hook/hook/event
+"#
+                .as_slice(),
+            ),
+            SourceFile::new("extensions/runtime.js", b"export default {};\n"),
+        ],
+    )]);
+    let Ok(prepared) = prepared else {
+        panic!("preparation failed: {prepared:?}");
+    };
+    let [prepared_bundle] = prepared.bundles() else {
+        panic!("fixture must prepare exactly one bundle");
+    };
+    let mut bundle = prepared_bundle.clone();
+    bundle.hooks[0].local_id = "audit".to_string();
+    bundle.hooks[0].stable_id = "bundle:hya/catalog-hook/hook/audit".to_string();
+
+    assert_eq!(
+        BundleCatalog::from_prepared(&[bundle]).err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/catalog-hook".to_string(),
+            feature: "hook:audit".to_string(),
+        })
     );
 }
 

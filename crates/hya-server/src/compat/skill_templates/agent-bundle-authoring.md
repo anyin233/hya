@@ -5,23 +5,109 @@
 
 # AgentBundle authoring
 
-Author and install a 0.34.10 public-static `AgentBundle`. Prefer one
-`bundle.hya.md` with both v1 markers, exactly one agent, no frontmatter
-`prompt:`, and no executable references. The Markdown body is the static agent
-prompt.
+Author and install a 0.34.11 public `AgentBundle`. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Repository references:
 
 - Authoring guide: `docs/agent-bundle-authoring.md`
-- Public-static example: `docs/examples/bundle.hya.md`
+- Static example: `docs/examples/bundle.hya.md`
+- Transient Bun example: `docs/examples/bun-transient/`
+- Resident Bun example: `docs/examples/bun-resident/`
+- Working split-entrypoint example: [`docs/examples/bun-disjoint`](docs/examples/bun-disjoint/) (`bun-disjoint`)
+
+## Runtime boundary
+
+Harness owns the agent prompt/model loop, task and mailbox input, tool permission checks, events, projection, MemberOutcome, admission, cancellation, and recovery. There is one sidecar per activation. The sidecar never runs the agent/model loop; there is no `agent/invoke`, no sidecar send/wait, and no terminal/artifact result. It never receives the task, prompt, transcript, model state, grants, or runtime snapshot.
+
+Harness's `SessionEngine` remains the only agent runtime. The sidecar never receives task/prompt/transcript or returns `MemberOutcome`; each executable activation owns one per-activation process.
+
+Static-only Bundles remain process-free. Bun Compat is the only executable sidecar implementation supported in 0.34.11.
+
+## Source and exact package closure
+
+Use one root `bundle.hya.md` with both v1 markers:
+
+```yaml
+api_version: hya.agent-bundle/v1
+kind: AgentBundle
+```
+
+For the Markdown form, a nonempty Markdown body remains the prompt for exactly one agent and needs no prompt field; omit frontmatter `prompt:`. An empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents; every agent in that form needs an explicit prompt path. No second manifest/schema/loader is introduced. A public archive contains the root `bundle.hya.md` plus exactly the normalized paths represented by the existing v1 agent prompt/resource/Extension contract, and nothing else. The archive rules are: undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
+
+A minimal executable source tree is:
+
+```text
+bundle.hya.md
+extensions/runtime.js
+```
+
+The manifest's Tool selector and JavaScript Extension entrypoint both reference the same `extensions/runtime.js` source, archived once under the controlled cross-kind exact-path rule. The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch. There is no import scanner, dependency installer, or new dependency guarantee; do not add files not represented by the v1 source contract.
+
+## Selected Tool/Hook resources and the disjoint example
+
+The working split-entrypoint example is [`docs/examples/bun-disjoint`](docs/examples/bun-disjoint/) (`bun-disjoint`) and has this six-file layout:
+
+```text
+docs/examples/bun-disjoint/
+├── bundle.hya.md
+├── prompts/
+│   ├── alpha.md
+│   ├── beta.md
+│   └── static.md
+└── extensions/
+    ├── alpha.js
+    └── beta.js
+```
+
+From `docs/examples/bun-disjoint/`, archive exactly the root, three prompts, and two extensions:
+
+```sh
+7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md prompts/alpha.md prompts/beta.md prompts/static.md extensions/alpha.js extensions/beta.js
+```
+
+`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject. Harness host hooks stay outside AgentBundle metadata. They use the existing local/alias/canonical resource-reference grammar; prepare canonicalizes them to stable Hook resource IDs. The supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks.
+
+Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
+
+Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
+
+The alpha and beta executable agents have disjoint selected closures: alpha selects `echo` and `event` from `extensions/alpha.js`, while beta selects `beta` and `tool.execute.before` from `extensions/beta.js`. The `docs-bun-static` agent selects neither and remains process-free. Do not add a second manifest/DTO/loader/import graph/provenance, schema, free Hook mapping, generic extension auto-load, or claim sandboxing.
+
+## Sidecar ABI
+
+The sidecar wire is newline-delimited JSON-RPC 2.0 using hya plugin protocol version 1. Initialize remains request/reply: initialize retains existing `protocol_version` and `host` fields, and the only activation-specific metadata is `{ activation_id, lifecycle }`. Activation begins only after initialize succeeds and declarations match the prepared Bundle. `tool/call` and `hook/*` are request/reply. `event` is one-way and has no id or result.
+
+stdout is protocol-only; bare or malformed stdout is a protocol failure. stderr is diagnostic-only and bounded. The sidecar cannot issue inbound Harness requests. Never invent a second transport or task/result protocol.
+
+## Lifecycle and recovery
+
+- `spawn_lifecycle: transient` starts one sidecar for the whole Harness activation and shuts it down/reaps it when the activation ends.
+- `spawn_lifecycle: resident` reuses one healthy sidecar across mailbox messages. Its in-process state is volatile. Process loss never replays completed messages or effects.
+- explicit stop is final and idempotent: Harness rejects new sends, fences running work, cancels queued work, shuts down or terminates/reaps the child, removes the resident, and releases its claim.
+- There is no TTL, heartbeat, idle reclaim, process adoption, or persisted PID/stdio state.
+
+## Stable identity, role, and spawn
+
+`stable_id` is the public `AgentName`; preserve its bytes for events, projection, replay, fork, and resume. `local_id` is not a replacement public identity.
+
+- `role: main` is selectable in the TUI direct selector.
+- `role: subagent` is hidden from direct TUI selection.
+- `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
+- `spawn_lifecycle` is orthogonal to `role`.
+- Explicit unknown or denied targets fail closed; there is no silent `general` fallback.
+
+## Resources and permissions
+
+`harness_access: none | basic | full` chooses the Harness-owned candidate set. `resource_view.allow`, `deny`, `aliases`, and `namespace` deterministically narrow and name it. Bundle-local names keep Bundle precedence and canonical qualified names remain exact.
+
+Bundle-local tool calls resolve against the activation's captured catalog binding. Existing `PermissionPlane` and plugin policy run before `tool/call`; denial prevents RPC. `PermissionPlane`/plugin policy remain the final gate before sidecar RPC. A Bundle adds no sandbox and causes no permission expansion. Host tools, static skills, and host-managed MCP remain governed by the Harness view.
 
 ## Package workflow
 
-From an otherwise empty directory containing the root `bundle.hya.md`, use an
-external `7z` only to create an unencrypted, non-solid, no-compression archive:
+Create an exact lowercase `.hyabundle` with an external `7z`; runtime inspection never shells to system `7z`:
 
 ```sh
-7z a -t7z -mx=0 -ms=off example.hyabundle bundle.hya.md
+7z a -t7z -mx=0 -ms=off example.hyabundle bundle.hya.md extensions/runtime.js
 hya bundle info -f example.hyabundle
 hya bundle install example.hyabundle
 hya bundle list
@@ -29,96 +115,8 @@ hya bundle info <bundle-id>
 hya bundle uninstall <bundle-id>
 ```
 
-Inspect before installation. `hya bundle info -f` mutates neither registry nor
-publication. Require the exact lowercase `.hyabundle` suffix; treat bytes magic
-as public/private format authority. The runtime uses an in-process strict reader
-and never shells to or depends on system `7z`. It does not runtime-scan docs,
-ordinary Markdown, or other source directories.
+`hya bundle info -f` does not mutate registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check.
 
-## Required v1 markers
+## Trust and unsupported combinations
 
-```yaml
-api_version: hya.agent-bundle/v1
-kind: AgentBundle
-```
-
-`bundle.hya.md` needs both markers, exactly one agent, and no frontmatter
-`prompt:` — the Markdown body is the prompt.
-
-## Stable AgentName bytes
-
-`stable_id` is the public `AgentName`. Keep those bytes stable for events,
-projection, replay, and spawn. Do not treat `local_id` as a public identity.
-
-## Role only controls TUI direct-selector visibility
-
-- `role: main` → selectable in the TUI direct selector
-- `role: subagent` → hidden from direct TUI selection
-
-Role never grants spawn authority and does not give subagents a TUI selector
-placement. Agent-facing/internal roster and ordinary spawn are derived only from
-the current caller's `can_spawn` reachability, never from `role`.
-
-## `spawn_lifecycle` is orthogonal
-
-`transient` / `resident` describes only how Harness spawns the entry when spawn
-is allowed. It does not change TUI direct-selector visibility.
-
-## `can_spawn` reachability
-
-List only targets the caller may spawn. Omitted agents are unreachable. Unknown
-or denied targets fail closed; there is no silent `general` fallback for
-explicit unknown IDs. Ordinary roster and spawn use this set only, never `role`.
-
-## `harness_access` vs `resource_view`
-
-| Field | Meaning |
-| --- | --- |
-| `harness_access: none` | No Harness-owned resources enter candidates |
-| `harness_access: basic` | Only the Harness basic builtin set enters |
-| `harness_access: full` | All current Harness tool/skill/MCP resources enter |
-| `resource_view.allow` / `deny` | Narrow the candidate set; deny wins |
-| `resource_view.aliases` / `namespace` | Rename/resolve within the candidate set |
-
-A Bundle cannot expand `PermissionPlane` or plugin authority.
-
-## Trust and legacy boundaries
-
-- Install exactly one static agent definition and its Markdown prompt; the
-  strict installable profile admits no external static-skill file.
-- Keep the exact-one-entry public example to its agent declaration and Markdown
-  prompt. Built-in or otherwise prepared catalogs may still expose static skill
-  IDs and content, and `info` may report those IDs.
-- Reject external tool/MCP/hook/JS/Rust execution references with typed
-  `UNSUPPORTED_BUNDLE_FEATURE`; do not claim a runner or executable install.
-- Private inspection means `authentication=unverified`, `payload=opaque`, and
-  `activation unsupported-in-0.34.10`. Structural and declared-digest checks
-  are not publisher authenticity.
-- Built-ins are build-time prepared, read-only, and immutable.
-- Installation adds no sandbox, malicious-code isolation, or new permission
-  plane.
-- Legacy agent files are unsupported; there is no migration path.
-
-## Minimal Markdown shape
-
-```markdown
----
-api_version: hya.agent-bundle/v1
-kind: AgentBundle
-identity:
-  id: acme/example
-  version: 1.0.0
-  publisher: acme
-agents:
-  - local_id: lead
-    stable_id: acme-example-lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
----
-
-You are the example lead agent.
-```
-
-Package this single root file with the strict workflow above. Keep executable
-references out of the 0.34.10 public-static package.
+Only public Bundles are supported for activation in 0.34.11. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery.

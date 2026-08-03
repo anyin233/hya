@@ -1,129 +1,132 @@
-# AgentBundle Authoring (0.34.10)
+# AgentBundle Authoring (0.34.11)
 
-Use this guide to author and install a public-static `AgentBundle`. The complete
-single-file example is [`examples/bundle.hya.md`](examples/bundle.hya.md).
+Author and install a public `AgentBundle`. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
-## Package and install the example
+Examples:
 
-Copy the example into an otherwise empty directory, enter that directory, and
-create the package with an external `7z` program:
+- Retained static example: [`examples/bundle.hya.md`](examples/bundle.hya.md)
+- Transient Bun example: [`examples/bun-transient/`](examples/bun-transient/)
+- Resident Bun example: [`examples/bun-resident/`](examples/bun-resident/)
+- Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
-```sh
-7z a -t7z -mx=0 -ms=off example.hyabundle bundle.hya.md
-hya bundle info -f example.hyabundle
-hya bundle install example.hyabundle
-hya bundle list
-hya bundle info hya/docs-example
-hya bundle uninstall hya/docs-example
-```
+## Runtime boundary
 
-Run `info -f` before installation to inspect without changing the registry or
-published catalog. The authoring command deliberately creates an unencrypted,
-non-solid archive with no compression. A public package must contain exactly
-one `bundle.hya.md` at the archive root and no other entry.
+Harness is the sole agent, model, task, mailbox, event, `MemberOutcome`, and recovery runtime. The per-activation Bun Compat child supplies only Bundle-local tools, hooks, and event handlers. It never runs an agent/model loop and never receives a task, prompt, transcript, model state, grants, or runtime snapshot. There is no `agent/invoke`, sidecar send/wait, agent terminal/artifact result, second runtime, or second transport.
 
-The external `7z` program is author tooling only. The hya runtime never shells
-out to, locates, or depends on a system `7z`; it uses its strict in-process
-reader. Package paths must have the exact lowercase `.hyabundle` suffix, while
-the bytes magic remains authoritative for deciding whether the package is
-public or private.
+Harness's `SessionEngine` remains the only agent runtime. The sidecar never receives task/prompt/transcript or returns `MemberOutcome`; each executable activation owns one per-activation process.
 
-## Source forms
+Bun Compat is the sole executable sidecar implementation supported in 0.34.11. Static-only Bundles remain process-free.
 
-The v1 preparer accepts exactly one of:
+## Source and exact package closure
 
-- `bundle.yaml` multi-file directory sources (prompts, static skill content, …)
-- a single `bundle.hya.md` with YAML frontmatter and Markdown body as the sole agent prompt
-
-Both require the exact markers:
+Use one root `bundle.hya.md` with both v1 markers:
 
 ```yaml
 api_version: hya.agent-bundle/v1
 kind: AgentBundle
 ```
 
-An installable public-static package uses the single-file form.
-`bundle.hya.md` must declare exactly one agent and must not set `prompt:` in
-frontmatter; the Markdown body is the prepared static prompt.
+For the Markdown form, a nonempty Markdown body remains the prompt for exactly one agent and needs no prompt field; omit frontmatter `prompt:`. An empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents; every agent in that form needs an explicit prompt path. No second manifest/schema/loader is introduced. A public archive contains the root `bundle.hya.md` plus exactly the normalized paths represented by the existing v1 agent prompt/resource/Extension contract, and nothing else. The archive rules are: undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
 
-## Stable AgentName bytes
+The retained static package can be created with:
 
-`stable_id` becomes the public `AgentName`. Those bytes are identity for events,
-projection, replay, and spawn resolution. Treat them as stable wire values: do not
-rename casually, and do not rely on `local_id` outside the bundle.
+```sh
+7z a -t7z -mx=0 -ms=off static.hyabundle bundle.hya.md
+```
 
-## Role vs spawn lifecycle
+A multi-file executable package references its closure explicitly:
 
-- `role` (`main` | `subagent`) controls **only** TUI direct-selector visibility:
-  `main` is selectable in the TUI; `subagent` is hidden from direct TUI selection.
-  Role does not grant spawn authority and does not place subagents into a
-  separate TUI selector slot.
-- `spawn_lifecycle` (`transient` | `resident`) is orthogonal: it only describes
-  how Harness should spawn the entry when spawn is allowed. It does not change
-  TUI direct-selector visibility.
+```sh
+7z a -t7z -mx=0 -ms=off bun.hyabundle bundle.hya.md extensions/runtime.js
+```
 
-## `can_spawn` reachability
+The runtime uses a strict in-process reader and never shells to system `7z`.
 
-`can_spawn` is the caller-facing reachability set. Agent-facing/internal roster
-and ordinary spawn are derived only from the current caller's `can_spawn`
-reachability, never from `role`. Omitted targets are not reachable; unknown or
-denied targets fail closed. Bundles cannot invent reachability past the prepared
-catalog.
+## Manifest and examples
 
-## `harness_access` vs `resource_view`
+Both the static and executable forms reuse the v1 source/preparer contract. A compact executable source tree is:
 
-- `harness_access`: `none` | `basic` | `full` — which Harness-owned resources enter
-  the candidate set.
-- `resource_view` (`allow` / `deny` / `aliases` / `namespace`) narrows and renames
-  within that candidate set. Deny wins over allow.
+```text
+bundle.hya.md
+extensions/runtime.js
+```
 
-A Bundle cannot expand `PermissionPlane` or plugin authority. Effective access is
-the narrowing intersection of access, view, and Harness policy.
+The manifest's Tool selector and JavaScript Extension entrypoint both reference the same `extensions/runtime.js` source, archived once under the controlled cross-kind exact-path rule. The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch. There is no import scanner, dependency installer, or new dependency guarantee; do not add a wrapper directory or files not represented by the v1 source contract. The committed Bun examples show the exact manifest/resource shape without introducing a second schema.
 
-## Shipped static boundary
+## Selected Tool/Hook resources and the disjoint example
 
-Release 0.34.10 installs public packages containing exactly one static agent
-definition and its Markdown prompt. The strict installable profile admits no
-external static-skill file. Documentation paths, including `docs/examples`,
-are not runtime-scanned. External tool, MCP, hook, JavaScript, or Rust execution
-references are rejected with typed
-`UNSUPPORTED_BUNDLE_FEATURE`; installation does not create a runner or a new
-permission plane. There is no sandbox or malicious-code isolation claim.
+The working split-entrypoint example is [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`) and has this six-file layout:
 
-The exact-one-entry public example contains only its agent declaration and
-Markdown prompt; do not add an external static-skill file to that archive.
-Built-in or otherwise prepared catalogs may still contain static skill IDs and
-content, and `info` can report those IDs.
+```text
+docs/examples/bun-disjoint/
+├── bundle.hya.md
+├── prompts/
+│   ├── alpha.md
+│   ├── beta.md
+│   └── static.md
+└── extensions/
+    ├── alpha.js
+    └── beta.js
+```
 
-Private packages are inspection-only. Their metadata is reported exactly as
-`authentication=unverified`, `payload=opaque`, and
-`activation unsupported-in-0.34.10`. Structural and declared-digest checks do
-not establish publisher authenticity.
+From `docs/examples/bun-disjoint/`, archive exactly the root, three prompts, and two extensions:
 
-## Built-ins and legacy
+```sh
+7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md prompts/alpha.md prompts/beta.md prompts/static.md extensions/alpha.js extensions/beta.js
+```
 
-- Built-ins are prepared at build time from repo-native sources under
-  `bundles/builtin/`, embedded, merged read-only with installed packages, and
-  immutable through bundle commands. They are not discovered at runtime from
-  disk.
-- Legacy agent files (for example `.hya/agents/*.md` and former compat agent-file
-  loaders) are **unsupported**. There is no migration, adapter, or dual catalog.
+`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject. Harness host hooks stay outside AgentBundle metadata. They use the existing local/alias/canonical resource-reference grammar; prepare canonicalizes them to stable Hook resource IDs. The supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks.
 
-## Skills and unsupported features
+Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
 
-- Built-in or otherwise prepared catalogs may carry bundle-local **static**
-  skill content. The strict installable profile does not accept a static-skill
-  file, and this catalog support is not a general skill plane, hot installer,
-  or remote skill loader.
-- Installing the same identity and digest is idempotent. Replacement and
-  removal are atomic registry operations.
-- Installed catalog changes become visible lazily before a new root turn binds
-  and on TUI/catalog refresh. In-flight and child turns remain pinned to the
-  catalog snapshot they already hold.
+Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
 
-## Example
+The alpha and beta executable agents have disjoint selected closures: alpha selects `echo` and `event` from `extensions/alpha.js`, while beta selects `beta` and `tool.execute.before` from `extensions/beta.js`. The `docs-bun-static` agent selects neither and remains process-free. Do not add a second manifest/DTO/loader/import graph/provenance, schema, free Hook mapping, generic extension auto-load, or claim sandboxing.
 
-See [`examples/bundle.hya.md`](examples/bundle.hya.md) for one flat `main` /
-`transient` agent with no executable references. Package the directory that
-contains it using the exact workflow above; the docs tree itself is never an
-installation source.
+## Sidecar ABI
+
+The sidecar wire is newline-delimited JSON-RPC 2.0 using hya plugin protocol version 1. Initialize remains request/reply: initialize retains existing `protocol_version` and `host` fields, and the only activation-specific metadata is `{ activation_id, lifecycle }`. Activation begins only after initialize succeeds and declarations match the prepared Bundle. The Harness must not mark the first item Running or poll the model before that ACK. `tool/call` and `hook/*` are request/reply. `event` is one-way and has no id or result.
+
+stdout is protocol-only with a 1 MiB frame cap; bare or malformed stdout is a protocol failure. stderr is diagnostic-only and bounded. Initialization has a 5 second limit and request/reply has a 30 second limit. A malformed response or timeout taints and terminates the sidecar. The child cannot issue inbound Harness requests. Never invent a second transport or task/result protocol.
+
+## Lifecycle and recovery
+
+- `spawn_lifecycle: transient` starts one child for the whole Harness activation and shuts it down and reaps it when the activation ends.
+- `spawn_lifecycle: resident` reuses one healthy child across mailbox messages. Its in-process state is volatile; process loss never replays completed messages or effects.
+- Idle resident loss lazily creates a fresh child and ACKs it under the same captured binding. Running loss aborts and fences the running item without replay, then preserves queued-after work for a fresh ACK under that binding.
+- Explicit stop is final and idempotent: Harness rejects new sends, fences running work, cancels queued work, shuts down or terminates/reaps the child, removes the resident, and releases its claim.
+- There is no TTL, heartbeat, idle reclaim, process adoption, watcher, or persisted PID/stdio/process state.
+
+## Stable identity, role, and spawn
+
+`stable_id` is the public `AgentName`; preserve its bytes for events, projection, replay, fork, and resume. `local_id` is not a replacement public identity.
+
+- `role: main` is selectable in the TUI direct selector.
+- `role: subagent` is hidden from direct TUI selection.
+- `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
+- `spawn_lifecycle` is orthogonal to `role`.
+- Explicit unknown or denied targets fail closed; there is no silent `general` fallback.
+
+## Resources and permissions
+
+`harness_access: none | basic | full` chooses the Harness-owned candidate set. `resource_view.allow`, `deny`, `aliases`, and `namespace` deterministically narrow and name it. Bundle-local names keep Bundle precedence and canonical qualified names remain exact.
+
+Bundle-local tool calls resolve against the activation's captured catalog binding. Existing `PermissionPlane` and plugin policy run before `tool/call`; denial prevents RPC. `PermissionPlane`/plugin policy remain the final gate before sidecar RPC. Host tools, static skills, and host-managed MCP remain governed by the Harness view. Bundle-declared MCP is unsupported. A Bundle adds no sandbox and causes no permission expansion.
+
+## Package and registry workflow
+
+Use an exact lowercase `.hyabundle` suffix for the CLI commands:
+
+```sh
+hya bundle info -f bun.hyabundle
+hya bundle install bun.hyabundle
+hya bundle list
+hya bundle info <bundle-id>
+hya bundle uninstall <bundle-id>
+```
+
+`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding.
+
+## Trust and unsupported combinations
+
+Only public Bundles are supported for activation in 0.34.11. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.

@@ -539,6 +539,17 @@ impl Projection {
                 current_task,
                 ..
             } => {
+                let terminal = matches!(*status, RosterStatus::Done | RosterStatus::Failed);
+                let explicit_stop = *status == RosterStatus::Failed
+                    && current_task.as_deref() == Some("resident stopped");
+                let terminal_inbox_len = if explicit_stop {
+                    self.team
+                        .inboxes
+                        .get(handle)
+                        .map_or(0, |inbox| inbox.len() as u64)
+                } else {
+                    0
+                };
                 if let Some(entry) = self.team.roster.get_mut(handle) {
                     entry.status = *status;
                     if current_task.is_some() {
@@ -548,6 +559,9 @@ impl Projection {
                         && let Some(work) = entry.resident_work.take()
                     {
                         entry.resident_cursor = entry.resident_cursor.max(work.inbox_through);
+                    }
+                    if terminal && explicit_stop && entry.mode.is_resident() {
+                        entry.resident_cursor = entry.resident_cursor.max(terminal_inbox_len);
                     }
                 }
             }
@@ -613,6 +627,15 @@ impl Projection {
                         // set first so the inbox borrow does not alias the channel.
                         let members: Vec<String> = channel_state.members.iter().cloned().collect();
                         for member in members {
+                            if self.team.roster.get(&member).is_some_and(|entry| {
+                                entry.mode.is_resident()
+                                    && matches!(
+                                        entry.status,
+                                        RosterStatus::Done | RosterStatus::Failed
+                                    )
+                            }) {
+                                continue;
+                            }
                             self.team
                                 .inboxes
                                 .entry(member)

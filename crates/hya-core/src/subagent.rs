@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::{
-    Event, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId, SubagentMode,
+    Event, FinishReason, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId,
+    SubagentMode,
 };
 use hya_store::ActorClaim;
 use hya_tool::AgentDef;
@@ -12,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
+use crate::hooks::scope_activation_hooks;
+use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Assign a stable, team-scoped handle (`{type}-{ordinal}`) to each member in
@@ -134,6 +137,9 @@ pub struct MemberSpec {
     /// truncated directive so observers still get a readable row title.
     pub description: String,
     pub session: Option<SessionId>,
+    /// Request-scoped sidecar factory already bound by the application.
+    /// This opaque capability is not persisted with the member specification.
+    pub sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
 }
 
 /// Short label for tree / TUI rows: task description when present, else prompt.
@@ -160,6 +166,12 @@ fn summarize_member(projection: &Projection) -> String {
     "no assistant output".to_string()
 }
 
+struct MemberRunOutcome {
+    child: SessionId,
+    summary: String,
+    sidecar: Option<Box<dyn SidecarHandle>>,
+}
+
 async fn run_member(
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -167,7 +179,7 @@ async fn run_member(
     handle: String,
     cancel: CancellationToken,
     actor_claim: Option<ActorClaim>,
-) -> Result<(SessionId, String), CoreError> {
+) -> Result<MemberRunOutcome, CoreError> {
     engine.validate_actor_claim(actor_claim.as_ref()).await?;
     let child = if let Some(session) = spec.session {
         session
@@ -237,73 +249,130 @@ async fn run_member(
             },
         )
         .await?;
-    engine
-        .emit_for_actor(
-            actor_claim.as_ref(),
-            lead,
-            Event::MemberStatusChanged {
-                session: lead,
-                member,
-                status: MemberRunStatus::Running,
-            },
-        )
-        .await?;
-    match actor_claim.as_ref() {
-        Some(claim) => {
-            engine
-                .admit_user_prompt_for_actor(claim, child, spec.directive)
-                .await?;
-            match spec.resources.clone() {
-                Some(resources) => {
-                    engine
-                        .run_resolved_turn_for_actor(
-                            child,
-                            &spec.agent,
-                            (spec.binding.clone(), spec.agents.clone(), resources),
-                            claim,
-                            cancel,
-                            spec.guidance.clone(),
-                        )
-                        .await?;
+    let (sidecar_handle, sidecar_tools, sidecar_hooks) =
+        if let Some(factory) = spec.sidecar_factory.clone() {
+            let mut handle = factory.start(SidecarStart::transient()).await?;
+            if let Err(error) = handle.ready().await {
+                let _ = handle.terminate().await;
+                return Err(error);
+            }
+            let sidecar_tools = handle.tool_bindings();
+            let sidecar_hooks = handle.hook_dispatcher();
+            (Some(handle), sidecar_tools, sidecar_hooks)
+        } else {
+            (None, Arc::from([]), None)
+        };
+    let loss_token = sidecar_handle
+        .as_ref()
+        .and_then(|handle| handle.loss_token());
+    let run = async {
+        engine
+            .emit_for_actor(
+                actor_claim.as_ref(),
+                lead,
+                Event::MemberStatusChanged {
+                    session: lead,
+                    member,
+                    status: MemberRunStatus::Running,
+                },
+            )
+            .await?;
+        let finish_reason = match actor_claim.as_ref() {
+            Some(claim) => {
+                engine
+                    .admit_user_prompt_for_actor(claim, child, spec.directive)
+                    .await?;
+                match spec.resources.clone() {
+                    Some(resources) => {
+                        engine
+                            .run_resolved_turn_with_sidecar_tools_for_actor(
+                                child,
+                                &spec.agent,
+                                (
+                                    spec.binding.clone(),
+                                    spec.agents.clone(),
+                                    resources,
+                                    sidecar_tools.clone(),
+                                ),
+                                claim,
+                                cancel,
+                                spec.guidance.clone(),
+                            )
+                            .await?
+                    }
+                    None => {
+                        engine
+                            .run_bound_turn_for_actor(
+                                child,
+                                &spec.agent,
+                                spec.binding.clone(),
+                                claim,
+                                cancel,
+                                spec.guidance.clone(),
+                            )
+                            .await?
+                    }
                 }
-                None => {
-                    engine
-                        .run_bound_turn_for_actor(
-                            child,
-                            &spec.agent,
-                            spec.binding.clone(),
-                            claim,
-                            cancel,
-                            spec.guidance.clone(),
-                        )
-                        .await?;
+            }
+            None => {
+                engine.admit_user_prompt(child, spec.directive).await?;
+                match spec.resources {
+                    Some(resources) => {
+                        engine
+                            .run_resolved_turn_with_sidecar_tools(
+                                child,
+                                &spec.agent,
+                                (spec.binding, spec.agents.clone(), resources, sidecar_tools),
+                                cancel,
+                                spec.guidance,
+                            )
+                            .await?
+                    }
+                    None => {
+                        engine
+                            .run_bound_turn(child, &spec.agent, spec.binding, cancel, spec.guidance)
+                            .await?
+                    }
                 }
+            }
+        };
+        if matches!(finish_reason, FinishReason::Cancelled) {
+            return Err(CoreError::Cancelled);
+        }
+        let projection = engine.read_projection(child).await?;
+        Ok::<String, CoreError>(summarize_member(&projection))
+    };
+    let run_result = match (sidecar_hooks, loss_token) {
+        (Some(hooks), Some(loss_token)) => {
+            tokio::select! {
+                biased;
+                _ = loss_token.cancelled() => Err(CoreError::Cancelled),
+                result = scope_activation_hooks(child, hooks, run) => result,
             }
         }
-        None => {
-            engine.admit_user_prompt(child, spec.directive).await?;
-            match spec.resources {
-                Some(resources) => {
-                    engine
-                        .run_resolved_turn(
-                            child,
-                            &spec.agent,
-                            (spec.binding, spec.agents.clone(), resources),
-                            cancel,
-                            spec.guidance,
-                        )
-                        .await?;
-                }
-                None => {
-                    engine
-                        .run_bound_turn(child, &spec.agent, spec.binding, cancel, spec.guidance)
-                        .await?;
-                }
+        (Some(hooks), None) => scope_activation_hooks(child, hooks, run).await,
+        (None, Some(loss_token)) => {
+            tokio::select! {
+                biased;
+                _ = loss_token.cancelled() => Err(CoreError::Cancelled),
+                result = run => result,
             }
+        }
+        (None, None) => run.await,
+    };
+    match run_result {
+        Ok(summary) => Ok(MemberRunOutcome {
+            child,
+            summary,
+            sidecar: sidecar_handle,
+        }),
+        Err(error) => {
+            if let Some(mut sidecar) = sidecar_handle {
+                let _ = sidecar.terminate().await;
+            }
+            Err(error)
         }
     }
-    let projection = engine.read_projection(child).await?;
-    Ok((child, summarize_member(&projection)))
 }
 
 fn rejected_evidence(id: MemberId, reason: &str) -> MemberEvidence {
@@ -462,8 +531,12 @@ async fn run_team_inner(
 
     let mut evidence = Vec::new();
     for (id, task) in member_tasks {
-        let (entry, member_status, child) = match task.await {
-            Ok(Ok((session, summary))) => (
+        let (entry, member_status, child, sidecar_handle) = match task.await {
+            Ok(Ok(MemberRunOutcome {
+                child: session,
+                summary,
+                sidecar,
+            })) => (
                 MemberEvidence {
                     member: id.to_string(),
                     session: session.to_string(),
@@ -472,6 +545,18 @@ async fn run_team_inner(
                 },
                 MemberRunStatus::Done,
                 Some(session),
+                sidecar,
+            ),
+            Ok(Err(CoreError::Cancelled)) => (
+                MemberEvidence {
+                    member: id.to_string(),
+                    session: "-".to_string(),
+                    status: MemberStatus::Failed,
+                    summary: "member cancelled".to_string(),
+                },
+                MemberRunStatus::Cancelled,
+                None,
+                None,
             ),
             Ok(Err(e)) => (
                 MemberEvidence {
@@ -481,6 +566,7 @@ async fn run_team_inner(
                     summary: e.to_string(),
                 },
                 MemberRunStatus::Failed,
+                None,
                 None,
             ),
             Err(join_err) => {
@@ -498,6 +584,7 @@ async fn run_team_inner(
                     },
                     status,
                     None,
+                    None,
                 )
             }
         };
@@ -514,6 +601,9 @@ async fn run_team_inner(
                 },
             )
             .await;
+        if let Some(mut sidecar) = sidecar_handle {
+            let _ = sidecar.shutdown().await;
+        }
         evidence.push(entry);
     }
     evidence.extend(rejected);

@@ -109,10 +109,22 @@ watcher or per-round/tool-call registry query.
 `info -f` strictly inspects a package without mutating the registry or runtime
 publication. Package paths require the exact lowercase `.hyabundle` suffix;
 the bytes magic is still authoritative for public/private format detection.
-Public packages are static-only. Private output reports authentication as
-unverified, payload as opaque, and activation as unsupported in 0.34.10.
-See [AgentBundle Authoring](agent-bundle-authoring.md) for the strict public
-archive profile and supported content.
+Public packages may remain process-free or may include only the exact existing-v1
+declared agent prompt/resource/Extension closure for self-contained selected JS
+Extension entrypoints in an activation-scoped Bun Compat sidecar; no helper/import
+closure is supported. Undeclared directory files are ignored and unreferenced
+archive files are rejected; activation never executes the authoring tree. See [AgentBundle Authoring](agent-bundle-authoring.md) and the
+[static example](examples/bundle.hya.md), [transient Bun example](examples/bun-transient/),
+[resident Bun example](examples/bun-resident/), and [disjoint Bun example](examples/bun-disjoint/)
+for supported forms. Package publication validates the complete built-ins-plus-installed
+BundleCatalog before atomic generation publication. Each activation materializes only
+the selected agent's captured Tool/Hook capability closure and exact-path-matched
+JS Extension entrypoints; staged-but-unselected Extensions never activate. New
+root turns and catalog refreshes publish the installed generation lazily while
+existing TurnBindings remain pinned. Private output reports authentication as
+unverified, payload as opaque, and activation as unsupported in 0.34.11.
+Raw Rust extensions and Bundle-declared MCP remain unsupported; the sidecar
+does not run an agent loop or add a permission plane.
 
 ## `hya-backend exec`
 

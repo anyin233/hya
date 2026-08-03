@@ -35,17 +35,25 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hya_proto::{
-    ActorClaim, Event, FinishReason, MailEndpoint, MemberId, MemberRunStatus, OwnerRunId,
-    PartProjection, Role, RosterStatus, SessionId, SubagentMode, ToolPartState,
+    ActorClaim, Event, MailEndpoint, MemberId, OwnerRunId, RosterStatus, SessionId, SubagentMode,
 };
-use hya_tool::AgentDef;
-use tokio::sync::Notify;
+use hya_tool::{AgentDef, ResolvedTool};
+use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
+use crate::hooks::{HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
+use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
+
+pub type ResolvedResidentRuntime = (
+    TurnBinding,
+    Arc<[AgentDef]>,
+    AgentResourcePolicy,
+    Option<Arc<dyn BoundSidecarFactory>>,
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentRecovery {
@@ -72,10 +80,11 @@ impl SessionEngine {
         root: SessionId,
         handle: &str,
     ) -> Result<ResidentRecoveryReport, CoreError> {
-        let aborted_operations = self.abort_recovered_actor_operations(recovered).await?;
-        let work = self.recover_resident_work(recovered, root, handle).await?;
+        let (work, aborted_operations) = self
+            .recover_resident_actor_durable(recovered, root, handle)
+            .await?;
         Ok(ResidentRecoveryReport {
-            work,
+            work: map_recovered_resident_work(work),
             aborted_operations,
         })
     }
@@ -88,122 +97,26 @@ impl SessionEngine {
         root: SessionId,
         handle: &str,
     ) -> Result<ResidentRecovery, CoreError> {
-        let projection = self.read_projection(root).await?;
-        let entry = projection
-            .team
-            .roster
-            .get(handle)
-            .filter(|entry| entry.session == recovered.claim.actor_id && entry.mode.is_resident())
-            .ok_or_else(|| CoreError::Invalid("resident recovery roster mismatch".to_string()))?;
-        if let Some(work) = entry.resident_work {
-            if work.epoch != recovered.previous_epoch {
-                return Err(CoreError::Invalid(
-                    "resident recovery work epoch mismatch".to_string(),
-                ));
-            }
-            self.terminalize_recovered_resident_effects(&recovered.claim)
-                .await?;
-            self.commit_resident_mutation(
-                &recovered.claim,
-                root,
-                vec![Event::AgentActivityChanged {
-                    session: root,
-                    handle: handle.to_string(),
-                    status: hya_proto::RosterStatus::Failed,
-                    current_task: Some("aborted by resident recovery".to_string()),
-                }],
-            )
+        let (work, _) = self
+            .recover_resident_actor_durable(recovered, root, handle)
             .await?;
-            let inbox_len = projection
-                .team
-                .inboxes
-                .get(handle)
-                .map_or(0, |inbox| inbox.len() as u64);
-            return Ok(ResidentRecovery::AbortedRunning {
-                inbox_cursor: work.inbox_through,
-                queued_after: inbox_len > work.inbox_through,
-            });
-        }
-        self.store().validate_actor_claim(&recovered.claim).await?;
-        let inbox_len = projection
-            .team
-            .inboxes
-            .get(handle)
-            .map_or(0, |inbox| inbox.len() as u64);
-        let actor_projection = self.read_projection(recovered.claim.actor_id).await?;
-        let pending_user_turn = actor_projection
-            .session
-            .messages
-            .last()
-            .is_some_and(|message| message.role == hya_proto::Role::User);
-        if inbox_len > entry.resident_cursor
-            || (pending_user_turn && entry.status == RosterStatus::Idle)
-        {
-            Ok(ResidentRecovery::Queued {
-                inbox_cursor: entry.resident_cursor,
-            })
-        } else {
-            Ok(ResidentRecovery::Idle)
-        }
+        Ok(map_recovered_resident_work(work))
     }
+}
 
-    async fn terminalize_recovered_resident_effects(
-        &self,
-        claim: &ActorClaim,
-    ) -> Result<(), CoreError> {
-        let projection = self.read_projection(claim.actor_id).await?;
-        let mut events = Vec::new();
-        for member in &projection.session.members {
-            if matches!(
-                member.status,
-                MemberRunStatus::Spawning | MemberRunStatus::Running
-            ) {
-                events.push(Event::MemberFinished {
-                    session: claim.actor_id,
-                    member: member.member,
-                    status: MemberRunStatus::Cancelled,
-                    summary: "aborted by resident recovery".to_string(),
-                    child: member.child,
-                });
-            }
+fn map_recovered_resident_work(work: hya_store::RecoveredResidentWork) -> ResidentRecovery {
+    match work {
+        hya_store::RecoveredResidentWork::Idle => ResidentRecovery::Idle,
+        hya_store::RecoveredResidentWork::Queued { inbox_cursor } => {
+            ResidentRecovery::Queued { inbox_cursor }
         }
-        for message in &projection.session.messages {
-            if message.role != Role::Assistant || message.finish.is_some() {
-                continue;
-            }
-            for part in &message.parts {
-                if let PartProjection::Tool {
-                    id,
-                    call,
-                    state: ToolPartState::Pending { .. } | ToolPartState::Running { .. },
-                    ..
-                } = part
-                {
-                    events.push(Event::ToolError {
-                        session: claim.actor_id,
-                        message: message.id,
-                        part: *id,
-                        call: *call,
-                        value: Some(serde_json::json!({
-                            "code": "STALE_ACTOR_CLAIM",
-                        })),
-                        message_text: "aborted by resident recovery".to_string(),
-                    });
-                }
-            }
-            events.push(Event::MessageFinished {
-                session: claim.actor_id,
-                message: message.id,
-                role: Role::Assistant,
-                finish: FinishReason::Cancelled,
-                tokens: None,
-            });
-        }
-        if !events.is_empty() {
-            self.commit_resident_mutation(claim, claim.actor_id, events)
-                .await?;
-        }
-        Ok(())
+        hya_store::RecoveredResidentWork::AbortedRunning {
+            inbox_cursor,
+            queued_after,
+        } => ResidentRecovery::AbortedRunning {
+            inbox_cursor,
+            queued_after,
+        },
     }
 }
 
@@ -230,17 +143,88 @@ struct SlotState {
     /// In-process only: immutable guidance from the triggering spawn turn.
     /// Never durable; recovery paths leave this `None`.
     guidance: Option<Arc<str>>,
+    /// Opaque request-scoped sidecar factory, retained only in memory.
+    sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     is_main: bool,
     status: SlotStatus,
     /// New mail has arrived and a turn is owed.
     pending: bool,
+    /// One-shot initial directive, retained only until the first run.
+    initial_directive: Option<String>,
     /// (Main only) a synthesis directive is owed on the next turn.
     synth_pending: bool,
     /// Present for resident subagents; the main/root actor remains transient.
     claim: Option<ActorClaim>,
+    /// Durable kill finalization completed for this slot's current claim.
+    kill_finalized: bool,
+    /// Slot-local cancellation, inherited from the team's cancellation token.
+    cancel: CancellationToken,
+    /// One-shot explicit stop request consumed by the resident task.
+    stop_request: Option<StopRequest>,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
     notify: Arc<Notify>,
+}
+
+struct StopRequest {
+    terminate: bool,
+    reply: oneshot::Sender<Result<(), CoreError>>,
+}
+
+struct StopCompletion {
+    outcome: Mutex<Option<Result<(), CoreError>>>,
+    notify: Notify,
+}
+
+impl StopCompletion {
+    fn new() -> Self {
+        Self {
+            outcome: Mutex::new(None),
+            notify: Notify::new(),
+        }
+    }
+
+    fn outcome(&self) -> Option<Result<(), CoreError>> {
+        match self.outcome.lock() {
+            Ok(outcome) => outcome.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn complete(&self, result: Result<(), CoreError>) {
+        let should_notify = match self.outcome.lock() {
+            Ok(mut current) => {
+                if current.is_none() {
+                    *current = Some(result);
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(poisoned) => {
+                let mut current = poisoned.into_inner();
+                if current.is_none() {
+                    *current = Some(result);
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        if should_notify {
+            self.notify.notify_waiters();
+        }
+    }
+
+    async fn wait(&self) -> Result<(), CoreError> {
+        loop {
+            let notified = self.notify.notified();
+            if let Some(outcome) = self.outcome() {
+                return outcome;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl SlotState {
@@ -254,6 +238,7 @@ impl SlotState {
 /// The mutable, lock-guarded state of one team.
 struct TeamState {
     residents: HashMap<SessionId, SlotState>,
+    stop_completions: HashMap<String, Arc<StopCompletion>>,
     /// Number of non-idle residents (incl. main). Quiescence = this is 0.
     busy: usize,
     killed: bool,
@@ -265,6 +250,8 @@ struct TeamState {
     last_synth_work_seq: u64,
     main_session: Option<SessionId>,
     kill_reason: Option<String>,
+    /// Guards the one-time release of the team's governor counters.
+    team_budget_released: bool,
 }
 
 /// Everything one turn needs, snapshotted atomically under the team lock so the
@@ -275,13 +262,16 @@ struct RunPlan {
     agents: Option<Arc<[AgentDef]>>,
     resources: Option<AgentResourcePolicy>,
     guidance: Option<Arc<str>>,
+    sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     handle: String,
     is_main: bool,
     /// Inbox messages before this index are already injected.
     cursor: usize,
     /// (Main only) inject the synthesis directive before the turn.
     synth: bool,
+    initial_directive: Option<String>,
     claim: Option<ActorClaim>,
+    cancel: CancellationToken,
 }
 
 enum ResidentRuntimeContext {
@@ -291,6 +281,12 @@ enum ResidentRuntimeContext {
         agents: Arc<[AgentDef]>,
         resources: AgentResourcePolicy,
     },
+}
+
+struct ResidentActivation {
+    initial: Option<String>,
+    guidance: Option<Arc<str>>,
+    sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
 }
 
 /// What a resident task should do next, decided atomically under the team lock.
@@ -304,9 +300,16 @@ enum Action {
         claim: Option<ActorClaim>,
         became_idle: bool,
     },
+    /// Explicitly stop one resident and report process cleanup to the caller.
+    StopResident {
+        terminate: bool,
+        reply: oneshot::Sender<Result<(), CoreError>>,
+    },
     /// The team was killed; the resident task must exit. `killed_now` is set for
     /// the single caller that observed the transition, so kill side-effects run once.
     Stop { killed_now: bool },
+    /// The team was killed, but this slot's durable finalization is still pending.
+    WaitForKillFinalization,
 }
 
 /// A single team's actor group: its residents, budgets, and cancellation.
@@ -359,12 +362,22 @@ impl TeamActor {
     /// per-team turn budget on the way into a `Run`; a trip kills the team.
     fn next_action(&self, session: SessionId) -> Action {
         let mut st = self.lock();
-        if st.killed {
-            return Action::Stop { killed_now: false };
-        }
+        let killed = st.killed;
         let Some(slot) = st.residents.get_mut(&session) else {
             return Action::Stop { killed_now: false };
         };
+        if let Some(request) = slot.stop_request.take() {
+            return Action::StopResident {
+                terminate: request.terminate,
+                reply: request.reply,
+            };
+        }
+        if killed {
+            if !slot.kill_finalized {
+                return Action::WaitForKillFinalization;
+            }
+            return Action::Stop { killed_now: false };
+        }
         if slot.has_work() {
             let synth = slot.synth_pending;
             let claim = slot.claim;
@@ -374,8 +387,11 @@ impl TeamActor {
             let agents = slot.agents.clone();
             let resources = slot.resources.clone();
             let guidance = slot.guidance.clone();
+            let sidecar_factory = slot.sidecar_factory.clone();
             let handle = slot.handle.clone();
             let is_main = slot.is_main;
+            let initial_directive = slot.initial_directive.take();
+            let cancel = slot.cancel.child_token();
             slot.pending = false;
             slot.synth_pending = false;
             if slot.status == SlotStatus::Idle {
@@ -395,11 +411,14 @@ impl TeamActor {
                 agents,
                 resources,
                 guidance,
+                sidecar_factory,
                 handle,
                 is_main,
                 cursor,
                 synth,
+                initial_directive,
                 claim,
+                cancel,
             }))
         } else {
             let handle = slot.handle.clone();
@@ -430,6 +449,118 @@ impl TeamActor {
         state.busy = state.busy.saturating_sub(1);
         if !has_work {
             self.maybe_fire_quiescence(&mut state);
+        }
+    }
+
+    fn replace_recovered_claim(
+        &self,
+        session: SessionId,
+        expected: ActorClaim,
+        recovered: ActorClaim,
+        disposition: ResidentRecovery,
+    ) -> Result<(), CoreError> {
+        let (cursor, pending) = match disposition {
+            ResidentRecovery::Idle => (None, false),
+            ResidentRecovery::Queued { inbox_cursor } => (
+                Some(usize::try_from(inbox_cursor).map_err(|_| {
+                    CoreError::Invalid("resident inbox cursor exceeds usize".to_string())
+                })?),
+                true,
+            ),
+            ResidentRecovery::AbortedRunning {
+                inbox_cursor,
+                queued_after,
+            } => (
+                Some(usize::try_from(inbox_cursor).map_err(|_| {
+                    CoreError::Invalid("resident inbox cursor exceeds usize".to_string())
+                })?),
+                queued_after,
+            ),
+        };
+        let mut state = self.lock();
+        let slot = state
+            .residents
+            .get_mut(&session)
+            .ok_or_else(|| CoreError::Invalid("resident recovery slot missing".to_string()))?;
+        if slot.claim != Some(expected) {
+            return Err(CoreError::Invalid(
+                "resident recovery claim changed before replacement".to_string(),
+            ));
+        }
+        slot.claim = Some(recovered);
+        slot.kill_finalized = false;
+        if let Some(cursor) = cursor {
+            slot.cursor = cursor;
+        }
+        slot.pending |= pending;
+        Ok(())
+    }
+
+    fn remove_slot(&self, session: SessionId) -> Result<(), CoreError> {
+        {
+            let mut state = self.lock();
+            let slot = state
+                .residents
+                .remove(&session)
+                .ok_or_else(|| CoreError::Invalid("resident stop slot missing".to_string()))?;
+            if slot.status == SlotStatus::Busy {
+                state.busy = state.busy.saturating_sub(1);
+            }
+            if state.main_session == Some(session) {
+                state.main_session = None;
+            }
+        }
+        self.release_team_budget_if_empty();
+        Ok(())
+    }
+
+    fn release_team_budget_if_empty(&self) {
+        let should_release = {
+            let mut state = self.lock();
+            if state.killed && state.residents.is_empty() && !state.team_budget_released {
+                state.team_budget_released = true;
+                true
+            } else {
+                false
+            }
+        };
+        if should_release && let Some(governor) = self.engine.governor() {
+            governor.release_team(self.root);
+        }
+    }
+
+    fn mark_kill_finalized(&self, session: SessionId, handle: &str, claim: Option<&ActorClaim>) {
+        let mut state = self.lock();
+        let Some(slot) = state.residents.get_mut(&session) else {
+            return;
+        };
+        let same_claim = match (slot.claim.as_ref(), claim) {
+            (Some(current), Some(expected)) => current == expected,
+            (None, None) => true,
+            _ => false,
+        };
+        if slot.handle == handle && same_claim {
+            slot.kill_finalized = true;
+            slot.notify.notify_one();
+        }
+    }
+
+    fn kill_finalized(&self, session: SessionId) -> bool {
+        let state = self.lock();
+        state
+            .residents
+            .get(&session)
+            .is_none_or(|slot| slot.kill_finalized)
+    }
+
+    fn remove_stop_completion(&self, handle: &str, completion: &Arc<StopCompletion>) {
+        let mut state = self.lock();
+        if state
+            .stop_completions
+            .get(handle)
+            .is_some_and(|current| Arc::ptr_eq(current, completion))
+        {
+            state.stop_completions.remove(handle);
         }
     }
 
@@ -478,8 +609,8 @@ impl TeamActor {
             self.kill_locked(&mut st, reason);
             let residents = st
                 .residents
-                .values()
-                .map(|slot| (slot.handle.clone(), slot.claim))
+                .iter()
+                .map(|(session, slot)| (*session, slot.handle.clone(), slot.claim))
                 .collect::<Vec<_>>();
             (already, residents)
         };
@@ -489,24 +620,32 @@ impl TeamActor {
         self.emit_kill(&residents, reason).await;
     }
 
-    /// Emit the terminal `Failed` roster activity + release the team's budget
-    /// counters. Separated so both kill paths (turn budget, message budget) share it.
-    async fn emit_kill(&self, residents: &[(String, Option<ActorClaim>)], reason: &str) {
-        for (handle, claim) in residents {
-            let _ = self
-                .record_activity(
-                    claim.as_ref(),
-                    handle.clone(),
-                    RosterStatus::Failed,
-                    Some(reason.to_string()),
-                )
-                .await;
-            if let Some(claim) = claim {
-                let _ = self.engine.release_resident_actor_claim(claim).await;
+    /// Atomically terminalize each claimed resident, retaining failed slots for a
+    /// later explicit stop retry. Claim-less main actors keep the existing activity
+    /// event behavior and may clean up locally after the event attempt.
+    async fn emit_kill(&self, residents: &[(SessionId, String, Option<ActorClaim>)], reason: &str) {
+        for (session, handle, claim) in residents {
+            let finalized = match claim {
+                Some(claim) => self
+                    .engine
+                    .finalize_resident_failure(claim, self.root, handle, reason)
+                    .await
+                    .is_ok(),
+                None => {
+                    let _ = self
+                        .record_activity(
+                            None,
+                            handle.clone(),
+                            RosterStatus::Failed,
+                            Some(reason.to_string()),
+                        )
+                        .await;
+                    true
+                }
+            };
+            if finalized {
+                self.mark_kill_finalized(*session, handle, claim.as_ref());
             }
-        }
-        if let Some(gov) = self.engine.governor() {
-            gov.release_team(self.root);
         }
     }
 
@@ -514,18 +653,26 @@ impl TeamActor {
     /// synthesis directive (main, on quiescence), and every inbox message since the
     /// cursor, then advance the cursor and stream one turn. All of this is coalesced
     /// into a single turn — many queued messages produce one turn, never several.
-    async fn run_one_turn(&self, session: SessionId, plan: RunPlan) -> Result<(), CoreError> {
+    async fn run_one_turn(
+        &self,
+        session: SessionId,
+        plan: RunPlan,
+        sidecar_tools: Arc<[ResolvedTool]>,
+    ) -> Result<(), CoreError> {
         let RunPlan {
             agent,
             binding,
             agents,
             resources,
             guidance,
+            sidecar_factory: _,
             handle,
             is_main,
             cursor,
             synth,
+            initial_directive,
             claim,
+            cancel,
         } = plan;
         // Snapshot new inbox mail for this handle (folded before its wake, so it is
         // already visible here).
@@ -599,6 +746,18 @@ impl TeamActor {
                 }
             }
         }
+        if let Some(initial) = initial_directive {
+            match claim.as_ref() {
+                Some(claim) => {
+                    self.engine
+                        .admit_user_prompt_for_actor(claim, session, initial)
+                        .await?;
+                }
+                None => {
+                    self.engine.admit_user_prompt(session, initial).await?;
+                }
+            }
+        }
         for (from, body) in &new_mail {
             let prompt = format!("[mail from {from}] {body}");
             match claim.as_ref() {
@@ -623,23 +782,23 @@ impl TeamActor {
         match (claim.as_ref(), agents, resources) {
             (Some(claim), Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_for_actor(
+                    .run_resolved_turn_with_sidecar_tools_for_actor(
                         session,
                         &agent,
-                        (binding, agents, resources),
+                        (binding, agents, resources, Arc::clone(&sidecar_tools)),
                         claim,
-                        self.cancel.child_token(),
+                        cancel.clone(),
                         guidance,
                     )
                     .await?;
             }
             (None, Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn(
+                    .run_resolved_turn_with_sidecar_tools(
                         session,
                         &agent,
-                        (binding, agents, resources),
-                        self.cancel.child_token(),
+                        (binding, agents, resources, Arc::clone(&sidecar_tools)),
+                        cancel.clone(),
                         guidance,
                     )
                     .await?;
@@ -651,20 +810,14 @@ impl TeamActor {
                         &agent,
                         binding,
                         claim,
-                        self.cancel.child_token(),
+                        cancel.clone(),
                         guidance,
                     )
                     .await?;
             }
             (None, _, _) => {
                 self.engine
-                    .run_bound_turn(
-                        session,
-                        &agent,
-                        binding,
-                        self.cancel.child_token(),
-                        guidance,
-                    )
+                    .run_bound_turn(session, &agent, binding, cancel, guidance)
                     .await?;
             }
         }
@@ -769,14 +922,301 @@ impl TeamActor {
 /// (with follow-ups for mail that arrived mid-turn) until it owes none, then park
 /// again. Exits when the team is killed or the supervisor is dropped.
 async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Notify>) {
+    let mut sidecar_handle: Option<Box<dyn SidecarHandle>> = None;
+    let mut sidecar_tools: Arc<[ResolvedTool]> = Arc::from([]);
+    let mut sidecar_hooks: Option<Arc<dyn HookDispatcher>> = None;
+    let mut stop_requires_terminate = false;
+    let mut stop_cleanup_pending = false;
+    let mut stop_cleanup_requires_request = false;
     loop {
-        notify.notified().await;
+        if stop_cleanup_pending {
+            notify.notified().await;
+            if stop_cleanup_requires_request {
+                let waiting_for_request = {
+                    let state = team.lock();
+                    state
+                        .residents
+                        .get(&session)
+                        .is_some_and(|slot| slot.stop_request.is_none())
+                };
+                if waiting_for_request {
+                    continue;
+                }
+            }
+        } else if let Some(loss_token) = sidecar_handle
+            .as_ref()
+            .and_then(|handle| handle.loss_token())
+        {
+            tokio::select! {
+                biased;
+                _ = loss_token.cancelled() => {
+                    sidecar_tools = Arc::from([]);
+                    sidecar_hooks = None;
+                    if let Some(mut handle) = sidecar_handle.take() {
+                        let _ = handle.terminate().await;
+                    }
+                    continue;
+                }
+                _ = notify.notified() => {}
+            }
+        } else {
+            notify.notified().await;
+        }
         loop {
             match team.next_action(session) {
                 Action::Run(plan) => {
                     let handle = plan.handle.clone();
                     let claim = plan.claim;
-                    match team.run_one_turn(session, *plan).await {
+                    if sidecar_handle
+                        .as_ref()
+                        .is_some_and(|cached| !cached.is_healthy())
+                        && let Some(mut stale_handle) = sidecar_handle.take()
+                    {
+                        sidecar_tools = Arc::from([]);
+                        sidecar_hooks = None;
+                        if let Err(err) = stale_handle.terminate().await {
+                            let _ = team
+                                .record_activity(
+                                    claim.as_ref(),
+                                    handle,
+                                    RosterStatus::Failed,
+                                    Some(format!("turn error: {err}")),
+                                )
+                                .await;
+                            team.finish_run(session);
+                            continue;
+                        }
+                    }
+                    if sidecar_handle.is_none()
+                        && let Some(factory) = plan.sidecar_factory.clone()
+                    {
+                        let activation = async {
+                            let mut handle = factory.start(SidecarStart::resident()).await?;
+                            if let Err(error) = handle.ready().await {
+                                let _ = handle.terminate().await;
+                                return Err(error);
+                            }
+                            let tool_bindings = handle.tool_bindings();
+                            let hook_dispatcher = handle.hook_dispatcher();
+                            Ok::<
+                                (
+                                    Box<dyn SidecarHandle>,
+                                    Arc<[ResolvedTool]>,
+                                    Option<Arc<dyn HookDispatcher>>,
+                                ),
+                                CoreError,
+                            >((handle, tool_bindings, hook_dispatcher))
+                        }
+                        .await;
+                        match activation {
+                            Ok((handle, tool_bindings, hook_dispatcher)) => {
+                                sidecar_tools = tool_bindings;
+                                sidecar_hooks = hook_dispatcher;
+                                sidecar_handle = Some(handle);
+                            }
+                            Err(err) => {
+                                let reason = format!("turn error: {err}");
+                                if let Some(claim) = claim.as_ref() {
+                                    match team
+                                        .engine
+                                        .finalize_resident_failure(
+                                            claim, team.root, &handle, &reason,
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            let _ = team.remove_slot(session);
+                                            return;
+                                        }
+                                        Err(_error) => {
+                                            stop_cleanup_pending = true;
+                                            team.finish_run(session);
+                                            break;
+                                        }
+                                    }
+                                }
+                                let _ = team
+                                    .record_activity(
+                                        None,
+                                        handle,
+                                        RosterStatus::Failed,
+                                        Some(reason),
+                                    )
+                                    .await;
+                                let _ = team.remove_slot(session);
+                                return;
+                            }
+                        }
+                    }
+                    let loss_token = sidecar_handle
+                        .as_ref()
+                        .and_then(|handle| handle.loss_token());
+                    let (turn_result, sidecar_lost) = match (sidecar_hooks.clone(), loss_token) {
+                        (Some(hooks), Some(loss_token)) => {
+                            tokio::select! {
+                                biased;
+                                _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
+                                result = scope_activation_hooks(
+                                    session,
+                                    hooks,
+                                    team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)),
+                                ) => (result, false),
+                            }
+                        }
+                        (Some(hooks), None) => (
+                            scope_activation_hooks(
+                                session,
+                                hooks,
+                                team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)),
+                            )
+                            .await,
+                            false,
+                        ),
+                        (None, Some(loss_token)) => {
+                            tokio::select! {
+                                biased;
+                                _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
+                                result = team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools)) => (result, false),
+                            }
+                        }
+                        (None, None) => (
+                            team.run_one_turn(session, *plan, Arc::clone(&sidecar_tools))
+                                .await,
+                            false,
+                        ),
+                    };
+                    let running_loss = claim.is_some()
+                        && matches!(&turn_result, Err(CoreError::Cancelled))
+                        && (sidecar_lost
+                            || sidecar_handle
+                                .as_ref()
+                                .is_some_and(|cached| !cached.is_healthy()));
+                    if running_loss {
+                        let Some(old_claim) = claim else {
+                            team.finish_run(session);
+                            continue;
+                        };
+                        let recovered = match team
+                            .engine
+                            .store()
+                            .recover_claim(old_claim.actor_id, old_claim.owner_run_id)
+                            .await
+                        {
+                            Ok(recovered) => recovered,
+                            Err(error) => {
+                                sidecar_tools = Arc::from([]);
+                                sidecar_hooks = None;
+                                if let Some(mut stale_handle) = sidecar_handle.take() {
+                                    let _ = stale_handle.terminate().await;
+                                }
+                                let reason = format!("resident recovery failed: {error}");
+                                match team
+                                    .engine
+                                    .finalize_resident_failure(
+                                        &old_claim, team.root, &handle, &reason,
+                                    )
+                                    .await
+                                {
+                                    Ok(()) => match team.remove_slot(session) {
+                                        Ok(()) | Err(_) => return,
+                                    },
+                                    Err(_error) => {
+                                        stop_cleanup_pending = true;
+                                        team.finish_run(session);
+                                        break;
+                                    }
+                                }
+                            }
+                        };
+                        sidecar_tools = Arc::from([]);
+                        sidecar_hooks = None;
+                        let termination_error = match sidecar_handle.take() {
+                            Some(mut stale_handle) => {
+                                stale_handle.terminate().await.err().map(|error| {
+                                    CoreError::Invalid(format!(
+                                        "terminate resident sidecar during recovery: {error}"
+                                    ))
+                                })
+                            }
+                            None => Some(CoreError::Invalid(
+                                "resident sidecar disappeared during recovery".to_string(),
+                            )),
+                        };
+                        let report = match team
+                            .engine
+                            .recover_resident_actor(&recovered, team.root, &handle)
+                            .await
+                        {
+                            Ok(report) => report,
+                            Err(error) => {
+                                let claim_replaced = team
+                                    .replace_recovered_claim(
+                                        session,
+                                        old_claim,
+                                        recovered.claim,
+                                        ResidentRecovery::Idle,
+                                    )
+                                    .is_ok();
+                                let reason = format!("resident recovery failed: {error}");
+                                match team
+                                    .engine
+                                    .finalize_resident_failure(
+                                        &recovered.claim,
+                                        team.root,
+                                        &handle,
+                                        &reason,
+                                    )
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        if claim_replaced {
+                                            let _ = team.remove_slot(session);
+                                        }
+                                        return;
+                                    }
+                                    Err(_error) => {
+                                        stop_cleanup_pending = true;
+                                        if claim_replaced {
+                                            team.finish_run(session);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        };
+                        if let Err(_error) = team.replace_recovered_claim(
+                            session,
+                            old_claim,
+                            recovered.claim,
+                            report.work,
+                        ) {
+                            team.finish_run(session);
+                            return;
+                        }
+                        if termination_error.is_some() {
+                            match team
+                                .engine
+                                .finalize_resident_stop(&recovered.claim, team.root, &handle)
+                                .await
+                            {
+                                Ok(()) => {
+                                    // A missing slot means local cleanup already completed; the
+                                    // durable finalizer has already made the stop terminal.
+                                    match team.remove_slot(session) {
+                                        Ok(()) | Err(_) => return,
+                                    }
+                                }
+                                Err(_error) => {
+                                    stop_cleanup_pending = true;
+                                    team.finish_run(session);
+                                    break;
+                                }
+                            }
+                        }
+                        team.finish_run(session);
+                        continue;
+                    }
+                    match turn_result {
                         Ok(()) => {
                             let _ = team
                                 .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
@@ -797,6 +1237,30 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                     }
                     team.finish_run(session);
                 }
+                Action::StopResident { terminate, reply } => {
+                    stop_requires_terminate |= terminate;
+                    let cleanup = match sidecar_handle.as_mut() {
+                        Some(handle) if stop_requires_terminate => handle.terminate().await,
+                        Some(handle) => handle.shutdown().await,
+                        None => Ok(()),
+                    };
+                    if let Err(error) = cleanup {
+                        stop_cleanup_pending = true;
+                        let _ = reply.send(Err(error));
+                        break;
+                    }
+                    stop_cleanup_pending = false;
+                    sidecar_handle.take();
+                    sidecar_tools = Arc::from([]);
+                    sidecar_hooks = None;
+                    let result = team.remove_slot(session);
+                    let should_return = result.is_ok();
+                    let _ = reply.send(result);
+                    if should_return {
+                        return;
+                    }
+                    break;
+                }
                 Action::Idle {
                     handle,
                     claim,
@@ -815,16 +1279,32 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                             let st = team.lock();
                             (
                                 st.residents
-                                    .values()
-                                    .map(|slot| (slot.handle.clone(), slot.claim))
+                                    .iter()
+                                    .map(|(session, slot)| {
+                                        (*session, slot.handle.clone(), slot.claim)
+                                    })
                                     .collect::<Vec<_>>(),
                                 st.kill_reason.clone().unwrap_or_default(),
                             )
                         };
                         team.emit_kill(&residents, &reason).await;
                     }
+                    if !team.kill_finalized(session) {
+                        break;
+                    }
+                    if let Some(handle) = sidecar_handle.as_mut()
+                        && handle.terminate().await.is_err()
+                    {
+                        stop_requires_terminate = true;
+                        stop_cleanup_pending = true;
+                        stop_cleanup_requires_request = true;
+                        break;
+                    }
+                    sidecar_handle.take();
+                    let _ = team.remove_slot(session);
                     return;
                 }
+                Action::WaitForKillFinalization => break,
             }
         }
     }
@@ -920,12 +1400,14 @@ impl ResidentSupervisor {
                     cancel: CancellationToken::new(),
                     state: Mutex::new(TeamState {
                         residents: HashMap::new(),
+                        stop_completions: HashMap::new(),
                         busy: 0,
                         killed: false,
                         work_seq: 0,
                         last_synth_work_seq: u64::MAX,
                         main_session: None,
                         kill_reason: None,
+                        team_budget_released: false,
                     }),
                 })
             })
@@ -936,7 +1418,146 @@ impl ResidentSupervisor {
     /// so the runtime/TUI can observe or force a team shutdown.
     #[must_use]
     pub fn team_cancel(&self, root: SessionId) -> Option<CancellationToken> {
-        self.teams().get(&root).map(|team| team.cancel.clone())
+        self.teams().get(&root).and_then(|team| {
+            let state = team.lock();
+            (!state.residents.is_empty()).then(|| team.cancel.clone())
+        })
+    }
+
+    pub async fn stop_resident(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
+        let team = self.teams().get(&root).cloned();
+        let Some(team) = team else {
+            return self.stop_terminal_projection(root, handle).await;
+        };
+
+        let mut selected = None;
+        let mut waiting = None;
+        let mut selection_error = None;
+        {
+            let mut state = team.lock();
+            if let Some(completion) = state.stop_completions.get(handle) {
+                waiting = Some(completion.clone());
+            } else if let Some((&session, slot)) = state
+                .residents
+                .iter_mut()
+                .find(|(_, slot)| slot.handle == handle)
+            {
+                if slot.is_main {
+                    selection_error = Some(CoreError::Invalid(
+                        "cannot stop resident main actor".to_string(),
+                    ));
+                } else if let Some(claim) = slot.claim {
+                    let completion = Arc::new(StopCompletion::new());
+                    let terminate = slot.status == SlotStatus::Busy;
+                    let (reply, receiver) = oneshot::channel();
+                    let stop_request = StopRequest { terminate, reply };
+                    slot.pending = false;
+                    slot.initial_directive = None;
+                    slot.synth_pending = false;
+                    slot.cancel.cancel();
+                    slot.notify.notify_one();
+                    state
+                        .stop_completions
+                        .insert(handle.to_string(), completion.clone());
+                    selected = Some((session, claim, stop_request, receiver, completion));
+                } else {
+                    selection_error = Some(CoreError::Invalid(
+                        "resident has no active claim".to_string(),
+                    ));
+                }
+            }
+        }
+        if let Some(error) = selection_error {
+            return Err(error);
+        }
+        if let Some(completion) = waiting {
+            return completion.wait().await;
+        }
+        let Some((session, claim, stop_request, receiver, completion)) = selected else {
+            return self.stop_terminal_projection(root, handle).await;
+        };
+
+        let leader_team = team.clone();
+        let leader_handle = handle.to_string();
+        let leader_completion = completion.clone();
+        tokio::spawn(async move {
+            let durable = leader_team
+                .engine
+                .finalize_resident_stop(&claim, root, &leader_handle)
+                .await;
+            let Err(durable_error) = durable else {
+                let post_commit = {
+                    let mut state = leader_team.lock();
+                    match state.residents.get_mut(&session) {
+                        Some(slot)
+                            if slot.handle == leader_handle
+                                && slot.claim == Some(claim)
+                                && slot.stop_request.is_none() =>
+                        {
+                            slot.stop_request = Some(stop_request);
+                            slot.notify.notify_one();
+                            Ok(Some(receiver))
+                        }
+                        Some(_) => Err(CoreError::Invalid(
+                            "resident stop slot claim changed before cleanup".to_string(),
+                        )),
+                        // The durable finalizer can race the activation-failure path's local
+                        // cleanup.  A missing slot here means that cleanup already completed.
+                        None => Ok(None),
+                    }
+                };
+                let cleanup = match post_commit {
+                    Err(error) => Err(error),
+                    Ok(None) => Ok(()),
+                    Ok(Some(receiver)) => match receiver.await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            let slot_absent = {
+                                let state = leader_team.lock();
+                                !state.residents.contains_key(&session)
+                            };
+                            if slot_absent {
+                                Ok(())
+                            } else {
+                                Err(CoreError::Invalid(
+                                    "resident stop task exited before cleanup".to_string(),
+                                ))
+                            }
+                        }
+                    },
+                };
+                leader_completion.complete(cleanup);
+                leader_team.remove_stop_completion(&leader_handle, &leader_completion);
+                return;
+            };
+            leader_completion.complete(Err(durable_error));
+            leader_team.remove_stop_completion(&leader_handle, &leader_completion);
+        });
+        completion.wait().await
+    }
+
+    async fn stop_terminal_projection(
+        &self,
+        root: SessionId,
+        handle: &str,
+    ) -> Result<(), CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let Some(entry) = projection.team.roster.get(handle) else {
+            return Err(CoreError::Invalid(format!("unknown resident `{handle}`")));
+        };
+        if entry.mode == SubagentMode::Resident
+            && matches!(entry.status, RosterStatus::Done | RosterStatus::Failed)
+        {
+            Ok(())
+        } else if entry.mode != SubagentMode::Resident {
+            Err(CoreError::Invalid(format!(
+                "mail target `{handle}` is not a resident"
+            )))
+        } else {
+            Err(CoreError::Invalid(format!(
+                "resident `{handle}` is not terminal"
+            )))
+        }
     }
 
     /// Register the team root as the main actor so child mail (and quiescence) wake
@@ -981,11 +1602,16 @@ impl ResidentSupervisor {
                         agents: Some(agents),
                         resources: Some(resources),
                         guidance,
+                        sidecar_factory: None,
                         is_main: true,
                         status: SlotStatus::Idle,
                         pending: false,
+                        initial_directive: None,
                         synth_pending: false,
                         claim: None,
+                        kill_finalized: false,
+                        cancel: team.cancel.child_token(),
+                        stop_request: None,
                         cursor: 0, // main-as-actor injects child mail from its inbox
                         notify: notify.clone(),
                     },
@@ -1013,12 +1639,12 @@ impl ResidentSupervisor {
         &self,
         parent: SessionId,
         agent: AgentSpec,
-        resolved: (TurnBinding, Arc<[AgentDef]>, AgentResourcePolicy),
+        resolved: ResolvedResidentRuntime,
         directive: String,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
-        let (binding, agents, resources) = resolved;
+        let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = match parent_claim {
             Some(claim) => {
@@ -1090,7 +1716,11 @@ impl ResidentSupervisor {
                 agents,
                 resources,
             },
-            (Some(directive), guidance),
+            ResidentActivation {
+                initial: Some(directive),
+                guidance,
+                sidecar_factory,
+            },
         )
         .await?;
         Ok((session, handle))
@@ -1114,7 +1744,39 @@ impl ResidentSupervisor {
             handle,
             agent,
             ResidentRuntimeContext::Bound(binding),
-            (initial, None),
+            ResidentActivation {
+                initial,
+                guidance: None,
+                sidecar_factory: None,
+            },
+        )
+        .await
+    }
+
+    /// Register an already-created resident with a request-scoped sidecar factory.
+    /// The factory remains opaque and in-memory; activation starts lazily on the
+    /// resident's first owed turn.
+    pub async fn register_existing_resident_with_sidecar(
+        &self,
+        root: SessionId,
+        session: SessionId,
+        handle: String,
+        agent: AgentSpec,
+        initial: Option<String>,
+        sidecar_factory: Arc<dyn BoundSidecarFactory>,
+    ) -> Result<(), CoreError> {
+        let binding = self.engine.bind_runtime(&agent.workdir)?;
+        self.register_existing_resident_with_agents(
+            root,
+            session,
+            handle,
+            agent,
+            ResidentRuntimeContext::Bound(binding),
+            ResidentActivation {
+                initial,
+                guidance: None,
+                sidecar_factory: Some(sidecar_factory),
+            },
         )
         .await
     }
@@ -1126,7 +1788,7 @@ impl ResidentSupervisor {
         handle: String,
         agent: AgentSpec,
         runtime: ResidentRuntimeContext,
-        activation: (Option<String>, Option<Arc<str>>),
+        activation: ResidentActivation,
     ) -> Result<(), CoreError> {
         let (binding, agents, resources) = match runtime {
             ResidentRuntimeContext::Bound(binding) => (binding, None, None),
@@ -1136,13 +1798,18 @@ impl ResidentSupervisor {
                 resources,
             } => (binding, Some(agents), Some(resources)),
         };
-        let (initial, guidance) = activation;
+        let ResidentActivation {
+            initial,
+            guidance,
+            sidecar_factory,
+        } = activation;
         let claim = self
             .engine
             .store()
             .try_claim_new(session, self.owner_run_id)
             .await?;
-        self.engine
+        if let Err(registration_error) = self
+            .engine
             .commit_resident_mutation(
                 &claim,
                 root,
@@ -1154,15 +1821,19 @@ impl ResidentSupervisor {
                     mode: SubagentMode::Resident,
                 }],
             )
-            .await?;
+            .await
+        {
+            if let Err(release_error) = self.engine.release_resident_actor_claim(&claim).await {
+                return Err(CoreError::Invalid(format!(
+                    "resident registration failed: {registration_error}; claim release failed: {release_error}"
+                )));
+            }
+            return Err(registration_error);
+        }
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());
-        let has_initial = initial.as_ref().is_some_and(|d| !d.trim().is_empty());
-        if let Some(initial) = initial.filter(|directive| !directive.trim().is_empty()) {
-            self.engine
-                .admit_user_prompt_for_actor(&claim, session, initial)
-                .await?;
-        }
+        let initial = initial.filter(|directive| !directive.trim().is_empty());
+        let has_initial = initial.is_some();
         {
             let mut st = team.lock();
             // New work exists (the initial directive), so a later quiescence fires.
@@ -1176,11 +1847,16 @@ impl ResidentSupervisor {
                     agents,
                     resources,
                     guidance,
+                    sidecar_factory,
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending: has_initial,
+                    initial_directive: initial,
                     synth_pending: false,
                     claim: Some(claim),
+                    kill_finalized: false,
+                    cancel: team.cancel.child_token(),
+                    stop_request: None,
                     cursor: 0,
                     notify: notify.clone(),
                 },
@@ -1198,10 +1874,11 @@ impl ResidentSupervisor {
         root: SessionId,
         handle: String,
         agent: AgentSpec,
-        binding: TurnBinding,
+        resolved: ResolvedResidentRuntime,
         recovered: hya_store::RecoveredActorClaim,
         disposition: ResidentRecovery,
     ) -> Result<(), CoreError> {
+        let (binding, agents, resources, sidecar_factory) = resolved;
         self.engine
             .store()
             .validate_actor_claim(&recovered.claim)
@@ -1231,15 +1908,20 @@ impl ResidentSupervisor {
                     handle,
                     agent,
                     binding,
-                    agents: None,
-                    resources: None,
+                    agents: Some(agents),
+                    resources: Some(resources),
                     // Ephemeral guidance is not durable; recovery invents nothing.
                     guidance: None,
+                    sidecar_factory,
                     is_main: false,
                     status: SlotStatus::Idle,
                     pending,
+                    initial_directive: None,
                     synth_pending: false,
                     claim: Some(recovered.claim),
+                    kill_finalized: false,
+                    cancel: team.cancel.child_token(),
+                    stop_request: None,
                     cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
                     notify: notify.clone(),
                 },

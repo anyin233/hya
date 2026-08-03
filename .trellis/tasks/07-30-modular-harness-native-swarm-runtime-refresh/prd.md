@@ -433,3 +433,27 @@ activate until decided:
 4. additive wire/event compatibility results for older readers;
 5. final baseline-derived latency/resource SLO ratification before performance
    optimization.
+
+## Consult26 resolved external-execution scope
+
+The former owner decision for external AgentBundle execution is resolved for
+0.34.11. Public Bundle agents remain Harness-native: SessionEngine owns their
+prompt/model/tool loop, mailbox, spawn/send/wait, events, outcomes, admission,
+and recovery. An executable activation may own one Bun Compat extension
+sidecar that supplies only Bundle-local JS/Bun tools, hooks, and one-way event
+handlers through the existing plugin protocol. Transient and resident behavior
+ship together; static-only Bundles remain process-free.
+
+Acceptance requires initialize-plus-declaration ACK before running/model poll,
+one sidecar per activation, captured-binding namespace/permission checks before
+RPC, exact referenced-file archive closure, transient/resident end-to-end
+proof, epoch-fenced loss recovery without replay, and final/idempotent resident
+stop. The sidecar receives no agent task/context and returns no terminal agent
+or artifact result.
+
+Private activation, raw Rust, Bundle MCP, external model/agent loops, sidecar
+send/wait, process pools, a second runtime/catalog/loader/transport, sandbox or
+permission expansion, arbitrary command/env, persisted process/context state,
+TTL/heartbeat/reclaim/watchers, and 0.34.12/0.34.13 work remain non-goals.
+0.34.12 is only 100/256 certification and 0.34.13 is only the independent
+updater.

@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use hya_proto::{OperationId, SessionId};
 
-#[derive(Error, Debug)]
+#[derive(Clone, Error, Debug)]
 pub enum StoreError {
     #[error("sqlite: {0}")]
-    Sqlite(#[from] sqlx::Error),
+    Sqlite(#[source] Arc<sqlx::Error>),
     #[error("migrate: {0}")]
-    Migrate(#[from] sqlx::migrate::MigrateError),
+    Migrate(#[source] Arc<sqlx::migrate::MigrateError>),
     #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(#[source] Arc<serde_json::Error>),
     #[error("bundle: {0}")]
     Bundle(#[from] hya_bundle::BundleError),
     #[error("bundle registry data: {0}")]
@@ -46,4 +48,24 @@ pub enum StoreError {
     ActorClaimUnavailable { actor_id: SessionId },
     #[error("resident actor claim: {0}")]
     ActorClaimData(String),
+    #[error("mailbox rejected: {0}")]
+    MailboxRejected(String),
+}
+
+impl From<sqlx::Error> for StoreError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Sqlite(Arc::new(error))
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for StoreError {
+    fn from(error: sqlx::migrate::MigrateError) -> Self {
+        Self::Migrate(Arc::new(error))
+    }
+}
+
+impl From<serde_json::Error> for StoreError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(Arc::new(error))
+    }
 }

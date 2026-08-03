@@ -21,12 +21,15 @@ If you want to compare hya with adjacent coding agents:
 
 1. [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md)
 
-If you want to package a public-static AgentBundle:
+If you want to package a public AgentBundle:
 
 1. Run `hya bundle info -f example.hyabundle`, then
    `hya bundle install example.hyabundle`.
 2. Read [AgentBundle Authoring](agent-bundle-authoring.md), start from the
-   [single-file example](examples/bundle.hya.md), and use the
+   [single-file static example](examples/bundle.hya.md), or the
+   [transient Bun example](examples/bun-transient/), or the
+   [resident Bun example](examples/bun-resident/), or the
+   [disjoint Bun example](examples/bun-disjoint/), and use the
    [bundle CLI reference](cli.md#bundle-commands).
 
 If you want to understand the codebase:
@@ -49,7 +52,7 @@ If you want to understand the codebase:
 | [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [CLI Reference](cli.md) | Document shipped `hya` commands and flags. |
-| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public-static AgentBundles. |
+| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundles, including static and Bun-sidecar forms. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |

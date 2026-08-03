@@ -169,7 +169,7 @@ impl BundleRegistry {
                 if is_sqlite_busy_or_locked(&error) {
                     StoreError::BundleRegistryBusy
                 } else {
-                    StoreError::Sqlite(error)
+                    StoreError::from(error)
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -263,7 +263,7 @@ impl BundleRegistry {
                 if is_sqlite_busy_or_locked(&error) {
                     StoreError::BundleRegistryBusy
                 } else {
-                    StoreError::Sqlite(error)
+                    StoreError::from(error)
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
