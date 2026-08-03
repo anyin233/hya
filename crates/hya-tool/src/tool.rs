@@ -7,6 +7,7 @@ use hya_proto::{ActorClaim, OperationId, SessionId, ToolCallId, ToolName, ToolSc
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -127,6 +128,7 @@ impl ToolOperation {
 }
 
 const SEARCH_LIMIT: usize = 100;
+const BUILTIN_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.tool.builtin-dispatch/v1";
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -170,6 +172,7 @@ pub struct ToolRegistry {
 struct ToolRegistryInner {
     tools: HashMap<String, ResolvedTool>,
     aliases: HashMap<String, ResolvedTool>,
+    dispatch_identities: HashMap<String, [u8; 32]>,
 }
 
 /// Immutable, lock-free tool view retained by an admitted turn.
@@ -290,6 +293,7 @@ impl ToolRegistry {
         let candidate = self.read();
         maps_match(&candidate.tools, &snapshot.inner.tools)
             && maps_match(&candidate.aliases, &snapshot.inner.aliases)
+            && candidate.dispatch_identities == snapshot.inner.dispatch_identities
     }
 
     /// Register a tool on this candidate builder through a shared reference.
@@ -314,6 +318,31 @@ impl ToolRegistry {
         permission: ToolPermission,
         aliases: &[String],
     ) -> Result<(), DuplicateName> {
+        self.register_with_permission_and_aliases_and_identity(tool, permission, aliases, None)
+    }
+
+    pub fn register_with_permission_and_aliases_and_dispatch_identity(
+        &self,
+        tool: Arc<dyn Tool>,
+        permission: ToolPermission,
+        aliases: &[String],
+        identity: [u8; 32],
+    ) -> Result<(), DuplicateName> {
+        self.register_with_permission_and_aliases_and_identity(
+            tool,
+            permission,
+            aliases,
+            Some(identity),
+        )
+    }
+
+    fn register_with_permission_and_aliases_and_identity(
+        &self,
+        tool: Arc<dyn Tool>,
+        permission: ToolPermission,
+        aliases: &[String],
+        identity: Option<[u8; 32]>,
+    ) -> Result<(), DuplicateName> {
         let name = tool.name().to_string();
         let mut inner = self.write();
         if inner.tools.contains_key(&name) || inner.aliases.contains_key(&name) {
@@ -332,9 +361,12 @@ impl ToolRegistry {
             }
         }
         let resolved = ResolvedTool { tool, permission };
-        inner.tools.insert(name, resolved.clone());
+        inner.tools.insert(name.clone(), resolved.clone());
         for alias in aliases {
             inner.aliases.insert(alias.clone(), resolved.clone());
+        }
+        if let Some(identity) = identity {
+            inner.dispatch_identities.insert(name, identity);
         }
         Ok(())
     }
@@ -356,7 +388,9 @@ impl ToolRegistry {
 
     pub fn remove(&self, name: &str) {
         let mut inner = self.write();
-        inner.tools.remove(name);
+        if inner.tools.remove(name).is_some() {
+            inner.dispatch_identities.remove(name);
+        }
         inner
             .aliases
             .retain(|alias, resolved| alias != name && resolved.tool.name() != name);
@@ -373,17 +407,22 @@ impl ToolRegistry {
 
     fn insert_builtin(&self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
-        self.write().tools.insert(
+        let mut inner = self.write();
+        inner.tools.insert(
             name.clone(),
             ResolvedTool {
                 tool,
                 permission: builtin_permission(&name),
             },
         );
+        if let Some(identity) = builtin_dispatch_identity(&name) {
+            inner.dispatch_identities.insert(name.clone(), identity);
+        }
     }
 
     fn insert_named_builtin(&self, name: &str, tool: Arc<dyn Tool>) {
-        self.write().tools.insert(
+        let mut inner = self.write();
+        inner.tools.insert(
             name.to_string(),
             ResolvedTool {
                 tool: Arc::new(NamedTool {
@@ -393,6 +432,9 @@ impl ToolRegistry {
                 permission: builtin_permission(name),
             },
         );
+        if let Some(identity) = builtin_dispatch_identity(name) {
+            inner.dispatch_identities.insert(name.to_string(), identity);
+        }
     }
 
     fn insert_aliased_builtin(&self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
@@ -411,6 +453,11 @@ impl ToolRegistry {
         inner
             .aliases
             .insert(legacy.to_string(), ResolvedTool { tool, permission });
+        if let Some(identity) = builtin_dispatch_identity(canonical) {
+            inner
+                .dispatch_identities
+                .insert(canonical.to_string(), identity);
+        }
     }
 }
 
@@ -423,7 +470,27 @@ fn maps_match(left: &HashMap<String, ResolvedTool>, right: &HashMap<String, Reso
         })
 }
 
+fn builtin_dispatch_identity(canonical: &str) -> Option<[u8; 32]> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(BUILTIN_DISPATCH_IDENTITY_DOMAIN_V1);
+    append_length_prefixed(&mut bytes, env!("CARGO_PKG_VERSION").as_bytes())?;
+    append_length_prefixed(&mut bytes, canonical.as_bytes())?;
+    Some(Sha256::digest(bytes).into())
+}
+
+fn append_length_prefixed(bytes: &mut Vec<u8>, value: &[u8]) -> Option<()> {
+    let length = u64::try_from(value.len()).ok()?;
+    bytes.extend_from_slice(&length.to_be_bytes());
+    bytes.extend_from_slice(value);
+    Some(())
+}
+
 impl ToolRegistrySnapshot {
+    #[must_use]
+    pub fn dispatch_identity_v1(&self, canonical: &str) -> Option<[u8; 32]> {
+        self.inner.dispatch_identities.get(canonical).copied()
+    }
+
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
         self.inner
