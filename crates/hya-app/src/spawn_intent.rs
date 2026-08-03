@@ -162,6 +162,31 @@ impl SpawnIntentV1 {
         })
     }
 
+    pub(crate) fn decode_admission_launch(
+        launch: &hya_store::AdmissionLaunch,
+    ) -> Result<Self, SpawnIntentError> {
+        let intent = Self::decode(&launch.intent.spawn_intent)?;
+        if launch.intent.runtime_fingerprint_version != SPAWN_INTENT_RUNTIME_FINGERPRINT_VERSION
+            || launch.intent.admission_binding_fingerprint_version
+                != SPAWN_INTENT_ADMISSION_BINDING_FINGERPRINT_VERSION
+            || launch.intent.runtime_fingerprint != intent.runtime_fingerprint
+            || launch.intent.admission_binding_fingerprint != intent.admission_binding_fingerprint
+            || launch.record.state != hya_store::AdmissionState::Accepted
+            || launch.record.admission_units != 1
+            || launch.record.logical_released
+            || launch.record.terminal_reason.is_some()
+            || launch.record.source_tool_call_id != intent.source_tool_call_id
+            || launch.record.operation_id
+                != ToolOperation::from_tool_call(intent.source_tool_call_id).operation_id()
+            || launch.record.member_ordinal != intent.member_ordinal
+            || launch.record.batch_size != intent.batch_cardinality
+            || intent.prior_start != PriorStartV1::NeverStarted
+        {
+            return Err(SpawnIntentError::NonCanonical);
+        }
+        Ok(intent)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self, SpawnIntentError> {
         let encoded = checked_encoded_end_v1(0, bytes.len())?;
         if encoded > MAX_SPAWN_INTENT_BYTES_V1 {
@@ -264,8 +289,12 @@ impl SpawnIntentV1 {
         Ok(intent)
     }
 
-    fn raw_member(&self) -> &SpawnMember {
+    pub(crate) fn raw_member(&self) -> &SpawnMember {
         &self.member
+    }
+
+    pub(crate) fn stable_target(&self) -> &AgentName {
+        &self.stable_target
     }
 }
 
