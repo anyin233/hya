@@ -40,6 +40,14 @@ pub enum StoreError {
     },
     #[error("admission journal: {0}")]
     AdmissionData(String),
+    #[error(
+        "admission capacity exceeded: active={active}, non_active={non_active}, requested={requested}"
+    )]
+    AdmissionCapacityExceeded {
+        active: u32,
+        non_active: u32,
+        requested: u32,
+    },
     #[error("resident actor is already claimed: {actor_id}")]
     ActorAlreadyClaimed { actor_id: SessionId },
     #[error("resident actor claim is stale: {actor_id}")]

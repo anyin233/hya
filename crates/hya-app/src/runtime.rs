@@ -1958,9 +1958,9 @@ async fn build_session_engine_with_mcp_defer(
         );
     }
     store
-        .abort_nonterminal_admissions("startup recovery")
+        .recover_nonterminal_admissions("startup recovery")
         .await
-        .context("abort nonterminal admissions before spawn readiness")?;
+        .context("recover nonterminal admissions before spawn readiness")?;
     let (websearch, invocation_policy) = tool_config;
     let router = Arc::new(router);
     let registry = ToolRegistry::builtins();
