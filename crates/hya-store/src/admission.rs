@@ -407,6 +407,13 @@ impl SessionStore {
             .map_err(|_| {
                 StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
             })?;
+        let max_admission_sequence: Option<i64> =
+            sqlx::query("SELECT MAX(admission_sequence) AS max_sequence FROM admission_journal")
+                .fetch_one(&mut *tx)
+                .await?
+                .try_get("max_sequence")?;
+        let admission_sequence_start =
+            next_sequence_start(max_admission_sequence, requested, "admission sequence")?;
         let now = now_millis();
         for member_ordinal in 0..requested {
             let state = if member_ordinal < accepted {
@@ -425,8 +432,9 @@ impl SessionStore {
                   state, admission_units, logical_released, terminal_reason, created_at, updated_at, \
                   actor_id, actor_epoch, member_ordinal, batch_size, \
                   runtime_fingerprint_version, runtime_fingerprint, \
-                  admission_binding_fingerprint_version, admission_binding_fingerprint, spawn_intent) \
-                 VALUES (?, ?, ?, ?, ?, 1, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  admission_binding_fingerprint_version, admission_binding_fingerprint, spawn_intent, \
+                  admission_sequence) \
+                 VALUES (?, ?, ?, ?, ?, 1, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(claim.operation_id.as_uuid().as_bytes().as_slice())
             .bind(claim.source_tool_call_id.as_uuid().as_bytes().as_slice())
@@ -444,6 +452,7 @@ impl SessionStore {
             .bind(i64::from(intent.admission_binding_fingerprint_version))
             .bind(intent.admission_binding_fingerprint.as_slice())
             .bind(intent.spawn_intent.as_slice())
+            .bind(admission_sequence_start + i64::from(member_ordinal))
             .execute(&mut *tx)
             .await?;
         }
@@ -539,27 +548,51 @@ impl SessionStore {
             tx.commit().await?;
             return Ok(Vec::new());
         }
-        let selected = sqlx::query(
-            "SELECT operation_id, member_ordinal FROM admission_journal \
-             WHERE state = 'queued' \
-               AND runtime_fingerprint_version IS NOT NULL \
-               AND runtime_fingerprint IS NOT NULL \
-               AND admission_binding_fingerprint_version IS NOT NULL \
-               AND admission_binding_fingerprint IS NOT NULL \
-               AND spawn_intent IS NOT NULL \
-             ORDER BY rowid LIMIT ?",
-        )
-        .bind(i64::from(promotion_limit))
-        .fetch_all(&mut *tx)
-        .await?;
-
         let now = now_millis();
-        let mut launches = Vec::with_capacity(selected.len());
-        for row in selected {
+        let mut launches = Vec::new();
+        for _ in 0..promotion_limit {
+            let Some(row) = sqlx::query(
+                "SELECT candidate.operation_id, candidate.member_ordinal \
+                 FROM admission_journal AS candidate \
+                 WHERE candidate.state = 'queued' \
+                   AND candidate.admission_sequence IS NOT NULL \
+                   AND candidate.runtime_fingerprint_version IS NOT NULL \
+                   AND candidate.runtime_fingerprint IS NOT NULL \
+                   AND candidate.admission_binding_fingerprint_version IS NOT NULL \
+                   AND candidate.admission_binding_fingerprint IS NOT NULL \
+                   AND candidate.spawn_intent IS NOT NULL \
+                 ORDER BY CASE WHEN ( \
+                     SELECT MAX(history.promotion_sequence) \
+                     FROM admission_journal AS history \
+                     WHERE history.root_session_id = candidate.root_session_id \
+                 ) IS NULL THEN 0 ELSE 1 END, \
+                 ( \
+                     SELECT MAX(history.promotion_sequence) \
+                     FROM admission_journal AS history \
+                     WHERE history.root_session_id = candidate.root_session_id \
+                 ), \
+                 candidate.admission_sequence, candidate.root_session_id, \
+                 candidate.operation_id, candidate.member_ordinal \
+                 LIMIT 1",
+            )
+            .fetch_optional(&mut *tx)
+            .await?
+            else {
+                break;
+            };
             let operation_id: Vec<u8> = row.try_get("operation_id")?;
             let member_ordinal: i64 = row.try_get("member_ordinal")?;
+            let max_promotion_sequence: Option<i64> = sqlx::query(
+                "SELECT MAX(promotion_sequence) AS max_sequence FROM admission_journal",
+            )
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get("max_sequence")?;
+            let promotion_sequence =
+                next_sequence_start(max_promotion_sequence, 1, "promotion sequence")?;
             let updated = sqlx::query(
-                "UPDATE admission_journal SET state = 'accepted', updated_at = ? \
+                "UPDATE admission_journal SET state = 'accepted', promotion_sequence = ?, \
+                         updated_at = ? \
                  WHERE operation_id = ? AND member_ordinal = ? AND state = 'queued' \
                  RETURNING operation_id, source_tool_call_id, root_session_id, \
                            request_fingerprint, member_ordinal, batch_size, state, \
@@ -568,6 +601,7 @@ impl SessionStore {
                            runtime_fingerprint, admission_binding_fingerprint_version, \
                            admission_binding_fingerprint, spawn_intent",
             )
+            .bind(promotion_sequence)
             .bind(now)
             .bind(operation_id)
             .bind(member_ordinal)
@@ -831,6 +865,25 @@ impl SessionStore {
         .await?;
         rows.into_iter().map(decode_record).collect()
     }
+}
+
+fn next_sequence_start(
+    max_sequence: Option<i64>,
+    count: u32,
+    name: &str,
+) -> Result<i64, StoreError> {
+    let first = max_sequence
+        .unwrap_or(0)
+        .checked_add(1)
+        .filter(|sequence| *sequence > 0)
+        .ok_or_else(|| StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range")))?;
+    first
+        .checked_add(i64::from(count).checked_sub(1).ok_or_else(|| {
+            StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range"))
+        })?)
+        .filter(|sequence| *sequence > 0)
+        .ok_or_else(|| StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range")))?;
+    Ok(first)
 }
 
 fn decode_admission_count(value: i64, name: &str) -> Result<u32, StoreError> {

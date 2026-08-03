@@ -1098,3 +1098,100 @@ async fn recovered_queued_member_promotes_to_one_exact_launch() {
     assert_eq!(repeated_record, promoted_launch.record);
     assert_eq!(repeated_record.state, AdmissionState::Accepted);
 }
+
+#[tokio::test]
+async fn promotion_round_robin_is_durable_after_terminal_release_and_restart() {
+    let temp_db = AdmissionTempDb::new();
+    let mut store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let root_a = SessionId::new();
+    let root_b = SessionId::new();
+    let mut claims = [
+        claim(ToolCallId::new(), 42),
+        claim(ToolCallId::new(), 43),
+        claim(ToolCallId::new(), 44),
+        claim(ToolCallId::new(), 45),
+    ];
+    for (admission, root_session) in claims.iter_mut().zip([root_a, root_a, root_b, root_b]) {
+        admission.root_session = root_session;
+        admission.admission_units = 1;
+    }
+    let intents = [
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x42; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa2; 32],
+            spawn_intent: vec![0xd1, 0x01],
+        },
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x43; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa3; 32],
+            spawn_intent: vec![0xd1, 0x02],
+        },
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x44; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa4; 32],
+            spawn_intent: vec![0xd1, 0x03],
+        },
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x45; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa5; 32],
+            spawn_intent: vec![0xd1, 0x04],
+        },
+    ];
+    for (admission, intent) in claims.iter().zip(intents) {
+        let outcome = store
+            .claim_admission_batch(admission, vec![intent])
+            .await
+            .unwrap();
+        match outcome {
+            AdmissionBatchClaimOutcome::Claimed(launches) => {
+                assert_eq!(launches.len(), 1);
+                assert_eq!(launches[0].record.state, AdmissionState::Accepted);
+            }
+            other => panic!("expected one accepted launch, got {other:?}"),
+        }
+    }
+
+    let recovered = store
+        .recover_nonterminal_admissions("startup recovery")
+        .await
+        .unwrap();
+    assert_eq!(recovered.len(), 4);
+    let recovered_counts = store.admission_counts().await.unwrap();
+    assert_eq!(recovered_counts.active, 0);
+    assert_eq!(recovered_counts.non_active, 4);
+    assert_eq!(recovered_counts.total, 4);
+
+    let first = store.promote_queued_admissions(1).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].record.operation_id, claims[0].operation_id);
+    store
+        .finalize_admission(
+            claims[0].operation_id,
+            AdmissionTerminal::Cancelled,
+            "terminal release",
+            None,
+        )
+        .await
+        .unwrap();
+    drop(store);
+    store = SessionStore::connect(temp_db.path()).await.unwrap();
+
+    let promoted = store.promote_queued_admissions(3).await.unwrap();
+    assert_eq!(promoted.len(), 3);
+    assert_eq!(promoted[0].record.operation_id, claims[2].operation_id);
+    assert_eq!(promoted[1].record.operation_id, claims[1].operation_id);
+    assert_eq!(promoted[2].record.operation_id, claims[3].operation_id);
+    assert!(store.promote_queued_admissions(1).await.unwrap().is_empty());
+    let final_counts = store.admission_counts().await.unwrap();
+    assert_eq!(final_counts.active, 3);
+    assert_eq!(final_counts.non_active, 0);
+    assert_eq!(final_counts.total, 3);
+}
