@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, BundleSource, HarnessAccess,
+    ModelPolicy, PreparedAgent, PreparedBundle, ResourceView, SourceFile, SpawnLifecycle,
 };
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
@@ -24,7 +24,10 @@ use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
-use hya_store::{AdmissionTerminal, SessionStore};
+use hya_store::{
+    AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionIntent, AdmissionState, AdmissionTerminal,
+    SessionStore,
+};
 use hya_tool::{
     Action, AgentDef, Mode, PermissionPlane, PermissionRules, Rule, SpawnError, SpawnMember,
     SpawnerPlane, ToolOperation, ToolRegistry,
@@ -36,6 +39,43 @@ use tokio::sync::Notify;
 const TRIGGER_GUIDANCE: &str = "TRIGGERING_TURN_GUIDANCE_MARKER_0_34_8";
 const CHILD_SCAN_POISON: &str = "CHILD_WORKDIR_SCAN_MUST_NOT_APPEAR";
 const POST_SPAWN_MUTATION: &str = "POST_SPAWN_SOURCE_MUTATION_MARKER";
+
+fn verified_admission_test_runtime(
+    tools: Arc<ToolRegistry>,
+    agents: &[(&str, AgentRole, &[&str])],
+) -> Arc<RuntimeRegistry> {
+    let mut manifest = String::from(
+        "api_version: hya.agent-bundle/v1\nkind: AgentBundle\nidentity:\n  id: hya/app-tests\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n",
+    );
+    let mut files = Vec::with_capacity(agents.len() + 1);
+    for (stable_id, role, can_spawn) in agents {
+        let role = match role {
+            AgentRole::Main => "main",
+            AgentRole::Subagent => "subagent",
+        };
+        manifest.push_str(&format!(
+            "  - local_id: {stable_id}\n    stable_id: {stable_id}\n    role: {role}\n    prompt: prompts/{stable_id}.md\n    spawn_lifecycle: transient\n    harness_access: full\n"
+        ));
+        if !can_spawn.is_empty() {
+            manifest.push_str("    can_spawn: [");
+            manifest.push_str(&can_spawn.join(", "));
+            manifest.push_str("]\n");
+        }
+        files.push(SourceFile::new(
+            format!("prompts/{stable_id}.md"),
+            format!("{stable_id} prompt").into_bytes(),
+        ));
+    }
+    files.push(SourceFile::new("bundle.yaml", manifest.into_bytes()));
+    let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])
+        .expect("test bundle must prepare");
+    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
+        .expect("test bundle must retain verified identity");
+    Arc::new(RuntimeRegistry::from_snapshot(
+        tools.snapshot(),
+        Arc::new(catalog),
+    ))
+}
 
 struct AdmissionFixture {
     engine: Arc<SessionEngine>,
@@ -102,6 +142,10 @@ impl Provider for CountingProvider {
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         self.inner.capabilities(model)
+    }
+
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        Some(b"hya-test-counting-provider-identity-v1".to_vec())
     }
 
     async fn stream(
@@ -174,114 +218,169 @@ async fn explicit_unknown_inline_target_creates_no_child() {
 
 #[tokio::test]
 async fn inline_description_is_unsupported_before_admission_without_side_effects() {
-    let fixture = admission_fixture(1).await;
-    let operation = operation();
-    let sessions_before = fixture.engine.store().list_sessions().await.unwrap();
-    let events_before = fixture.engine.replay(fixture.parent).await.unwrap();
-    let projection_before = fixture
-        .engine
-        .read_projection(fixture.parent)
-        .await
-        .unwrap();
-    let binding_before = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
-    let quick_before = binding_before
-        .resolve_agent("quick")
-        .expect("quick must exist in fixture catalog")
-        .clone();
-    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 0);
-    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
-
-    let result = fixture
-        .scoped_spawner()
-        .spawn_background(
-            operation,
-            vec![SpawnMember {
-                description: "inline description rejected".to_string(),
-                prompt: "must not start".to_string(),
-                subagent_type: "quick".to_string(),
-                inline_agent: Some(hya_tool::InlineAgent {
-                    name: "inline-with-description".to_string(),
-                    prompt: "INLINE WITH DESCRIPTION".to_string(),
-                    description: Some("unsupported request overlay description".to_string()),
-                    ..hya_tool::InlineAgent::default()
-                }),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await;
-
-    assert!(
-        matches!(
-            result,
-            Err(SpawnError::UnsupportedInlineAgentField {
-                field: "description"
-            })
-        ),
-        "expected typed UnsupportedInlineAgentField {{ field: description }}, got {result:?}"
-    );
-
-    let sessions_after = fixture.engine.store().list_sessions().await.unwrap();
-    let events_after = fixture.engine.replay(fixture.parent).await.unwrap();
-    let projection_after = fixture
-        .engine
-        .read_projection(fixture.parent)
-        .await
-        .unwrap();
-    let binding_after = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
-    let quick_after = binding_after
-        .resolve_agent("quick")
-        .expect("quick must remain in catalog");
-
-    assert_eq!(
-        sessions_after, sessions_before,
-        "unsupported inline description must not create a child session"
-    );
-    assert_eq!(
-        events_after, events_before,
-        "unsupported inline description must not append parent/child events"
-    );
-    assert_eq!(
-        projection_after, projection_before,
-        "unsupported inline description must not change the parent projection"
-    );
-    assert!(
-        fixture
+    for foreground in [false, true] {
+        let fixture = admission_fixture(if foreground { 2 } else { 1 }).await;
+        let operation = operation();
+        let sessions_before = fixture.engine.store().list_sessions().await.unwrap();
+        let events_before = fixture.engine.replay(fixture.parent).await.unwrap();
+        let projection_before = fixture
             .engine
-            .store()
-            .admission(operation.operation_id())
+            .read_projection(fixture.parent)
             .await
+            .unwrap();
+        let admission_counts_before = fixture.engine.store().admission_counts().await.unwrap();
+        let remaining_budget_before = fixture
+            .engine
+            .governor()
             .unwrap()
-            .is_none(),
-        "unsupported inline description must precede durable admission"
-    );
-    assert_eq!(
-        fixture.provider_calls.load(Ordering::SeqCst),
-        0,
-        "unsupported inline description must not start a provider turn"
-    );
-    assert!(
-        fixture.resident.team_cancel(fixture.parent).is_none(),
-        "unsupported inline description must not create resident supervisor state"
-    );
-    assert!(
-        binding_after
-            .resolve_agent("inline-with-description")
-            .is_none(),
-        "request overlay name must not become a catalog entry"
-    );
-    assert_eq!(
-        quick_after.prompt, quick_before.prompt,
-        "catalog agent prompt must be unchanged"
-    );
-    assert_eq!(
-        quick_after.stable_id, quick_before.stable_id,
-        "catalog agent identity must be unchanged"
-    );
-    assert_eq!(
-        quick_after.model_policy, quick_before.model_policy,
-        "catalog agent model policy must be unchanged"
-    );
+            .remaining_budget(fixture.parent);
+        let active_actors_before = fixture.engine.store().active_actor_ids().await.unwrap();
+        let binding_before = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
+        let quick_before = binding_before
+            .resolve_agent("quick")
+            .expect("quick must exist in fixture catalog")
+            .clone();
+        assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 0);
+        assert!(fixture.resident.team_cancel(fixture.parent).is_none());
+
+        let invalid = SpawnMember {
+            description: "inline description rejected".to_string(),
+            prompt: "must not start".to_string(),
+            subagent_type: "quick".to_string(),
+            inline_agent: Some(hya_tool::InlineAgent {
+                name: "inline-with-description".to_string(),
+                prompt: "INLINE WITH DESCRIPTION".to_string(),
+                description: Some("unsupported request overlay description".to_string()),
+                ..hya_tool::InlineAgent::default()
+            }),
+            ..SpawnMember::default()
+        };
+        let members = if foreground {
+            vec![
+                SpawnMember {
+                    description: "valid foreground member".to_string(),
+                    prompt: "must not start".to_string(),
+                    subagent_type: "quick".to_string(),
+                    ..SpawnMember::default()
+                },
+                invalid,
+            ]
+        } else {
+            vec![invalid]
+        };
+        let result = if foreground {
+            fixture
+                .scoped_spawner()
+                .spawn(operation, members, Default::default())
+                .await
+        } else {
+            fixture
+                .scoped_spawner()
+                .spawn_background(operation, members, Default::default())
+                .await
+        };
+
+        assert!(
+            matches!(
+                result,
+                Err(SpawnError::UnsupportedInlineAgentField {
+                    field: "description"
+                })
+            ),
+            "expected typed UnsupportedInlineAgentField {{ field: description }}, got {result:?}"
+        );
+
+        let sessions_after = fixture.engine.store().list_sessions().await.unwrap();
+        let events_after = fixture.engine.replay(fixture.parent).await.unwrap();
+        let projection_after = fixture
+            .engine
+            .read_projection(fixture.parent)
+            .await
+            .unwrap();
+        let admission_counts_after = fixture.engine.store().admission_counts().await.unwrap();
+        let remaining_budget_after = fixture
+            .engine
+            .governor()
+            .unwrap()
+            .remaining_budget(fixture.parent);
+        let active_actors_after = fixture.engine.store().active_actor_ids().await.unwrap();
+        let binding_after = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
+        let quick_after = binding_after
+            .resolve_agent("quick")
+            .expect("quick must remain in catalog");
+
+        assert_eq!(
+            sessions_after, sessions_before,
+            "unsupported inline description must not create a child session"
+        );
+        assert_eq!(
+            events_after, events_before,
+            "unsupported inline description must not append parent/child events"
+        );
+        assert_eq!(
+            projection_after, projection_before,
+            "unsupported inline description must not change the parent projection"
+        );
+        assert_eq!(
+            admission_counts_after, admission_counts_before,
+            "unsupported inline description must not change durable admission counts"
+        );
+        assert_eq!(
+            remaining_budget_after, remaining_budget_before,
+            "unsupported inline description must not debit the governor"
+        );
+        assert_eq!(
+            active_actors_after, active_actors_before,
+            "unsupported inline description must not claim an actor"
+        );
+        assert!(
+            fixture
+                .engine
+                .store()
+                .admission(operation.operation_id())
+                .await
+                .unwrap()
+                .is_none(),
+            "unsupported inline description must precede durable admission"
+        );
+        assert!(
+            fixture
+                .engine
+                .store()
+                .admissions(operation.operation_id())
+                .await
+                .unwrap()
+                .is_empty(),
+            "unsupported inline description must leave no admission rows"
+        );
+        assert_eq!(
+            fixture.provider_calls.load(Ordering::SeqCst),
+            0,
+            "unsupported inline description must not start a provider turn"
+        );
+        assert!(
+            fixture.resident.team_cancel(fixture.parent).is_none(),
+            "unsupported inline description must not create resident supervisor state"
+        );
+        assert!(
+            binding_after
+                .resolve_agent("inline-with-description")
+                .is_none(),
+            "request overlay name must not become a catalog entry"
+        );
+        assert_eq!(
+            quick_after.prompt, quick_before.prompt,
+            "catalog agent prompt must be unchanged"
+        );
+        assert_eq!(
+            quick_after.stable_id, quick_before.stable_id,
+            "catalog agent identity must be unchanged"
+        );
+        assert_eq!(
+            quick_after.model_policy, quick_before.model_policy,
+            "catalog agent model policy must be unchanged"
+        );
+    }
 }
 
 #[tokio::test]
@@ -320,21 +419,25 @@ async fn authorized_inline_overlay_executes_without_catalog_entry() {
 #[tokio::test]
 async fn inline_child_spawns_through_its_authorized_base_roster() {
     let store = SessionStore::connect_memory().await.unwrap();
-    let provider = Arc::new(FakeProvider::scripted_turns(vec![
-        vec![
-            FakeStep::ToolCall {
-                name: "task".to_string(),
-                input: json!({
-                    "description": "nested plan",
-                    "prompt": "plan the next step",
-                    "subagent_type": "plan"
-                }),
-            },
-            FakeStep::Finish(FinishReason::ToolCalls),
-        ],
-        vec![FakeStep::Finish(FinishReason::Stop)],
-        vec![FakeStep::Finish(FinishReason::Stop)],
-    ]));
+    let provider = Arc::new(CountingProvider {
+        calls: Arc::new(AtomicUsize::new(0)),
+        inner: FakeProvider::scripted_turns(vec![
+            vec![
+                FakeStep::ToolCall {
+                    name: "task".to_string(),
+                    input: json!({
+                        "description": "nested plan",
+                        "prompt": "plan the next step",
+                        "subagent_type": "plan"
+                    }),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ],
+            vec![FakeStep::Finish(FinishReason::Stop)],
+            vec![FakeStep::Finish(FinishReason::Stop)],
+        ]),
+        gate: None,
+    });
     let provider_router = Arc::new(ProviderRouter::new().with(provider));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Task,
@@ -346,7 +449,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         SessionEngine::new(
             store,
             provider_router.clone(),
-            support::test_runtime(
+            verified_admission_test_runtime(
                 Arc::new(ToolRegistry::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
@@ -707,6 +810,313 @@ async fn foreground_completion_uses_one_debit_and_one_finalize() {
 }
 
 #[tokio::test]
+async fn queued_foreground_reply_waits_for_all_terminal() {
+    let gate = Arc::new(ProviderGate {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let fixture = admission_fixture_with_gate(101, Some(gate.clone())).await;
+    let operation = operation();
+    let operation_id = operation.operation_id();
+    let members = (0..101)
+        .map(|index| SpawnMember {
+            description: format!("queued foreground member {index}"),
+            prompt: format!("complete foreground member {index}"),
+            subagent_type: "quick".to_string(),
+            ..SpawnMember::default()
+        })
+        .collect::<Vec<_>>();
+    let plane = fixture.scoped_spawner();
+    let mut spawn =
+        tokio::spawn(async move { plane.spawn(operation, members, Default::default()).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if !fixture
+                .engine
+                .store()
+                .admissions(operation_id)
+                .await
+                .unwrap()
+                .is_empty()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("durable foreground admission did not appear");
+
+    assert_eq!(
+        fixture.engine.store().admission_counts().await.unwrap(),
+        hya_store::AdmissionCounts {
+            active: 100,
+            non_active: 1,
+            total: 101,
+        }
+    );
+
+    let records = fixture
+        .engine
+        .store()
+        .admissions(operation_id)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 101);
+    for (index, record) in records.iter().enumerate() {
+        assert_eq!(record.member_ordinal, u32::try_from(index).unwrap());
+    }
+    assert!(records[..100].iter().all(|record| matches!(
+        record.state,
+        hya_store::AdmissionState::Accepted | hya_store::AdmissionState::Started
+    )));
+    assert_eq!(records[100].state, hya_store::AdmissionState::Queued);
+    assert!(records.iter().all(|record| record.actor.is_none()));
+    assert!(records.iter().all(|record| !record.state.is_terminal()));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture.provider_calls.load(Ordering::SeqCst) == 100 {
+                let records = fixture
+                    .engine
+                    .store()
+                    .admissions(operation_id)
+                    .await
+                    .unwrap();
+                if records.len() == 101
+                    && records[..100]
+                        .iter()
+                        .all(|record| record.state == hya_store::AdmissionState::Started)
+                    && records[100].state == hya_store::AdmissionState::Queued
+                {
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first 100 foreground members did not become active");
+    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 100);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        101
+    );
+    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
+    assert!(
+        fixture
+            .engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    gate.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let records = fixture
+                .engine
+                .store()
+                .admissions(operation_id)
+                .await
+                .unwrap();
+            if records.len() == 101 && records[100].state != hya_store::AdmissionState::Queued {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queued foreground member was not promoted");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
+            .await
+            .is_err()
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let records = fixture
+                .engine
+                .store()
+                .admissions(operation_id)
+                .await
+                .unwrap();
+            if records.len() == 101
+                && records[100].state == hya_store::AdmissionState::Started
+                && fixture.provider_calls.load(Ordering::SeqCst) == 101
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("promoted foreground member did not reach its provider turn");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
+            .await
+            .is_err()
+    );
+
+    gate.release.notify_waiters();
+    let outcomes = tokio::time::timeout(Duration::from_secs(5), spawn)
+        .await
+        .expect("foreground spawn timed out")
+        .expect("foreground spawn task panicked")
+        .expect("foreground spawn failed");
+    assert_eq!(outcomes.len(), 101);
+    assert!(outcomes.iter().all(|outcome| outcome.status == "done"));
+
+    let records = fixture
+        .engine
+        .store()
+        .admissions(operation_id)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 101);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.state == hya_store::AdmissionState::Completed)
+    );
+    assert_eq!(
+        fixture.engine.store().admission_counts().await.unwrap(),
+        hya_store::AdmissionCounts {
+            active: 0,
+            non_active: 0,
+            total: 0,
+        }
+    );
+    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 101);
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        102
+    );
+}
+
+#[tokio::test]
+async fn all_queued_owner_uses_authoritative_batch_cardinality() {
+    let fixture = admission_fixture(2).await;
+    let filler_operation = operation();
+    let filler_intents = (0..100)
+        .map(|ordinal| AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x11; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0x22; 32],
+            spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
+        })
+        .collect::<Vec<_>>();
+    let filler_launches = fixture
+        .engine
+        .store()
+        .claim_admission_batch(
+            &AdmissionClaim {
+                operation_id: filler_operation.operation_id(),
+                source_tool_call_id: filler_operation.source_tool_call_id(),
+                root_session: fixture.parent,
+                request_fingerprint: [0x44; 32],
+                admission_units: 100,
+                actor_claim: None,
+            },
+            filler_intents,
+        )
+        .await
+        .unwrap();
+    let AdmissionBatchClaimOutcome::Claimed(filler_launches) = filler_launches else {
+        panic!("unrelated store-only filler admission must be newly claimed");
+    };
+    assert_eq!(filler_launches.len(), 100);
+    assert!(filler_launches.iter().enumerate().all(|(index, launch)| {
+        launch.record.member_ordinal == u32::try_from(index).unwrap()
+            && launch.record.batch_size == 100
+            && launch.record.state == AdmissionState::Accepted
+    }));
+
+    let operation = operation();
+    let operation_id = operation.operation_id();
+    let members = (0..2)
+        .map(|index| SpawnMember {
+            description: format!("all queued member {index}"),
+            prompt: format!("finish all queued member {index}"),
+            subagent_type: "quick".to_string(),
+            ..SpawnMember::default()
+        })
+        .collect::<Vec<_>>();
+    let plane = fixture.scoped_spawner();
+    let mut spawn =
+        tokio::spawn(async move { plane.spawn(operation, members, Default::default()).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture
+                .engine
+                .store()
+                .admissions(operation_id)
+                .await
+                .unwrap()
+                .len()
+                == 2
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all-queued foreground admission did not appear");
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), &mut spawn)
+            .await
+            .is_err(),
+        "queued foreground caller completed before durable promotion"
+    );
+
+    let records = fixture
+        .engine
+        .store()
+        .admissions(operation_id)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    for (index, record) in records.iter().enumerate() {
+        assert_eq!(record.member_ordinal, u32::try_from(index).unwrap());
+        assert_eq!(record.batch_size, 2);
+        assert_eq!(record.state, AdmissionState::Queued);
+        assert!(!record.state.is_terminal());
+        assert!(record.actor.is_none());
+    }
+    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.engine.store().list_sessions().await.unwrap().len(),
+        1
+    );
+    assert!(
+        fixture
+            .engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
+
+    spawn.abort();
+    let _ = spawn.await;
+}
+
+#[tokio::test]
 async fn conflicting_terminal_finalize_fails_closed_to_foreground_caller() {
     let gate = Arc::new(ProviderGate {
         entered: Notify::new(),
@@ -1025,7 +1435,7 @@ async fn admission_fixture_with_store_and_gate(
         SessionEngine::new(
             store,
             provider_router.clone(),
-            support::test_runtime(
+            verified_admission_test_runtime(
                 Arc::new(ToolRegistry::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
@@ -1104,6 +1514,10 @@ impl Provider for CaptureSystemsProvider {
         self.inner.capabilities(model)
     }
 
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        Some(b"hya-test-capture-systems-provider-identity-v1".to_vec())
+    }
+
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -1140,7 +1554,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         tools_by_session,
         inner: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
     })));
-    let runtime = support::test_runtime(
+    let runtime = verified_admission_test_runtime(
         Arc::new(ToolRegistry::builtins()),
         &[
             ("build", AgentRole::Main, &["quick"]),
@@ -1343,7 +1757,7 @@ async fn guidance_spawn_fixture(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             provider_router.clone(),
-            support::test_runtime(Arc::new(ToolRegistry::builtins()), agents),
+            verified_admission_test_runtime(Arc::new(ToolRegistry::builtins()), agents),
             permission,
             EventBus::default(),
         )
