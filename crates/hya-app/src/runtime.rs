@@ -8,11 +8,11 @@ use hya_bundle::{BundleCatalog, PreparedAgent, PreparedCatalog, SpawnLifecycle};
 use hya_core::{
     AdmissionMemberIdentity, AgentResourcePolicy, AgentSpec, BoundSidecarFactory,
     BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CompactionConfig, CoreError,
-    CreateSession, EventBus, MemberEvidence, MemberSpec, MemberStatus, ModelSummarizer, PromptEnv,
-    ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle,
-    SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, TurnBinding, build_system_prompt, project_envelope,
-    project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
+    CreateSession, EventBus, MemberEvidence, MemberSpec, MemberStatus, ModelSummarizer,
+    OperationReservation, PromptEnv, ResidentSupervisor, RuntimeRegistry, SessionEngine,
+    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome,
+    SubagentGovernor, Summarizer, TeamEvidenceEnvelope, TurnBinding, build_system_prompt,
+    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
     run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
@@ -29,7 +29,10 @@ use hya_proto::{
     AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
 };
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
-use hya_store::{AdmissionIntent, AdmissionLaunch, AdmissionTerminal, SessionStore, StoreError};
+use hya_store::{
+    AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionIntent, AdmissionLaunch,
+    AdmissionTerminal, SessionStore, StoreError,
+};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
     PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, ResolvedTool, Resource,
@@ -322,6 +325,47 @@ struct BundleSidecarEnvironment {
     staging_root: PathBuf,
     #[cfg(test)]
     terminate_notify: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(test)]
+    test_observer: Option<Arc<AdmissionTestObserver>>,
+}
+
+#[cfg(test)]
+struct AdmissionTestObserver {
+    sequence: std::sync::atomic::AtomicUsize,
+    cleanup_attempt: tokio::sync::Notify,
+    cleanup_finished: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl AdmissionTestObserver {
+    fn new() -> Self {
+        Self {
+            sequence: std::sync::atomic::AtomicUsize::new(0),
+            cleanup_attempt: tokio::sync::Notify::new(),
+            cleanup_finished: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn mark_step(&self) {
+        self.sequence
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn mark_owner_acquired(&self) {
+        self.mark_step();
+    }
+
+    fn mark_resolution_hook(&self) {
+        self.mark_step();
+    }
+
+    fn mark_cleanup_attempt(&self) {
+        self.cleanup_attempt.notify_one();
+    }
+
+    fn mark_cleanup_finished(&self) {
+        self.cleanup_finished.notify_one();
+    }
 }
 
 impl BundleSidecarEnvironment {
@@ -331,6 +375,7 @@ impl BundleSidecarEnvironment {
             command: Some(command),
             staging_root,
             terminate_notify: None,
+            test_observer: None,
         }
     }
 
@@ -345,6 +390,8 @@ impl BundleSidecarEnvironment {
             staging_root,
             #[cfg(test)]
             terminate_notify: None,
+            #[cfg(test)]
+            test_observer: None,
         }
     }
 }
@@ -355,6 +402,10 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
         binding: &TurnBinding,
         stable_agent_id: &str,
     ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+        #[cfg(test)]
+        if let Some(observer) = &self.test_observer {
+            observer.mark_resolution_hook();
+        }
         let (_, _) = binding
             .agent_catalog()
             .resolve_agent_entry(stable_agent_id)
@@ -1378,6 +1429,11 @@ struct TransientAdmissionCompletion {
     promoted: Vec<AdmissionLaunch>,
 }
 
+type TransientAdmissionResult = Result<TransientAdmissionCompletion, SpawnError>;
+type TransientAdmissionHandle = tokio::task::JoinHandle<Result<(), SpawnError>>;
+type TransientAdmissionCompletionSender = tokio::sync::mpsc::Sender<TransientAdmissionResult>;
+type TransientAdmissionCompletionReceiver = tokio::sync::mpsc::Receiver<TransientAdmissionResult>;
+
 #[allow(dead_code)]
 fn install_admission_task<F, T>(
     launch: &AdmissionLaunch,
@@ -1403,12 +1459,12 @@ where
 }
 
 #[allow(dead_code)]
-fn install_transient_admission_launch(
+fn transient_admission_work_future(
     engine: Arc<SessionEngine>,
     resolved: ResolvedAdmissionLaunch,
     cancel: tokio_util::sync::CancellationToken,
     actor_claim: Option<hya_store::ActorClaim>,
-) -> InstalledAdmissionTask<Result<TransientAdmissionCompletion, SpawnError>> {
+) -> impl std::future::Future<Output = TransientAdmissionResult> + Send + 'static {
     let ResolvedAdmissionLaunch {
         launch,
         intent,
@@ -1444,7 +1500,7 @@ fn install_transient_admission_launch(
             .and_then(|task_id| task_id.parse::<SessionId>().ok()),
         sidecar_factory,
     };
-    let work_future = async move {
+    async move {
         let evidence = match actor_claim {
             Some(claim) => {
                 run_pre_admitted_team_for_actor(
@@ -1498,8 +1554,39 @@ fn install_transient_admission_launch(
             evidence: evidence.clone(),
             promoted: outcome.promoted,
         })
+    }
+}
+
+#[allow(dead_code)]
+fn install_transient_admission_launch(
+    engine: Arc<SessionEngine>,
+    resolved: ResolvedAdmissionLaunch,
+    cancel: tokio_util::sync::CancellationToken,
+    actor_claim: Option<hya_store::ActorClaim>,
+) -> InstalledAdmissionTask<TransientAdmissionResult> {
+    let launch = resolved.launch.clone();
+    install_admission_task(
+        &launch,
+        transient_admission_work_future(engine, resolved, cancel, actor_claim),
+    )
+}
+
+fn install_transient_admission_launch_with_completion(
+    engine: Arc<SessionEngine>,
+    resolved: ResolvedAdmissionLaunch,
+    cancel: tokio_util::sync::CancellationToken,
+    actor_claim: Option<hya_store::ActorClaim>,
+    completion: TransientAdmissionCompletionSender,
+) -> InstalledAdmissionTask<Result<(), SpawnError>> {
+    let launch = resolved.launch.clone();
+    let work = transient_admission_work_future(engine, resolved, cancel, actor_claim);
+    let work = async move {
+        completion
+            .send(work.await)
+            .await
+            .map_err(|_| SpawnError::Unavailable)
     };
-    install_admission_task(&launch, work_future)
+    install_admission_task(&launch, work)
 }
 
 #[allow(dead_code)]
@@ -1591,6 +1678,43 @@ fn authorize_spawn_target<'a>(
     Ok(definition)
 }
 
+fn validate_unsupported_inline_agent_fields(member: &SpawnMember) -> Result<(), SpawnError> {
+    if member
+        .inline_agent
+        .as_ref()
+        .is_some_and(|inline| inline.description.is_some())
+    {
+        return Err(SpawnError::UnsupportedInlineAgentField {
+            field: "description",
+        });
+    }
+    Ok(())
+}
+
+/// Determine the narrow foreground batch branch without resolving any member.
+///
+/// Authorization and the prepared bundle lifecycle are the only semantic inputs
+/// here; raw request overlays can opt a member into the resident lifecycle. An
+/// authorization failure falls through to the legacy resolver so its existing
+/// typed error remains public behavior.
+fn is_foreground_transient_batch(binding: &TurnBinding, caller: &str, req: &SpawnRequest) -> bool {
+    !req.background
+        && !req.members.is_empty()
+        && req.members.iter().all(|member| {
+            let Ok(definition) = authorize_spawn_target(binding, &req.agents, caller, member)
+            else {
+                return false;
+            };
+            definition.spawn_lifecycle != SpawnLifecycle::Resident
+                && !member.resident
+                && !member
+                    .inline_agent
+                    .as_ref()
+                    .and_then(|inline| inline.resident)
+                    .unwrap_or(false)
+        })
+}
+
 #[allow(dead_code)]
 fn prepare_spawn_admission(
     engine: &SessionEngine,
@@ -1601,6 +1725,9 @@ fn prepare_spawn_admission(
     caller: &str,
     req: &SpawnRequest,
 ) -> Result<PreparedSpawnAdmission, SpawnError> {
+    req.members
+        .iter()
+        .try_for_each(validate_unsupported_inline_agent_fields)?;
     let request_fingerprint =
         spawn_request_fingerprint(req).map_err(|_| SpawnError::Unavailable)?;
     let runtime_fingerprint = engine
@@ -1659,6 +1786,7 @@ fn resolve_authorized_spawn_member(
     member: SpawnMember,
     definition: &PreparedAgent,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
+    validate_unsupported_inline_agent_fields(&member)?;
     let authorized_target = definition.stable_id.clone();
     let sidecar_factory = ctx
         .sidecar_environment
@@ -1732,11 +1860,6 @@ fn resolve_authorized_spawn_member(
 
     let mut resident = definition.spawn_lifecycle == SpawnLifecycle::Resident || member.resident;
     if let Some(inline) = member.inline_agent.as_ref() {
-        if inline.description.is_some() {
-            return Err(SpawnError::UnsupportedInlineAgentField {
-                field: "description",
-            });
-        }
         resident |= inline.resident.unwrap_or(false);
         if !inline.prompt.trim().is_empty() {
             agent.system_prompt = inline.prompt.clone();
@@ -1924,6 +2047,565 @@ async fn resolve_recovered_admission_launches(
     .await
 }
 
+fn admission_records_match(
+    records: &[hya_store::AdmissionRecord],
+    operation_id: hya_proto::OperationId,
+    actor_claim: Option<&hya_store::ActorClaim>,
+    cardinality: u32,
+    terminal: bool,
+) -> bool {
+    let expected_actor = actor_claim.map(|claim| hya_store::AdmissionActorBinding {
+        actor_id: claim.actor_id,
+        actor_epoch: claim.epoch,
+    });
+    let Some(cardinality_usize) = usize::try_from(cardinality).ok() else {
+        return false;
+    };
+    records.len() == cardinality_usize
+        && records.iter().enumerate().all(|(index, record)| {
+            record.operation_id == operation_id
+                && record.member_ordinal == u32::try_from(index).unwrap_or(u32::MAX)
+                && record.batch_size == cardinality
+                && record.admission_units == 1
+                && record.actor == expected_actor
+                && (!terminal || record.state.is_terminal())
+        })
+}
+
+async fn cleanup_transient_admission<T>(
+    engine: &SessionEngine,
+    operation_id: hya_proto::OperationId,
+    actor_claim: Option<&hya_store::ActorClaim>,
+    cancel: &tokio_util::sync::CancellationToken,
+    handles: &mut Vec<tokio::task::JoinHandle<T>>,
+    cardinality: u32,
+    reason: &str,
+) -> bool
+where
+    T: Send + 'static,
+{
+    cancel.cancel();
+    for handle in handles.iter() {
+        handle.abort();
+    }
+    for handle in handles.drain(..) {
+        let _ = handle.await;
+    }
+
+    let records = match engine.store().admissions(operation_id).await {
+        Ok(records)
+            if admission_records_match(&records, operation_id, actor_claim, cardinality, false) =>
+        {
+            records
+        }
+        _ => return false,
+    };
+    let pending: Vec<_> = records
+        .iter()
+        .filter(|record| !record.state.is_terminal())
+        .map(|record| (record.operation_id, record.member_ordinal))
+        .collect();
+    if !pending.is_empty()
+        && engine
+            .store()
+            .finalize_admission_members(&pending, AdmissionTerminal::Aborted, reason, actor_claim)
+            .await
+            .is_err()
+    {
+        return false;
+    }
+    engine
+        .store()
+        .admissions(operation_id)
+        .await
+        .is_ok_and(|records| {
+            admission_records_match(&records, operation_id, actor_claim, cardinality, true)
+        })
+}
+
+fn release_transient_operation(
+    engine: &SessionEngine,
+    operation_id: hya_proto::OperationId,
+    acquired: bool,
+) {
+    if acquired && let Some(governor) = engine.governor() {
+        governor.release_operation(operation_id);
+    }
+}
+
+struct ForegroundTransientAdmissionOwnerInit {
+    engine: Arc<SessionEngine>,
+    binding: TurnBinding,
+    resolution: AdmissionResolutionContext,
+    caller: String,
+    allowed_agents: Arc<[hya_tool::AgentDef]>,
+    sidecar_environment: Arc<BundleSidecarEnvironment>,
+    request: SpawnRequest,
+    root: SessionId,
+    cardinality: u32,
+}
+
+struct ForegroundTransientAdmissionOwner {
+    engine: Arc<SessionEngine>,
+    binding: TurnBinding,
+    resolution: AdmissionResolutionContext,
+    caller: String,
+    allowed_agents: Arc<[hya_tool::AgentDef]>,
+    guidance: Option<Arc<str>>,
+    sidecar_environment: Arc<BundleSidecarEnvironment>,
+    parent: SessionId,
+    root: SessionId,
+    operation: hya_tool::ToolOperation,
+    actor_claim: Option<hya_store::ActorClaim>,
+    cardinality: u32,
+    cancel: tokio_util::sync::CancellationToken,
+    reply: Option<tokio::sync::oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>>,
+    debit_acquired: bool,
+    authoritative_ordinals: BTreeSet<u32>,
+    evidence: Vec<Option<MemberEvidence>>,
+    scheduled: BTreeSet<u32>,
+    handles: Vec<TransientAdmissionHandle>,
+    completion_tx: Option<TransientAdmissionCompletionSender>,
+    completion_rx: TransientAdmissionCompletionReceiver,
+    closed: bool,
+    #[cfg(test)]
+    test_observer: Option<Arc<AdmissionTestObserver>>,
+}
+
+impl ForegroundTransientAdmissionOwner {
+    fn new(init: ForegroundTransientAdmissionOwnerInit) -> Self {
+        let ForegroundTransientAdmissionOwnerInit {
+            engine,
+            binding,
+            resolution,
+            caller,
+            allowed_agents,
+            sidecar_environment,
+            request,
+            root,
+            cardinality,
+        } = init;
+        let (completion_tx, completion_rx) =
+            tokio::sync::mpsc::channel(usize::try_from(cardinality).unwrap_or(1).max(1));
+        let operation = request.operation;
+        let actor_claim = operation.actor_claim();
+        let evidence = vec![None; usize::try_from(cardinality).unwrap_or(0)];
+        #[cfg(test)]
+        let test_observer = sidecar_environment.test_observer.clone();
+        #[cfg(test)]
+        if let Some(observer) = &test_observer {
+            observer.mark_owner_acquired();
+        }
+        Self {
+            engine,
+            binding,
+            resolution,
+            caller,
+            allowed_agents,
+            guidance: request.guidance,
+            sidecar_environment,
+            parent: request.parent,
+            root,
+            operation,
+            actor_claim,
+            cardinality,
+            cancel: request.cancel,
+            reply: Some(request.reply),
+            debit_acquired: false,
+            authoritative_ordinals: (0..cardinality).collect(),
+            evidence,
+            scheduled: BTreeSet::new(),
+            handles: Vec::new(),
+            completion_tx: Some(completion_tx),
+            completion_rx,
+            closed: false,
+            #[cfg(test)]
+            test_observer,
+        }
+    }
+
+    fn operation_id(&self) -> hya_proto::OperationId {
+        self.operation.operation_id()
+    }
+
+    fn validate_launch(&self, launch: &AdmissionLaunch) -> Result<u32, &'static str> {
+        let ordinal = launch.record.member_ordinal;
+        if self.closed
+            || launch.record.operation_id != self.operation_id()
+            || launch.record.batch_size != self.cardinality
+            || launch.record.state != hya_store::AdmissionState::Accepted
+            || launch.record.actor
+                != self
+                    .actor_claim
+                    .map(|claim| hya_store::AdmissionActorBinding {
+                        actor_id: claim.actor_id,
+                        actor_epoch: claim.epoch,
+                    })
+            || !self.authoritative_ordinals.contains(&ordinal)
+            || self.scheduled.contains(&ordinal)
+        {
+            return Err("invalid transient admission launch");
+        }
+        Ok(ordinal)
+    }
+
+    async fn schedule(&mut self, resolved: ResolvedAdmissionLaunch) -> Result<(), &'static str> {
+        let ordinal = self.validate_launch(&resolved.launch)?;
+        self.scheduled.insert(ordinal);
+        let completion = self
+            .completion_tx
+            .as_ref()
+            .ok_or("transient admission owner is closed")?
+            .clone();
+        let installed = install_transient_admission_launch_with_completion(
+            self.engine.clone(),
+            resolved,
+            self.cancel.clone(),
+            self.actor_claim,
+            completion,
+        );
+        let handle = installed
+            .start(self.engine.store(), self.actor_claim.as_ref())
+            .await
+            .map_err(|_| "failed to start admitted member")?;
+        self.handles.push(handle);
+        Ok(())
+    }
+
+    async fn promote(&mut self, launch: AdmissionLaunch) -> Result<(), &'static str> {
+        self.validate_launch(&launch)?;
+        let context = AdmissionLaunchResolutionCtx {
+            engine: &self.engine,
+            binding: &self.binding,
+            resolution: &self.resolution,
+            caller: &self.caller,
+            allowed_agents: self.allowed_agents.as_ref(),
+            guidance: self.guidance.clone(),
+            sidecar_environment: self.sidecar_environment.as_ref(),
+        };
+        let resolved = resolve_current_admission_launches(&context, launch)
+            .await
+            .map_err(|_| "promoted admission launch failed current validation")?;
+        if resolved.is_empty() {
+            return Err("promoted admission launch was not currently accepted");
+        }
+        for resolved in resolved {
+            self.schedule(resolved).await?;
+        }
+        Ok(())
+    }
+
+    async fn accept_completion(
+        &mut self,
+        completion: TransientAdmissionCompletion,
+    ) -> Result<(), &'static str> {
+        let ordinal = completion.member_ordinal;
+        let Some(index) = usize::try_from(ordinal)
+            .ok()
+            .filter(|index| *index < self.evidence.len())
+        else {
+            return Err("admitted member completion ordinal out of bounds");
+        };
+        if completion.operation_id != self.operation_id()
+            || !self.scheduled.contains(&ordinal)
+            || self.evidence[index].is_some()
+        {
+            return Err("duplicate or mismatched admitted member completion");
+        }
+        self.evidence[index] = Some(completion.evidence);
+        for launch in completion.promoted {
+            self.promote(launch).await?;
+        }
+        Ok(())
+    }
+
+    async fn fail_after_claim(&mut self, reason: &str, error: SpawnError) {
+        self.closed = true;
+        self.completion_tx.take();
+        #[cfg(test)]
+        if let Some(observer) = &self.test_observer {
+            observer.mark_cleanup_attempt();
+        }
+        let cleanup_proven = cleanup_transient_admission(
+            &self.engine,
+            self.operation_id(),
+            self.actor_claim.as_ref(),
+            &self.cancel,
+            &mut self.handles,
+            self.cardinality,
+            reason,
+        )
+        .await;
+        #[cfg(test)]
+        if let Some(observer) = &self.test_observer {
+            observer.mark_cleanup_finished();
+        }
+        if cleanup_proven {
+            release_transient_operation(&self.engine, self.operation_id(), self.debit_acquired);
+            self.debit_acquired = false;
+            if let Some(reply) = self.reply.take() {
+                let _ = reply.send(Err(error));
+            }
+        } else {
+            std::future::pending::<()>().await;
+        }
+    }
+
+    async fn quiesce_success(&mut self) {
+        self.completion_tx.take();
+        for handle in self.handles.drain(..) {
+            let _ = handle.await;
+        }
+    }
+
+    async fn run(mut self, initial: Vec<AdmissionLaunch>) {
+        self.debit_acquired = match self.engine.governor() {
+            Some(governor) => match governor.try_reserve_operation(
+                self.root,
+                self.operation_id(),
+                u64::from(self.cardinality),
+                self.cancel.clone(),
+            ) {
+                OperationReservation::Acquired => true,
+                OperationReservation::Overloaded => {
+                    self.fail_after_claim("spawn admission overloaded", SpawnError::Overloaded)
+                        .await;
+                    return;
+                }
+                OperationReservation::Existing | OperationReservation::Conflict => {
+                    self.fail_after_claim(
+                        "spawn admission operation already handled",
+                        SpawnError::OperationAlreadyHandled,
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => false,
+        };
+
+        let context = AdmissionLaunchResolutionCtx {
+            engine: &self.engine,
+            binding: &self.binding,
+            resolution: &self.resolution,
+            caller: &self.caller,
+            allowed_agents: self.allowed_agents.as_ref(),
+            guidance: self.guidance.clone(),
+            sidecar_environment: self.sidecar_environment.as_ref(),
+        };
+        let initial = match resolve_admission_launches(&context, initial) {
+            Ok(initial) => initial,
+            Err(_) => {
+                self.fail_after_claim("admission resolution unavailable", SpawnError::Unavailable)
+                    .await;
+                return;
+            }
+        };
+        for resolved in initial {
+            if let Err(reason) = self.schedule(resolved).await {
+                self.fail_after_claim(reason, SpawnError::Unavailable).await;
+                return;
+            }
+        }
+
+        while self.evidence.iter().any(Option::is_none) {
+            let Some(message) = self.completion_rx.recv().await else {
+                self.fail_after_claim(
+                    "admitted member completion missing",
+                    SpawnError::Unavailable,
+                )
+                .await;
+                return;
+            };
+            let completion = match message {
+                Ok(completion) => completion,
+                Err(_) => {
+                    self.fail_after_claim(
+                        "admitted member completion failed",
+                        SpawnError::Unavailable,
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if let Err(reason) = self.accept_completion(completion).await {
+                self.fail_after_claim(reason, SpawnError::Unavailable).await;
+                return;
+            }
+        }
+
+        self.quiesce_success().await;
+        let records = match self.engine.store().admissions(self.operation_id()).await {
+            Ok(records)
+                if admission_records_match(
+                    &records,
+                    self.operation_id(),
+                    self.actor_claim.as_ref(),
+                    self.cardinality,
+                    true,
+                ) =>
+            {
+                records
+            }
+            _ => {
+                self.fail_after_claim(
+                    "admission journal is not durably terminal",
+                    SpawnError::Unavailable,
+                )
+                .await;
+                return;
+            }
+        };
+        let Some(evidence) = std::mem::take(&mut self.evidence)
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+        else {
+            self.fail_after_claim(
+                "admitted member evidence is incomplete",
+                SpawnError::Unavailable,
+            )
+            .await;
+            return;
+        };
+        debug_assert_eq!(records.len(), evidence.len());
+        let envelope = TeamEvidenceEnvelope {
+            members: evidence.clone(),
+        };
+        let projected = match self.actor_claim.as_ref() {
+            Some(claim) => {
+                project_envelope_for_actor(&self.engine, self.parent, &envelope, claim).await
+            }
+            None => project_envelope(&self.engine, self.parent, &envelope).await,
+        };
+        if projected.is_err() {
+            self.fail_after_claim("team evidence projection failed", SpawnError::Unavailable)
+                .await;
+            return;
+        }
+        let outcomes = evidence
+            .into_iter()
+            .map(|evidence| MemberOutcome {
+                member: evidence.member,
+                session: evidence.session,
+                status: match evidence.status {
+                    MemberStatus::Done => "done".to_string(),
+                    MemberStatus::Failed => "failed".to_string(),
+                },
+                summary: evidence.summary,
+            })
+            .collect();
+        release_transient_operation(&self.engine, self.operation_id(), self.debit_acquired);
+        self.debit_acquired = false;
+        if let Some(reply) = self.reply.take() {
+            let _ = reply.send(Ok(outcomes));
+        }
+    }
+}
+
+struct ForegroundTransientAdmissionPreparation {
+    engine: Arc<SessionEngine>,
+    binding: TurnBinding,
+    base: AgentSpec,
+    router: Arc<ProviderRouter>,
+    categories: Arc<CategoryRegistry>,
+    sidecar_environment: Arc<BundleSidecarEnvironment>,
+    caller: String,
+    req: SpawnRequest,
+}
+
+impl ForegroundTransientAdmissionPreparation {
+    async fn run(self) {
+        let Self {
+            engine,
+            binding,
+            base,
+            router,
+            categories,
+            sidecar_environment,
+            caller,
+            req,
+        } = self;
+        let operation_id = req.operation.operation_id();
+        let actor_claim = req.operation.actor_claim();
+        let cardinality = match u32::try_from(req.members.len()) {
+            Ok(cardinality) if cardinality > 0 => cardinality,
+            _ => {
+                let _ = req.reply.send(Err(SpawnError::Overloaded));
+                return;
+            }
+        };
+        let prepared = match prepare_spawn_admission(
+            &engine, &binding, base, categories, router, &caller, &req,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = req.reply.send(Err(error));
+                return;
+            }
+        };
+        let (root, depth) = match engine.session_lineage(req.parent).await {
+            Ok(lineage) => lineage,
+            Err(_) => {
+                let _ = req.reply.send(Err(SpawnError::Unavailable));
+                return;
+            }
+        };
+        if engine
+            .governor()
+            .is_some_and(|governor| depth.saturating_add(1) > governor.max_depth())
+        {
+            let _ = req.reply.send(Err(SpawnError::Overloaded));
+            return;
+        }
+        let claim = AdmissionClaim {
+            operation_id,
+            source_tool_call_id: req.operation.source_tool_call_id(),
+            root_session: root,
+            request_fingerprint: prepared.request_fingerprint,
+            admission_units: cardinality,
+            actor_claim,
+        };
+        let PreparedSpawnAdmission {
+            request_fingerprint: _,
+            resolution,
+            intents,
+        } = prepared;
+        let launches = match engine.store().claim_admission_batch(&claim, intents).await {
+            Ok(AdmissionBatchClaimOutcome::Claimed(launches)) => launches,
+            Ok(AdmissionBatchClaimOutcome::Existing) => {
+                let _ = req.reply.send(Err(SpawnError::OperationAlreadyHandled));
+                return;
+            }
+            Err(StoreError::AdmissionCapacityExceeded { .. }) => {
+                let _ = req.reply.send(Err(SpawnError::Overloaded));
+                return;
+            }
+            Err(StoreError::OperationIdConflict { .. }) => {
+                let _ = req.reply.send(Err(SpawnError::OperationIdConflict));
+                return;
+            }
+            Err(_) => {
+                let _ = req.reply.send(Err(SpawnError::Unavailable));
+                return;
+            }
+        };
+        tokio::spawn(
+            ForegroundTransientAdmissionOwner::new(ForegroundTransientAdmissionOwnerInit {
+                engine,
+                binding,
+                resolution,
+                caller,
+                allowed_agents: req.agents.clone(),
+                sidecar_environment,
+                request: req,
+                root,
+                cardinality,
+            })
+            .run(launches),
+        );
+    }
+}
+
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -1967,6 +2649,21 @@ fn spawn_team_supervisor_with_environment(
                 let _ = req.reply.send(Err(SpawnError::Unavailable));
                 continue;
             };
+            if is_foreground_transient_batch(&binding, caller.as_str(), &req) {
+                ForegroundTransientAdmissionPreparation {
+                    engine: engine.clone(),
+                    binding,
+                    base: base.clone(),
+                    router: router.clone(),
+                    categories: categories.clone(),
+                    sidecar_environment: sidecar_environment.clone(),
+                    caller: caller.as_str().to_string(),
+                    req,
+                }
+                .run()
+                .await;
+                continue;
+            }
             let is_servable = |model: &ModelRef| router.resolve(model).is_some();
             // Guidance is request-scoped: one Arc cloned to every resolved member.
             let request_guidance = req.guidance.clone();
@@ -2818,7 +3515,8 @@ mod tests {
     use async_trait::async_trait;
     use hya_bundle::{
         AgentRole, BundleIdentity, BundleOrigin, BundleSource, HarnessAccess, ModelPolicy,
-        PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SourceFile, prepare_package,
+        PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SourceFile,
+        prepare_builtins, prepare_package,
     };
     use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
@@ -2839,8 +3537,10 @@ mod tests {
         WebSearchPlane,
     };
     use serde_json::{Value, json};
+    use sqlx::{Connection, SqliteConnection};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
     use tokio::io::AsyncBufReadExt;
     use tokio_util::sync::CancellationToken;
 
@@ -4858,6 +5558,503 @@ mod tests {
             .expect("started admission row must exist");
         assert_eq!(after_start.state, hya_store::AdmissionState::Started);
         assert!(after_start.actor.is_none());
+    }
+
+    #[tokio::test]
+    async fn failure_quiesces_real_member_tasks_before_cleanup_reply() {
+        struct QuiescedGuard(Arc<AtomicBool>);
+
+        impl Drop for QuiescedGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let engine = Arc::new(
+            engine_with_catalog(builtin_catalog().expect("built-in catalog must load")).await,
+        );
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let root_session = SessionId::new();
+        let launch = match engine
+            .store()
+            .claim_admission_batch(
+                &hya_store::AdmissionClaim {
+                    operation_id,
+                    source_tool_call_id: operation.source_tool_call_id(),
+                    root_session,
+                    request_fingerprint: [0x41; 32],
+                    admission_units: 1,
+                    actor_claim: None,
+                },
+                vec![hya_store::AdmissionIntent {
+                    runtime_fingerprint_version: 1,
+                    runtime_fingerprint: [0x42; 32],
+                    admission_binding_fingerprint_version: 1,
+                    admission_binding_fingerprint: [0x43; 32],
+                    spawn_intent: vec![0x44],
+                }],
+            )
+            .await
+            .expect("one-member admission claim must succeed")
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(mut launches) => {
+                assert_eq!(launches.len(), 1);
+                launches.pop().unwrap()
+            }
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh in-memory admission must not already exist")
+            }
+        };
+        assert_eq!(launch.record.state, hya_store::AdmissionState::Accepted);
+        engine
+            .store()
+            .start_admission_member(operation_id, 0, None)
+            .await
+            .expect("claimed member must transition to started");
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let quiesced = Arc::new(AtomicBool::new(false));
+        let post_cleanup_work = Arc::new(AtomicUsize::new(0));
+        let operation_cancel = CancellationToken::new();
+        let task_entered = Arc::clone(&entered);
+        let task_release = Arc::clone(&release);
+        let task_quiesced = Arc::clone(&quiesced);
+        let task_post_cleanup_work = Arc::clone(&post_cleanup_work);
+        let real_task: tokio::task::JoinHandle<Result<TransientAdmissionCompletion, SpawnError>> =
+            tokio::spawn(async move {
+                let _guard = QuiescedGuard(task_quiesced);
+                task_entered.notify_one();
+                task_release.notified().await;
+                task_post_cleanup_work.fetch_add(1, Ordering::SeqCst);
+                Err(SpawnError::Unavailable)
+            });
+        let real_abort = real_task.abort_handle();
+        let mut handles = vec![real_task];
+
+        tokio::time::timeout(Duration::from_secs(5), entered.notified())
+            .await
+            .expect("controlled member task did not enter");
+
+        let (reply, reply_rx) =
+            tokio::sync::oneshot::channel::<Result<Vec<MemberOutcome>, SpawnError>>();
+        let cleanup_engine = Arc::clone(&engine);
+        let cleanup_cancel = operation_cancel.clone();
+        let cleanup_task = tokio::spawn(async move {
+            let cleaned = cleanup_transient_admission(
+                &cleanup_engine,
+                operation_id,
+                None,
+                &cleanup_cancel,
+                &mut handles,
+                1,
+                "forced RED1b cleanup",
+            )
+            .await;
+            assert!(cleaned, "direct-handle cleanup must be provable");
+            let _ = reply.send(Err(SpawnError::Unavailable));
+        });
+
+        let store = engine.store().clone();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if store
+                    .admission(operation_id)
+                    .await
+                    .unwrap()
+                    .is_some_and(|record| record.state == hya_store::AdmissionState::Aborted)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("durable cleanup did not commit Aborted");
+
+        assert!(
+            quiesced.load(Ordering::SeqCst),
+            "durable cleanup committed before real member task quiesced"
+        );
+
+        cleanup_task.await.expect("cleanup task must not panic");
+        assert!(real_abort.is_finished());
+        assert!(quiesced.load(Ordering::SeqCst));
+        assert!(matches!(
+            reply_rx.await.expect("cleanup must send one reply"),
+            Err(SpawnError::Unavailable)
+        ));
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_millis(250), async {
+            loop {
+                if real_abort.is_finished() && post_cleanup_work.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("real member task did not remain quiescent after cleanup");
+        assert_eq!(post_cleanup_work.load(Ordering::SeqCst), 0);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PostClaimFailureKind {
+        GovernorOverload,
+        AcceptedResolution,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CleanupFault {
+        Healthy,
+        RejectAbort,
+        DeleteAbort,
+    }
+
+    async fn post_claim_failure_case(
+        kind: PostClaimFailureKind,
+        fault: CleanupFault,
+        check_order: bool,
+    ) {
+        let cardinality = 3_u32;
+        let per_run_budget = match kind {
+            PostClaimFailureKind::GovernorOverload => 2_u64,
+            PostClaimFailureKind::AcceptedResolution => u64::from(cardinality),
+        };
+        let workdir = tempdir().join("post-claim-failure-workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let database_path = tempdir().join("post-claim-failure.sqlite3");
+        let store = match fault {
+            CleanupFault::Healthy => SessionStore::connect_memory().await.unwrap(),
+            CleanupFault::RejectAbort | CleanupFault::DeleteAbort => {
+                SessionStore::connect(database_path.to_str().unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+        if !matches!(fault, CleanupFault::Healthy) {
+            let mut connection =
+                SqliteConnection::connect(&format!("sqlite://{}", database_path.display()))
+                    .await
+                    .unwrap();
+            let trigger = match fault {
+                CleanupFault::RejectAbort => {
+                    "CREATE TRIGGER test_post_claim_reject_abort
+                     BEFORE UPDATE OF state ON admission_journal
+                     WHEN NEW.state = 'aborted'
+                     BEGIN SELECT RAISE(ABORT, 'test post-claim cleanup rejection'); END;"
+                }
+                CleanupFault::DeleteAbort => {
+                    "CREATE TRIGGER test_post_claim_delete_abort
+                     AFTER UPDATE OF state ON admission_journal
+                     WHEN NEW.state = 'aborted'
+                     BEGIN DELETE FROM admission_journal
+                       WHERE operation_id = NEW.operation_id
+                         AND member_ordinal = NEW.member_ordinal; END;"
+                }
+                CleanupFault::Healthy => unreachable!(),
+            };
+            sqlx::query(trigger).execute(&mut connection).await.unwrap();
+            connection.close().await.unwrap();
+        }
+
+        let catalog = {
+            let prepared = prepare_builtins(vec![BundleSource::new(
+                "post-claim-resolution",
+                vec![
+                    SourceFile::new(
+                        "bundle.yaml",
+                        br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/post-claim-resolution
+  version: 0.0.1
+  publisher: hya-tests
+resources:
+  tools:
+    - id: echo
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agents:
+  - local_id: build
+    stable_id: build
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    can_spawn:
+      - worker
+    prompt: prompts/build.md
+  - local_id: worker
+    stable_id: worker
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+    resource_view:
+      allow:
+        - echo
+    prompt: prompts/worker.md
+"#
+                        .to_vec(),
+                    ),
+                    SourceFile::new("prompts/build.md", b"post-claim build prompt"),
+                    SourceFile::new("prompts/worker.md", b"post-claim worker prompt"),
+                    SourceFile::new("extensions/runtime.js", b"export default {};\n"),
+                ],
+            )])
+            .expect("selected-sidecar fixture must prepare");
+            Arc::new(
+                BundleCatalog::from_verified_catalogs(&[&prepared])
+                    .expect("selected-sidecar fixture must retain semantic identity"),
+            )
+        };
+        let router = Arc::new(ProviderRouter::new());
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            catalog,
+        ));
+        let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+        let engine = Arc::new(
+            SessionEngine::new(
+                store,
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_governor(SubagentGovernor::new(hya_core::SubagentLimits {
+                per_run_budget,
+                ..hya_core::SubagentLimits::default()
+            })),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "post-claim base prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+        assert!(
+            agents.iter().any(|agent| agent.name == "worker"),
+            "worker must be authorized in the selected-sidecar fixture"
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let members = (0..cardinality)
+            .map(|ordinal| SpawnMember {
+                description: format!("post-claim failure member {ordinal}"),
+                prompt: format!("post-claim failure prompt {ordinal}"),
+                subagent_type: "worker".to_string(),
+                ..SpawnMember::default()
+            })
+            .collect();
+        let (reply, mut reply_rx) = tokio::sync::oneshot::channel();
+        let request = SpawnRequest {
+            parent,
+            agents,
+            guidance: None,
+            operation,
+            members,
+            cancel: CancellationToken::new(),
+            background: false,
+            reply,
+        };
+        let test_observer = Arc::new(AdmissionTestObserver::new());
+        let cleanup_notified = test_observer.cleanup_attempt.notified();
+        let cleanup_finished = test_observer.cleanup_finished.notified();
+        let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+            command: None,
+            staging_root: tempdir(),
+            terminate_notify: None,
+            test_observer: Some(Arc::clone(&test_observer)),
+        });
+        ForegroundTransientAdmissionPreparation {
+            engine: Arc::clone(&engine),
+            binding,
+            base,
+            router,
+            categories: Arc::new(CategoryRegistry::default()),
+            sidecar_environment,
+            caller: "build".to_string(),
+            req: request,
+        }
+        .run()
+        .await;
+
+        let cleanup_observed = if matches!(fault, CleanupFault::Healthy) {
+            let reply = tokio::time::timeout(Duration::from_secs(1), &mut reply_rx)
+                .await
+                .expect("successful cleanup must send a typed reply")
+                .expect("reply sender must remain available");
+            match kind {
+                PostClaimFailureKind::GovernorOverload => {
+                    assert!(matches!(reply, Err(SpawnError::Overloaded)));
+                }
+                PostClaimFailureKind::AcceptedResolution => {
+                    assert!(matches!(reply, Err(SpawnError::Unavailable)));
+                }
+            }
+            true
+        } else {
+            let attempt_observed = tokio::time::timeout(Duration::from_secs(1), cleanup_notified)
+                .await
+                .is_ok();
+            let finished_observed = tokio::time::timeout(Duration::from_secs(1), cleanup_finished)
+                .await
+                .is_ok();
+            assert!(
+                attempt_observed && finished_observed,
+                "cleanup attempt and its durable proof result must be observed before checking the caller reply"
+            );
+            true
+        };
+
+        if check_order {
+            let ordered_steps = test_observer.sequence.load(Ordering::SeqCst);
+            assert_eq!(
+                ordered_steps,
+                match kind {
+                    PostClaimFailureKind::GovernorOverload => 1,
+                    PostClaimFailureKind::AcceptedResolution => 2,
+                },
+                "authoritative owner/reply acquisition must precede the failing selected-sidecar resolution hook"
+            );
+        }
+
+        let records = engine.store().admissions(operation_id).await.unwrap();
+        assert!(
+            !records.is_empty() || matches!(fault, CleanupFault::DeleteAbort),
+            "the post-Claimed path must expose its durable rows before the failing resolution hook"
+        );
+        match fault {
+            CleanupFault::Healthy => {
+                assert_eq!(records.len(), usize::try_from(cardinality).unwrap());
+                assert!(records.iter().all(|record| {
+                    record.state == hya_store::AdmissionState::Aborted && record.state.is_terminal()
+                }));
+            }
+            CleanupFault::RejectAbort => {
+                assert_eq!(records.len(), usize::try_from(cardinality).unwrap());
+                assert!(
+                    records
+                        .iter()
+                        .all(|record| record.state == hya_store::AdmissionState::Accepted),
+                    "rejected cleanup must leave the claimed rows nonterminal"
+                );
+            }
+            CleanupFault::DeleteAbort => {
+                assert!(
+                    records.is_empty(),
+                    "missing-row cleanup proof must not be treated as durable terminal proof"
+                );
+            }
+        };
+        let expected_budget = match (kind, fault) {
+            (PostClaimFailureKind::GovernorOverload, _) => 2_u64,
+            (PostClaimFailureKind::AcceptedResolution, CleanupFault::Healthy) => {
+                u64::from(cardinality)
+            }
+            (PostClaimFailureKind::AcceptedResolution, CleanupFault::RejectAbort)
+            | (PostClaimFailureKind::AcceptedResolution, CleanupFault::DeleteAbort) => 0,
+        };
+        let remaining_budget = engine.governor().unwrap().remaining_budget(parent);
+        let reply_pending = if matches!(fault, CleanupFault::Healthy) {
+            false
+        } else {
+            matches!(
+                reply_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            )
+        };
+        let contract_ok = cleanup_observed
+            && match fault {
+                CleanupFault::Healthy => !reply_pending,
+                CleanupFault::RejectAbort | CleanupFault::DeleteAbort => reply_pending,
+            }
+            && remaining_budget == expected_budget;
+        assert!(
+            contract_ok,
+            "post-Claimed cleanup contract failed: reply_pending={reply_pending}, remaining_budget={remaining_budget}, expected_budget={expected_budget}"
+        );
+        assert_eq!(
+            engine.store().list_sessions().await.unwrap().len(),
+            1,
+            "post-Claimed failure must not allocate member sessions"
+        );
+        assert!(
+            engine.store().active_actor_ids().await.unwrap().is_empty(),
+            "post-Claimed failure must leave no active member actors"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_claim_failures_use_owned_reply_after_proven_cleanup() {
+        for kind in [
+            PostClaimFailureKind::GovernorOverload,
+            PostClaimFailureKind::AcceptedResolution,
+        ] {
+            post_claim_failure_case(kind, CleanupFault::Healthy, false).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn post_claim_failures_acquire_owner_before_failing_resolution_hook() {
+        let mut failures = Vec::new();
+        for kind in [
+            PostClaimFailureKind::GovernorOverload,
+            PostClaimFailureKind::AcceptedResolution,
+        ] {
+            let label = format!("{kind:?}/Healthy");
+            if tokio::spawn(post_claim_failure_case(kind, CleanupFault::Healthy, true))
+                .await
+                .is_err()
+            {
+                failures.push(label);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "each owner-before-hook case must satisfy its ordered observer contract; failures: {failures:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_claim_failures_keep_reply_pending_when_cleanup_is_unproven() {
+        let mut failures = Vec::new();
+        for kind in [
+            PostClaimFailureKind::GovernorOverload,
+            PostClaimFailureKind::AcceptedResolution,
+        ] {
+            for fault in [CleanupFault::RejectAbort, CleanupFault::DeleteAbort] {
+                let label = format!("{kind:?}/{fault:?}");
+                if tokio::spawn(post_claim_failure_case(kind, fault, false))
+                    .await
+                    .is_err()
+                {
+                    failures.push(label);
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "each post-Claimed cleanup-fault matrix case must satisfy the owner contract; failures: {failures:?}"
+        );
     }
 
     #[tokio::test]
