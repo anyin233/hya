@@ -9,13 +9,14 @@ use hya_bundle::{
     PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
-    AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus, HookDispatcher, MemberSpec,
-    MemberStatus, MessageUserBeforeInput, MessageUserBeforeOutcome, ResidentSupervisor,
-    RuntimeRegistry, SessionEngine, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SubagentGovernor, SubagentLimits, TeamEvidenceEnvelope, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, project_envelope, run_team,
+    AdmissionMemberIdentity, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
+    ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError,
+    CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, TeamEvidenceEnvelope,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope, run_pre_admitted_member,
+    run_team,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId,
@@ -27,8 +28,8 @@ use hya_provider::{
 };
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, Mode, PermissionPlane, PermissionRules, ResolvedTool, Resource, Rule, Tool, ToolCtx,
-    ToolError, ToolPermission, ToolRegistry,
+    Action, MemberOutcome, Mode, PermissionPlane, PermissionRules, ResolvedTool, Resource, Rule,
+    Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry,
 };
 use serde_json::{Value, json};
 use sqlx::{Connection, SqliteConnection};
@@ -1162,6 +1163,123 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
         reasoning: None,
     };
     (engine, agent)
+}
+
+#[tokio::test]
+async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
+    let workdir = support::TestDir::new("pre-admitted-nested-spawn");
+    let provider = Arc::new(FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "task".to_string(),
+                input: json!({
+                    "description": "nested task",
+                    "prompt": "nested prompt",
+                    "subagent_type": "general"
+                }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("member complete".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]));
+    let router = Arc::new(ProviderRouter::new().with(provider));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Task,
+        "*",
+        Mode::Allow,
+    )]));
+    let (spawn_sender, mut spawn_rx) = BoundSpawnSender::with_capacity(1);
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            support::test_runtime(tools),
+            permission,
+            EventBus::default(),
+        )
+        .with_spawn_sender(spawn_sender),
+    );
+    let root = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.path().to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let binding = engine.bind_runtime(workdir.path()).unwrap();
+    let base = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "member harness".to_string(),
+        workdir: workdir.path().to_path_buf(),
+        reasoning: None,
+    };
+    let agent = engine
+        .agent_spec_for_binding(&binding, &base, "general")
+        .unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "general")
+        .unwrap();
+    let resources = binding.agent_resource_policy("general").unwrap();
+    let member = MemberSpec {
+        id: MemberId::new(),
+        agent,
+        binding,
+        agents,
+        resources: Some(resources),
+        guidance: None,
+        directive: "member directive".to_string(),
+        description: "member task".to_string(),
+        session: None,
+        sidecar_factory: None,
+    };
+    let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+    let admission = AdmissionMemberIdentity {
+        operation_id: operation.operation_id(),
+        member_ordinal: 0,
+    };
+    let run = tokio::spawn(run_pre_admitted_member(
+        engine,
+        root,
+        member,
+        CancellationToken::new(),
+        admission,
+    ));
+
+    let bound = tokio::time::timeout(std::time::Duration::from_secs(5), spawn_rx.recv())
+        .await
+        .expect("nested spawn request must arrive")
+        .expect("spawn sender must remain connected");
+    assert_eq!(bound.parent_admission(), Some(admission));
+    let (_binding, nested_request) = bound.into_parts();
+    let nested_parent = nested_request.parent;
+    nested_request
+        .reply
+        .send(Ok(vec![MemberOutcome {
+            member: "nested-member".to_string(),
+            session: SessionId::new().to_string(),
+            status: "done".to_string(),
+            summary: "nested complete".to_string(),
+        }]))
+        .expect("nested spawn reply must be accepted");
+
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .expect("pre-admitted member must complete")
+        .expect("pre-admitted member task must not panic");
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].status, MemberStatus::Done);
+    let admitted_child = evidence[0]
+        .session
+        .parse::<SessionId>()
+        .expect("member evidence must expose the admitted child session");
+    assert_eq!(nested_parent, admitted_child);
 }
 
 /// A provider that records how many streams run concurrently, so a test can prove

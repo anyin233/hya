@@ -34,8 +34,8 @@ pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
 pub use engine::{
-    AgentSpec, BoundSpawnRequest, BoundSpawnSender, CreateSession, RuntimeCatalogRefresh,
-    SessionEngine, SpawnAdmissionOutcome,
+    AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, CreateSession,
+    RuntimeCatalogRefresh, SessionEngine, SpawnAdmissionOutcome,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -64,7 +64,7 @@ pub use sidecar::{
 };
 pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
-    pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_team,
-    run_pre_admitted_team_for_actor, run_team,
+    pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_member,
+    run_pre_admitted_team, run_pre_admitted_team_for_actor, run_team,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

@@ -1,11 +1,12 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::PreparedAgent;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, Projection, SessionId, ToolCallId,
-    ToolSchema, now_millis,
+    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, SessionId,
+    ToolCallId, ToolSchema, now_millis,
 };
 use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
@@ -99,6 +100,38 @@ pub struct AgentSpec {
     pub reasoning: Option<ReasoningEffort>,
 }
 
+/// Process-local identity for one admitted member in a parent orchestration turn.
+///
+/// This value is only an in-process binding between admission and nested spawn
+/// observation. It is never persisted, serialized onto the wire, or used as
+/// session or event authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmissionMemberIdentity {
+    pub operation_id: OperationId,
+    pub member_ordinal: u32,
+}
+
+tokio::task_local! {
+    static CURRENT_ADMISSION_MEMBER: Option<AdmissionMemberIdentity>;
+}
+
+pub(crate) async fn scope_admission_member<F, T>(
+    admission: Option<AdmissionMemberIdentity>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    CURRENT_ADMISSION_MEMBER.scope(admission, future).await
+}
+
+pub(crate) fn current_admission_member() -> Option<AdmissionMemberIdentity> {
+    CURRENT_ADMISSION_MEMBER
+        .try_with(|admission| *admission)
+        .ok()
+        .flatten()
+}
+
 #[cfg(test)]
 pub(crate) struct DirectMailPreAppendGate {
     entered: Arc<Notify>,
@@ -124,9 +157,16 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
 pub struct BoundSpawnRequest {
     binding: TurnBinding,
     request: SpawnRequest,
+    admission: Option<AdmissionMemberIdentity>,
 }
 
 impl BoundSpawnRequest {
+    /// Return the process-local identity of the admitted parent member, if any.
+    #[must_use]
+    pub fn parent_admission(&self) -> Option<AdmissionMemberIdentity> {
+        self.admission
+    }
+
     #[must_use]
     pub fn into_parts(self) -> (TurnBinding, SpawnRequest) {
         (self.binding, self.request)
@@ -176,6 +216,7 @@ impl SpawnRequestSink for BoundSpawnRequestSink {
             .try_send(BoundSpawnRequest {
                 binding: self.binding.clone(),
                 request,
+                admission: current_admission_member(),
             })
             .map_err(|error| match error {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => SpawnRequestSendError::Full,
