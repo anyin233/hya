@@ -8740,6 +8740,550 @@ agents:
     }
 
     #[tokio::test]
+    async fn mixed_foreground_cancel_waits_for_whole_batch_terminal() {
+        // Consult30 RED 6: mixed Accepted/Queued foreground batch cancelled after
+        // claim must durable-terminalize every member and complete the caller
+        // with Cancelled (no partial success reply).
+        let workdir = tempdir();
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "mixed cancel base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal % 200).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x99; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let cancel = CancellationToken::new();
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let cancel_task = cancel.clone();
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn(
+                    operation,
+                    vec![
+                        SpawnMember {
+                            description: "mix-0".to_string(),
+                            prompt: "MIX-0".to_string(),
+                            subagent_type: "general".to_string(),
+                            ..SpawnMember::default()
+                        },
+                        SpawnMember {
+                            description: "mix-1".to_string(),
+                            prompt: "MIX-1".to_string(),
+                            subagent_type: "general".to_string(),
+                            ..SpawnMember::default()
+                        },
+                    ],
+                    cancel_task,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("accepted member must enter gate");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = engine.store().admissions(operation_id).await.unwrap();
+                if records.len() == 2
+                    && records
+                        .iter()
+                        .any(|r| r.state == hya_store::AdmissionState::Started)
+                    && records
+                        .iter()
+                        .any(|r| r.state == hya_store::AdmissionState::Queued)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("mixed Started+Queued batch");
+
+        cancel.cancel();
+        // Release the in-flight Started member so cancel/cleanup can converge.
+        provider_gate.release.notify_waiters();
+
+        let reply = tokio::time::timeout(Duration::from_secs(10), reply_task)
+            .await
+            .expect("mixed cancel reply timed out")
+            .expect("join");
+        assert!(
+            matches!(reply, Err(SpawnError::Cancelled)),
+            "mixed batch cancel must complete as Cancelled, got {reply:?}"
+        );
+        let records = engine.store().admissions(operation_id).await.unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(
+            records.iter().all(|r| r.state.is_terminal()),
+            "every member must be durable-terminal: {records:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_receiver_converges_without_implicit_cancel() {
+        // Consult30 RED 5: dropping the caller oneshot receiver must not panic,
+        // implicitly cancel, or block durable promotion/registration.
+        let workdir = tempdir();
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "drop-receiver base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal % 200).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x88; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let holder_op = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let holder_spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents.clone());
+        let holder_task = tokio::spawn(async move {
+            holder_spawner
+                .spawn(
+                    holder_op,
+                    vec![SpawnMember {
+                        description: "holder".to_string(),
+                        prompt: "HOLDER".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    CancellationToken::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("holder must enter gate");
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn_background(
+                    operation,
+                    vec![SpawnMember {
+                        description: "drop-rx".to_string(),
+                        prompt: "DROP-RX".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    CancellationToken::new(),
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = engine.store().admission(operation_id).await.unwrap();
+                if record.is_some_and(|r| r.state == hya_store::AdmissionState::Queued) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background must queue");
+
+        // Drop the caller oneshot receiver without cancelling durable work.
+        reply_task.abort();
+        let _ = reply_task.await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let after_drop = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(
+            after_drop.state,
+            hya_store::AdmissionState::Queued,
+            "receiver drop must not implicitly cancel durable Queued work"
+        );
+
+        // Promote via holder completion; owner must converge without a reply owner.
+        provider_gate.release.notify_waiters();
+        let _ = tokio::time::timeout(Duration::from_secs(10), holder_task).await;
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let record = engine
+                    .store()
+                    .admission(operation_id)
+                    .await
+                    .unwrap()
+                    .expect("row");
+                if record.state == hya_store::AdmissionState::Started || record.state.is_terminal()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("durable work must still promote/start after receiver drop");
+        let final_record = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("row");
+        assert_ne!(
+            final_record.state,
+            hya_store::AdmissionState::Cancelled,
+            "receiver drop must not durable-cancel the operation"
+        );
+    }
+
+    #[tokio::test]
+    async fn promotion_first_cancel_before_registration() {
+        // Consult30 RED 4: Queued -> Accepted commits first; subsequent cancel
+        // terminalizes without fabricating a running outcome or registering work.
+        let workdir = tempdir();
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "promotion-first base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..100)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal % 200).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x77; 32],
+            admission_units: 100,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 100),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let cancel = CancellationToken::new();
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let cancel_task = cancel.clone();
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn_background(
+                    operation,
+                    vec![SpawnMember {
+                        description: "promo-first".to_string(),
+                        prompt: "PROMO-FIRST".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    cancel_task,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = engine.store().admission(operation_id).await.unwrap();
+                if record.is_some_and(|r| r.state == hya_store::AdmissionState::Queued) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background must queue under full capacity");
+
+        // Promotion-first: free a slot; finalize auto-promotes Queued → Accepted.
+        // Do not wake the owner, so it cannot cross Started before cancel.
+        let release = engine
+            .store()
+            .finalize_admission_members(
+                &[(filler_operation.operation_id(), 0)],
+                AdmissionTerminal::Aborted,
+                "free slot for promotion-first",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            release
+                .promoted
+                .iter()
+                .any(|launch| launch.record.operation_id == operation_id
+                    && launch.record.state == hya_store::AdmissionState::Accepted),
+            "promotion must Accept the background row first: {:?}",
+            release.promoted
+        );
+        let record = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("background row");
+        assert_eq!(record.state, hya_store::AdmissionState::Accepted);
+        let sessions_after_promo = engine.store().list_sessions().await.unwrap().len();
+        assert_eq!(
+            sessions_after_promo, 1,
+            "Accepted alone must not register a child session"
+        );
+        assert!(
+            !reply_task.is_finished(),
+            "promotion alone must not complete the caller reply"
+        );
+
+        // Queued-cancel has lost; post-promotion cancel terminalizes Accepted.
+        cancel.cancel();
+        let reply = tokio::time::timeout(Duration::from_secs(5), reply_task)
+            .await
+            .expect("post-promotion cancel reply timed out")
+            .expect("join");
+        assert!(
+            matches!(reply, Err(SpawnError::Cancelled)),
+            "post-promotion cancel before registration must not fabricate running: {reply:?}"
+        );
+        let record = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("admission row");
+        assert_eq!(record.state, hya_store::AdmissionState::Cancelled);
+        assert_eq!(
+            engine.store().list_sessions().await.unwrap().len(),
+            sessions_after_promo,
+            "cancel after Accept before registration must not create a session"
+        );
+    }
+
+    #[tokio::test]
     async fn queued_cancel_wins_before_promotion() {
         // Consult30 RED 3: cancel-first while Queued → durable Cancelled, zero
         // allocation, one SpawnError::Cancelled, and later promotion is empty.

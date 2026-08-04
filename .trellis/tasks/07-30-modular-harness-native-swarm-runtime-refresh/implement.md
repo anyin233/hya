@@ -2711,3 +2711,16 @@ all nonterminal journal rows as `Cancelled`, aborts any handles, releases debit,
 and returns `SpawnError::Cancelled` with no child session allocation. Later
 promotion skips the cancelled operation. Focused cancel-first and background
 registration tests plus full hya-app lib/clippy are green.
+
+## 18.24 Consult30 promotion-first, drop-rx, mixed cancel
+
+Locked remaining Consult30 caller-reply barriers:
+- promotion-first Accept before registration; cancel terminalizes without
+  fabricating `running` or allocating a session
+- dropped oneshot receiver does not implicit-cancel Queued work; promotion and
+  start still converge
+- mixed Accepted/Queued foreground cancel returns `SpawnError::Cancelled` only
+  after every member is durable-terminal
+
+Consult30 required REDs 1–6 are now covered. Next: R10 certification matrix and
+0.34.12 release cut.
