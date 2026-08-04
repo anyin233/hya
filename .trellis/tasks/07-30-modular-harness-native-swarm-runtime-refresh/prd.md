@@ -479,3 +479,36 @@ A durable `Queued` commit is internal admission state only: it sends no caller r
 Queued cancellation and promotion linearize only through the existing serialized `admission_journal` writer transaction/current-state compare-and-set. A winning `Queued -> Cancelled` transition allocates nothing and sends one `SpawnError::Cancelled`; a winning `Queued -> Accepted` transition closes the queued-cancel path and follows existing post-promotion cancellation/finalization. The sole sender stays only in existing process-local request/launch state, is taken once, is never persisted or replayed after restart, and a dropped receiver neither cancels durable work nor causes retry.
 
 Exact fuji1 HEAD already uses `oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>` and already maps channel loss to `SpawnError::Unavailable`. The stale Mac sync-area observation to the contrary is superseded factually; no channel migration or flattening change is authorized. The only `hya-tool` API addition is the unit `SpawnError::Cancelled` with truthful display text. Public queued outcomes, fabricated sessions/handles, reply registries, reconnect promises, immediate-start exceptions, and Event/DTO/wire changes remain excluded.
+
+## Consult31 authoritative foreground owner and lifecycle correction
+
+Each foreground-transient request must enter exactly one supervisor-owned
+handler before prepare or admission classification. The same path covers valid,
+invalid, rejected, accepted, mixed, and all-Queued requests. At most 256 such
+handlers may be live; while full, the supervisor must not dequeue, reject, or
+journal-mutate request 257. Queued classification creates no additional task,
+and each queued member remains free of task/session/actor/sidecar/provider and
+Started allocation.
+
+The original operation handler alone executes its ordinals and owns their
+intent, MemberId/session/evidence associations, ordering, and reply. Foreign
+promotions are postcommit generation-qualified unit wakes only; their launch
+payload is discarded and cannot be executed by the committer. A bounded
+wake-only index is process-local coordination, never reply storage or admission
+authority. The handler always rereads ordered journal records and validates
+them against its retained intent. No new `AdmissionLaunch` read API, durable
+outcome schema, payload router, polling, or projection matching is permitted.
+
+Every production engine build must retain one cohesive public non-Clone,
+`#[must_use]` aggregate whose lifecycle internals are private. Explicit async
+shutdown must stop intake, abort and drain every handler, clear wake routes, and
+surface join failure; Drop remains nonblocking and cannot claim a proven drain.
+`HyaRuntime` and all backend exits must expose or perform that drain. Server and
+TUI HTTP scopes must stop gracefully and be awaited before supervisor shutdown.
+Request-facing application state must never own or clone the lifecycle.
+
+The exact-SHA green result for `994ea6b2` certifies compatibility only. Its
+detached post-claim owner remains rejected and cannot close GREEN1. The
+corrected implementation proceeds through the recorded ten REDs one at a time,
+beginning only with uniform pre-admission ownership and integrating the
+approved simplicity reductions into the minimum GREEN.

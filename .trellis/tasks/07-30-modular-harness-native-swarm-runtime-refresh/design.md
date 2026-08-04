@@ -1210,3 +1210,59 @@ Background transient and initial resident requests each have one stricter early-
 Queued cancellation races promotion through the current serialized SQLite writer transaction and state predicate on the same row. `Queued -> Cancelled` winning first terminalizes with zero allocation, prevents later promotion, and takes/sends `Err(SpawnError::Cancelled)` once for queued-only background/resident work. `Queued -> Accepted` winning first makes queued cancellation a no-op; later cancellation uses existing post-promotion behavior. The sender remains an `Option` only in the operation's existing process-local request/launch owner, and send failure from a dropped receiver is ignored without retry or implicit cancellation. Restart retains durable work but no sender and offers no reply replay/reconnect protocol.
 
 At exact fuji1 source, `SpawnRequest.reply` is already Result-bearing and `SpawnerPlane::spawn_inner` already flattens channel disappearance to `SpawnError::Unavailable`; the earlier Mac sync-area shape was stale. Do not change that type or flattening. Add only unit `SpawnError::Cancelled` (`spawn cancelled before activation`). No queued/deferred `MemberOutcome`, public queued status, DTO/Event/wire change, reply registry, second queue authority, task/session/actor/sidecar/provider/`Started` allocation while queued, or immediate background/resident start exception is permitted.
+
+## 25. Consult31 foreground request owner and supervisor lifecycle
+
+Every foreground-transient request now has one uniform process-local owner task,
+created by the spawn supervisor immediately after it dequeues the request and
+before prepare, claim, or Accepted/Queued classification. The supervisor owns
+all such tasks in one bounded `JoinSet`; at 256 live handlers it stops polling
+the intake receiver until one handler is reaped. Classification as Queued adds
+no task, and a queued member still owns no execution task, session, actor,
+sidecar, provider permit, or Started state. This source-corrects the former
+over-broad phrase “Queued allocates no Tokio task” without weakening the
+zero-member-execution invariant.
+
+The original handler for operation O is the sole owner of O's immutable
+ordinal-to-`AdmissionIntent` vector, resolution and execution, MemberId/session
+associations, evidence, outcome ordering, and reply attempt. A committing
+handler executes only launches for its own operation. A foreign committed
+promotion produces only a generation-qualified coalescing wake in a bounded
+supervisor-owned `OperationId` index and discards the launch payload. Wakes
+authorize nothing: O registers, immediately rereads ordered
+`SessionStore::admissions(O)`, and rereads after each wake; journal state plus
+its retained intent decides whether an ordinal may pass the existing binding
+validation and `start_admission_member` CAS. Missing, duplicate, full, stale,
+or closed wakes cannot execute work or complete a reply. The route holds no
+reply, outcome, admission, lease, ordering, or scheduling state and remains
+until O attempts its reply or drops.
+
+No admission read API is added. Existing ordered `AdmissionRecord` values plus
+the handler-retained exact intents contain the complete persisted and
+process-local inputs required to reconstruct an `AdmissionLaunch`. The handler
+must validate exact count, contiguous unique ordinals, and every immutable
+claim identity field before reusing `SpawnIntentV1::decode_admission_launch`,
+`resolve_admission_launches`, and `start_admission_member`. Exact
+`MemberOutcome` evidence remains owner-local; it is never reconstructed from
+global Events, Projection, or `TeamEvidenceEnvelope`.
+
+Public `build_session_engine` returns one non-Clone, `#[must_use]`
+`BuiltSessionEngine` aggregate that owns the existing build products and one
+private `SpawnSupervisorLifecycle`. Only the minimum existing component access
+and public idempotent `shutdown(&mut self)` are exposed; there is no detachable
+`into_parts`. The raw stop sender, supervisor `JoinHandle`, handler `JoinSet`,
+and wake router remain private. `HyaRuntime` retains the aggregate or private
+lifecycle and exposes only its own `shutdown(&mut self)` wrapper. Explicit
+shutdown stops intake, aborts and fully drains handlers, clears routing residue,
+and reports a failed supervisor join; Drop only signals and aborts without
+claiming a drain. Shutdown never durably cancels admission rows.
+
+Backend owners keep the aggregate outside request-facing state and await its
+shutdown on every post-build success or error. Headless commands share one
+minimal body-plus-shutdown result combiner. Server shutdown uses Axum graceful
+shutdown driven by Ctrl-C and, on Unix, SIGTERM, then drains the supervisor.
+The TUI owns a private one-shot graceful stop, signals and awaits its local HTTP
+task, then drains the supervisor regardless of the TUI result. No public
+lifecycle internals, strong supervisor/engine cycle, discarded handle, polling
+loop, durable router, second reply/admission authority, or shutdown-driven
+terminalization is permitted.
