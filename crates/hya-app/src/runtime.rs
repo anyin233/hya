@@ -327,6 +327,8 @@ struct BundleSidecarEnvironment {
     terminate_notify: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     test_observer: Option<Arc<AdmissionTestObserver>>,
+    #[cfg(test)]
+    uniform_probe: Option<Arc<ForegroundHandlerUniformProbe>>,
 }
 
 #[cfg(test)]
@@ -368,6 +370,80 @@ impl AdmissionTestObserver {
     }
 }
 
+#[cfg(test)]
+struct ForegroundHandlerUniformProbe {
+    prepare_entered: tokio::sync::Notify,
+    prepare_release: tokio::sync::Notify,
+    before_claim: tokio::sync::Notify,
+    before_claim_release: tokio::sync::Notify,
+    after_claim: tokio::sync::Notify,
+    after_claim_release: tokio::sync::Notify,
+    owner_run_entered: tokio::sync::Notify,
+    owner_run_release: tokio::sync::Notify,
+    supervisor_handler_active: std::sync::atomic::AtomicUsize,
+    supervisor_handler_owned: std::sync::atomic::AtomicUsize,
+    reply_owners: std::sync::atomic::AtomicUsize,
+    detached_postclaim_owner_spawns: std::sync::atomic::AtomicUsize,
+    real_member_task_installations: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl ForegroundHandlerUniformProbe {
+    fn new() -> Self {
+        Self {
+            prepare_entered: tokio::sync::Notify::new(),
+            prepare_release: tokio::sync::Notify::new(),
+            before_claim: tokio::sync::Notify::new(),
+            before_claim_release: tokio::sync::Notify::new(),
+            after_claim: tokio::sync::Notify::new(),
+            after_claim_release: tokio::sync::Notify::new(),
+            owner_run_entered: tokio::sync::Notify::new(),
+            owner_run_release: tokio::sync::Notify::new(),
+            supervisor_handler_active: std::sync::atomic::AtomicUsize::new(0),
+            supervisor_handler_owned: std::sync::atomic::AtomicUsize::new(0),
+            reply_owners: std::sync::atomic::AtomicUsize::new(0),
+            detached_postclaim_owner_spawns: std::sync::atomic::AtomicUsize::new(0),
+            real_member_task_installations: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+struct ForegroundHandlerProbeGuard {
+    probe: Arc<ForegroundHandlerUniformProbe>,
+}
+
+#[cfg(test)]
+impl ForegroundHandlerProbeGuard {
+    fn new(probe: Arc<ForegroundHandlerUniformProbe>) -> Self {
+        probe
+            .supervisor_handler_active
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        probe
+            .supervisor_handler_owned
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        probe
+            .reply_owners
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self { probe }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ForegroundHandlerProbeGuard {
+    fn drop(&mut self) {
+        self.probe
+            .supervisor_handler_active
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.probe
+            .supervisor_handler_owned
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.probe
+            .reply_owners
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 impl BundleSidecarEnvironment {
     #[cfg(test)]
     fn from_command(command: Vec<String>, staging_root: PathBuf) -> Self {
@@ -376,6 +452,7 @@ impl BundleSidecarEnvironment {
             staging_root,
             terminate_notify: None,
             test_observer: None,
+            uniform_probe: None,
         }
     }
 
@@ -392,6 +469,8 @@ impl BundleSidecarEnvironment {
             terminate_notify: None,
             #[cfg(test)]
             test_observer: None,
+            #[cfg(test)]
+            uniform_probe: None,
         }
     }
 }
@@ -2170,6 +2249,8 @@ struct ForegroundTransientAdmissionOwner {
     closed: bool,
     #[cfg(test)]
     test_observer: Option<Arc<AdmissionTestObserver>>,
+    #[cfg(test)]
+    uniform_probe: Option<Arc<ForegroundHandlerUniformProbe>>,
 }
 
 impl ForegroundTransientAdmissionOwner {
@@ -2192,6 +2273,8 @@ impl ForegroundTransientAdmissionOwner {
         let evidence = vec![None; usize::try_from(cardinality).unwrap_or(0)];
         #[cfg(test)]
         let test_observer = sidecar_environment.test_observer.clone();
+        #[cfg(test)]
+        let uniform_probe = sidecar_environment.uniform_probe.clone();
         #[cfg(test)]
         if let Some(observer) = &test_observer {
             observer.mark_owner_acquired();
@@ -2221,6 +2304,8 @@ impl ForegroundTransientAdmissionOwner {
             closed: false,
             #[cfg(test)]
             test_observer,
+            #[cfg(test)]
+            uniform_probe,
         }
     }
 
@@ -2268,6 +2353,12 @@ impl ForegroundTransientAdmissionOwner {
             .start(self.engine.store(), self.actor_claim.as_ref())
             .await
             .map_err(|_| "failed to start admitted member")?;
+        #[cfg(test)]
+        if let Some(probe) = &self.uniform_probe {
+            probe
+                .real_member_task_installations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         self.handles.push(handle);
         Ok(())
     }
@@ -2359,6 +2450,14 @@ impl ForegroundTransientAdmissionOwner {
     }
 
     async fn run(mut self, initial: Vec<AdmissionLaunch>) {
+        #[cfg(test)]
+        if let Some(probe) = &self.uniform_probe {
+            probe.owner_run_entered.notify_one();
+            probe.owner_run_release.notified().await;
+            if self.cancel.is_cancelled() {
+                return;
+            }
+        }
         self.debit_acquired = match self.engine.governor() {
             Some(governor) => match governor.try_reserve_operation(
                 self.root,
@@ -2525,6 +2624,11 @@ impl ForegroundTransientAdmissionPreparation {
             caller,
             req,
         } = self;
+        #[cfg(test)]
+        if let Some(probe) = &sidecar_environment.uniform_probe {
+            probe.prepare_entered.notify_one();
+            probe.prepare_release.notified().await;
+        }
         let operation_id = req.operation.operation_id();
         let actor_claim = req.operation.actor_claim();
         let cardinality = match u32::try_from(req.members.len()) {
@@ -2570,6 +2674,11 @@ impl ForegroundTransientAdmissionPreparation {
             resolution,
             intents,
         } = prepared;
+        #[cfg(test)]
+        if let Some(probe) = &sidecar_environment.uniform_probe {
+            probe.before_claim.notify_one();
+            probe.before_claim_release.notified().await;
+        }
         let launches = match engine.store().claim_admission_batch(&claim, intents).await {
             Ok(AdmissionBatchClaimOutcome::Claimed(launches)) => launches,
             Ok(AdmissionBatchClaimOutcome::Existing) => {
@@ -2589,20 +2698,24 @@ impl ForegroundTransientAdmissionPreparation {
                 return;
             }
         };
-        tokio::spawn(
-            ForegroundTransientAdmissionOwner::new(ForegroundTransientAdmissionOwnerInit {
-                engine,
-                binding,
-                resolution,
-                caller,
-                allowed_agents: req.agents.clone(),
-                sidecar_environment,
-                request: req,
-                root,
-                cardinality,
-            })
-            .run(launches),
-        );
+        #[cfg(test)]
+        if let Some(probe) = &sidecar_environment.uniform_probe {
+            probe.after_claim.notify_one();
+            probe.after_claim_release.notified().await;
+        }
+        ForegroundTransientAdmissionOwner::new(ForegroundTransientAdmissionOwnerInit {
+            engine,
+            binding,
+            resolution,
+            caller,
+            allowed_agents: req.agents.clone(),
+            sidecar_environment,
+            request: req,
+            root,
+            cardinality,
+        })
+        .run(launches)
+        .await;
     }
 }
 
@@ -2625,6 +2738,12 @@ pub fn spawn_team_supervisor(
     );
 }
 
+fn observe_foreground_handler_join(joined: Option<Result<(), tokio::task::JoinError>>) {
+    if let Some(Err(error)) = joined {
+        eprintln!("hya: foreground spawn handler failed ({error})");
+    }
+}
+
 fn spawn_team_supervisor_with_environment(
     mut rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -2635,7 +2754,25 @@ fn spawn_team_supervisor_with_environment(
     sidecar_environment: Arc<BundleSidecarEnvironment>,
 ) {
     tokio::spawn(async move {
-        while let Some(bound_request) = rx.recv().await {
+        let mut foreground_handlers = tokio::task::JoinSet::new();
+        loop {
+            let bound_request = loop {
+                if foreground_handlers.is_empty() {
+                    break rx.recv().await;
+                }
+                tokio::select! {
+                    bound_request = rx.recv() => break bound_request,
+                    joined = foreground_handlers.join_next() => {
+                        observe_foreground_handler_join(joined);
+                    }
+                }
+            };
+            let Some(bound_request) = bound_request else {
+                while let Some(joined) = foreground_handlers.join_next().await {
+                    observe_foreground_handler_join(Some(joined));
+                }
+                break;
+            };
             let (binding, req) = bound_request.into_parts();
             let parent = match engine.read_projection(req.parent).await {
                 Ok(parent) => parent,
@@ -2650,18 +2787,31 @@ fn spawn_team_supervisor_with_environment(
                 continue;
             };
             if is_foreground_transient_batch(&binding, caller.as_str(), &req) {
-                ForegroundTransientAdmissionPreparation {
-                    engine: engine.clone(),
-                    binding,
-                    base: base.clone(),
-                    router: router.clone(),
-                    categories: categories.clone(),
-                    sidecar_environment: sidecar_environment.clone(),
-                    caller: caller.as_str().to_string(),
-                    req,
-                }
-                .run()
-                .await;
+                let handler_engine = Arc::clone(&engine);
+                let handler_base = base.clone();
+                let handler_router = Arc::clone(&router);
+                let handler_categories = Arc::clone(&categories);
+                let handler_sidecar_environment = Arc::clone(&sidecar_environment);
+                let handler_caller = caller.as_str().to_string();
+                foreground_handlers.spawn(async move {
+                    #[cfg(test)]
+                    let _probe_guard = handler_sidecar_environment
+                        .uniform_probe
+                        .as_ref()
+                        .map(|probe| ForegroundHandlerProbeGuard::new(Arc::clone(probe)));
+                    ForegroundTransientAdmissionPreparation {
+                        engine: handler_engine,
+                        binding,
+                        base: handler_base,
+                        router: handler_router,
+                        categories: handler_categories,
+                        sidecar_environment: handler_sidecar_environment,
+                        caller: handler_caller,
+                        req,
+                    }
+                    .run()
+                    .await;
+                });
                 continue;
             }
             let is_servable = |model: &ModelRef| router.resolve(model).is_some();
@@ -5883,8 +6033,9 @@ agents:
             staging_root: tempdir(),
             terminate_notify: None,
             test_observer: Some(Arc::clone(&test_observer)),
+            uniform_probe: None,
         });
-        ForegroundTransientAdmissionPreparation {
+        let preparation = ForegroundTransientAdmissionPreparation {
             engine: Arc::clone(&engine),
             binding,
             base,
@@ -5893,9 +6044,13 @@ agents:
             sidecar_environment,
             caller: "build".to_string(),
             req: request,
-        }
-        .run()
-        .await;
+        };
+        let preparation_task = if matches!(fault, CleanupFault::Healthy) {
+            preparation.run().await;
+            None
+        } else {
+            Some(tokio::spawn(preparation.run()))
+        };
 
         let cleanup_observed = if matches!(fault, CleanupFault::Healthy) {
             let reply = tokio::time::timeout(Duration::from_secs(1), &mut reply_rx)
@@ -5992,6 +6147,10 @@ agents:
             contract_ok,
             "post-Claimed cleanup contract failed: reply_pending={reply_pending}, remaining_budget={remaining_budget}, expected_budget={expected_budget}"
         );
+        if let Some(preparation_task) = preparation_task {
+            preparation_task.abort();
+            let _ = preparation_task.await;
+        }
         assert_eq!(
             engine.store().list_sessions().await.unwrap().len(),
             1,
@@ -6054,6 +6213,313 @@ agents:
         assert!(
             failures.is_empty(),
             "each post-Claimed cleanup-fault matrix case must satisfy the owner contract; failures: {failures:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_handler_uniform_pre_admission() {
+        struct CountingProvider {
+            calls: Arc<AtomicUsize>,
+            inner: DevProvider,
+        }
+
+        #[async_trait]
+        impl Provider for CountingProvider {
+            fn id(&self) -> &str {
+                self.inner.id()
+            }
+
+            fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+                self.inner.capabilities(model)
+            }
+
+            fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+                self.inner.configured_identity_v1()
+            }
+
+            async fn stream(
+                &self,
+                request: CompletionRequest,
+                session: SessionId,
+                message: hya_proto::MessageId,
+            ) -> Result<EventStream, ProviderError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.inner.stream(request, session, message).await
+            }
+        }
+
+        #[derive(Debug)]
+        struct BarrierSample {
+            name: &'static str,
+            handler_active: usize,
+            handler_owned: usize,
+            reply_owners: usize,
+            detached_spawns: usize,
+            member_installations: usize,
+        }
+
+        let cases = [
+            (
+                "accepted",
+                0_u32,
+                1_usize,
+                vec![hya_store::AdmissionState::Accepted],
+            ),
+            (
+                "mixed",
+                99_u32,
+                2_usize,
+                vec![
+                    hya_store::AdmissionState::Accepted,
+                    hya_store::AdmissionState::Queued,
+                ],
+            ),
+            (
+                "all-queued",
+                100_u32,
+                1_usize,
+                vec![hya_store::AdmissionState::Queued],
+            ),
+        ];
+        let mut observations = Vec::new();
+
+        for (case_name, filler_count, member_count, expected_states) in cases {
+            let workdir = tempdir();
+            let provider_calls = Arc::new(AtomicUsize::new(0));
+            let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingProvider {
+                calls: Arc::clone(&provider_calls),
+                inner: DevProvider::new(),
+            })));
+            let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+                ToolRegistry::builtins().snapshot(),
+                builtin_catalog().unwrap(),
+            ));
+            let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+            let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+            let engine = Arc::new(
+                SessionEngine::new(
+                    SessionStore::connect_memory().await.unwrap(),
+                    Arc::clone(&router),
+                    runtime,
+                    permission,
+                    EventBus::default(),
+                )
+                .with_spawn_sender(spawn_sender.clone()),
+            );
+            let base = AgentSpec {
+                name: AgentName::new("build"),
+                model: ModelRef::new("dev"),
+                system_prompt: "uniform pre-admission base".to_string(),
+                workdir: workdir.clone(),
+                reasoning: None,
+            };
+            let parent = engine
+                .create(CreateSession {
+                    parent: None,
+                    agent: base.name.clone(),
+                    model: base.model.clone(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                })
+                .await
+                .unwrap();
+            let binding = engine.bind_runtime(&workdir).unwrap();
+            let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+            if filler_count > 0 {
+                let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+                let filler_intents = (0..filler_count)
+                    .map(|ordinal| AdmissionIntent {
+                        runtime_fingerprint_version: 1,
+                        runtime_fingerprint: [0x11; 32],
+                        admission_binding_fingerprint_version: 1,
+                        admission_binding_fingerprint: [0x22; 32],
+                        spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
+                    })
+                    .collect();
+                let filler_claim = AdmissionClaim {
+                    operation_id: filler_operation.operation_id(),
+                    source_tool_call_id: filler_operation.source_tool_call_id(),
+                    root_session: parent,
+                    request_fingerprint: [0x44; 32],
+                    admission_units: filler_count,
+                    actor_claim: None,
+                };
+                let filler_launches = engine
+                    .store()
+                    .claim_admission_batch(&filler_claim, filler_intents)
+                    .await
+                    .unwrap();
+                match filler_launches {
+                    AdmissionBatchClaimOutcome::Claimed(launches) => {
+                        assert_eq!(launches.len(), filler_count as usize);
+                    }
+                    AdmissionBatchClaimOutcome::Existing => {
+                        panic!("fresh filler admission must not already exist");
+                    }
+                }
+            }
+
+            let probe = Arc::new(ForegroundHandlerUniformProbe::new());
+            let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: Some(Arc::clone(&probe)),
+            });
+            let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+            spawn_team_supervisor_with_environment(
+                spawn_rx,
+                Arc::clone(&engine),
+                base,
+                Arc::clone(&router),
+                Arc::new(CategoryRegistry::default()),
+                Arc::clone(&resident_supervisor),
+                sidecar_environment,
+            );
+
+            let cancel = CancellationToken::new();
+            let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+            let operation_id = operation.operation_id();
+            let members = (0..member_count)
+                .map(|ordinal| SpawnMember {
+                    description: format!("uniform member {ordinal}"),
+                    prompt: format!("uniform prompt {ordinal}"),
+                    subagent_type: "general".to_string(),
+                    ..SpawnMember::default()
+                })
+                .collect();
+            let spawner = spawn_sender
+                .for_binding(&binding)
+                .for_session_with_agents(parent, agents);
+            let request_cancel = cancel.clone();
+            let request_task =
+                tokio::spawn(
+                    async move { spawner.spawn(operation, members, request_cancel).await },
+                );
+
+            let mut samples = Vec::new();
+            let sample = |name: &'static str| BarrierSample {
+                name,
+                handler_active: probe.supervisor_handler_active.load(Ordering::SeqCst),
+                handler_owned: probe.supervisor_handler_owned.load(Ordering::SeqCst),
+                reply_owners: probe.reply_owners.load(Ordering::SeqCst),
+                detached_spawns: probe.detached_postclaim_owner_spawns.load(Ordering::SeqCst),
+                member_installations: probe.real_member_task_installations.load(Ordering::SeqCst),
+            };
+
+            let prepare_entered = probe.prepare_entered.notified();
+            tokio::time::timeout(Duration::from_secs(5), prepare_entered)
+                .await
+                .expect("foreground preparation did not enter");
+            samples.push(sample("prepare"));
+            let before_claim = probe.before_claim.notified();
+            probe.prepare_release.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), before_claim)
+                .await
+                .expect("foreground preparation did not reach before-claim barrier");
+            samples.push(sample("before-claim"));
+            let after_claim = probe.after_claim.notified();
+            probe.before_claim_release.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), after_claim)
+                .await
+                .expect("foreground preparation did not reach after-claim barrier");
+            let records = engine.store().admissions(operation_id).await.unwrap();
+            let admission_counts = engine.store().admission_counts().await.unwrap();
+            let states = records
+                .iter()
+                .map(|record| record.state)
+                .collect::<Vec<_>>();
+            samples.push(sample("post-claim"));
+            let member_installations_at_claim =
+                probe.real_member_task_installations.load(Ordering::SeqCst);
+            let owner_entered = probe.owner_run_entered.notified();
+            probe.after_claim_release.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), owner_entered)
+                .await
+                .expect("inline foreground request handler owner did not enter");
+            samples.push(sample("owner-entry"));
+
+            let sessions = engine.store().list_sessions().await.unwrap();
+            let active_actors = engine.store().active_actor_ids().await.unwrap();
+            let reply_pending = !request_task.is_finished();
+            let member_installations = probe.real_member_task_installations.load(Ordering::SeqCst);
+            let provider_call_count = provider_calls.load(Ordering::SeqCst);
+            let expected_active = filler_count
+                + u32::try_from(
+                    expected_states
+                        .iter()
+                        .filter(|state| **state == hya_store::AdmissionState::Accepted)
+                        .count(),
+                )
+                .unwrap();
+            let expected_non_active = u32::try_from(
+                expected_states
+                    .iter()
+                    .filter(|state| **state == hya_store::AdmissionState::Queued)
+                    .count(),
+            )
+            .unwrap();
+            let counts_ok = admission_counts
+                == hya_store::AdmissionCounts {
+                    active: expected_active,
+                    non_active: expected_non_active,
+                    total: expected_active + expected_non_active,
+                };
+            let handler_delta = samples.last().map_or(0, |last| {
+                last.handler_active
+                    .saturating_sub(samples[0].handler_active)
+            });
+            let member_delta = member_installations.saturating_sub(member_installations_at_claim);
+            let samples_ok = samples.iter().all(|sample| {
+                !sample.name.is_empty()
+                    && sample.handler_active == 1
+                    && sample.handler_owned == 1
+                    && sample.reply_owners == 1
+                    && sample.detached_spawns == 0
+                    && sample.member_installations == 0
+            });
+            let all_queued_ok = case_name != "all-queued"
+                || (states
+                    .iter()
+                    .all(|state| *state == hya_store::AdmissionState::Queued)
+                    && sessions.len() == 1
+                    && active_actors.is_empty()
+                    && resident_supervisor.team_cancel(parent).is_none()
+                    && provider_call_count == 0
+                    && member_installations == 0
+                    && reply_pending);
+            let case_ok = states == expected_states
+                && counts_ok
+                && samples_ok
+                && handler_delta == 0
+                && member_delta == 0
+                && reply_pending
+                && all_queued_ok;
+            let barrier_names = samples.iter().map(|sample| sample.name).collect::<Vec<_>>();
+            observations.push(format!(
+                "{case_name}: ok={case_ok}, states={states:?}, samples={samples:?}, \
+                 barriers={barrier_names:?}, \
+                 handler_delta={handler_delta}, member_delta={member_delta}, \
+                 admission_counts={admission_counts:?}, \
+                 sessions={}, active_actors={}, provider_calls={provider_call_count}, \
+                 member_installations={member_installations}, reply_pending={reply_pending}",
+                sessions.len(),
+                active_actors.len(),
+            ));
+
+            cancel.cancel();
+            probe.owner_run_release.notify_one();
+            request_task.abort();
+            let _ = request_task.await;
+        }
+
+        assert!(
+            observations
+                .iter()
+                .all(|observation| observation.contains("ok=true")),
+            "foreground_handler_uniform_pre_admission ownership defect:\n{}",
+            observations.join("\n")
         );
     }
 
