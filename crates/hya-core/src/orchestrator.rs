@@ -1,8 +1,8 @@
 //! Bounded subagent orchestration primitives.
 //!
 //! [`SubagentLimits`] carries the user-configurable caps that keep nested,
-//! massively-parallel subagent fan-out safe: a maximum recursion depth, a global
-//! cap on concurrently-*streaming* members, and a per-top-level-run budget on the
+//! massively-parallel subagent fan-out safe: a maximum recursion depth, a cap on
+//! concurrently streaming general members, and a per-top-level-run budget on the
 //! total number of members that may be spawned. The [`SubagentGovernor`] that
 //! enforces these lands with the orchestration workstream; this module defines the
 //! limits type so config parsing (`hya-app`) can resolve it independently of the
@@ -15,13 +15,18 @@ use hya_proto::{OperationId, SessionId};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
+const DEFAULT_GENERAL_STREAM_PERMITS: usize = 100;
+const MAX_GENERAL_STREAM_PERMITS: usize = DEFAULT_GENERAL_STREAM_PERMITS;
+const RESERVED_STREAM_PERMITS: usize = 28;
+
 /// Configurable caps for nested/parallel subagent execution.
 ///
 /// - `max_depth`: how many levels a subagent tree may recurse (the interactive
 ///   lead session is depth 0; its direct subagents are depth 1, and so on).
-/// - `max_concurrency`: global ceiling on members whose provider stream is running
-///   at the same time. Excess members park until a slot frees, which is the
-///   backpressure that keeps 100+ agents from exhausting resources.
+/// - `max_concurrency`: configurable ceiling on general members whose provider
+///   stream is running at the same time. It is normalized to `1..=100`; excess
+///   members park until a slot frees. The default live stream budget is 128,
+///   split into 100 general and 28 reserved permits.
 /// - `per_run_budget`: maximum total number of members that may be spawned under a
 ///   single top-level run, bounding the total task fan-out.
 /// - `per_team_turn_budget`: maximum total number of resident *turns* a single
@@ -43,7 +48,7 @@ impl Default for SubagentLimits {
     fn default() -> Self {
         Self {
             max_depth: 5,
-            max_concurrency: 128,
+            max_concurrency: DEFAULT_GENERAL_STREAM_PERMITS,
             // Raised from 256 so a large resident swarm (100+) comfortably fits
             // under one team's total-spawn ceiling (decision 7).
             per_run_budget: 1024,
@@ -84,10 +89,11 @@ struct OperationDebit {
 
 /// Enforces [`SubagentLimits`] at runtime.
 ///
-/// - `acquire_stream` hands out a permit from a global semaphore sized to
-///   `max_concurrency`; the turn loop holds it only around provider streaming
-///   (never across tool execution), which bounds concurrently-streaming members
-///   without risking a nested-spawn deadlock.
+/// - General and reserved provider streams use independent live semaphores. The
+///   general class is bounded by normalized `max_concurrency`; the reserved class
+///   is fixed at 28 and cannot be borrowed by general work. The turn loop holds a
+///   permit only around provider streaming (never across tool execution). These
+///   are execution bounds, never durable admission or ordering truth.
 /// - `reserve` draws from a per-top-level-run budget so the total number of
 ///   members spawned under one run cannot exceed `per_run_budget`.
 /// - `release` frees a completed root's budget entry so the map cannot leak.
@@ -96,7 +102,8 @@ struct OperationDebit {
 #[derive(Clone)]
 pub struct SubagentGovernor {
     limits: SubagentLimits,
-    stream_sem: Arc<Semaphore>,
+    general_stream_sem: Arc<Semaphore>,
+    reserved_stream_sem: Arc<Semaphore>,
     budgets: Arc<Mutex<BudgetState>>,
     /// Per-team running totals of resident turns and mail messages, keyed by the
     /// team-root session. Separate from `budgets` (which is per-run spawn count)
@@ -108,10 +115,12 @@ pub struct SubagentGovernor {
 impl SubagentGovernor {
     #[must_use]
     pub fn new(limits: SubagentLimits) -> Self {
-        let permits = limits.max_concurrency.max(1);
+        let mut limits = limits;
+        limits.max_concurrency = limits.max_concurrency.clamp(1, MAX_GENERAL_STREAM_PERMITS);
         Self {
             limits,
-            stream_sem: Arc::new(Semaphore::new(permits)),
+            general_stream_sem: Arc::new(Semaphore::new(limits.max_concurrency)),
+            reserved_stream_sem: Arc::new(Semaphore::new(RESERVED_STREAM_PERMITS)),
             budgets: Arc::new(Mutex::new(BudgetState::default())),
             team_turns: Arc::new(Mutex::new(HashMap::new())),
             team_messages: Arc::new(Mutex::new(HashMap::new())),
@@ -128,17 +137,38 @@ impl SubagentGovernor {
         self.limits.max_depth
     }
 
-    /// Acquire one streaming permit, parking until a slot frees. The permit lives
-    /// as long as the returned guard; drop it as soon as streaming ends. Returns
-    /// `None` only if the semaphore was closed (never done in practice).
+    /// Acquire one general streaming permit. Kept as a compatibility alias for
+    /// callers that predate the explicit general/reserved split.
     pub async fn acquire_stream(&self) -> Option<OwnedSemaphorePermit> {
-        self.stream_sem.clone().acquire_owned().await.ok()
+        self.acquire_general_stream().await
     }
 
-    /// Number of streaming permits currently available (for tests/metrics).
+    /// Number of general streaming permits currently available.
     #[must_use]
     pub fn available_permits(&self) -> usize {
-        self.stream_sem.available_permits()
+        self.available_general_stream_permits()
+    }
+
+    /// Acquire one general provider-stream permit.
+    pub async fn acquire_general_stream(&self) -> Option<OwnedSemaphorePermit> {
+        self.general_stream_sem.clone().acquire_owned().await.ok()
+    }
+
+    /// Acquire one reserved provider-stream permit.
+    pub async fn acquire_reserved_stream(&self) -> Option<OwnedSemaphorePermit> {
+        self.reserved_stream_sem.clone().acquire_owned().await.ok()
+    }
+
+    /// Number of general provider-stream permits currently available.
+    #[must_use]
+    pub fn available_general_stream_permits(&self) -> usize {
+        self.general_stream_sem.available_permits()
+    }
+
+    /// Number of reserved provider-stream permits currently available.
+    #[must_use]
+    pub fn available_reserved_stream_permits(&self) -> usize {
+        self.reserved_stream_sem.available_permits()
     }
 
     /// Reserve up to `want` member slots against `root`'s budget. On first sight of

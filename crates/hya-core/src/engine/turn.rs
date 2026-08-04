@@ -530,9 +530,9 @@ impl SessionEngine {
         } = execution;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
-        // Depth in the subagent tree, derived from the parent chain. Only subagents
-        // (depth > 0) are subject to the streaming-concurrency semaphore; the
-        // interactive lead (depth 0) never waits behind background subagents.
+        // Depth in the subagent tree, derived from the parent chain. Subagents use
+        // the general live provider-stream class; the root uses the independent
+        // reserved class so root progress never waits behind background work.
         let depth = match &self.governor {
             Some(_) => self
                 .session_lineage(session)
@@ -647,13 +647,14 @@ impl SessionEngine {
             } else {
                 request
             };
-            // Hold a global streaming permit ONLY around provider streaming, and only
-            // for subagents. Acquired here and dropped before tool execution, so a
-            // member blocked in the `task` tool (awaiting its children) holds no
-            // permit — guaranteeing nested spawns can always make progress.
-            let stream_permit = match (depth > 0, &self.governor) {
-                (true, Some(gov)) => gov.acquire_stream().await,
-                _ => None,
+            // Hold a live provider-stream permit ONLY around provider streaming.
+            // It is dropped before tool execution, so a member blocked in the
+            // `task` tool (awaiting its children) holds no permit. These classes
+            // bound execution only; durable admission/order remains authoritative.
+            let stream_permit = match (&self.governor, depth > 0) {
+                (Some(gov), true) => gov.acquire_general_stream().await,
+                (Some(gov), false) => gov.acquire_reserved_stream().await,
+                (None, _) => None,
             };
             self.validate_actor_claim(actor_claim).await?;
             let stream = self.providers.stream(request, session, message).await?;
