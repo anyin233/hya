@@ -1840,6 +1840,21 @@ impl<T> InstalledAdmissionTask<T> {
         }
     }
 
+    /// Arm an already-Started member's work future without a second CAS.
+    fn start_signal_only(mut self) -> Result<tokio::task::JoinHandle<T>, SpawnError> {
+        let Some(start_signal) = self.start_signal.take() else {
+            return Err(SpawnError::Unavailable);
+        };
+        let Some(handle) = self.handle.take() else {
+            return Err(SpawnError::Unavailable);
+        };
+        if start_signal.send(()).is_err() {
+            handle.abort();
+            return Err(SpawnError::Unavailable);
+        }
+        Ok(handle)
+    }
+
     async fn start(
         mut self,
         store: &SessionStore,
@@ -1932,28 +1947,51 @@ fn validate_unsupported_inline_agent_fields(member: &SpawnMember) -> Result<(), 
     Ok(())
 }
 
-/// Determine the narrow foreground batch branch without resolving any member.
+/// Durable journal admission owner path without fully resolving members.
 ///
 /// Authorization and the prepared bundle lifecycle are the only semantic inputs
 /// here; raw request overlays can opt a member into the resident lifecycle. An
 /// authorization failure falls through to the legacy resolver so its existing
 /// typed error remains public behavior.
-fn is_foreground_transient_batch(binding: &TurnBinding, caller: &str, req: &SpawnRequest) -> bool {
-    !req.background
-        && !req.members.is_empty()
-        && req.members.iter().all(|member| {
-            let Ok(definition) = authorize_spawn_target(binding, &req.agents, caller, member)
-            else {
-                return false;
-            };
-            definition.spawn_lifecycle != SpawnLifecycle::Resident
-                && !member.resident
-                && !member
-                    .inline_agent
-                    .as_ref()
-                    .and_then(|inline| inline.resident)
-                    .unwrap_or(false)
-        })
+///
+/// Eligible:
+/// - foreground multi/single-member all-transient batches (whole-batch reply)
+/// - single-member background all-transient (running reply after registration)
+///
+/// Multi-member background and any resident batch stay on the legacy route.
+fn uses_durable_admission_owner(binding: &TurnBinding, caller: &str, req: &SpawnRequest) -> bool {
+    if req.members.is_empty() {
+        return false;
+    }
+    let all_transient = req.members.iter().all(|member| {
+        let Ok(definition) = authorize_spawn_target(binding, &req.agents, caller, member) else {
+            return false;
+        };
+        definition.spawn_lifecycle != SpawnLifecycle::Resident
+            && !member.resident
+            && !member
+                .inline_agent
+                .as_ref()
+                .and_then(|inline| inline.resident)
+                .unwrap_or(false)
+    });
+    if !all_transient {
+        return false;
+    }
+    if req.background {
+        req.members.len() == 1
+    } else {
+        true
+    }
+}
+
+/// How the durable admission owner answers the caller oneshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableOwnerReplyMode {
+    /// Wait until every ordinal is terminal; reply `Ok(done outcomes)`.
+    ForegroundWholeBatch,
+    /// Reply `Ok(running)` once after Started + real session registration; detach.
+    BackgroundRunningOnRegister,
 }
 
 #[allow(dead_code)]
@@ -2406,6 +2444,7 @@ struct ForegroundTransientAdmissionOwnerInit {
     cardinality: u32,
     retained_intents: Vec<AdmissionIntent>,
     wake_router: Arc<ForegroundAdmissionWakeRouter>,
+    reply_mode: DurableOwnerReplyMode,
 }
 
 struct ForegroundTransientAdmissionOwner {
@@ -2435,6 +2474,7 @@ struct ForegroundTransientAdmissionOwner {
     wake_router: Arc<ForegroundAdmissionWakeRouter>,
     wake_registration: Option<ForegroundAdmissionWakeRegistration>,
     wake_rx: Option<tokio::sync::mpsc::Receiver<ForegroundAdmissionWake>>,
+    reply_mode: DurableOwnerReplyMode,
     #[cfg(test)]
     test_observer: Option<Arc<AdmissionTestObserver>>,
     #[cfg(test)]
@@ -2455,6 +2495,7 @@ impl ForegroundTransientAdmissionOwner {
             cardinality,
             retained_intents,
             wake_router,
+            reply_mode,
         } = init;
         let (completion_tx, completion_rx) =
             tokio::sync::mpsc::channel(usize::try_from(cardinality).unwrap_or(1).max(1));
@@ -2500,6 +2541,7 @@ impl ForegroundTransientAdmissionOwner {
             wake_router,
             wake_registration,
             wake_rx,
+            reply_mode,
             #[cfg(test)]
             test_observer,
             #[cfg(test)]
@@ -2532,7 +2574,10 @@ impl ForegroundTransientAdmissionOwner {
         Ok(ordinal)
     }
 
-    async fn schedule(&mut self, resolved: ResolvedAdmissionLaunch) -> Result<(), &'static str> {
+    async fn schedule(
+        &mut self,
+        mut resolved: ResolvedAdmissionLaunch,
+    ) -> Result<(), &'static str> {
         let ordinal = self.validate_launch(&resolved.launch)?;
         self.scheduled.insert(ordinal);
         let completion = self
@@ -2540,6 +2585,68 @@ impl ForegroundTransientAdmissionOwner {
             .as_ref()
             .ok_or("transient admission owner is closed")?
             .clone();
+        if self.reply_mode == DurableOwnerReplyMode::BackgroundRunningOnRegister {
+            // Consult30 order: Started CAS → register session → reply running → work.
+            let launch = resolved.launch.clone();
+            let barrier = install_admission_task(&launch, async { Ok::<(), SpawnError>(()) });
+            let barrier_handle = barrier
+                .start(self.engine.store(), self.actor_claim.as_ref())
+                .await
+                .map_err(|_| "failed to start admitted member")?;
+            let _ = barrier_handle.await;
+            let create = CreateSession {
+                parent: Some(self.parent),
+                agent: resolved.resolved.agent.name.clone(),
+                model: resolved.resolved.agent.model.clone(),
+                workdir: resolved
+                    .resolved
+                    .agent
+                    .workdir
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            let session = match self.actor_claim.as_ref() {
+                Some(claim) => self
+                    .engine
+                    .create_for_actor(claim, create)
+                    .await
+                    .map_err(|_| "failed to register background session")?,
+                None => self
+                    .engine
+                    .create(create)
+                    .await
+                    .map_err(|_| "failed to register background session")?,
+            };
+            resolved.resolved.request.task_id = Some(session.to_string());
+            let member_id = MemberId::new();
+            if let Some(reply) = self.reply.take() {
+                let _ = reply.send(Ok(vec![MemberOutcome {
+                    member: member_id.to_string(),
+                    session: session.to_string(),
+                    status: "running".to_string(),
+                    summary: "The task is working in the background.".to_string(),
+                }]));
+            }
+            let work_install = install_transient_admission_launch_with_completion(
+                self.engine.clone(),
+                resolved,
+                self.cancel.clone(),
+                self.actor_claim,
+                completion,
+            );
+            let handle = work_install
+                .start_signal_only()
+                .map_err(|_| "failed to arm background member work")?;
+            #[cfg(test)]
+            if let Some(probe) = &self.uniform_probe {
+                probe
+                    .real_member_task_installations
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            self.handles.push(handle);
+            return Ok(());
+        }
+
         let installed = install_transient_admission_launch_with_completion(
             self.engine.clone(),
             resolved,
@@ -2893,6 +3000,7 @@ struct ForegroundTransientAdmissionPreparation {
     caller: String,
     req: SpawnRequest,
     wake_router: Arc<ForegroundAdmissionWakeRouter>,
+    reply_mode: DurableOwnerReplyMode,
 }
 
 impl ForegroundTransientAdmissionPreparation {
@@ -2907,6 +3015,7 @@ impl ForegroundTransientAdmissionPreparation {
             caller,
             req,
             wake_router,
+            reply_mode,
         } = self;
         #[cfg(test)]
         let watched_preparation = sidecar_environment
@@ -3022,6 +3131,7 @@ impl ForegroundTransientAdmissionPreparation {
             cardinality,
             retained_intents,
             wake_router,
+            reply_mode,
         })
         .run(launches)
         .await;
@@ -3257,7 +3367,7 @@ fn spawn_team_supervisor_with_environment(
                 let _ = req.reply.send(Err(SpawnError::Unavailable));
                 continue;
             };
-            if is_foreground_transient_batch(&binding, caller.as_str(), &req) {
+            if uses_durable_admission_owner(&binding, caller.as_str(), &req) {
                 let handler_engine = Arc::clone(&engine);
                 let handler_base = base.clone();
                 let handler_router = Arc::clone(&router);
@@ -3265,6 +3375,11 @@ fn spawn_team_supervisor_with_environment(
                 let handler_sidecar_environment = Arc::clone(&sidecar_environment);
                 let handler_wake_router = Arc::clone(&wake_router);
                 let handler_caller = caller.as_str().to_string();
+                let reply_mode = if req.background {
+                    DurableOwnerReplyMode::BackgroundRunningOnRegister
+                } else {
+                    DurableOwnerReplyMode::ForegroundWholeBatch
+                };
                 foreground_handlers.spawn(async move {
                     #[cfg(test)]
                     let _probe_guard = handler_sidecar_environment
@@ -3281,6 +3396,7 @@ fn spawn_team_supervisor_with_environment(
                         caller: handler_caller,
                         req,
                         wake_router: handler_wake_router,
+                        reply_mode,
                     }
                     .run()
                     .await;
@@ -6659,6 +6775,7 @@ agents:
             caller: "build".to_string(),
             req: request,
             wake_router,
+            reply_mode: DurableOwnerReplyMode::ForegroundWholeBatch,
         };
         let preparation_task = if matches!(fault, CleanupFault::Healthy) {
             preparation.run().await;
@@ -8373,6 +8490,193 @@ agents:
         assert!(
             projection.session.members.len() >= 2,
             "projection may observe members, but reply identity is owner-local"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_running_reply_only_after_registration() {
+        // Consult30 RED 2: one-member background under full capacity stays Queued
+        // with no reply; after promotion + Started + session registration, one
+        // running outcome is returned.
+        let workdir = tempdir();
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "background delayed reply base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal % 200).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x55; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let holder_op = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let holder_spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents.clone());
+        let holder_task = tokio::spawn(async move {
+            holder_spawner
+                .spawn(
+                    holder_op,
+                    vec![SpawnMember {
+                        description: "holder".to_string(),
+                        prompt: "HOLDER".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    CancellationToken::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("foreground holder must enter provider gate");
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn_background(
+                    operation,
+                    vec![SpawnMember {
+                        description: "bg-queued".to_string(),
+                        prompt: "BACKGROUND-MARKER".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    CancellationToken::new(),
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = engine.store().admission(operation_id).await.unwrap();
+                if record.is_some_and(|r| r.state == hya_store::AdmissionState::Queued) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background member must be durably Queued under full capacity");
+        assert!(
+            !reply_task.is_finished(),
+            "background must not reply while Queued"
+        );
+        // parent + holder session only; background must not register yet.
+        let sessions_while_queued = engine.store().list_sessions().await.unwrap().len();
+        assert_eq!(
+            sessions_while_queued, 2,
+            "queued background must not allocate its own child session before registration"
+        );
+
+        provider_gate.release.notify_waiters();
+        let _ = tokio::time::timeout(Duration::from_secs(10), holder_task).await;
+
+        let reply = tokio::time::timeout(Duration::from_secs(15), reply_task)
+            .await
+            .expect("background reply timed out after promotion")
+            .expect("join")
+            .expect("background must reply Ok(running) after registration");
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0].status, "running");
+        assert_ne!(reply[0].session, "-");
+        assert_ne!(reply[0].session, "");
+        let record = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("background admission row");
+        assert!(
+            record.state == hya_store::AdmissionState::Started || record.state.is_terminal(),
+            "after registration reply, row must have crossed Started: {:?}",
+            record.state
+        );
+        assert!(
+            engine.store().list_sessions().await.unwrap().len() > sessions_while_queued,
+            "registration must create a real child session for the background member"
         );
     }
 

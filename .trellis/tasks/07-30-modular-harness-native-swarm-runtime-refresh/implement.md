@@ -2693,3 +2693,13 @@ Consult30 RED 1 is locked with a capacity-faithful mixed batch: 99 active
 fillers force a 2-member foreground claim into Started+Queued. The owner keeps
 the reply pending until the queued ordinal is promoted, started, and terminal,
 then returns ordinal-ordered MemberOutcome identity. Full hya-app lib green.
+
+## 18.22 Consult30 background delayed running reply
+
+Single-member background transient batches now use the durable admission owner
+with `BackgroundRunningOnRegister` reply mode: claim may leave the row `Queued`
+with no session and no caller reply; after promotion, durable `Started` CAS,
+and real session registration the owner sends one `running` outcome and detaches
+work. Added `SpawnError::Cancelled` for later cancel-first barriers. Focused
+`background_running_reply_only_after_registration` plus full hya-app lib and
+clippy are green.
