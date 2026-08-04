@@ -8044,6 +8044,171 @@ agents:
     }
 
     #[tokio::test]
+    async fn identical_members_preserve_exact_ordered_reply() {
+        /// Completes the second concurrent stream before the first so completion
+        /// order is reverse of ordinal order. Reply must still be ordinal-ordered.
+        struct ReverseCompletionProvider {
+            inner: DevProvider,
+            calls: AtomicUsize,
+            second_done: tokio::sync::Notify,
+        }
+
+        #[async_trait]
+        impl Provider for ReverseCompletionProvider {
+            fn id(&self) -> &str {
+                self.inner.id()
+            }
+
+            fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+                self.inner.capabilities(model)
+            }
+
+            fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+                self.inner.configured_identity_v1()
+            }
+
+            async fn stream(
+                &self,
+                request: CompletionRequest,
+                session: SessionId,
+                message: hya_proto::MessageId,
+            ) -> Result<EventStream, ProviderError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    self.second_done.notified().await;
+                    self.inner.stream(request, session, message).await
+                } else {
+                    let result = self.inner.stream(request, session, message).await;
+                    self.second_done.notify_waiters();
+                    result
+                }
+            }
+        }
+
+        let workdir = tempdir();
+        let reverse = Arc::new(ReverseCompletionProvider {
+            inner: DevProvider::new(),
+            calls: AtomicUsize::new(0),
+            second_done: tokio::sync::Notify::new(),
+        });
+        let reverse_provider: Arc<dyn Provider> = reverse.clone();
+        let router = Arc::new(ProviderRouter::new().with(reverse_provider));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "identical ordered reply base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+        let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+            command: None,
+            staging_root: tempdir(),
+            terminate_notify: None,
+            test_observer: None,
+            uniform_probe: None,
+        });
+        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+        spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            Arc::clone(&resident_supervisor),
+            sidecar_environment,
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let members = vec![
+            SpawnMember {
+                description: "identical-0".to_string(),
+                prompt: "ORDINAL-MARKER-0".to_string(),
+                subagent_type: "general".to_string(),
+                ..SpawnMember::default()
+            },
+            SpawnMember {
+                description: "identical-1".to_string(),
+                prompt: "ORDINAL-MARKER-1".to_string(),
+                subagent_type: "general".to_string(),
+                ..SpawnMember::default()
+            },
+        ];
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let reply = tokio::time::timeout(
+            Duration::from_secs(15),
+            spawner.spawn(operation, members, CancellationToken::new()),
+        )
+        .await
+        .expect("identical-member spawn timed out")
+        .expect("identical-member spawn must succeed");
+
+        assert_eq!(reply.len(), 2, "reply must contain one outcome per ordinal");
+        assert_ne!(
+            reply[0].member, reply[1].member,
+            "identical members must still have distinct MemberId identities"
+        );
+        assert_ne!(
+            reply[0].session, reply[1].session,
+            "identical members must still have distinct sessions"
+        );
+        assert!(
+            reply.iter().all(|outcome| outcome.status == "done"),
+            "both members must complete successfully: {reply:?}"
+        );
+        // Ordinal order is authoritative even when completion was reverse.
+        assert!(
+            reply[0].summary.contains("ORDINAL-MARKER-0"),
+            "outcomes[0] must be ordinal 0 evidence, got summary={}",
+            reply[0].summary
+        );
+        assert!(
+            reply[1].summary.contains("ORDINAL-MARKER-1"),
+            "outcomes[1] must be ordinal 1 evidence, got summary={}",
+            reply[1].summary
+        );
+        assert_eq!(
+            reverse.calls.load(Ordering::SeqCst),
+            2,
+            "both members must have run model turns"
+        );
+        // Projection must not be required for ordered reply correctness.
+        let projection = engine.read_projection(parent).await.unwrap();
+        assert!(
+            projection.session.members.len() >= 2,
+            "projection may observe members, but reply identity is owner-local"
+        );
+    }
+
+    #[tokio::test]
     async fn pre_started_admission_failure_cancels_task_before_recovery() {
         struct DropSentinel(Arc<AtomicUsize>);
 
