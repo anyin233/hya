@@ -219,6 +219,233 @@ async fn startup_recovery_requeues_accepted_aborts_started_and_is_idempotent() {
 }
 
 #[tokio::test]
+async fn startup_recovery_converges_mixed_states_without_replaying_waiting_parent() {
+    let temp_db = AdmissionTempDb::new();
+    let root = SessionId::new();
+    let intent = |seed| AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [seed; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [seed.wrapping_add(0x40); 32],
+        spawn_intent: vec![0xd2, seed],
+    };
+
+    let mut queued = claim(ToolCallId::new(), 60);
+    queued.root_session = root;
+    queued.admission_units = 1;
+    let queued_intent = intent(60);
+    let mut started = claim(ToolCallId::new(), 61);
+    started.root_session = root;
+    started.admission_units = 1;
+    let started_intent = intent(61);
+    let mut parent = claim(ToolCallId::new(), 62);
+    parent.root_session = root;
+    parent.admission_units = 1;
+    let parent_intent = intent(62);
+    let mut child = claim(ToolCallId::new(), 63);
+    child.root_session = root;
+    child.admission_units = 1;
+    let child_intent = intent(63);
+    let mut final_admission = claim(ToolCallId::new(), 64);
+    final_admission.root_session = root;
+    final_admission.admission_units = 1;
+    let final_intent = intent(64);
+
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    assert!(matches!(
+        store
+            .claim_admission_batch(&queued, vec![queued_intent.clone()])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    let seeded = store
+        .recover_nonterminal_admissions("seed queue")
+        .await
+        .unwrap();
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(seeded[0].operation_id, queued.operation_id);
+    assert_eq!(seeded[0].state, AdmissionState::Queued);
+    assert_eq!(seeded[0].terminal_reason, None);
+
+    assert!(matches!(
+        store
+            .claim_admission_batch(&started, vec![started_intent.clone()])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    assert!(matches!(
+        store
+            .start_admission(started.operation_id, None)
+            .await
+            .unwrap(),
+        AdmissionStartOutcome::Started(_)
+    ));
+    assert!(matches!(
+        store
+            .claim_admission_batch(&parent, vec![parent_intent.clone()])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    assert!(matches!(
+        store
+            .start_admission(parent.operation_id, None)
+            .await
+            .unwrap(),
+        AdmissionStartOutcome::Started(_)
+    ));
+    assert!(matches!(
+        store
+            .suspend_parent_and_claim_admission_batch(
+                parent.operation_id,
+                0,
+                &child,
+                vec![child_intent.clone()],
+            )
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    assert_eq!(
+        store
+            .admission(parent.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        AdmissionState::Waiting
+    );
+    assert!(matches!(
+        store
+            .claim_admission_batch(&final_admission, vec![final_intent.clone()])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    let before_restart = store.admission_counts().await.unwrap();
+    assert_eq!(before_restart.active, 3);
+    assert_eq!(before_restart.non_active, 2);
+    assert_eq!(before_restart.total, 5);
+    drop(store);
+
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let recovered = store
+        .recover_nonterminal_admissions("startup recovery")
+        .await
+        .unwrap();
+    assert!(
+        !recovered
+            .iter()
+            .any(|record| record.operation_id == queued.operation_id),
+        "pre-existing queued work must not be replayed"
+    );
+    assert!(
+        recovered
+            .iter()
+            .any(|record| record.operation_id == parent.operation_id),
+        "waiting parent must converge during recovery"
+    );
+    assert_eq!(recovered.len(), 4);
+    for operation_id in [started.operation_id, parent.operation_id] {
+        let record = recovered
+            .iter()
+            .find(|record| record.operation_id == operation_id)
+            .unwrap();
+        assert_eq!(record.state, AdmissionState::Aborted);
+        assert_eq!(record.terminal_reason.as_deref(), Some("startup recovery"));
+        assert_eq!(
+            record.logical_released,
+            operation_id == started.operation_id,
+            "only the previously active Started row releases a lease"
+        );
+    }
+    for operation_id in [child.operation_id, final_admission.operation_id] {
+        let record = recovered
+            .iter()
+            .find(|record| record.operation_id == operation_id)
+            .unwrap();
+        assert_eq!(record.state, AdmissionState::Queued);
+        assert!(!record.logical_released);
+        assert_eq!(record.terminal_reason, None);
+    }
+    let recovered_counts = store.admission_counts().await.unwrap();
+    assert_eq!(recovered_counts.active, 0);
+    assert_eq!(recovered_counts.non_active, 3);
+    assert_eq!(recovered_counts.total, 3);
+
+    let persisted_before_repeat = vec![
+        store.admission(queued.operation_id).await.unwrap().unwrap(),
+        store
+            .admission(started.operation_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        store.admission(parent.operation_id).await.unwrap().unwrap(),
+        store.admission(child.operation_id).await.unwrap().unwrap(),
+        store
+            .admission(final_admission.operation_id)
+            .await
+            .unwrap()
+            .unwrap(),
+    ];
+    assert!(
+        store
+            .recover_nonterminal_admissions("startup recovery")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let persisted_after_repeat = vec![
+        store.admission(queued.operation_id).await.unwrap().unwrap(),
+        store
+            .admission(started.operation_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        store.admission(parent.operation_id).await.unwrap().unwrap(),
+        store.admission(child.operation_id).await.unwrap().unwrap(),
+        store
+            .admission(final_admission.operation_id)
+            .await
+            .unwrap()
+            .unwrap(),
+    ];
+    assert_eq!(persisted_after_repeat, persisted_before_repeat);
+    assert_eq!(store.admission_counts().await.unwrap(), recovered_counts);
+
+    let promoted = store.promote_queued_admissions(3).await.unwrap();
+    assert_eq!(promoted.len(), 3);
+    for (launch, (operation_id, expected_intent)) in promoted.iter().zip([
+        (queued.operation_id, queued_intent),
+        (child.operation_id, child_intent),
+        (final_admission.operation_id, final_intent),
+    ]) {
+        assert_eq!(launch.record.operation_id, operation_id);
+        assert_eq!(launch.record.member_ordinal, 0);
+        assert_eq!(launch.record.state, AdmissionState::Accepted);
+        assert_eq!(launch.intent, expected_intent);
+    }
+    assert_ne!(
+        promoted[0].record.operation_id,
+        promoted[1].record.operation_id
+    );
+    assert_ne!(
+        promoted[1].record.operation_id,
+        promoted[2].record.operation_id
+    );
+    assert_ne!(
+        promoted[0].record.operation_id,
+        promoted[2].record.operation_id
+    );
+    assert_eq!(store.admission_counts().await.unwrap().active, 3);
+    assert_eq!(store.admission_counts().await.unwrap().non_active, 0);
+    assert_eq!(store.admission_counts().await.unwrap().total, 3);
+    assert!(store.promote_queued_admissions(1).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn startup_recovery_aborts_unbound_accepted_without_rebinding() {
     let store = SessionStore::connect_memory().await.unwrap();
     let accepted = claim(ToolCallId::new(), 34);
