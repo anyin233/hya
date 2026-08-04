@@ -2703,3 +2703,11 @@ and real session registration the owner sends one `running` outcome and detaches
 work. Added `SpawnError::Cancelled` for later cancel-first barriers. Focused
 `background_running_reply_only_after_registration` plus full hya-app lib and
 clippy are green.
+
+## 18.23 Consult30 cancel-first before activation
+
+While the durable owner still holds the caller oneshot, cancellation finalizes
+all nonterminal journal rows as `Cancelled`, aborts any handles, releases debit,
+and returns `SpawnError::Cancelled` with no child session allocation. Later
+promotion skips the cancelled operation. Focused cancel-first and background
+registration tests plus full hya-app lib/clippy are green.

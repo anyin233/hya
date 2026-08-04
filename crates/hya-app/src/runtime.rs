@@ -2759,6 +2759,57 @@ impl ForegroundTransientAdmissionOwner {
         Ok(())
     }
 
+    /// Consult30 cancel-first: durable Cancelled for nonterminal rows before
+    /// activation, zero remaining launch allocation, one Cancelled error reply.
+    async fn cancel_queued_before_activation(&mut self) {
+        self.closed = true;
+        self.completion_tx.take();
+        let records = match self.engine.store().admissions(self.operation_id()).await {
+            Ok(records) => records,
+            Err(_) => {
+                if let Some(reply) = self.reply.take() {
+                    let _ = reply.send(Err(SpawnError::Cancelled));
+                }
+                return;
+            }
+        };
+        let pending: Vec<_> = records
+            .iter()
+            .filter(|record| !record.state.is_terminal())
+            .map(|record| (record.operation_id, record.member_ordinal))
+            .collect();
+        if !pending.is_empty() {
+            let outcome = self
+                .engine
+                .store()
+                .finalize_admission_members(
+                    &pending,
+                    AdmissionTerminal::Cancelled,
+                    "spawn cancelled before activation",
+                    self.actor_claim.as_ref(),
+                )
+                .await;
+            if let Ok(outcome) = outcome {
+                for promoted in outcome.promoted {
+                    if promoted.record.operation_id != self.operation_id() {
+                        self.wake_router.wake(promoted.record.operation_id);
+                    }
+                }
+            }
+        }
+        // Abort any already-started handles without claiming a second reply.
+        self.cancel.cancel();
+        for handle in self.handles.drain(..) {
+            handle.abort();
+            let _ = handle.await;
+        }
+        release_transient_operation(&self.engine, self.operation_id(), self.debit_acquired);
+        self.debit_acquired = false;
+        if let Some(reply) = self.reply.take() {
+            let _ = reply.send(Err(SpawnError::Cancelled));
+        }
+    }
+
     async fn fail_after_claim(&mut self, reason: &str, error: SpawnError) {
         self.closed = true;
         self.completion_tx.take();
@@ -2879,7 +2930,15 @@ impl ForegroundTransientAdmissionOwner {
             return;
         };
         while self.evidence.iter().any(Option::is_none) {
+            // Background may have already replied running and still wait for
+            // terminal journal convergence; cancellation only applies while the
+            // caller oneshot is still held (pre-activation).
             tokio::select! {
+                biased;
+                _ = self.cancel.cancelled(), if self.reply.is_some() => {
+                    self.cancel_queued_before_activation().await;
+                    return;
+                }
                 message = self.completion_rx.recv() => {
                     let Some(message) = message else {
                         self.fail_after_claim(
@@ -8677,6 +8736,167 @@ agents:
         assert!(
             engine.store().list_sessions().await.unwrap().len() > sessions_while_queued,
             "registration must create a real child session for the background member"
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_cancel_wins_before_promotion() {
+        // Consult30 RED 3: cancel-first while Queued → durable Cancelled, zero
+        // allocation, one SpawnError::Cancelled, and later promotion is empty.
+        let workdir = tempdir();
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "cancel-first base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..100)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal % 200).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x66; 32],
+            admission_units: 100,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 100),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let cancel = CancellationToken::new();
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let cancel_task = cancel.clone();
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn_background(
+                    operation,
+                    vec![SpawnMember {
+                        description: "cancel-queued".to_string(),
+                        prompt: "CANCEL-MARKER".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    cancel_task,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = engine.store().admission(operation_id).await.unwrap();
+                if record.is_some_and(|r| r.state == hya_store::AdmissionState::Queued) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("member must be Queued before cancel");
+        let sessions_before = engine.store().list_sessions().await.unwrap().len();
+        cancel.cancel();
+
+        let reply = tokio::time::timeout(Duration::from_secs(5), reply_task)
+            .await
+            .expect("cancel reply timed out")
+            .expect("join");
+        assert!(
+            matches!(reply, Err(SpawnError::Cancelled)),
+            "cancel-first must return SpawnError::Cancelled, got {reply:?}"
+        );
+        let record = engine
+            .store()
+            .admission(operation_id)
+            .await
+            .unwrap()
+            .expect("admission row");
+        assert_eq!(record.state, hya_store::AdmissionState::Cancelled);
+        assert_eq!(
+            engine.store().list_sessions().await.unwrap().len(),
+            sessions_before,
+            "cancel-first must allocate zero child sessions"
+        );
+        // Free a slot and promote: cancelled row must not re-launch.
+        engine
+            .store()
+            .finalize_admission_members(
+                &[(filler_operation.operation_id(), 0)],
+                AdmissionTerminal::Aborted,
+                "free slot after cancel",
+                None,
+            )
+            .await
+            .unwrap();
+        let promoted = engine.store().promote_queued_admissions(1).await.unwrap();
+        assert!(
+            promoted
+                .iter()
+                .all(|launch| launch.record.operation_id != operation_id),
+            "later promotion must not re-launch a Cancelled row"
         );
     }
 
