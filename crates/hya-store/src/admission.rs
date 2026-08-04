@@ -1166,9 +1166,11 @@ impl SessionStore {
         })
     }
 
-    /// Recover non-actor operations at startup. Accepted rows return to the
-    /// queued state, while started rows are aborted. Actor-bound rows remain
-    /// for [`Self::abort_recovered_actor_admissions`], which fences them
+    /// Recover non-actor operations at startup. Complete bound Accepted rows
+    /// return to Queued; incomplete Accepted, Started, and previously-started
+    /// Waiting rows become Aborted. Waiting rows already released their active
+    /// lease at suspension, so they do not release it again. Actor-bound rows
+    /// remain for [`Self::abort_recovered_actor_admissions`], which fences them
     /// against the recovered claim.
     pub async fn recover_nonterminal_admissions(
         &self,
@@ -1197,7 +1199,7 @@ impl SessionStore {
                      ELSE ? \
                  END, \
                  updated_at = ? \
-             WHERE actor_id IS NULL AND state IN ('accepted', 'started') \
+             WHERE actor_id IS NULL AND state IN ('accepted', 'started', 'waiting') \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
                        member_ordinal, batch_size, state, admission_units, logical_released, \
                        terminal_reason, created_at, updated_at, actor_id, actor_epoch",
