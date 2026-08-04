@@ -2,8 +2,9 @@
 
 use hya_proto::{OperationId, OwnerRunId, SessionId, ToolCallId};
 use hya_store::{
-    AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionClaimOutcome, AdmissionIntent,
-    AdmissionStartOutcome, AdmissionState, AdmissionTerminal, SessionStore, StoreError,
+    AdmissionActorBinding, AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionClaimOutcome,
+    AdmissionIntent, AdmissionStartOutcome, AdmissionState, AdmissionTerminal, SessionStore,
+    StoreError,
 };
 use sqlx::{Connection, Row, SqliteConnection};
 
@@ -1194,4 +1195,254 @@ async fn promotion_round_robin_is_durable_after_terminal_release_and_restart() {
     assert_eq!(final_counts.active, 3);
     assert_eq!(final_counts.non_active, 0);
     assert_eq!(final_counts.total, 3);
+}
+
+#[tokio::test]
+async fn parent_wait_claims_child_atomically_and_requeues_through_fair_scheduler() {
+    let temp_db = AdmissionTempDb::new();
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let actor_claim = store
+        .try_claim_new(SessionId::new(), OwnerRunId::new())
+        .await
+        .unwrap();
+    let mut parent = claim(ToolCallId::new(), 46);
+    parent.admission_units = 1;
+    parent.actor_claim = Some(actor_claim);
+    let parent_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x46; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xa6; 32],
+        spawn_intent: vec![0xd1, 0x05],
+    };
+    assert!(matches!(
+        store
+            .claim_admission_batch(&parent, vec![parent_intent.clone()])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(launches)
+            if launches.len() == 1 && launches[0].intent == parent_intent
+    ));
+    let parent_started = match store
+        .start_admission_member(parent.operation_id, 0, Some(&actor_claim))
+        .await
+        .unwrap()
+    {
+        AdmissionStartOutcome::Started(record) => record,
+        other => panic!("expected parent member to start, got {other:?}"),
+    };
+
+    let mut child = claim(ToolCallId::new(), 47);
+    child.root_session = parent.root_session;
+    child.admission_units = 2;
+    child.actor_claim = Some(actor_claim);
+    let child_intents = vec![
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x47; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa7; 32],
+            spawn_intent: vec![0xd1, 0x06],
+        },
+        AdmissionIntent {
+            runtime_fingerprint_version: 1,
+            runtime_fingerprint: [0x48; 32],
+            admission_binding_fingerprint_version: 1,
+            admission_binding_fingerprint: [0xa8; 32],
+            spawn_intent: vec![0xd1, 0x07],
+        },
+    ];
+    let child_launches = match store
+        .suspend_parent_and_claim_admission_batch(
+            parent.operation_id,
+            0,
+            &child,
+            child_intents.clone(),
+        )
+        .await
+        .unwrap()
+    {
+        AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+        other => panic!("expected two accepted child launches, got {other:?}"),
+    };
+    assert_eq!(child_launches.len(), 2);
+    for (ordinal, (launch, intent)) in child_launches.iter().zip(&child_intents).enumerate() {
+        assert_eq!(launch.record.state, AdmissionState::Accepted);
+        assert_eq!(launch.record.member_ordinal, ordinal as u32);
+        assert_eq!(&launch.intent, intent);
+    }
+    let parent_waiting = store.admissions(parent.operation_id).await.unwrap();
+    assert_eq!(parent_waiting.len(), 1);
+    assert_eq!(parent_waiting[0].state, AdmissionState::Waiting);
+    assert_eq!(parent_waiting[0].operation_id, parent_started.operation_id);
+    assert_eq!(
+        parent_waiting[0].source_tool_call_id,
+        parent_started.source_tool_call_id
+    );
+    assert_eq!(parent_waiting[0].root_session, parent_started.root_session);
+    assert_eq!(
+        parent_waiting[0].request_fingerprint,
+        parent_started.request_fingerprint
+    );
+    assert_eq!(
+        parent_waiting[0].member_ordinal,
+        parent_started.member_ordinal
+    );
+    assert_eq!(parent_waiting[0].batch_size, parent_started.batch_size);
+    assert_eq!(
+        parent_waiting[0].admission_units,
+        parent_started.admission_units
+    );
+    assert_eq!(
+        parent_waiting[0].actor,
+        Some(AdmissionActorBinding {
+            actor_id: actor_claim.actor_id,
+            actor_epoch: actor_claim.epoch,
+        })
+    );
+    let child_records = store.admissions(child.operation_id).await.unwrap();
+    assert_eq!(child_records.len(), 2);
+    assert!(child_records.iter().all(|record| {
+        record.state == AdmissionState::Accepted
+            && record.root_session == parent.root_session
+            && record.batch_size == 2
+            && record.admission_units == 1
+            && record.actor
+                == Some(AdmissionActorBinding {
+                    actor_id: actor_claim.actor_id,
+                    actor_epoch: actor_claim.epoch,
+                })
+    }));
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 2);
+    assert_eq!(counts.non_active, 1);
+    assert_eq!(counts.total, 3);
+
+    let queued_parent = store
+        .queue_waiting_admission_member(parent.operation_id, 0, Some(&actor_claim))
+        .await
+        .unwrap();
+    assert_eq!(queued_parent.operation_id, parent.operation_id);
+    assert_eq!(queued_parent.member_ordinal, 0);
+    assert_eq!(queued_parent.state, AdmissionState::Queued);
+    let queued_parent_records = store.admissions(parent.operation_id).await.unwrap();
+    assert_eq!(queued_parent_records[0].state, AdmissionState::Queued);
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 2);
+    assert_eq!(counts.non_active, 1);
+    assert_eq!(counts.total, 3);
+
+    let queued_again = store
+        .queue_waiting_admission_member(parent.operation_id, 0, Some(&actor_claim))
+        .await
+        .unwrap();
+    assert_eq!(queued_again, queued_parent);
+    let wrong_claim = store
+        .queue_waiting_admission_member(parent.operation_id, 0, None)
+        .await;
+    assert!(matches!(wrong_claim, Err(StoreError::AdmissionData(_))));
+    let queued_after_wrong_claim = store.admissions(parent.operation_id).await.unwrap();
+    assert_eq!(queued_after_wrong_claim.len(), 1);
+    assert_eq!(queued_after_wrong_claim[0].state, AdmissionState::Queued);
+    assert_eq!(queued_after_wrong_claim[0].actor, queued_parent.actor);
+
+    let promoted_parent = store.promote_queued_admissions(1).await.unwrap();
+    assert_eq!(promoted_parent.len(), 1);
+    assert_eq!(promoted_parent[0].record.operation_id, parent.operation_id);
+    assert_eq!(promoted_parent[0].record.member_ordinal, 0);
+    assert_eq!(promoted_parent[0].record.state, AdmissionState::Accepted);
+    assert_eq!(promoted_parent[0].intent, parent_intent);
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 3);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 3);
+
+    let rollback_db = AdmissionTempDb::new();
+    let rollback_store = SessionStore::connect(rollback_db.path()).await.unwrap();
+    let mut rollback_parent = claim(ToolCallId::new(), 49);
+    rollback_parent.admission_units = 1;
+    let rollback_parent_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x49; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xa9; 32],
+        spawn_intent: vec![0xd1, 0x08],
+    };
+    assert!(matches!(
+        rollback_store
+            .claim_admission_batch(&rollback_parent, vec![rollback_parent_intent])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    assert!(matches!(
+        rollback_store
+            .start_admission_member(rollback_parent.operation_id, 0, None)
+            .await
+            .unwrap(),
+        AdmissionStartOutcome::Started(_)
+    ));
+    let mut filler = claim(ToolCallId::new(), 50);
+    filler.admission_units = 255;
+    let filler_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x50; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xaa; 32],
+        spawn_intent: vec![0xd1, 0x09],
+    };
+    assert!(matches!(
+        rollback_store
+            .claim_admission_batch(&filler, vec![filler_intent; 255])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    let counts = rollback_store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 156);
+    assert_eq!(counts.total, 256);
+
+    let mut rejected_child = claim(ToolCallId::new(), 51);
+    rejected_child.root_session = rollback_parent.root_session;
+    rejected_child.admission_units = 1;
+    let rejected_child_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x51; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xab; 32],
+        spawn_intent: vec![0xd1, 0x0a],
+    };
+    assert!(matches!(
+        rollback_store
+            .suspend_parent_and_claim_admission_batch(
+                rollback_parent.operation_id,
+                0,
+                &rejected_child,
+                vec![rejected_child_intent],
+            )
+            .await,
+        Err(StoreError::AdmissionCapacityExceeded {
+            active: 100,
+            non_active: 156,
+            requested: 1,
+        })
+    ));
+    let rollback_parent_records = rollback_store
+        .admissions(rollback_parent.operation_id)
+        .await
+        .unwrap();
+    assert_eq!(rollback_parent_records.len(), 1);
+    assert_eq!(rollback_parent_records[0].state, AdmissionState::Started);
+    assert!(
+        rollback_store
+            .admissions(rejected_child.operation_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let counts = rollback_store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 156);
+    assert_eq!(counts.total, 256);
 }
