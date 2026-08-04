@@ -4429,6 +4429,7 @@ mod tests {
         let workdir = tempdir().join("recovered-transient-admission-workdir");
         std::fs::create_dir_all(&workdir).unwrap();
         struct IdentityFakeProvider {
+            configured_identity_calls: Arc<AtomicUsize>,
             inner: FakeProvider,
         }
 
@@ -4443,6 +4444,8 @@ mod tests {
             }
 
             fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+                self.configured_identity_calls
+                    .fetch_add(1, Ordering::SeqCst);
                 Some(b"hya-test-configured-identity-v1".to_vec())
             }
 
@@ -4456,7 +4459,9 @@ mod tests {
             }
         }
 
+        let configured_identity_calls = Arc::new(AtomicUsize::new(0));
         let provider = Arc::new(IdentityFakeProvider {
+            configured_identity_calls: Arc::clone(&configured_identity_calls),
             inner: FakeProvider::scripted_turns(vec![
                 vec![
                     FakeStep::ToolCall {
@@ -4506,7 +4511,6 @@ mod tests {
         let binding = engine.bind_runtime(&workdir).unwrap();
         let runtime_fingerprint = engine.runtime_semantic_fingerprint_v1(&binding).unwrap();
         let categories = Arc::new(CategoryRegistry::default());
-        let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
         let resolution = AdmissionResolutionContext::capture(
             AgentSpec {
                 name: AgentName::new("build"),
@@ -4519,6 +4523,11 @@ mod tests {
             Arc::clone(&router),
         )
         .unwrap();
+        assert_eq!(
+            configured_identity_calls.load(Ordering::SeqCst),
+            1,
+            "AdmissionResolutionContext::capture must use the uniquely observable engine provider"
+        );
         let admission_fingerprint =
             resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
         let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
