@@ -2687,3 +2687,9 @@ finalization wakes foreign owners only after durable commit (third finalize site
 Focused lifecycle tests, full hya-app lib 147/147, clippy `-D warnings` on
 hya-app/hya-backend, and rustfmt are green.
 
+## 18.21 Consult30 whole-batch foreground reply lock
+
+Consult30 RED 1 is locked with a capacity-faithful mixed batch: 99 active
+fillers force a 2-member foreground claim into Started+Queued. The owner keeps
+the reply pending until the queued ordinal is promoted, started, and terminal,
+then returns ordinal-ordered MemberOutcome identity. Full hya-app lib green.
