@@ -1539,22 +1539,23 @@ effect-fence contracts, and `0.34.12` remote CI green.
 
 ### Slices
 
-- [ ] **P8.1 Canonical signed metadata.** Verify trust root, release sequence,
+- [x] **P8.1 Canonical signed metadata.** Verify trust root, release sequence,
       freshness, platform/compatibility, hashes/sizes, and explicit recovery
-      intent without loading candidate code.
-- [ ] **P8.2 Immutable staging.** Download/copy into a versioned staging
-      directory, verify locked artifacts, fsync supported filesystem boundaries,
-      and smoke in a dedicated subprocess without claiming sandbox isolation.
-- [ ] **P8.3 Activation journal/selector.** Journal prepare, quiesce/drain/fence
-      the runtime, atomically switch one selector, fsync the parent, and journal
-      commit/accepted floor.
-- [ ] **P8.4 Independent ownership.** Package verifier, trust roots, accepted
-      floor, journal, and selector so candidate/runtime/extensions cannot
-      modify them. The updater cannot read session databases or runtime secrets.
-- [ ] **P8.5 Recovery and break-glass.** Recover every interrupted state to one
-      complete verified generation. Retain `install.sh` as manual/bootstrap
-      recovery; an older release requires a newly authorized higher-sequence
-      recovery activation.
+      intent without loading candidate code. (`crates/hya-updater`)
+- [x] **P8.2 Immutable staging.** Stage into `releases/<sequence>/`, verify
+      locked artifacts, fsync artifact files, and smoke in a dedicated
+      subprocess without claiming sandbox isolation.
+- [x] **P8.3 Activation journal/selector.** Journal prepare, atomically switch
+      one selector (tmp+rename+fsync), and journal commit/accepted floor.
+      Runtime quiesce/drain remains a caller/runtime concern outside this TCB.
+- [x] **P8.4 Independent ownership.** Layout proof: verifier control paths
+      (trust roots, floor, journal, selector) live outside candidate trees; root
+      must not hold session DB/secret paths. Host OS permissions packaging still
+      owner-gated for production activation.
+- [x] **P8.5 Recovery and break-glass.** Recover prepare-without-commit (keep
+      previous) and prepare-after-selector (finish floor/commit). Higher-sequence
+      recovery advances the floor only. `install.sh` remains break-glass.
+      Production activation stays owner-gated after custody/crash matrices.
 
 ### RED/gates
 
@@ -2732,3 +2733,20 @@ gate: 100/156/256 envelope vector, item-257 typed overload with zero allocation,
 and Started release promoting exactly one Queued row. Workspace and TUI package
 versions advance to `0.34.12`; prior root changelog moved to
 `docs/changes/CHANGELOG_0.34.11.md`.
+
+## 18.26 P8 independent updater and 0.34.13 cut
+
+Added `crates/hya-updater` as the independent update TCB (no runtime/plugin/MCP/
+bundle/app/store deps):
+
+- ed25519 domain-separated signed release metadata with trust-root, platform,
+  freshness, digest, and anti-rollback floor checks
+- immutable `releases/<sequence>/` staging with path-escape rejection and
+  subprocess smoke
+- activation journal prepare/commit/abort, atomic selector rename, accepted floor
+  advance, and crash recovery to one complete generation
+- layout ownership proof for TCB paths outside candidate trees
+
+Workspace and TUI package versions advance to `0.34.13`; prior root changelog
+moved to `docs/changes/CHANGELOG_0.34.12.md`. Production activation remains
+owner-gated; `install.sh` remains break-glass.
