@@ -7,12 +7,12 @@ use anyhow::Context as _;
 use hya_bundle::{BundleCatalog, PreparedAgent, PreparedCatalog, SpawnLifecycle};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
-    CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberSpec,
-    MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry, SessionEngine,
-    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome,
-    SubagentGovernor, Summarizer, TeamEvidenceEnvelope, TurnBinding, build_system_prompt,
-    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_team,
-    run_pre_admitted_team_for_actor,
+    CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberEvidence,
+    MemberSpec, MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
+    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope, TurnBinding,
+    build_system_prompt, project_envelope, project_envelope_for_actor, run_mailbox_service,
+    run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -1370,6 +1370,14 @@ struct InstalledAdmissionTask<T> {
 }
 
 #[allow(dead_code)]
+struct TransientAdmissionCompletion {
+    operation_id: hya_proto::OperationId,
+    member_ordinal: u32,
+    evidence: MemberEvidence,
+    promoted: Vec<AdmissionLaunch>,
+}
+
+#[allow(dead_code)]
 fn install_admission_task<F, T>(
     launch: &AdmissionLaunch,
     work_future: F,
@@ -1391,6 +1399,94 @@ where
         start_signal: Some(start_signal),
         handle: Some(handle),
     }
+}
+
+#[allow(dead_code)]
+fn install_transient_admission_launch(
+    engine: Arc<SessionEngine>,
+    resolved: ResolvedAdmissionLaunch,
+    cancel: tokio_util::sync::CancellationToken,
+    actor_claim: Option<hya_store::ActorClaim>,
+) -> InstalledAdmissionTask<Result<TransientAdmissionCompletion, SpawnError>> {
+    let ResolvedAdmissionLaunch {
+        launch,
+        intent,
+        resolved:
+            ResolvedSpawnMember {
+                request: member,
+                authorized_target,
+                agent,
+                binding,
+                agents,
+                resources,
+                guidance,
+                sidecar_factory,
+                ..
+            },
+    } = resolved;
+    let _authorized_target = authorized_target;
+    let operation_id = launch.record.operation_id;
+    let member_ordinal = launch.record.member_ordinal;
+    let parent = intent.parent();
+    let spec = MemberSpec {
+        id: MemberId::new(),
+        agent,
+        binding,
+        agents,
+        resources: Some(resources),
+        guidance,
+        directive: member.prompt,
+        description: member.description,
+        session: member
+            .task_id
+            .as_deref()
+            .and_then(|task_id| task_id.parse::<SessionId>().ok()),
+        sidecar_factory,
+    };
+    let work_future = async move {
+        let evidence = match actor_claim {
+            Some(claim) => {
+                run_pre_admitted_team_for_actor(
+                    engine.clone(),
+                    parent,
+                    vec![spec],
+                    cancel.clone(),
+                    claim,
+                )
+                .await
+            }
+            None => run_pre_admitted_team(engine.clone(), parent, vec![spec], cancel.clone()).await,
+        };
+        let failed =
+            !matches!(evidence.as_slice(), [entry] if entry.status != MemberStatus::Failed);
+        let (terminal, reason) = if cancel.is_cancelled() {
+            (AdmissionTerminal::Cancelled, "spawn member cancelled")
+        } else if failed {
+            (AdmissionTerminal::Aborted, "spawn member failed")
+        } else {
+            (AdmissionTerminal::Completed, "spawn member completed")
+        };
+        let outcome = engine
+            .store()
+            .finalize_admission_members(
+                &[(operation_id, member_ordinal)],
+                terminal,
+                reason,
+                actor_claim.as_ref(),
+            )
+            .await
+            .map_err(|_| SpawnError::Unavailable)?;
+        let [evidence] = evidence.as_slice() else {
+            return Err(SpawnError::Unavailable);
+        };
+        Ok(TransientAdmissionCompletion {
+            operation_id,
+            member_ordinal,
+            evidence: evidence.clone(),
+            promoted: outcome.promoted,
+        })
+    };
+    install_admission_task(&launch, work_future)
 }
 
 #[allow(dead_code)]
@@ -4309,6 +4405,232 @@ mod tests {
                 .iter()
                 .map(|session| session.session.to_string())
                 .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn recovered_transient_launch_executes_only_after_started_barrier() {
+        let workdir = tempdir().join("recovered-transient-admission-workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let engine = Arc::new(engine_with_catalog(builtin_catalog().unwrap()).await);
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let runtime_fingerprint = engine.runtime_semantic_fingerprint_v1(&binding).unwrap();
+        let categories = Arc::new(CategoryRegistry::default());
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
+        let resolution = AdmissionResolutionContext::capture(
+            AgentSpec {
+                name: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                system_prompt: "current prompt".to_string(),
+                workdir: workdir.clone(),
+                reasoning: None,
+            },
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .unwrap();
+        let admission_fingerprint =
+            resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let spawn_intent = SpawnIntentV1::new(SpawnIntentInputV1 {
+            member: SpawnMember {
+                description: "recovered transient description".to_string(),
+                prompt: "recovered transient prompt".to_string(),
+                subagent_type: "general".to_string(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            },
+            parent,
+            stable_target: AgentName::new("general"),
+            background: true,
+            operation,
+            member_ordinal: 0,
+            batch_cardinality: 1,
+            prior_start: PriorStartV1::NeverStarted,
+            runtime_fingerprint,
+            admission_binding_fingerprint: admission_fingerprint,
+            diagnostic_generation: binding.generation().get(),
+        })
+        .unwrap();
+        let claim = hya_store::AdmissionClaim {
+            operation_id: operation.operation_id(),
+            source_tool_call_id: operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x91; 32],
+            admission_units: 1,
+            actor_claim: None,
+        };
+        let launch = match engine
+            .store()
+            .claim_admission_batch(
+                &claim,
+                vec![spawn_intent.clone().into_admission_intent().unwrap()],
+            )
+            .await
+            .unwrap()
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(mut launches) => {
+                assert_eq!(launches.len(), 1);
+                launches.pop().unwrap()
+            }
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh transient admission must not already exist")
+            }
+        };
+        assert_eq!(launch.record.state, hya_store::AdmissionState::Accepted);
+        let stale_launch = launch.clone();
+
+        struct CountingSidecarEnvironment {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl SidecarEnvironment for CountingSidecarEnvironment {
+            fn factory_for(
+                &self,
+                _binding: &TurnBinding,
+                _stable_id: &str,
+            ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+        }
+
+        let sidecar_calls = Arc::new(AtomicUsize::new(0));
+        let sidecar_environment = CountingSidecarEnvironment {
+            calls: Arc::clone(&sidecar_calls),
+        };
+        let mut resolved = resolve_recovered_admission_launches(
+            &engine,
+            &resolution,
+            &sidecar_environment,
+            launch,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+        let resolved_launch = resolved.pop().unwrap();
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+
+        let sessions_before = engine.store().list_sessions().await.unwrap();
+        assert_eq!(sessions_before.len(), 1);
+        let parent_before = engine.read_projection(parent).await.unwrap();
+        assert!(parent_before.session.members.is_empty());
+        let record_before = engine
+            .store()
+            .admission(operation.operation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record_before.state, hya_store::AdmissionState::Accepted);
+        assert!(!record_before.logical_released);
+
+        let installed = install_transient_admission_launch(
+            Arc::clone(&engine),
+            resolved_launch,
+            CancellationToken::new(),
+            None,
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(engine.store().list_sessions().await.unwrap().len(), 1);
+        assert!(
+            engine
+                .read_projection(parent)
+                .await
+                .unwrap()
+                .session
+                .members
+                .is_empty()
+        );
+        let record_before_start = engine
+            .store()
+            .admission(operation.operation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record_before_start.state,
+            hya_store::AdmissionState::Accepted
+        );
+        assert!(!record_before_start.logical_released);
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+
+        let handle = installed.start(engine.store(), None).await.unwrap();
+        let completion = handle.await.unwrap().unwrap();
+        assert_eq!(completion.operation_id, operation.operation_id());
+        assert_eq!(completion.member_ordinal, 0);
+        assert_eq!(completion.evidence.status, MemberStatus::Done);
+        assert_ne!(completion.evidence.session, "-");
+        let child = completion.evidence.session.parse::<SessionId>().unwrap();
+        assert_eq!(completion.promoted.len(), 0);
+
+        let completed_record = engine
+            .store()
+            .admission(operation.operation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed_record.state, hya_store::AdmissionState::Completed);
+        assert!(completed_record.logical_released);
+        assert_eq!(
+            completed_record.terminal_reason.as_deref(),
+            Some("spawn member completed")
+        );
+        assert_eq!(
+            engine.store().admission_counts().await.unwrap(),
+            hya_store::AdmissionCounts {
+                active: 0,
+                non_active: 0,
+                total: 0,
+            }
+        );
+
+        let sessions_after = engine.store().list_sessions().await.unwrap();
+        assert_eq!(sessions_after.len(), 2);
+        let child_projection = engine.read_projection(child).await.unwrap();
+        assert_eq!(child_projection.session.parent, Some(parent));
+        let parent_after = engine.read_projection(parent).await.unwrap();
+        assert_eq!(parent_after.session.members.len(), 1);
+        assert_eq!(
+            parent_after.session.members[0].status,
+            MemberRunStatus::Done
+        );
+        assert_eq!(parent_after.session.members[0].child, Some(child));
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+
+        assert!(
+            resolve_recovered_admission_launches(
+                &engine,
+                &resolution,
+                &sidecar_environment,
+                stale_launch,
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(engine.store().list_sessions().await.unwrap().len(), 2);
+        assert_eq!(
+            engine
+                .read_projection(parent)
+                .await
+                .unwrap()
+                .session
+                .members
+                .len(),
+            1
         );
     }
 
