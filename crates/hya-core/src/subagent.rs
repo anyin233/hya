@@ -11,7 +11,9 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{AgentSpec, CreateSession, SessionEngine};
+use crate::engine::{
+    AdmissionMemberIdentity, AgentSpec, CreateSession, SessionEngine, scope_admission_member,
+};
 use crate::error::CoreError;
 use crate::hooks::scope_activation_hooks;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
@@ -425,7 +427,7 @@ pub async fn run_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, true, None).await
+    run_team_inner(engine, lead, specs, cancel, true, None, None).await
 }
 
 /// Run a team whose complete member set was reserved by [`pre_admit_team`].
@@ -438,7 +440,30 @@ pub async fn run_pre_admitted_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, false, None).await
+    run_team_inner(engine, lead, specs, cancel, false, None, None).await
+}
+
+/// Run one member that has already been admitted by the durable scheduler.
+///
+/// The admission identity is process-local orchestration context only; it is
+/// available to nested spawn dispatch without changing session or event data.
+pub async fn run_pre_admitted_member(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    member: MemberSpec,
+    cancel: CancellationToken,
+    admission: AdmissionMemberIdentity,
+) -> Vec<MemberEvidence> {
+    run_team_inner(
+        engine,
+        lead,
+        vec![member],
+        cancel,
+        false,
+        None,
+        Some(admission),
+    )
+    .await
 }
 
 pub async fn run_pre_admitted_team_for_actor(
@@ -448,7 +473,7 @@ pub async fn run_pre_admitted_team_for_actor(
     cancel: CancellationToken,
     actor_claim: ActorClaim,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, false, Some(actor_claim)).await
+    run_team_inner(engine, lead, specs, cancel, false, Some(actor_claim), None).await
 }
 
 async fn run_team_inner(
@@ -458,6 +483,7 @@ async fn run_team_inner(
     cancel: CancellationToken,
     reserve_admission: bool,
     actor_claim: Option<ActorClaim>,
+    admission: Option<AdmissionMemberIdentity>,
 ) -> Vec<MemberEvidence> {
     let mut rejected: Vec<MemberEvidence> = Vec::new();
     let specs: Vec<MemberSpec> = if !reserve_admission {
@@ -524,7 +550,11 @@ async fn run_team_inner(
         let child_cancel = cancel.child_token();
         let id = spec.id;
         let task = tokio::spawn(async move {
-            run_member(engine, lead, spec, handle, child_cancel, actor_claim).await
+            scope_admission_member(
+                admission,
+                run_member(engine, lead, spec, handle, child_cancel, actor_claim),
+            )
+            .await
         });
         member_tasks.push((id, task));
     }
