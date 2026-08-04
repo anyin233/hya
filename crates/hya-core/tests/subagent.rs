@@ -1239,6 +1239,114 @@ async fn governed_engine(
     (engine, agent)
 }
 
+#[tokio::test]
+async fn provider_streams_partition_100_general_28_reserved_and_root_progresses() {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let provider = Arc::new(TransientLossProvider {
+        entered: entered.clone(),
+        release: release.clone(),
+    });
+    let (engine, agent) = governed_engine(SubagentLimits::default(), provider).await;
+    let governor = engine.governor().expect("governor installed").clone();
+
+    assert_eq!(governor.limits().max_concurrency, 100);
+    assert_eq!(governor.available_general_stream_permits(), 100);
+    assert_eq!(governor.available_reserved_stream_permits(), 28);
+
+    let mut general = Vec::with_capacity(100);
+    for _ in 0..100 {
+        general.push(
+            governor
+                .acquire_general_stream()
+                .await
+                .expect("general stream permit"),
+        );
+    }
+    assert_eq!(governor.available_general_stream_permits(), 0);
+    assert_eq!(governor.available_reserved_stream_permits(), 28);
+    let counts = engine.store().admission_counts().await.unwrap();
+    assert_eq!(counts.active, 0);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 0);
+
+    let root = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(root, "root progress".to_string())
+        .await
+        .unwrap();
+    let run = tokio::spawn({
+        let engine = engine.clone();
+        let agent = agent.clone();
+        async move {
+            engine
+                .run_turn(root, &agent, CancellationToken::new())
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .expect("root provider stream must progress under general saturation");
+    assert_eq!(governor.available_general_stream_permits(), 0);
+    assert_eq!(governor.available_reserved_stream_permits(), 27);
+    let counts = engine.store().admission_counts().await.unwrap();
+    assert_eq!(counts.active, 0);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 0);
+
+    release.notify_one();
+    assert_eq!(run.await.unwrap().unwrap(), FinishReason::Stop);
+    assert_eq!(governor.available_reserved_stream_permits(), 28);
+
+    let mut reserved = Vec::with_capacity(28);
+    for _ in 0..28 {
+        reserved.push(
+            governor
+                .acquire_reserved_stream()
+                .await
+                .expect("reserved stream permit"),
+        );
+    }
+    assert_eq!(governor.available_general_stream_permits(), 0);
+    assert_eq!(governor.available_reserved_stream_permits(), 0);
+
+    drop(general.pop().expect("general permit to release"));
+    assert_eq!(governor.available_general_stream_permits(), 1);
+    assert_eq!(governor.available_reserved_stream_permits(), 0);
+    general.push(
+        governor
+            .acquire_general_stream()
+            .await
+            .expect("general stream permit reacquisition"),
+    );
+    drop(reserved.pop().expect("reserved permit to release"));
+    assert_eq!(governor.available_general_stream_permits(), 0);
+    assert_eq!(governor.available_reserved_stream_permits(), 1);
+    reserved.push(
+        governor
+            .acquire_reserved_stream()
+            .await
+            .expect("reserved stream permit reacquisition"),
+    );
+    drop(general);
+    drop(reserved);
+    assert_eq!(governor.available_general_stream_permits(), 100);
+    assert_eq!(governor.available_reserved_stream_permits(), 28);
+
+    let counts = engine.store().admission_counts().await.unwrap();
+    assert_eq!(counts.active, 0);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 0);
+}
+
 fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberSpec {
     MemberSpec {
         id: MemberId::new(),
