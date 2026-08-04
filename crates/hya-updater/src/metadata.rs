@@ -23,6 +23,9 @@ pub struct ArtifactDigest {
     pub sha256_hex: String,
 }
 
+/// Current signed-metadata protocol supported by this crate.
+pub const SUPPORTED_PROTOCOL_VERSION: u32 = 1;
+
 /// Signed release metadata. The `signature` field is excluded from the
 /// canonical payload that is verified.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -37,6 +40,11 @@ pub struct ReleaseMetadata {
     /// When true, may reinstall a previously accepted generation only if the
     /// sequence still advances the accepted floor (authorized recovery).
     pub recovery: bool,
+    /// Metadata protocol version. Must equal [`SUPPORTED_PROTOCOL_VERSION`].
+    pub protocol_version: u32,
+    /// Minimum updater package version required to apply this release
+    /// (semver string compared as `CARGO_PKG_VERSION`).
+    pub min_updater_version: String,
     pub key_id: String,
     /// Ed25519 signature over the domain-separated canonical payload.
     pub signature: Vec<u8>,
@@ -49,5 +57,7 @@ pub struct VerifiedRelease {
     pub platform: String,
     pub artifacts: Vec<ArtifactDigest>,
     pub recovery: bool,
+    pub protocol_version: u32,
+    pub min_updater_version: String,
     pub key_id: String,
 }

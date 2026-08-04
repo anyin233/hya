@@ -32,6 +32,13 @@ If you want to package a public AgentBundle:
    [disjoint Bun example](examples/bun-disjoint/), and use the
    [bundle CLI reference](cli.md#bundle-commands).
 
+If you want the independent self-update path (0.34.13+):
+
+1. Read [Secure self-update](self-update.md).
+2. Run the local dry-run under [examples/self-update](examples/self-update/).
+3. Remember: signatures alone never activate; production needs explicit owner
+   authorization, and `install.sh` remains break-glass recovery.
+
 If you want to understand the codebase:
 
 1. [Project Structure](project-structure.md)
@@ -53,6 +60,7 @@ If you want to understand the codebase:
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [CLI Reference](cli.md) | Document shipped `hya` commands and flags. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundles, including static and Bun-sidecar forms. |
+| [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |

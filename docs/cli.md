@@ -242,3 +242,29 @@ accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID.
 
 This command intentionally exits cleanly on broken pipe, so shell filters such
 as `head` and `grep -q` can close stdout without causing a panic.
+
+## `hya-updater` (independent self-update TCB)
+
+`hya-updater` is a separate binary from `hya-backend`. It verifies signed
+release metadata, stages immutable generations, optionally smokes them, and
+activates only with explicit owner authorization. See
+[Secure self-update](self-update.md).
+
+```sh
+cargo build -p hya-updater --bin hya-updater
+./target/debug/hya-updater version
+./target/debug/hya-updater status --root /var/lib/hya/updater
+./target/debug/hya-updater recover --root /var/lib/hya/updater
+./target/debug/hya-updater apply \
+  --root /var/lib/hya/updater \
+  --metadata release.metadata.json \
+  --package ./package-dir \
+  --platform x86_64-unknown-linux-gnu \
+  --smoke smoke.sh
+# owner-gated activation only:
+./target/debug/hya-updater apply ... --owner-authorized-activation
+./target/debug/hya-updater discard --root /var/lib/hya/updater --sequence 42
+```
+
+Network download is outside the TCB. Pass a local package directory or
+`file://` path. `install.sh` remains break-glass recovery.

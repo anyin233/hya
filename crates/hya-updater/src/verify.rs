@@ -3,10 +3,16 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::UpdaterError;
-use crate::metadata::{AcceptedFloor, ArtifactDigest, ReleaseMetadata, TrustRoot, VerifiedRelease};
+use crate::metadata::{
+    AcceptedFloor, ArtifactDigest, ReleaseMetadata, SUPPORTED_PROTOCOL_VERSION, TrustRoot,
+    VerifiedRelease,
+};
 
 /// Domain separation for release-metadata signatures.
 pub const METADATA_DOMAIN: &[u8] = b"hya.updater.release-metadata.v1";
+
+/// This package's version, used for `min_updater_version` checks.
+pub const UPDATER_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Serialize)]
 struct CanonicalMetadata<'a> {
@@ -16,6 +22,8 @@ struct CanonicalMetadata<'a> {
     not_before: i64,
     not_after: i64,
     recovery: bool,
+    protocol_version: u32,
+    min_updater_version: &'a str,
     key_id: &'a str,
 }
 
@@ -33,6 +41,11 @@ pub fn canonical_metadata_payload(
     if metadata.key_id.is_empty() {
         return Err(UpdaterError::InvalidMetadata(
             "key_id must be non-empty".to_string(),
+        ));
+    }
+    if metadata.min_updater_version.is_empty() {
+        return Err(UpdaterError::InvalidMetadata(
+            "min_updater_version must be non-empty".to_string(),
         ));
     }
     if metadata.not_after < metadata.not_before {
@@ -78,6 +91,8 @@ pub fn canonical_metadata_payload(
         not_before: metadata.not_before,
         not_after: metadata.not_after,
         recovery: metadata.recovery,
+        protocol_version: metadata.protocol_version,
+        min_updater_version: &metadata.min_updater_version,
         key_id: &metadata.key_id,
     };
     let json = serde_json::to_vec(&body).map_err(|error| {
@@ -91,6 +106,33 @@ pub fn canonical_metadata_payload(
     Ok(out)
 }
 
+/// Compare dotted numeric versions (`1.2.3`); non-numeric tails are rejected.
+fn version_cmp(left: &str, right: &str) -> Result<std::cmp::Ordering, UpdaterError> {
+    let parse = |value: &str| -> Result<Vec<u64>, UpdaterError> {
+        if value.is_empty() {
+            return Err(UpdaterError::InvalidMetadata(
+                "version string must be non-empty".to_string(),
+            ));
+        }
+        value
+            .split('.')
+            .map(|part| {
+                part.parse::<u64>().map_err(|_| {
+                    UpdaterError::InvalidMetadata(format!(
+                        "version `{value}` must be dotted numeric semver"
+                    ))
+                })
+            })
+            .collect()
+    };
+    let mut a = parse(left)?;
+    let mut b = parse(right)?;
+    let len = a.len().max(b.len());
+    a.resize(len, 0);
+    b.resize(len, 0);
+    Ok(a.cmp(&b))
+}
+
 /// Verify signed release metadata against trust roots and anti-rollback floor.
 ///
 /// Does not load candidate runtime code, session databases, or extension
@@ -102,6 +144,20 @@ pub fn verify_release_metadata(
     now_unix: i64,
     host_platform: &str,
 ) -> Result<VerifiedRelease, UpdaterError> {
+    if metadata.protocol_version != SUPPORTED_PROTOCOL_VERSION {
+        return Err(UpdaterError::UnsupportedProtocol {
+            got: metadata.protocol_version,
+            supported: SUPPORTED_PROTOCOL_VERSION,
+        });
+    }
+    if version_cmp(UPDATER_PACKAGE_VERSION, &metadata.min_updater_version)?
+        == std::cmp::Ordering::Less
+    {
+        return Err(UpdaterError::UpdaterTooOld {
+            have: UPDATER_PACKAGE_VERSION.to_string(),
+            need: metadata.min_updater_version.clone(),
+        });
+    }
     if metadata.sequence <= floor.sequence {
         return Err(UpdaterError::NonIncreasingSequence {
             sequence: metadata.sequence,
@@ -142,6 +198,8 @@ pub fn verify_release_metadata(
         platform: metadata.platform.clone(),
         artifacts: metadata.artifacts.clone(),
         recovery: metadata.recovery,
+        protocol_version: metadata.protocol_version,
+        min_updater_version: metadata.min_updater_version.clone(),
         key_id: metadata.key_id.clone(),
     })
 }
