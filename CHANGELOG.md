@@ -1,26 +1,14 @@
-# 0.34.11
+# 0.34.12
 
-- Keep `SessionEngine` as the only agent runtime while activating an optional
-  Bun Compat sidecar per public transient or resident Bundle activation;
-  static-only Bundles remain process-free.
-- Gate first work and model polling on initialize ACK plus declaration-drift
-  validation, exact Tool/Hook declaration sets, and canonical `hook_refs`;
-  preserve JSON-RPC request/notification roles, bound stderr, and make
-  shutdown, terminate, reap, exit observation, and process loss explicit.
-- Resolve the selected exact-path owning-bundle Tool/Hook closure and JS
-  entrypoints from the captured TurnBinding; staged-vs-active isolation keeps
-  staged Extensions inactive, while the existing permission plane runs before
-  RPC and tool results return through the existing Harness event/projection path.
-- Expand strict public archives to the exact root manifest plus existing-v1
-  declared agent prompt/resource/Extension closure, with canonical
-  directory/archive identity and generation-preserving failure. Self-contained
-  selected JS entrypoints have no helper/import closure. Private activation, raw
-  Rust extensions, Bundle-declared MCP, and unenforceable resource profiles
-  remain unsupported.
-- Reuse one healthy resident sidecar across mailbox messages while keeping its
-  state volatile; fence running loss, preserve queued-after mail for fresh ACK,
-  and make explicit stop final and idempotent. No TTL, heartbeat, idle reclaim,
-  process adoption, or permission expansion is introduced.
-- Add transient, resident, and disjoint multi-agent Bun authoring examples,
-  the 0.34.11 runtime/CLI contract, and an updated built-in AgentBundle
-  authoring skill.
+- Add durable multi-resource admission with a 100-active / 156-non-active /
+  256-envelope capacity vector, atomic batch claim, Queued promotion, parent
+  suspension fairness, and restart-stable reconstruction.
+- Route foreground transient batches and single-member background work through a
+  process-local admission owner that rehydrates on wake, preserves ordinal reply
+  identity, delays background running replies until Started registration, and
+  cancel-first terminalizes with `SpawnError::Cancelled`.
+- Own spawn-supervisor lifecycle via public `BuiltSessionEngine`: explicit
+  shutdown drains handlers; Drop is nonblocking stop/abort; backend commands and
+  serve paths await shutdown.
+- Certify R10 capacity gates (100/156/256, item-257 zero allocation, bounded
+  promotion after Started release) and lock Consult30 live queued reply barriers.
