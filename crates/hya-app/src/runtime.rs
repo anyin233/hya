@@ -8377,6 +8377,170 @@ agents:
     }
 
     #[tokio::test]
+    async fn queued_foreground_reply_waits_for_all_terminal() {
+        // Consult30 RED 1 (capacity-faithful form): fill 99 active slots, then a
+        // 2-member foreground batch yields 1 Accepted + 1 Queued. Reply must wait
+        // until both are terminal and preserve ordinal order/identity.
+        let workdir = tempdir();
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "queued batch reply base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent,
+            request_fingerprint: [0x44; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        match engine
+            .store()
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap()
+        {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => panic!("filler must be fresh"),
+        }
+
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_id = operation.operation_id();
+        let members = vec![
+            SpawnMember {
+                description: "batch-0".to_string(),
+                prompt: "BATCH-MARKER-0".to_string(),
+                subagent_type: "general".to_string(),
+                ..SpawnMember::default()
+            },
+            SpawnMember {
+                description: "batch-1".to_string(),
+                prompt: "BATCH-MARKER-1".to_string(),
+                subagent_type: "general".to_string(),
+                ..SpawnMember::default()
+            },
+        ];
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let reply_task = tokio::spawn(async move {
+            spawner
+                .spawn(operation, members, CancellationToken::new())
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("accepted member must enter provider gate");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = engine.store().admissions(operation_id).await.unwrap();
+                if records.len() == 2
+                    && records[0].state == hya_store::AdmissionState::Started
+                    && records[1].state == hya_store::AdmissionState::Queued
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("batch must split into Started + Queued under full active capacity");
+        assert!(
+            !reply_task.is_finished(),
+            "foreground reply must wait while any member is nonterminal"
+        );
+
+        // Release member 0; promotion should start member 1 and re-enter the gate.
+        let second_enter = provider_gate.entered.notified();
+        provider_gate.release.notify_waiters();
+        tokio::time::timeout(Duration::from_secs(10), second_enter)
+            .await
+            .expect("promoted queued member must enter provider after member 0 completes");
+        provider_gate.release.notify_waiters();
+        let reply = tokio::time::timeout(Duration::from_secs(30), reply_task)
+            .await
+            .expect("whole-batch reply timed out")
+            .expect("join")
+            .expect("mixed Accepted/Queued foreground batch must reply Ok after all terminal");
+        assert_eq!(reply.len(), 2);
+        assert!(reply.iter().all(|o| o.status == "done"), "{reply:?}");
+        assert!(
+            reply[0].summary.contains("BATCH-MARKER-0")
+                && reply[1].summary.contains("BATCH-MARKER-1"),
+            "ordinal-ordered identity must survive queued promotion: {reply:?}"
+        );
+        let terminal = engine.store().admissions(operation_id).await.unwrap();
+        assert!(terminal.iter().all(|r| r.state.is_terminal()));
+    }
+
+    #[tokio::test]
     async fn built_session_engine_shutdown_drains_supervisor() {
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
