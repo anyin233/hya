@@ -1170,3 +1170,29 @@ Before restart launch RED 3, `hya-app` composes the completed core `RuntimeSeman
 Live supervisor integration must keep a durable `Queued` commit invisible to the caller and allocation-free. Foreground replies only after the complete admitted batch is terminal; one-member background/resident replies only after its exact promotion, member `Started` CAS, and real registration. Queued cancellation and promotion race only through the existing journal writer transaction; cancellation-first returns the new unit `SpawnError::Cancelled`, promotion-first uses existing later cancellation. The already-Result-bearing oneshot and `Unavailable` channel-loss flattening remain unchanged, no sender survives restart, and dropped receivers do not cancel/retry durable work.
 
 The non-skippable live RED order is: 101-member foreground whole-batch reply barrier; parameterized background/resident registration gate; queued-cancel-first; queued-promotion-first; dropped receiver before each race; and mixed foreground cancellation. Each closes atomically before the next opens. No public queued outcome, placeholder identity, reply registry, wire change, or queued execution allocation enters R10.
+
+## Consult31 corrected foreground owner/lifecycle prerequisite
+
+The source-rejected post-claim owner at `994ea6b2` is replaced incrementally by
+one uniformly created supervisor-owned pre-admission handler per foreground
+request, bounded to 256 with intake backpressure. Queued classification creates
+no additional task or member execution allocation. The original operation
+handler alone retains exact intents, executes accepted ordinals, owns evidence
+and reply order, and reacts to foreign-operation commits only through bounded
+generation-qualified postcommit wakes followed by authoritative journal reread.
+No new store read API is needed.
+
+The corrected path closes in this exact order, with one atomic GREEN and
+exact-SHA CI before the next RED: uniform pre-admission ownership; 256-handler
+cap; foreign wake-only promotion; owner rehydration/start-once; exact identical
+member replies; wake-race matrix; postcommit wakes at all three current batch
+sites; explicit 256-handler drain; nonblocking Drop; and production exit
+shutdown. The approved simplicity reductions are part of these minimum GREENs.
+Queued cancellation, background/resident gates, root/session batch cleanup,
+and legacy batch fencing remain unopened later stages.
+
+`build_session_engine` returns one public non-Clone, `#[must_use]` aggregate
+whose raw lifecycle stays private. CLI, RPC, goal, server, TUI, and native
+runtime owners retain it and explicitly drain it; server Ctrl-C/SIGTERM and the
+TUI local HTTP server first follow their minimal graceful-stop paths. The next
+code action is only `foreground_handler_uniform_pre_admission`.

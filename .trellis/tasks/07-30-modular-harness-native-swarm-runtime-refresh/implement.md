@@ -2610,3 +2610,41 @@ That last CI is compatibility evidence only for the committed source. Post-commi
 Pro chose Option A for 0.34.12 live queued caller replies. `Queued` is internal admission only and completes no caller reply. Foreground retains one process-local sender until its complete admitted batch is durable-terminal. One-member background/resident returns the existing real running outcome only after exact promotion, member `Started` CAS, and real registration. Queued cancellation and promotion race solely through the existing journal writer transaction on the same row; cancellation-first terminalizes allocation-free and returns unit `SpawnError::Cancelled`, promotion-first follows established later cancellation.
 
 The first Mac source check used a stale sync area. Exact fuji1 HEAD already has a Result-bearing reply oneshot and already maps channel loss to `SpawnError::Unavailable`; no channel-type or flattening change is needed. Sender loss never cancels/retries durable work, and no sender survives restart. Required live REDs remain the 101-member foreground whole-batch barrier, background/resident registration gate, cancellation-first, promotion-first, dropped-receiver variants, and mixed foreground cancellation, one certified atomic boundary at a time. Public queued outcomes, placeholder identities, reply registries, queued allocation, replay/reconnect, and Event/DTO/wire changes remain excluded.
+
+## 18.18 Consult31 corrected foreground owner/lifecycle authority
+
+Commit `994ea6b2a6afb0b80183d448c36398c5d23446aa`
+(`feat(admission): queue foreground transient batches`) is retained without
+history rewrite. Exact-head CI run `30885299291` attempt 3/job `91917608968`
+completed GREEN at `2026-08-04T07:15:33Z`; attempts 1-2 stopped before Rust on
+the unchanged, source-proven 140-column PTY timing signature. The successful
+run is behavior-compatibility evidence only. The commit remains source-rejected
+because it creates a detached post-claim owner, does not provide a bounded
+supervisor lifecycle, and cannot safely route foreign-operation promotions.
+
+RED0 source closure proves no new store read API is required. The pre-admission
+handler retains the exact prepared `AdmissionIntent` vector; existing ordered
+`SessionStore::admissions(operation_id)` supplies current journal state. Exact
+count, contiguous unique ordinals, and complete immutable claim identity are
+checked before constructing existing `AdmissionLaunch` values and reusing
+`SpawnIntentV1::decode_admission_launch`, `resolve_admission_launches`, and the
+member-specific `start_admission_member` CAS. Exact reply evidence stays in the
+owning handler.
+
+The controlling implementation order is strictly one RED/GREEN boundary at a
+time: (1) uniform pre-admission handler across accepted, mixed, and all-Queued;
+(2) 256-handler intake cap; (3) foreign promotion is wake-only; (4) owner
+rehydrates and starts each ordinal once; (5) identical members preserve exact
+reply order and identity; (6) postcommit wake race matrix; (7) all three current
+batch sites wake only after commit; (8) explicit shutdown drains 256 handlers;
+(9) Drop fallback is nonblocking; and (10) every production exit awaits
+shutdown. Queued-cancel batch wake and root/session batch-cleanup migration
+remain later mandatory boundaries.
+
+The already accepted simplicity pruning is integrated into these minimum
+GREENs rather than layered afterward: one checked ordinal-slot vector,
+capacity-one completion/wake channels, direct ownership of real handles,
+consolidated resolution and fail-after-claim flow, no evidence clone, and
+bounded test instrumentation. The first code boundary is only
+`foreground_handler_uniform_pre_admission`; no later owner, cancellation,
+background, resident, or root-cleanup RED overlaps it.

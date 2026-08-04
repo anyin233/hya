@@ -1823,3 +1823,95 @@ The Mac sync-area source used for the first channel-shape check was stale. Exact
 Required REDs, one atomic boundary at a time, are: (1) `queued_foreground_reply_waits_for_all_terminal`, with 101 members yielding 100 active plus one queued, no allocation for member 101, and one final reply only after all 101 are terminal; (2) parameterized background/resident proof of no reply while queued, after promotion alone, or after `Started` alone, and one real running result only after registration; (3) cancellation-first transaction barrier proving durable Cancelled, zero allocation, one `Cancelled` error, and empty later promotion; (4) promotion-first barriers before `Started` and registration proving queued cancellation loses and no premature/fabricated outcome; (5) receiver drop separately before cancellation and promotion with correct durable convergence; and (6) mixed foreground cancellation with whole-batch terminal completion. Exact-SHA CI closes each boundary before the next opens.
 
 Explicit exclusions are queued/deferred `MemberOutcome`, placeholder session or resident handle, public queued status, DTO/Event/wire-byte changes, immediate-start exceptions, any task/session/actor/sidecar/provider/`Started` allocation while queued, a second reply registry or queue authority, durable reply replay/reconnect, and changes to capacity, fairness, fingerprints, topology, permissions, or post-promotion cancellation policy.
+
+### `CONSULT-2026-08-04-FOREGROUND-OWNER-LIFECYCLE-31`
+
+```yaml
+consultation_id: CONSULT-2026-08-04-FOREGROUND-OWNER-LIFECYCLE-31
+date: 2026-08-04
+scope: source-corrected process-local owner, wake routing, and shutdown lifecycle for live foreground-transient admission
+status: Pro-arbitrated, Mac source-corrected, RED0 Sol source-validated, authoritative
+choice: A
+supersedes: Consult30 implementation assumptions that permit a detached post-claim owner or literal zero request-handler tasks for all-Queued work
+retains: Consult30 caller-reply semantics, sole admission_journal authority, exact 100/156/256 capacity, stable Event/DTO/wire bytes, later cancellation/background/resident boundaries
+```
+
+Every foreground-transient request receives exactly one uniformly created
+pre-admission Tokio handler immediately after the supervisor dequeues its
+`BoundSpawnRequest`. The supervisor owns the handler in one `JoinSet` before
+prepare, claim, or classification, for accepted, mixed, all-Queued, invalid,
+and rejected requests alike. It permits exactly 256 live handlers and, at the
+bound, stops polling intake until one is reaped; request 257 is not dequeued,
+spawned, rejected, or journal-mutated. Queued classification creates zero
+additional tasks, while a queued member continues to own no execution task,
+child session, actor, sidecar, provider permit, or `Started` state.
+
+The original handler for operation O is O's only execution, ordinal/MemberId/
+session/evidence, ordering, and reply owner. A committer executes only returned
+launches whose operation is its own O. For a foreign operation, it sends one
+generation-qualified coalescing unit wake strictly after durable commit and
+discards the launch payload; route absence never permits execution. O retains
+its immutable ordinal-to-`AdmissionIntent` mapping, registers its route, rereads
+durable state immediately, and rereads on every wake. Only ordered journal
+records paired with retained intents may pass existing fingerprint/binding
+validation and member `Started` CAS. O starts each ordinal at most once and
+alone constructs the existing ordered `Vec<MemberOutcome>` from its local
+MemberId/session/evidence associations.
+
+The router is one bounded supervisor-owned non-authoritative index from
+`OperationId` to a private registration generation and capacity-one wake
+sender, with at most 256 entries. It stores no reply, outcome, evidence,
+admission state, lease, ordering, or schedule decision. Registration followed
+by an immediate reread closes pre-registration races; capacity-one coalescing
+closes the reread/wait edge; duplicate, stale, full, or closed wakes authorize
+nothing. The route remains through the reply attempt or handler drop and is
+removed by handler teardown.
+
+RED0 proved ordered `AdmissionRecord` plus retained exact `AdmissionIntent` is
+sufficient. Do not add any admission-launch read API. The handler must enforce
+exact record count, unique contiguous ordinals, and equality of every immutable
+claim identity field, then reuse `SpawnIntentV1::decode_admission_launch`,
+`resolve_admission_launches`, and `start_admission_member`. Exact reply evidence
+cannot be reconstructed from durable truth alone and must not be matched from
+Events, Projection, or `TeamEvidenceEnvelope`. Restart has no reply owner;
+existing persisted-intent recovery remains authoritative.
+
+Public `build_session_engine` returns a public non-Clone, `#[must_use]`
+`BuiltSessionEngine` aggregate because its backend callers are cross-crate. It
+owns all existing products plus one private, unnameable
+`SpawnSupervisorLifecycle`; the raw stop sender, supervisor handle, router, and
+handler set remain private. The aggregate exposes only minimum existing
+component access/take operations and public idempotent `shutdown(&mut self)`;
+no `into_parts` may detach work from lifecycle. `HyaRuntime` retains the owner
+or lifecycle internally and exposes only a matching shutdown wrapper.
+
+Explicit shutdown prioritizes stop, closes intake, creates no new handlers,
+aborts all handlers, drains the `JoinSet` to empty, removes routes through
+handler teardown, clears residue, and treats a panic/cancelled supervisor join
+as failure. Handler abort at shutdown does not terminalize or cancel durable
+rows. Nonblocking Drop sends stop and aborts the supervisor handle but claims no
+drain. Headless backend commands combine every post-build body result with
+shutdown through one helper. Server ownership stays outside `AppState`, uses
+Axum graceful shutdown for Ctrl-C and Unix SIGTERM, then drains the supervisor.
+TUI ownership similarly signals and awaits its local HTTP task before draining,
+regardless of the TUI result.
+
+The strict RED sequence is: (1) uniform pre-admission handler; (2) exact
+256-handler cap; (3) foreign promotion wake-only; (4) owner rehydrates and
+starts exactly once; (5) identical-member exact ordered reply; (6) postcommit
+wake race matrix; (7) all three current batch finalization/cleanup sites wake
+postcommit; (8) explicit shutdown drains 256; (9) Drop fallback is nonblocking;
+and (10) every production exit awaits shutdown. Queued cancellation and
+root/session batch cleanup are later mandatory migrations. One atomic RED/GREEN
+and exact-SHA CI gate closes before the next opens.
+
+Commit `994ea6b2a6afb0b80183d448c36398c5d23446aa` passed exact-head CI run
+`30885299291` attempt 3/job `91917608968`, but that result certifies behavior
+compatibility only. Its post-claim detached owner violates this authority and
+remains source-rejected. No history rewrite is authorized; corrected slices
+replace its behavior incrementally while integrating the accepted simplicity
+pruning. Explicit exclusions are a post-claim detached spawn, per-Queued-member
+task, inline wait in the supervisor, unbounded handler collection, payload or
+reply router, durable routing table, polling, second authority, public raw
+lifecycle, discarded handle, strong owner cycle, shutdown-driven durable
+cancellation, or overlap with later Option-A semantics.
