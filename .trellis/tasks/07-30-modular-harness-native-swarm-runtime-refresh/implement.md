@@ -2648,3 +2648,26 @@ consolidated resolution and fail-after-claim flow, no evidence clone, and
 bounded test instrumentation. The first code boundary is only
 `foreground_handler_uniform_pre_admission`; no later owner, cancellation,
 background, resident, or root-cleanup RED overlaps it.
+
+## 18.19 Consult31 owner rehydrate-on-wake slice 4
+
+The next atomic RED added only `owner_rehydrates_accepted_ordinals_exactly_once_on_wake`.
+It reuses the foreign-promotion topology (A0 holds the last active lease; A1 is
+intentionally unresolvable so finalization wakes B without A executing B) and
+requires B's owner to cross `Started` after the wake with exactly one `worker-b`
+resolution. The focused command exited 101 with the sole diagnostic that the
+2s Started wait timed out while B remained `Accepted`.
+
+The minimum GREEN retains claim-time `AdmissionIntent`s on the foreground owner,
+drives the wake receiver in the owner `run` loop, and on register plus every wake
+rereads `SessionStore::admissions` to start currently Accepted unscheduled
+ordinals via the existing promote/resolve/`start_admission_member` path. Foreign
+`completion.promoted` launches wake the owning operation instead of failing the
+committer. No store launch-read API, public types, Event/DTO/wire changes, or
+shutdown/cancel scope entered.
+
+Focused `owner_rehydrates_accepted_ordinals_exactly_once_on_wake` 1/1,
+`foreign_promotion_is_wake_only` 1/1, `foreground_handler_*` 2/2, wake-router unit
+tests 2/2, full `hya-app` lib 144/144, `cargo clippy -p hya-app --all-targets -- -D warnings`,
+`cargo fmt --all --check`, and `git diff --check` all green.
+

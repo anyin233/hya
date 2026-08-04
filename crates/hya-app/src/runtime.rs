@@ -405,7 +405,6 @@ struct ForegroundAdmissionWakeRouter {
 struct ForegroundAdmissionWakeRegistration {
     operation_id: hya_proto::OperationId,
     generation: u64,
-    _receiver: tokio::sync::mpsc::Receiver<ForegroundAdmissionWake>,
     router: Arc<ForegroundAdmissionWakeRouter>,
 }
 
@@ -422,7 +421,10 @@ impl ForegroundAdmissionWakeRouter {
     fn register(
         self: &Arc<Self>,
         operation_id: hya_proto::OperationId,
-    ) -> Option<ForegroundAdmissionWakeRegistration> {
+    ) -> Option<(
+        ForegroundAdmissionWakeRegistration,
+        tokio::sync::mpsc::Receiver<ForegroundAdmissionWake>,
+    )> {
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -435,12 +437,14 @@ impl ForegroundAdmissionWakeRouter {
             operation_id,
             ForegroundAdmissionWakeRoute { generation, sender },
         );
-        Some(ForegroundAdmissionWakeRegistration {
-            operation_id,
-            generation,
-            _receiver: receiver,
-            router: Arc::clone(self),
-        })
+        Some((
+            ForegroundAdmissionWakeRegistration {
+                operation_id,
+                generation,
+                router: Arc::clone(self),
+            },
+            receiver,
+        ))
     }
 
     fn wake(&self, operation_id: hya_proto::OperationId) {
@@ -479,13 +483,6 @@ impl Drop for ForegroundAdmissionWakeRegistration {
         {
             routes.remove(&self.operation_id);
         }
-    }
-}
-
-#[cfg(test)]
-impl ForegroundAdmissionWakeRegistration {
-    fn try_recv_generation(&mut self) -> Option<u64> {
-        self._receiver.try_recv().ok().map(|wake| wake._generation)
     }
 }
 
@@ -2396,6 +2393,7 @@ struct ForegroundTransientAdmissionOwnerInit {
     request: SpawnRequest,
     root: SessionId,
     cardinality: u32,
+    retained_intents: Vec<AdmissionIntent>,
     wake_router: Arc<ForegroundAdmissionWakeRouter>,
 }
 
@@ -2416,6 +2414,7 @@ struct ForegroundTransientAdmissionOwner {
     reply: Option<tokio::sync::oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>>,
     debit_acquired: bool,
     authoritative_ordinals: BTreeSet<u32>,
+    retained_intents: Vec<AdmissionIntent>,
     evidence: Vec<Option<MemberEvidence>>,
     scheduled: BTreeSet<u32>,
     handles: Vec<TransientAdmissionHandle>,
@@ -2424,6 +2423,7 @@ struct ForegroundTransientAdmissionOwner {
     closed: bool,
     wake_router: Arc<ForegroundAdmissionWakeRouter>,
     wake_registration: Option<ForegroundAdmissionWakeRegistration>,
+    wake_rx: Option<tokio::sync::mpsc::Receiver<ForegroundAdmissionWake>>,
     #[cfg(test)]
     test_observer: Option<Arc<AdmissionTestObserver>>,
     #[cfg(test)]
@@ -2442,6 +2442,7 @@ impl ForegroundTransientAdmissionOwner {
             request,
             root,
             cardinality,
+            retained_intents,
             wake_router,
         } = init;
         let (completion_tx, completion_rx) =
@@ -2449,7 +2450,10 @@ impl ForegroundTransientAdmissionOwner {
         let operation = request.operation;
         let actor_claim = operation.actor_claim();
         let evidence = vec![None; usize::try_from(cardinality).unwrap_or(0)];
-        let wake_registration = wake_router.register(operation.operation_id());
+        let (wake_registration, wake_rx) = match wake_router.register(operation.operation_id()) {
+            Some((registration, receiver)) => (Some(registration), Some(receiver)),
+            None => (None, None),
+        };
         #[cfg(test)]
         let test_observer = sidecar_environment.test_observer.clone();
         #[cfg(test)]
@@ -2475,6 +2479,7 @@ impl ForegroundTransientAdmissionOwner {
             reply: Some(request.reply),
             debit_acquired: false,
             authoritative_ordinals: (0..cardinality).collect(),
+            retained_intents,
             evidence,
             scheduled: BTreeSet::new(),
             handles: Vec::new(),
@@ -2483,6 +2488,7 @@ impl ForegroundTransientAdmissionOwner {
             closed: false,
             wake_router,
             wake_registration,
+            wake_rx,
             #[cfg(test)]
             test_observer,
             #[cfg(test)]
@@ -2568,6 +2574,44 @@ impl ForegroundTransientAdmissionOwner {
         Ok(())
     }
 
+    /// Reread durable journal rows and start any currently Accepted ordinals
+    /// that this owner has not yet scheduled. Uses retained claim-time intents
+    /// only — no store launch-read API.
+    async fn rehydrate_accepted(&mut self) -> Result<(), &'static str> {
+        let records = self
+            .engine
+            .store()
+            .admissions(self.operation_id())
+            .await
+            .map_err(|_| "admission journal read failed")?;
+        if !admission_records_match(
+            &records,
+            self.operation_id(),
+            self.actor_claim.as_ref(),
+            self.cardinality,
+            false,
+        ) {
+            return Err("admission journal identity mismatch");
+        }
+        for record in records {
+            if record.state != hya_store::AdmissionState::Accepted
+                || self.scheduled.contains(&record.member_ordinal)
+            {
+                continue;
+            }
+            let ordinal = record.member_ordinal;
+            let Some(intent) = usize::try_from(ordinal)
+                .ok()
+                .and_then(|index| self.retained_intents.get(index).cloned())
+            else {
+                return Err("missing retained admission intent");
+            };
+            let launch = AdmissionLaunch { record, intent };
+            self.promote(launch).await?;
+        }
+        Ok(())
+    }
+
     async fn accept_completion(
         &mut self,
         completion: TransientAdmissionCompletion,
@@ -2587,7 +2631,12 @@ impl ForegroundTransientAdmissionOwner {
         }
         self.evidence[index] = Some(completion.evidence);
         for launch in completion.promoted {
-            self.promote(launch).await?;
+            if launch.record.operation_id == self.operation_id() {
+                self.promote(launch).await?;
+            } else {
+                // Foreign promotions are wake-only; the owning handler rehydrates.
+                self.wake_router.wake(launch.record.operation_id);
+            }
         }
         Ok(())
     }
@@ -2632,7 +2681,7 @@ impl ForegroundTransientAdmissionOwner {
     }
 
     async fn run(mut self, initial: Vec<AdmissionLaunch>) {
-        if self.wake_registration.is_none() {
+        if self.wake_registration.is_none() || self.wake_rx.is_none() {
             self.fail_after_claim(
                 "foreground admission wake route unavailable",
                 SpawnError::Unavailable,
@@ -2696,30 +2745,61 @@ impl ForegroundTransientAdmissionOwner {
                 return;
             }
         }
+        // Immediate reread closes pre-registration races with foreign promotion.
+        if let Err(reason) = self.rehydrate_accepted().await {
+            self.fail_after_claim(reason, SpawnError::Unavailable).await;
+            return;
+        }
 
+        let Some(mut wake_rx) = self.wake_rx.take() else {
+            self.fail_after_claim(
+                "foreground admission wake route unavailable",
+                SpawnError::Unavailable,
+            )
+            .await;
+            return;
+        };
         while self.evidence.iter().any(Option::is_none) {
-            let Some(message) = self.completion_rx.recv().await else {
-                self.fail_after_claim(
-                    "admitted member completion missing",
-                    SpawnError::Unavailable,
-                )
-                .await;
-                return;
-            };
-            let completion = match message {
-                Ok(completion) => completion,
-                Err(_) => {
-                    self.fail_after_claim(
-                        "admitted member completion failed",
-                        SpawnError::Unavailable,
-                    )
-                    .await;
-                    return;
+            tokio::select! {
+                message = self.completion_rx.recv() => {
+                    let Some(message) = message else {
+                        self.fail_after_claim(
+                            "admitted member completion missing",
+                            SpawnError::Unavailable,
+                        )
+                        .await;
+                        return;
+                    };
+                    let completion = match message {
+                        Ok(completion) => completion,
+                        Err(_) => {
+                            self.fail_after_claim(
+                                "admitted member completion failed",
+                                SpawnError::Unavailable,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    if let Err(reason) = self.accept_completion(completion).await {
+                        self.fail_after_claim(reason, SpawnError::Unavailable).await;
+                        return;
+                    }
                 }
-            };
-            if let Err(reason) = self.accept_completion(completion).await {
-                self.fail_after_claim(reason, SpawnError::Unavailable).await;
-                return;
+                wake = wake_rx.recv() => {
+                    if wake.is_none() {
+                        self.fail_after_claim(
+                            "foreground admission wake route closed",
+                            SpawnError::Unavailable,
+                        )
+                        .await;
+                        return;
+                    }
+                    if let Err(reason) = self.rehydrate_accepted().await {
+                        self.fail_after_claim(reason, SpawnError::Unavailable).await;
+                        return;
+                    }
+                }
             }
         }
 
@@ -2888,6 +2968,7 @@ impl ForegroundTransientAdmissionPreparation {
             resolution,
             intents,
         } = prepared;
+        let retained_intents = intents.clone();
         #[cfg(test)]
         if let Some(probe) = &sidecar_environment.uniform_probe {
             probe.before_claim.notify_one();
@@ -2927,6 +3008,7 @@ impl ForegroundTransientAdmissionPreparation {
             request: req,
             root,
             cardinality,
+            retained_intents,
             wake_router,
         })
         .run(launches)
@@ -3978,7 +4060,7 @@ mod tests {
         ))));
         let operation_id =
             ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
-        let mut first = router.register(operation_id).expect("first route");
+        let (first, mut first_rx) = router.register(operation_id).expect("first route");
         let generation = first.generation;
         router.wake(operation_id);
         router.wake(operation_id);
@@ -3987,8 +4069,11 @@ mod tests {
             1,
             "capacity-one duplicate wakes must coalesce without retry"
         );
-        assert_eq!(first.try_recv_generation(), Some(generation));
-        assert_eq!(first.try_recv_generation(), None);
+        assert_eq!(
+            first_rx.try_recv().ok().map(|wake| wake._generation),
+            Some(generation)
+        );
+        assert_eq!(first_rx.try_recv().ok().map(|wake| wake._generation), None);
         router.wake(operation_id);
         assert_eq!(
             observer.foreign_wake_operation_ids.lock().unwrap().len(),
@@ -4000,7 +4085,7 @@ mod tests {
         for _ in 1..FOREGROUND_HANDLER_CAP {
             let operation_id =
                 ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
-            registrations.push(router.register(operation_id).expect("route within cap"));
+            registrations.push(router.register(operation_id).expect("route within cap").0);
         }
         let overflow = ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
         assert!(
@@ -4017,7 +4102,7 @@ mod tests {
         ))));
         let operation_id =
             ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
-        let stale = router.register(operation_id).expect("stale route");
+        let (stale, _stale_rx) = router.register(operation_id).expect("stale route");
         let replacement_generation = stale.generation.wrapping_add(1);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         router.routes.lock().unwrap().insert(
@@ -7548,37 +7633,405 @@ agents:
             .await
             .unwrap()
             .expect("B admission row must remain readable");
-        let b_projection = engine.read_projection(parent_b).await.unwrap();
-        let active_actor_count = engine.store().active_actor_ids().await.unwrap().len();
-        let snapshot = (
-            foreign_wake_while_locked,
-            foreign_wake_after_commit,
-            foreign_wake_operation_ids,
-            b_queued_while_locked,
+        // A's path must only wake B after durable commit. B's owner may then
+        // rehydrate (see owner_rehydrates_accepted_ordinals_exactly_once_on_wake).
+        assert_eq!(
+            (
+                foreign_wake_while_locked,
+                foreign_wake_after_commit,
+                foreign_wake_operation_ids,
+                b_queued_while_locked,
+            ),
+            (false, true, vec![operation_b_id], true),
+            "foreign promotion must wake B only after A's commit"
+        );
+        assert!(
+            !baseline_targets.iter().any(|target| target == "worker-b"),
+            "A must not resolve B before the foreign wake"
+        );
+        assert!(
+            matches!(
+                b_record.state,
+                hya_store::AdmissionState::Accepted | hya_store::AdmissionState::Started
+            ) || b_record.state.is_terminal(),
+            "B must be promoted after A's commit; state={:?}",
+            b_record.state
+        );
+        let _ = (
             promoted_targets,
             provider_calls.load(Ordering::SeqCst),
-            b_record.state,
             engine.store().list_sessions().await.unwrap().len(),
-            b_projection.session.members.len(),
-            active_actor_count,
-            !request_b.is_finished(),
         );
-        let expected = (
-            false,
-            true,
-            vec![operation_b_id],
-            true,
-            Vec::<String>::new(),
-            1,
-            hya_store::AdmissionState::Accepted,
-            3,
-            0,
-            0,
-            true,
+
+        cancel_a.cancel();
+        cancel_b.cancel();
+        provider_gate.release.notify_waiters();
+        request_a.abort();
+        request_b.abort();
+        let _ = request_a.await;
+        let _ = request_b.await;
+    }
+
+    #[tokio::test]
+    async fn owner_rehydrates_accepted_ordinals_exactly_once_on_wake() {
+        // Derivative of foreign_promotion_is_wake_only: after the foreign wake that
+        // leaves B Accepted, B's owner must rehydrate and start that ordinal once.
+        let workdir = tempdir().join("owner-rehydrate-wake-workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let database = tempdir().join("owner-rehydrate-wake.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let prepared = prepare_builtins(vec![BundleSource::new(
+            "owner-rehydrate-wake",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/owner-rehydrate-wake
+  version: 0.0.1
+  publisher: hya-tests
+agents:
+  - local_id: build
+    stable_id: build
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    can_spawn:
+      - worker-a
+      - worker-b
+    prompt: prompts/build.md
+  - local_id: worker-a
+    stable_id: worker-a
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+    prompt: prompts/worker-a.md
+  - local_id: worker-b
+    stable_id: worker-b
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+    prompt: prompts/worker-b.md
+"#
+                    .to_vec(),
+                ),
+                SourceFile::new("prompts/build.md", b"owner rehydrate build prompt"),
+                SourceFile::new("prompts/worker-a.md", b"owner rehydrate worker-a prompt"),
+                SourceFile::new("prompts/worker-b.md", b"owner rehydrate worker-b prompt"),
+            ],
+        )])
+        .expect("owner-rehydrate catalog must prepare");
+        let catalog = Arc::new(
+            BundleCatalog::from_verified_catalogs(&[&prepared])
+                .expect("owner-rehydrate catalog must retain verified identity"),
         );
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            catalog,
+        ));
+
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::clone(&provider_calls),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                store.clone(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "owner rehydrate base prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent_a = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let parent_b = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent_a,
+            request_fingerprint: [0x44; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        let filler_launches = store
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap();
+        match filler_launches {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh filler admission must not already exist")
+            }
+        }
+
+        let observer = Arc::new(AdmissionTestObserver::new());
+        let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+            command: None,
+            staging_root: tempdir(),
+            terminate_notify: None,
+            test_observer: Some(Arc::clone(&observer)),
+            uniform_probe: None,
+        });
+        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+        spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            Arc::clone(&resident_supervisor),
+            sidecar_environment,
+        );
+
+        let operation_a = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_a_id = operation_a.operation_id();
+        let cancel_a = CancellationToken::new();
+        let members_a = vec![
+            SpawnMember {
+                description: "owner rehydrate A0".to_string(),
+                prompt: "owner rehydrate A0".to_string(),
+                subagent_type: "worker-a".to_string(),
+                ..SpawnMember::default()
+            },
+            SpawnMember {
+                description: "owner rehydrate A1".to_string(),
+                prompt: "owner rehydrate A1".to_string(),
+                subagent_type: "worker-a".to_string(),
+                ..SpawnMember::default()
+            },
+        ];
+        let spawner_a = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent_a, agents.clone());
+        let cancel_a_task = cancel_a.clone();
+        let request_a =
+            tokio::spawn(
+                async move { spawner_a.spawn(operation_a, members_a, cancel_a_task).await },
+            );
+
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("A0 provider did not enter its gate");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = store.admissions(operation_a_id).await.unwrap();
+                if records.len() == 2
+                    && records[0].state == hya_store::AdmissionState::Started
+                    && records[1].state == hya_store::AdmissionState::Queued
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("A0 must be started while A1 remains queued");
+
+        let mut corrupt_connection =
+            SqliteConnection::connect(&format!("sqlite://{}", database.display()))
+                .await
+                .unwrap();
+        sqlx::query(
+            "UPDATE admission_journal SET admission_binding_fingerprint = ? \
+             WHERE operation_id = ? AND member_ordinal = 1",
+        )
+        .bind(vec![0x99_u8; 32])
+        .bind(operation_a_id.as_uuid().as_bytes().as_slice())
+        .execute(&mut corrupt_connection)
+        .await
+        .unwrap();
+        corrupt_connection.close().await.unwrap();
+
+        let operation_b = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_b_id = operation_b.operation_id();
+        let cancel_b = CancellationToken::new();
+        let spawner_b = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent_b, agents);
+        let cancel_b_task = cancel_b.clone();
+        let request_b = tokio::spawn(async move {
+            spawner_b
+                .spawn(
+                    operation_b,
+                    vec![SpawnMember {
+                        description: "owner rehydrate B0".to_string(),
+                        prompt: "owner rehydrate B0".to_string(),
+                        subagent_type: "worker-b".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    cancel_b_task,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let b_owner_acquired = {
+                    let owners = observer
+                        .owner_operation_ids
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    owners.contains(&operation_b_id)
+                };
+                if b_owner_acquired {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("B foreground owner did not acquire its request");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = store.admissions(operation_b_id).await.unwrap();
+                if records.len() == 1 && records[0].state == hya_store::AdmissionState::Queued {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("B must remain queued before A0 is released");
+
+        let baseline_targets = observer
+            .resolution_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(
+            baseline_targets.iter().any(|target| target == "worker-a"),
+            "A0's initial launch must be resolved before the promotion barrier"
+        );
+
+        let mut blocker = SqliteConnection::connect(&format!("sqlite://{}", database.display()))
+            .await
+            .unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        let foreign_wake = observer.foreign_wake.notified();
+        tokio::pin!(foreign_wake);
+        provider_gate.release.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        sqlx::query("COMMIT").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = store
+                    .admission(operation_b_id)
+                    .await
+                    .unwrap()
+                    .expect("B admission row");
+                if record.state == hya_store::AdmissionState::Accepted
+                    || record.state == hya_store::AdmissionState::Started
+                    || record.state.is_terminal()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("A finalize must commit B's promotion");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), &mut foreign_wake)
+                .await
+                .is_ok(),
+            "foreign promotion must wake B's owner"
+        );
+
+        // RED: without owner rehydrate this times out while B stays Accepted.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let record = store
+                    .admission(operation_b_id)
+                    .await
+                    .unwrap()
+                    .expect("B admission row");
+                if record.state == hya_store::AdmissionState::Started || record.state.is_terminal()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("B owner must rehydrate Accepted ordinal and cross Started after wake");
+
+        provider_gate.release.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let worker_b_resolutions = observer
+            .resolution_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|target| *target == "worker-b")
+            .count();
+        let b_record = store
+            .admission(operation_b_id)
+            .await
+            .unwrap()
+            .expect("B admission row");
         assert_eq!(
-            snapshot, expected,
-            "foreign promotion must wake B only after A's commit; A's resolver must not execute B"
+            (
+                b_record.state == hya_store::AdmissionState::Started
+                    || b_record.state.is_terminal(),
+                worker_b_resolutions,
+            ),
+            (true, 1),
+            "B must start/terminalize with exactly one worker-b resolve"
         );
 
         cancel_a.cancel();
