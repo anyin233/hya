@@ -2724,3 +2724,11 @@ Locked remaining Consult30 caller-reply barriers:
 
 Consult30 required REDs 1–6 are now covered. Next: R10 certification matrix and
 0.34.12 release cut.
+
+## 18.25 R10 capacity certification and 0.34.12 cut
+
+Added `crates/hya-store/tests/r10_certification.rs` as the explicit R10 capacity
+gate: 100/156/256 envelope vector, item-257 typed overload with zero allocation,
+and Started release promoting exactly one Queued row. Workspace and TUI package
+versions advance to `0.34.12`; prior root changelog moved to
+`docs/changes/CHANGELOG_0.34.11.md`.
