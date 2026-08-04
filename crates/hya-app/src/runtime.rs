@@ -334,6 +334,10 @@ struct BundleSidecarEnvironment {
 #[cfg(test)]
 struct AdmissionTestObserver {
     sequence: std::sync::atomic::AtomicUsize,
+    owner_operation_ids: std::sync::Mutex<Vec<hya_proto::OperationId>>,
+    resolution_targets: std::sync::Mutex<Vec<String>>,
+    foreign_wake: tokio::sync::Notify,
+    foreign_wake_operation_ids: std::sync::Mutex<Vec<hya_proto::OperationId>>,
     cleanup_attempt: tokio::sync::Notify,
     cleanup_finished: tokio::sync::Notify,
 }
@@ -343,6 +347,10 @@ impl AdmissionTestObserver {
     fn new() -> Self {
         Self {
             sequence: std::sync::atomic::AtomicUsize::new(0),
+            owner_operation_ids: std::sync::Mutex::new(Vec::new()),
+            resolution_targets: std::sync::Mutex::new(Vec::new()),
+            foreign_wake: tokio::sync::Notify::new(),
+            foreign_wake_operation_ids: std::sync::Mutex::new(Vec::new()),
             cleanup_attempt: tokio::sync::Notify::new(),
             cleanup_finished: tokio::sync::Notify::new(),
         }
@@ -353,12 +361,20 @@ impl AdmissionTestObserver {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
-    fn mark_owner_acquired(&self) {
+    fn mark_owner_acquired(&self, operation_id: hya_proto::OperationId) {
         self.mark_step();
+        self.owner_operation_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(operation_id);
     }
 
-    fn mark_resolution_hook(&self) {
+    fn mark_resolution_hook(&self, stable_agent_id: &str) {
         self.mark_step();
+        self.resolution_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(stable_agent_id.to_string());
     }
 
     fn mark_cleanup_attempt(&self) {
@@ -367,6 +383,109 @@ impl AdmissionTestObserver {
 
     fn mark_cleanup_finished(&self) {
         self.cleanup_finished.notify_one();
+    }
+}
+
+struct ForegroundAdmissionWake {
+    _generation: u64,
+}
+
+struct ForegroundAdmissionWakeRoute {
+    generation: u64,
+    sender: tokio::sync::mpsc::Sender<ForegroundAdmissionWake>,
+}
+
+struct ForegroundAdmissionWakeRouter {
+    routes: std::sync::Mutex<BTreeMap<hya_proto::OperationId, ForegroundAdmissionWakeRoute>>,
+    next_generation: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    test_observer: Option<Arc<AdmissionTestObserver>>,
+}
+
+struct ForegroundAdmissionWakeRegistration {
+    operation_id: hya_proto::OperationId,
+    generation: u64,
+    _receiver: tokio::sync::mpsc::Receiver<ForegroundAdmissionWake>,
+    router: Arc<ForegroundAdmissionWakeRouter>,
+}
+
+impl ForegroundAdmissionWakeRouter {
+    fn new(#[cfg(test)] test_observer: Option<Arc<AdmissionTestObserver>>) -> Self {
+        Self {
+            routes: std::sync::Mutex::new(BTreeMap::new()),
+            next_generation: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            test_observer,
+        }
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        operation_id: hya_proto::OperationId,
+    ) -> Option<ForegroundAdmissionWakeRegistration> {
+        let generation = self
+            .next_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let mut routes = self.routes.lock().ok()?;
+        if routes.len() >= FOREGROUND_HANDLER_CAP || routes.contains_key(&operation_id) {
+            return None;
+        }
+        routes.insert(
+            operation_id,
+            ForegroundAdmissionWakeRoute { generation, sender },
+        );
+        Some(ForegroundAdmissionWakeRegistration {
+            operation_id,
+            generation,
+            _receiver: receiver,
+            router: Arc::clone(self),
+        })
+    }
+
+    fn wake(&self, operation_id: hya_proto::OperationId) {
+        let Some((sender, generation)) = self.routes.lock().ok().and_then(|routes| {
+            routes
+                .get(&operation_id)
+                .map(|route| (route.sender.clone(), route.generation))
+        }) else {
+            return;
+        };
+        if sender
+            .try_send(ForegroundAdmissionWake {
+                _generation: generation,
+            })
+            .is_ok()
+        {
+            #[cfg(test)]
+            if let Some(observer) = &self.test_observer {
+                observer
+                    .foreign_wake_operation_ids
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(operation_id);
+                observer.foreign_wake.notify_one();
+            }
+        }
+    }
+}
+
+impl Drop for ForegroundAdmissionWakeRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut routes) = self.router.routes.lock()
+            && routes
+                .get(&self.operation_id)
+                .is_some_and(|route| route.generation == self.generation)
+        {
+            routes.remove(&self.operation_id);
+        }
+    }
+}
+
+#[cfg(test)]
+impl ForegroundAdmissionWakeRegistration {
+    fn try_recv_generation(&mut self) -> Option<u64> {
+        self._receiver.try_recv().ok().map(|wake| wake._generation)
     }
 }
 
@@ -529,7 +648,7 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
     ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
         #[cfg(test)]
         if let Some(observer) = &self.test_observer {
-            observer.mark_resolution_hook();
+            observer.mark_resolution_hook(stable_agent_id);
         }
         let (_, _) = binding
             .agent_catalog()
@@ -2076,8 +2195,9 @@ fn resolve_admission_launches(
 async fn resolve_current_admission_launches(
     ctx: &AdmissionLaunchResolutionCtx<'_>,
     launch: AdmissionLaunch,
+    wake_router: Option<&ForegroundAdmissionWakeRouter>,
 ) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
-    resolve_admission_launches_fifo(ctx.engine, launch, |launch| {
+    resolve_admission_launches_fifo(ctx.engine, launch, wake_router, |launch| {
         std::future::ready(resolve_admission_launches(ctx, vec![launch]))
     })
     .await
@@ -2086,12 +2206,14 @@ async fn resolve_current_admission_launches(
 async fn resolve_admission_launches_fifo<F, Fut>(
     engine: &SessionEngine,
     launch: AdmissionLaunch,
+    wake_router: Option<&ForegroundAdmissionWakeRouter>,
     mut resolve_one: F,
 ) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError>
 where
     F: FnMut(AdmissionLaunch) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<ResolvedAdmissionLaunch>, SpawnError>>,
 {
+    let owner_operation_id = launch.record.operation_id;
     let mut pending = std::collections::VecDeque::from([launch]);
     let mut resolved = Vec::new();
     while let Some(launch) = pending.pop_front() {
@@ -2119,7 +2241,13 @@ where
                     )
                     .await
                     .map_err(|_| SpawnError::Unavailable)?;
-                pending.extend(outcome.promoted);
+                for promoted in outcome.promoted {
+                    if wake_router.is_none() || promoted.record.operation_id == owner_operation_id {
+                        pending.push_back(promoted);
+                    } else if let Some(wake_router) = wake_router {
+                        wake_router.wake(promoted.record.operation_id);
+                    }
+                }
             }
         }
     }
@@ -2133,7 +2261,7 @@ async fn resolve_recovered_admission_launches(
     sidecar_environment: &dyn SidecarEnvironment,
     launch: AdmissionLaunch,
 ) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
-    resolve_admission_launches_fifo(engine, launch, |launch| async move {
+    resolve_admission_launches_fifo(engine, launch, None, |launch| async move {
         let intent =
             SpawnIntentV1::decode_admission_launch(&launch).map_err(|_| SpawnError::Unavailable)?;
         let projection = engine
@@ -2268,6 +2396,7 @@ struct ForegroundTransientAdmissionOwnerInit {
     request: SpawnRequest,
     root: SessionId,
     cardinality: u32,
+    wake_router: Arc<ForegroundAdmissionWakeRouter>,
 }
 
 struct ForegroundTransientAdmissionOwner {
@@ -2293,6 +2422,8 @@ struct ForegroundTransientAdmissionOwner {
     completion_tx: Option<TransientAdmissionCompletionSender>,
     completion_rx: TransientAdmissionCompletionReceiver,
     closed: bool,
+    wake_router: Arc<ForegroundAdmissionWakeRouter>,
+    wake_registration: Option<ForegroundAdmissionWakeRegistration>,
     #[cfg(test)]
     test_observer: Option<Arc<AdmissionTestObserver>>,
     #[cfg(test)]
@@ -2311,19 +2442,21 @@ impl ForegroundTransientAdmissionOwner {
             request,
             root,
             cardinality,
+            wake_router,
         } = init;
         let (completion_tx, completion_rx) =
             tokio::sync::mpsc::channel(usize::try_from(cardinality).unwrap_or(1).max(1));
         let operation = request.operation;
         let actor_claim = operation.actor_claim();
         let evidence = vec![None; usize::try_from(cardinality).unwrap_or(0)];
+        let wake_registration = wake_router.register(operation.operation_id());
         #[cfg(test)]
         let test_observer = sidecar_environment.test_observer.clone();
         #[cfg(test)]
         let uniform_probe = sidecar_environment.uniform_probe.clone();
         #[cfg(test)]
         if let Some(observer) = &test_observer {
-            observer.mark_owner_acquired();
+            observer.mark_owner_acquired(operation.operation_id());
         }
         Self {
             engine,
@@ -2348,6 +2481,8 @@ impl ForegroundTransientAdmissionOwner {
             completion_tx: Some(completion_tx),
             completion_rx,
             closed: false,
+            wake_router,
+            wake_registration,
             #[cfg(test)]
             test_observer,
             #[cfg(test)]
@@ -2420,9 +2555,10 @@ impl ForegroundTransientAdmissionOwner {
             guidance: self.guidance.clone(),
             sidecar_environment: self.sidecar_environment.as_ref(),
         };
-        let resolved = resolve_current_admission_launches(&context, launch)
-            .await
-            .map_err(|_| "promoted admission launch failed current validation")?;
+        let resolved =
+            resolve_current_admission_launches(&context, launch, Some(self.wake_router.as_ref()))
+                .await
+                .map_err(|_| "promoted admission launch failed current validation")?;
         if resolved.is_empty() {
             return Err("promoted admission launch was not currently accepted");
         }
@@ -2496,6 +2632,14 @@ impl ForegroundTransientAdmissionOwner {
     }
 
     async fn run(mut self, initial: Vec<AdmissionLaunch>) {
+        if self.wake_registration.is_none() {
+            self.fail_after_claim(
+                "foreground admission wake route unavailable",
+                SpawnError::Unavailable,
+            )
+            .await;
+            return;
+        }
         #[cfg(test)]
         if let Some(probe) = &self.uniform_probe {
             probe.owner_run_entered.notify_one();
@@ -2656,6 +2800,7 @@ struct ForegroundTransientAdmissionPreparation {
     sidecar_environment: Arc<BundleSidecarEnvironment>,
     caller: String,
     req: SpawnRequest,
+    wake_router: Arc<ForegroundAdmissionWakeRouter>,
 }
 
 impl ForegroundTransientAdmissionPreparation {
@@ -2669,6 +2814,7 @@ impl ForegroundTransientAdmissionPreparation {
             sidecar_environment,
             caller,
             req,
+            wake_router,
         } = self;
         #[cfg(test)]
         let watched_preparation = sidecar_environment
@@ -2781,6 +2927,7 @@ impl ForegroundTransientAdmissionPreparation {
             request: req,
             root,
             cardinality,
+            wake_router,
         })
         .run(launches)
         .await;
@@ -2823,6 +2970,10 @@ fn spawn_team_supervisor_with_environment(
     resident_supervisor: Arc<ResidentSupervisor>,
     sidecar_environment: Arc<BundleSidecarEnvironment>,
 ) {
+    let wake_router = Arc::new(ForegroundAdmissionWakeRouter::new(
+        #[cfg(test)]
+        sidecar_environment.test_observer.clone(),
+    ));
     tokio::spawn(async move {
         let mut foreground_handlers = tokio::task::JoinSet::new();
         loop {
@@ -2873,6 +3024,7 @@ fn spawn_team_supervisor_with_environment(
                 let handler_router = Arc::clone(&router);
                 let handler_categories = Arc::clone(&categories);
                 let handler_sidecar_environment = Arc::clone(&sidecar_environment);
+                let handler_wake_router = Arc::clone(&wake_router);
                 let handler_caller = caller.as_str().to_string();
                 foreground_handlers.spawn(async move {
                     #[cfg(test)]
@@ -2889,6 +3041,7 @@ fn spawn_team_supervisor_with_environment(
                         sidecar_environment: handler_sidecar_environment,
                         caller: handler_caller,
                         req,
+                        wake_router: handler_wake_router,
                     }
                     .run()
                     .await;
@@ -3780,6 +3933,12 @@ mod tests {
     struct CountingDevProvider {
         calls: Arc<AtomicUsize>,
         inner: DevProvider,
+        gate: Option<Arc<ProviderGate>>,
+    }
+
+    struct ProviderGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
     }
 
     #[async_trait]
@@ -3802,9 +3961,97 @@ mod tests {
             session: SessionId,
             message: hya_proto::MessageId,
         ) -> Result<EventStream, ProviderError> {
+            if let Some(gate) = &self.gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.inner.stream(request, session, message).await
         }
+    }
+
+    #[test]
+    fn foreground_admission_wake_router_bounds_and_coalesces() {
+        let observer = Arc::new(AdmissionTestObserver::new());
+        let router = Arc::new(ForegroundAdmissionWakeRouter::new(Some(Arc::clone(
+            &observer,
+        ))));
+        let operation_id =
+            ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
+        let mut first = router.register(operation_id).expect("first route");
+        let generation = first.generation;
+        router.wake(operation_id);
+        router.wake(operation_id);
+        assert_eq!(
+            observer.foreign_wake_operation_ids.lock().unwrap().len(),
+            1,
+            "capacity-one duplicate wakes must coalesce without retry"
+        );
+        assert_eq!(first.try_recv_generation(), Some(generation));
+        assert_eq!(first.try_recv_generation(), None);
+        router.wake(operation_id);
+        assert_eq!(
+            observer.foreign_wake_operation_ids.lock().unwrap().len(),
+            2,
+            "a wake after the coalesced payload is consumed may send once"
+        );
+
+        let mut registrations = vec![first];
+        for _ in 1..FOREGROUND_HANDLER_CAP {
+            let operation_id =
+                ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
+            registrations.push(router.register(operation_id).expect("route within cap"));
+        }
+        let overflow = ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
+        assert!(
+            router.register(overflow).is_none(),
+            "wake index must reject registration beyond the foreground cap"
+        );
+    }
+
+    #[test]
+    fn foreground_admission_wake_router_rejects_stale_guard_generation() {
+        let observer = Arc::new(AdmissionTestObserver::new());
+        let router = Arc::new(ForegroundAdmissionWakeRouter::new(Some(Arc::clone(
+            &observer,
+        ))));
+        let operation_id =
+            ToolOperation::from_tool_call(hya_proto::ToolCallId::new()).operation_id();
+        let stale = router.register(operation_id).expect("stale route");
+        let replacement_generation = stale.generation.wrapping_add(1);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        router.routes.lock().unwrap().insert(
+            operation_id,
+            ForegroundAdmissionWakeRoute {
+                generation: replacement_generation,
+                sender,
+            },
+        );
+        drop(stale);
+        assert_eq!(
+            router
+                .routes
+                .lock()
+                .unwrap()
+                .get(&operation_id)
+                .map(|route| route.generation),
+            Some(replacement_generation),
+            "stale guard drop must not remove a newer registration"
+        );
+        router.wake(operation_id);
+        assert_eq!(
+            receiver.try_recv().ok().map(|wake| wake._generation),
+            Some(replacement_generation),
+            "wake must target the newer registration generation"
+        );
+        assert_eq!(
+            observer
+                .foreign_wake_operation_ids
+                .lock()
+                .unwrap()
+                .as_slice(),
+            &[operation_id]
+        );
     }
 
     #[test]
@@ -4973,7 +5220,7 @@ mod tests {
             sidecar_environment: &sidecar_environment,
         };
         assert_eq!(sidecar_calls.load(Ordering::SeqCst), 0);
-        let resolved = resolve_current_admission_launches(&resolution_ctx, row0_launch)
+        let resolved = resolve_current_admission_launches(&resolution_ctx, row0_launch, None)
             .await
             .expect("mismatched recovered launch must resolve its promotion");
         assert_eq!(resolved.len(), 1);
@@ -5063,13 +5310,13 @@ mod tests {
         let before_counts = engine.store().admission_counts().await.unwrap();
         let before_sidecar_calls = sidecar_calls.load(Ordering::SeqCst);
         assert!(
-            resolve_current_admission_launches(&resolution_ctx, stale_row0_launch)
+            resolve_current_admission_launches(&resolution_ctx, stale_row0_launch, None)
                 .await
                 .expect("stale aborted launch must be ignored")
                 .is_empty()
         );
         assert!(
-            resolve_current_admission_launches(&resolution_ctx, resolved_row1.launch.clone())
+            resolve_current_admission_launches(&resolution_ctx, resolved_row1.launch.clone(), None)
                 .await
                 .expect("stale started launch must be ignored")
                 .is_empty()
@@ -6146,6 +6393,9 @@ agents:
             test_observer: Some(Arc::clone(&test_observer)),
             uniform_probe: None,
         });
+        let wake_router = Arc::new(ForegroundAdmissionWakeRouter::new(Some(Arc::clone(
+            &test_observer,
+        ))));
         let preparation = ForegroundTransientAdmissionPreparation {
             engine: Arc::clone(&engine),
             binding,
@@ -6155,6 +6405,7 @@ agents:
             sidecar_environment,
             caller: "build".to_string(),
             req: request,
+            wake_router,
         };
         let preparation_task = if matches!(fault, CleanupFault::Healthy) {
             preparation.run().await;
@@ -6370,6 +6621,7 @@ agents:
             let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
                 calls: Arc::clone(&provider_calls),
                 inner: DevProvider::new(),
+                gate: None,
             })));
             let runtime = Arc::new(RuntimeRegistry::from_snapshot(
                 ToolRegistry::builtins().snapshot(),
@@ -6611,6 +6863,7 @@ agents:
         let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
             calls: Arc::clone(&provider_calls),
             inner: DevProvider::new(),
+            gate: None,
         })));
         let runtime = Arc::new(RuntimeRegistry::from_snapshot(
             ToolRegistry::builtins().snapshot(),
@@ -6938,6 +7191,403 @@ agents:
             0,
             "all parked foreground handlers must release during test cleanup"
         );
+    }
+
+    #[tokio::test]
+    async fn foreign_promotion_is_wake_only() {
+        let workdir = tempdir().join("foreign-promotion-wake-only-workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let database = tempdir().join("foreign-promotion-wake-only.db");
+        let store = SessionStore::connect(database.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let prepared = prepare_builtins(vec![BundleSource::new(
+            "foreign-promotion-wake-only",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    br#"api_version: hya.agent-bundle/v1
+kind: AgentBundle
+identity:
+  id: hya/foreign-promotion-wake-only
+  version: 0.0.1
+  publisher: hya-tests
+agents:
+  - local_id: build
+    stable_id: build
+    role: main
+    spawn_lifecycle: transient
+    harness_access: full
+    can_spawn:
+      - worker-a
+      - worker-b
+    prompt: prompts/build.md
+  - local_id: worker-a
+    stable_id: worker-a
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+    prompt: prompts/worker-a.md
+  - local_id: worker-b
+    stable_id: worker-b
+    role: subagent
+    spawn_lifecycle: transient
+    harness_access: full
+    prompt: prompts/worker-b.md
+"#
+                    .to_vec(),
+                ),
+                SourceFile::new("prompts/build.md", b"foreign wake build prompt"),
+                SourceFile::new("prompts/worker-a.md", b"foreign wake worker-a prompt"),
+                SourceFile::new("prompts/worker-b.md", b"foreign wake worker-b prompt"),
+            ],
+        )])
+        .expect("foreign-promotion catalog must prepare");
+        let catalog = Arc::new(
+            BundleCatalog::from_verified_catalogs(&[&prepared])
+                .expect("foreign-promotion catalog must retain verified identity"),
+        );
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            catalog,
+        ));
+
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::clone(&provider_calls),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+        let engine = Arc::new(
+            SessionEngine::new(
+                store.clone(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "foreign wake base prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent_a = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let parent_b = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+
+        let filler_operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let filler_intents = (0..99)
+            .map(|ordinal| AdmissionIntent {
+                runtime_fingerprint_version: 1,
+                runtime_fingerprint: [0x11; 32],
+                admission_binding_fingerprint_version: 1,
+                admission_binding_fingerprint: [0x22; 32],
+                spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
+            })
+            .collect();
+        let filler_claim = AdmissionClaim {
+            operation_id: filler_operation.operation_id(),
+            source_tool_call_id: filler_operation.source_tool_call_id(),
+            root_session: parent_a,
+            request_fingerprint: [0x44; 32],
+            admission_units: 99,
+            actor_claim: None,
+        };
+        let filler_launches = store
+            .claim_admission_batch(&filler_claim, filler_intents)
+            .await
+            .unwrap();
+        match filler_launches {
+            AdmissionBatchClaimOutcome::Claimed(launches) => assert_eq!(launches.len(), 99),
+            AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh filler admission must not already exist")
+            }
+        }
+
+        let observer = Arc::new(AdmissionTestObserver::new());
+        let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+            command: None,
+            staging_root: tempdir(),
+            terminate_notify: None,
+            test_observer: Some(Arc::clone(&observer)),
+            uniform_probe: None,
+        });
+        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+        spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            Arc::clone(&resident_supervisor),
+            sidecar_environment,
+        );
+
+        let operation_a = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_a_id = operation_a.operation_id();
+        let cancel_a = CancellationToken::new();
+        let members_a = vec![
+            SpawnMember {
+                description: "foreign wake A0".to_string(),
+                prompt: "foreign wake A0".to_string(),
+                subagent_type: "worker-a".to_string(),
+                ..SpawnMember::default()
+            },
+            SpawnMember {
+                description: "foreign wake A1".to_string(),
+                prompt: "foreign wake A1".to_string(),
+                subagent_type: "worker-a".to_string(),
+                ..SpawnMember::default()
+            },
+        ];
+        let spawner_a = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent_a, agents.clone());
+        let cancel_a_task = cancel_a.clone();
+        let request_a =
+            tokio::spawn(
+                async move { spawner_a.spawn(operation_a, members_a, cancel_a_task).await },
+            );
+
+        tokio::time::timeout(Duration::from_secs(5), provider_gate.entered.notified())
+            .await
+            .expect("A0 provider did not enter its gate");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = store.admissions(operation_a_id).await.unwrap();
+                if records.len() == 2
+                    && records[0].state == hya_store::AdmissionState::Started
+                    && records[1].state == hya_store::AdmissionState::Queued
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("A0 must be started while A1 remains queued");
+
+        let mut corrupt_connection =
+            SqliteConnection::connect(&format!("sqlite://{}", database.display()))
+                .await
+                .unwrap();
+        sqlx::query(
+            "UPDATE admission_journal SET admission_binding_fingerprint = ? \
+             WHERE operation_id = ? AND member_ordinal = 1",
+        )
+        .bind(vec![0x99_u8; 32])
+        .bind(operation_a_id.as_uuid().as_bytes().as_slice())
+        .execute(&mut corrupt_connection)
+        .await
+        .unwrap();
+        corrupt_connection.close().await.unwrap();
+
+        let operation_b = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_b_id = operation_b.operation_id();
+        let cancel_b = CancellationToken::new();
+        let spawner_b = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent_b, agents);
+        let cancel_b_task = cancel_b.clone();
+        let request_b = tokio::spawn(async move {
+            spawner_b
+                .spawn(
+                    operation_b,
+                    vec![SpawnMember {
+                        description: "foreign wake B0".to_string(),
+                        prompt: "foreign wake B0".to_string(),
+                        subagent_type: "worker-b".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    cancel_b_task,
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let b_owner_acquired = {
+                    let owners = observer
+                        .owner_operation_ids
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    owners.contains(&operation_b_id)
+                };
+                if b_owner_acquired {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("B foreground owner did not acquire its request");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let records = store.admissions(operation_b_id).await.unwrap();
+                if records.len() == 1 && records[0].state == hya_store::AdmissionState::Queued {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("B must remain queued before A0 is released");
+
+        let baseline_targets = observer
+            .resolution_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(
+            baseline_targets.iter().any(|target| target == "worker-a"),
+            "A0's initial launch must be resolved before the promotion barrier"
+        );
+
+        let mut blocker = SqliteConnection::connect(&format!("sqlite://{}", database.display()))
+            .await
+            .unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        let foreign_wake = observer.foreign_wake.notified();
+        tokio::pin!(foreign_wake);
+        provider_gate.release.notify_one();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let b_queued_while_locked = store
+            .admission(operation_b_id)
+            .await
+            .unwrap()
+            .is_some_and(|record| record.state == hya_store::AdmissionState::Queued);
+        let foreign_wake_while_locked =
+            tokio::time::timeout(Duration::from_millis(100), &mut foreign_wake)
+                .await
+                .is_ok();
+        sqlx::query("COMMIT").execute(&mut blocker).await.unwrap();
+        blocker.close().await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = store
+                    .admission(operation_b_id)
+                    .await
+                    .unwrap()
+                    .expect("B admission row");
+                if record.state == hya_store::AdmissionState::Accepted {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("A finalize must commit B's promotion");
+        let foreign_wake_after_commit =
+            tokio::time::timeout(Duration::from_secs(1), &mut foreign_wake)
+                .await
+                .is_ok();
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let promoted_target_observed = {
+                    let targets = observer
+                        .resolution_targets
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    targets.len() > baseline_targets.len()
+                };
+                if promoted_target_observed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let _ =
+            tokio::time::timeout(Duration::from_secs(1), provider_gate.entered.notified()).await;
+
+        let resolution_targets = observer
+            .resolution_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let promoted_targets = resolution_targets[baseline_targets.len()..].to_vec();
+        let foreign_wake_operation_ids = observer
+            .foreign_wake_operation_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let b_record = store
+            .admission(operation_b_id)
+            .await
+            .unwrap()
+            .expect("B admission row must remain readable");
+        let b_projection = engine.read_projection(parent_b).await.unwrap();
+        let active_actor_count = engine.store().active_actor_ids().await.unwrap().len();
+        let snapshot = (
+            foreign_wake_while_locked,
+            foreign_wake_after_commit,
+            foreign_wake_operation_ids,
+            b_queued_while_locked,
+            promoted_targets,
+            provider_calls.load(Ordering::SeqCst),
+            b_record.state,
+            engine.store().list_sessions().await.unwrap().len(),
+            b_projection.session.members.len(),
+            active_actor_count,
+            !request_b.is_finished(),
+        );
+        let expected = (
+            false,
+            true,
+            vec![operation_b_id],
+            true,
+            Vec::<String>::new(),
+            1,
+            hya_store::AdmissionState::Accepted,
+            3,
+            0,
+            0,
+            true,
+        );
+        assert_eq!(
+            snapshot, expected,
+            "foreign promotion must wake B only after A's commit; A's resolver must not execute B"
+        );
+
+        cancel_a.cancel();
+        cancel_b.cancel();
+        provider_gate.release.notify_waiters();
+        request_a.abort();
+        request_b.abort();
+        let _ = request_a.await;
+        let _ = request_b.await;
     }
 
     #[tokio::test]
