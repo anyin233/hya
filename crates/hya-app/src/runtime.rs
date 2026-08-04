@@ -1715,6 +1715,47 @@ fn resolve_admission_launches(
         .collect()
 }
 
+#[allow(dead_code)]
+async fn resolve_current_admission_launches(
+    ctx: &AdmissionLaunchResolutionCtx<'_>,
+    launch: AdmissionLaunch,
+) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
+    let mut pending = std::collections::VecDeque::from([launch]);
+    let mut resolved = Vec::new();
+    while let Some(launch) = pending.pop_front() {
+        let records = ctx
+            .engine
+            .store()
+            .admissions(launch.record.operation_id)
+            .await
+            .map_err(|_| SpawnError::Unavailable)?;
+        if !records.iter().any(|record| {
+            record == &launch.record && record.state == hya_store::AdmissionState::Accepted
+        }) {
+            continue;
+        }
+
+        match resolve_admission_launches(ctx, vec![launch.clone()]) {
+            Ok(mut launches) => resolved.append(&mut launches),
+            Err(_) => {
+                let outcome = ctx
+                    .engine
+                    .store()
+                    .finalize_admission_members(
+                        &[(launch.record.operation_id, launch.record.member_ordinal)],
+                        AdmissionTerminal::Aborted,
+                        "admission recovery resolution unavailable",
+                        None,
+                    )
+                    .await
+                    .map_err(|_| SpawnError::Unavailable)?;
+                pending.extend(outcome.promoted);
+            }
+        }
+    }
+    Ok(resolved)
+}
+
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -3611,6 +3652,309 @@ mod tests {
             records_after
                 .iter()
                 .all(|record| record.state != hya_store::AdmissionState::Started)
+        );
+    }
+
+    #[tokio::test]
+    async fn recovered_mismatch_aborts_once_and_resolves_promoted_match() {
+        let workdir = tempdir().join("recovered-admission-resolution-workdir");
+        std::fs::create_dir_all(&workdir).unwrap();
+        let engine =
+            engine_with_catalog(builtin_catalog().expect("built-in catalog must load")).await;
+        let binding = engine.bind_runtime(&workdir).expect("bind admission turn");
+        let categories = Arc::new(CategoryRegistry::default());
+        let router = Arc::new(ProviderRouter::new());
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("current-base-model"),
+            system_prompt: "current-base-system-prompt".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let resolution = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .expect("current admission context");
+        let runtime_fingerprint = engine
+            .runtime_semantic_fingerprint_v1(&binding)
+            .expect("runtime semantic fingerprint");
+        let current_admission_fingerprint =
+            resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
+        let changed_resolution = AdmissionResolutionContext::capture(
+            AgentSpec {
+                model: ModelRef::new("changed-base-model"),
+                system_prompt: "current-base-system-prompt".to_string(),
+                ..base.clone()
+            },
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .expect("changed admission context");
+        let changed_admission_fingerprint =
+            changed_resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
+        assert_ne!(current_admission_fingerprint, changed_admission_fingerprint);
+        let diagnostic_generation = binding
+            .generation()
+            .get()
+            .checked_add(1)
+            .expect("diagnostic generation increment");
+        assert_ne!(diagnostic_generation, binding.generation().get());
+
+        let root = SessionId::new();
+        let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let member = |ordinal: u32| SpawnMember {
+            description: format!("recovered-description-{ordinal}"),
+            prompt: format!("recovered-prompt-{ordinal}"),
+            subagent_type: "general".to_string(),
+            task_id: None,
+            model: None,
+            category: None,
+            inline_agent: None,
+            resident: false,
+        };
+        let intent = |ordinal: u32, admission_binding_fingerprint| {
+            SpawnIntentV1::new(SpawnIntentInputV1 {
+                member: member(ordinal),
+                parent: root,
+                stable_target: AgentName::new("general"),
+                background: true,
+                operation,
+                member_ordinal: ordinal,
+                batch_cardinality: 2,
+                prior_start: PriorStartV1::NeverStarted,
+                runtime_fingerprint,
+                admission_binding_fingerprint,
+                diagnostic_generation,
+            })
+            .expect("canonical recovered spawn intent")
+        };
+        let row0_spawn_intent = intent(0, changed_admission_fingerprint);
+        let row1_spawn_intent = intent(1, current_admission_fingerprint);
+        let row0_intent = row0_spawn_intent
+            .clone()
+            .into_admission_intent()
+            .expect("row0 admission intent");
+        let row1_intent = row1_spawn_intent
+            .clone()
+            .into_admission_intent()
+            .expect("row1 admission intent");
+        let claim = hya_store::AdmissionClaim {
+            operation_id: operation.operation_id(),
+            source_tool_call_id: operation.source_tool_call_id(),
+            root_session: root,
+            request_fingerprint: [0x71; 32],
+            admission_units: 2,
+            actor_claim: None,
+        };
+        let claimed = match engine
+            .store()
+            .claim_admission_batch(&claim, vec![row0_intent, row1_intent])
+            .await
+            .expect("claim recovered admission batch")
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh admission batch must not already exist")
+            }
+        };
+        assert_eq!(claimed.len(), 2);
+        assert_eq!(
+            claimed
+                .iter()
+                .map(|launch| launch.record.member_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert!(
+            claimed
+                .iter()
+                .all(|launch| { launch.record.state == hya_store::AdmissionState::Accepted })
+        );
+        let mut recovered = engine
+            .store()
+            .recover_nonterminal_admissions("startup recovery")
+            .await
+            .expect("recover accepted admissions");
+        recovered.sort_unstable_by_key(|record| record.member_ordinal);
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(
+            recovered
+                .iter()
+                .map(|record| record.member_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert!(
+            recovered
+                .iter()
+                .all(|record| record.state == hya_store::AdmissionState::Queued)
+        );
+        let launches = engine
+            .store()
+            .promote_queued_admissions(1)
+            .await
+            .expect("promote one recovered launch");
+        assert_eq!(launches.len(), 1);
+        let row0_launch = launches.into_iter().next().unwrap();
+        assert_eq!(row0_launch.record.member_ordinal, 0);
+        assert_eq!(
+            row0_launch.record.state,
+            hya_store::AdmissionState::Accepted
+        );
+        let stale_row0_launch = row0_launch.clone();
+
+        struct CountingSidecarEnvironment {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl SidecarEnvironment for CountingSidecarEnvironment {
+            fn factory_for(
+                &self,
+                _binding: &TurnBinding,
+                _stable_id: &str,
+            ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+        }
+
+        let sidecar_calls = Arc::new(AtomicUsize::new(0));
+        let sidecar_environment = CountingSidecarEnvironment {
+            calls: Arc::clone(&sidecar_calls),
+        };
+        let allowed_agents: Arc<[AgentDef]> = vec![AgentDef {
+            name: "general".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+        }]
+        .into();
+        let resolution_ctx = AdmissionLaunchResolutionCtx {
+            engine: &engine,
+            binding: &binding,
+            resolution: &resolution,
+            caller: "build",
+            allowed_agents: allowed_agents.as_ref(),
+            guidance: None,
+            sidecar_environment: &sidecar_environment,
+        };
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 0);
+        let resolved = resolve_current_admission_launches(&resolution_ctx, row0_launch)
+            .await
+            .expect("mismatched recovered launch must resolve its promotion");
+        assert_eq!(resolved.len(), 1);
+        let resolved_row1 = resolved.into_iter().next().unwrap();
+        assert_eq!(resolved_row1.launch.record.member_ordinal, 1);
+        assert_eq!(
+            resolved_row1.launch.record.state,
+            hya_store::AdmissionState::Accepted
+        );
+        assert_eq!(resolved_row1.intent, row1_spawn_intent);
+        assert_eq!(
+            resolved_row1.resolved.authorized_target,
+            AgentName::new("general")
+        );
+        assert_eq!(
+            resolved_row1.resolved.binding.generation(),
+            binding.generation()
+        );
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+
+        let rows = engine
+            .store()
+            .admissions(operation.operation_id())
+            .await
+            .unwrap();
+        let row0_record = rows
+            .iter()
+            .find(|record| record.member_ordinal == 0)
+            .unwrap();
+        assert_eq!(row0_record.state, hya_store::AdmissionState::Aborted);
+        assert_eq!(
+            row0_record.terminal_reason.as_deref(),
+            Some("admission recovery resolution unavailable")
+        );
+        let row1_record = rows
+            .iter()
+            .find(|record| record.member_ordinal == 1)
+            .unwrap();
+        assert_eq!(row1_record.state, hya_store::AdmissionState::Accepted);
+        let counts = engine.store().admission_counts().await.unwrap();
+        assert_eq!(counts.active, 1);
+        assert_eq!(counts.non_active, 0);
+        assert_eq!(counts.total, 1);
+
+        let work_count = Arc::new(AtomicUsize::new(0));
+        let work_count_for_task = Arc::clone(&work_count);
+        let observed_store = engine.store().clone();
+        let work_future = async move {
+            work_count_for_task.fetch_add(1, Ordering::SeqCst);
+            observed_store
+                .admissions(operation.operation_id())
+                .await
+                .expect("row1 admission remains readable")
+                .into_iter()
+                .find(|record| record.member_ordinal == 1)
+                .map(|record| record.state)
+        };
+        let installed = install_admission_task(&resolved_row1.launch, work_future);
+        tokio::task::yield_now().await;
+        assert_eq!(work_count.load(Ordering::SeqCst), 0);
+        let row1_handle = installed
+            .start(engine.store(), None)
+            .await
+            .expect("promoted row1 must start through the existing CAS barrier");
+        let observed_state = row1_handle.await.expect("row1 task must finish");
+        assert_eq!(observed_state, Some(hya_store::AdmissionState::Started));
+        assert_eq!(work_count.load(Ordering::SeqCst), 1);
+        let started_rows = engine
+            .store()
+            .admissions(operation.operation_id())
+            .await
+            .unwrap();
+        assert_eq!(
+            started_rows
+                .iter()
+                .find(|record| record.member_ordinal == 1)
+                .unwrap()
+                .state,
+            hya_store::AdmissionState::Started
+        );
+
+        let before_replay = engine
+            .store()
+            .admissions(operation.operation_id())
+            .await
+            .unwrap();
+        let before_counts = engine.store().admission_counts().await.unwrap();
+        let before_sidecar_calls = sidecar_calls.load(Ordering::SeqCst);
+        assert!(
+            resolve_current_admission_launches(&resolution_ctx, stale_row0_launch)
+                .await
+                .expect("stale aborted launch must be ignored")
+                .is_empty()
+        );
+        assert!(
+            resolve_current_admission_launches(&resolution_ctx, resolved_row1.launch.clone())
+                .await
+                .expect("stale started launch must be ignored")
+                .is_empty()
+        );
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), before_sidecar_calls);
+        assert_eq!(work_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            engine
+                .store()
+                .admissions(operation.operation_id())
+                .await
+                .unwrap(),
+            before_replay
+        );
+        assert_eq!(
+            engine.store().admission_counts().await.unwrap(),
+            before_counts
         );
     }
 
