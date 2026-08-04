@@ -2322,6 +2322,7 @@ fn admission_records_match(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cleanup_transient_admission<T>(
     engine: &SessionEngine,
     operation_id: hya_proto::OperationId,
@@ -2330,6 +2331,7 @@ async fn cleanup_transient_admission<T>(
     handles: &mut Vec<tokio::task::JoinHandle<T>>,
     cardinality: u32,
     reason: &str,
+    wake_router: Option<&ForegroundAdmissionWakeRouter>,
 ) -> bool
 where
     T: Send + 'static,
@@ -2355,14 +2357,23 @@ where
         .filter(|record| !record.state.is_terminal())
         .map(|record| (record.operation_id, record.member_ordinal))
         .collect();
-    if !pending.is_empty()
-        && engine
+    if !pending.is_empty() {
+        let outcome = match engine
             .store()
             .finalize_admission_members(&pending, AdmissionTerminal::Aborted, reason, actor_claim)
             .await
-            .is_err()
-    {
-        return false;
+        {
+            Ok(outcome) => outcome,
+            Err(_) => return false,
+        };
+        // Wake foreign owners only after the cleanup finalize commits.
+        if let Some(wake_router) = wake_router {
+            for promoted in outcome.promoted {
+                if promoted.record.operation_id != operation_id {
+                    wake_router.wake(promoted.record.operation_id);
+                }
+            }
+        }
     }
     engine
         .store()
@@ -2656,6 +2667,7 @@ impl ForegroundTransientAdmissionOwner {
             &mut self.handles,
             self.cardinality,
             reason,
+            Some(self.wake_router.as_ref()),
         )
         .await;
         #[cfg(test)]
@@ -3016,6 +3028,124 @@ impl ForegroundTransientAdmissionPreparation {
     }
 }
 
+/// Private supervisor ownership for foreground admission handlers.
+///
+/// Explicit [`shutdown`](SpawnSupervisorLifecycle::shutdown) drains handlers.
+/// [`Drop`] is nonblocking: it only signals stop and aborts the supervisor task.
+struct SpawnSupervisorLifecycle {
+    stop: tokio_util::sync::CancellationToken,
+    join: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl SpawnSupervisorLifecycle {
+    async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.stop.cancel();
+        if let Some(join) = self.join.take() {
+            match join.await {
+                Ok(()) => Ok(()),
+                Err(error) if error.is_cancelled() => Err(CoreError::Invalid(
+                    "spawn supervisor cancelled during shutdown".to_string(),
+                )),
+                Err(error) => Err(CoreError::Invalid(format!(
+                    "spawn supervisor failed during shutdown: {error}"
+                ))),
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    fn drop_stop(&mut self) {
+        self.stop.cancel();
+        if let Some(join) = self.join.take() {
+            join.abort();
+        }
+    }
+}
+
+impl Drop for SpawnSupervisorLifecycle {
+    fn drop(&mut self) {
+        self.drop_stop();
+    }
+}
+
+/// Public aggregate returned by [`build_session_engine`].
+///
+/// Owns engine products plus the private spawn-supervisor lifecycle. Not `Clone`.
+/// Callers must keep this value until they finish using the engine and then call
+/// [`shutdown`](BuiltSessionEngine::shutdown) (or drop for a nonblocking fallback).
+#[must_use]
+pub struct BuiltSessionEngine {
+    engine: Arc<SessionEngine>,
+    asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
+    questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
+    mcp_control: Arc<dyn hya_server::McpControl>,
+    plugin_host: Arc<hya_plugin::PluginHost>,
+    lifecycle: SpawnSupervisorLifecycle,
+}
+
+impl BuiltSessionEngine {
+    /// Shared session engine handle.
+    #[must_use]
+    pub fn engine(&self) -> Arc<SessionEngine> {
+        Arc::clone(&self.engine)
+    }
+
+    /// Take the permission-ask receiver exactly once.
+    pub fn take_asks(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>> {
+        self.asks.take()
+    }
+
+    /// Take the interaction-question receiver exactly once.
+    pub fn take_questions(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>> {
+        self.questions.take()
+    }
+
+    /// MCP control plane handle.
+    #[must_use]
+    pub fn mcp_control(&self) -> Arc<dyn hya_server::McpControl> {
+        Arc::clone(&self.mcp_control)
+    }
+
+    /// Plugin host handle.
+    #[must_use]
+    pub fn plugin_host(&self) -> Arc<hya_plugin::PluginHost> {
+        Arc::clone(&self.plugin_host)
+    }
+
+    /// Stop intake, abort handlers, and drain the supervisor JoinSet.
+    pub async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.lifecycle.shutdown().await
+    }
+}
+
+impl Drop for BuiltSessionEngine {
+    fn drop(&mut self) {
+        self.lifecycle.drop_stop();
+    }
+}
+
+/// Run a body against a built engine and always attempt supervisor shutdown.
+pub async fn with_built_session_engine<T, E, F, Fut>(
+    mut built: BuiltSessionEngine,
+    body: F,
+) -> Result<T, E>
+where
+    F: FnOnce(&mut BuiltSessionEngine) -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: From<CoreError>,
+{
+    let body_result = body(&mut built).await;
+    let shutdown_result = built.shutdown().await.map_err(E::from);
+    match (body_result, shutdown_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -3024,7 +3154,7 @@ pub fn spawn_team_supervisor(
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
 ) {
-    spawn_team_supervisor_with_environment(
+    let _lifecycle = spawn_team_supervisor_with_environment(
         rx,
         engine,
         base,
@@ -3033,6 +3163,9 @@ pub fn spawn_team_supervisor(
         resident_supervisor,
         Arc::new(BundleSidecarEnvironment::production()),
     );
+    // Test/helper entry: lifecycle is intentionally detached; production uses
+    // BuiltSessionEngine ownership. Drop still nonblocking-aborts on process end.
+    std::mem::forget(_lifecycle);
 }
 
 fn observe_foreground_handler_join(joined: Option<Result<(), tokio::task::JoinError>>) {
@@ -3051,15 +3184,27 @@ fn spawn_team_supervisor_with_environment(
     categories: Arc<CategoryRegistry>,
     resident_supervisor: Arc<ResidentSupervisor>,
     sidecar_environment: Arc<BundleSidecarEnvironment>,
-) {
+) -> SpawnSupervisorLifecycle {
     let wake_router = Arc::new(ForegroundAdmissionWakeRouter::new(
         #[cfg(test)]
         sidecar_environment.test_observer.clone(),
     ));
-    tokio::spawn(async move {
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_child = stop.child_token();
+    let join = tokio::spawn(async move {
         let mut foreground_handlers = tokio::task::JoinSet::new();
         loop {
+            if stop_child.is_cancelled() {
+                foreground_handlers.abort_all();
+                while let Some(joined) = foreground_handlers.join_next().await {
+                    observe_foreground_handler_join(Some(joined));
+                }
+                break;
+            }
             let bound_request = loop {
+                if stop_child.is_cancelled() {
+                    break None;
+                }
                 #[cfg(test)]
                 if foreground_handlers.len() == FOREGROUND_HANDLER_CAP
                     && let Some(probe) = &sidecar_environment.uniform_probe
@@ -3067,14 +3212,25 @@ fn spawn_team_supervisor_with_environment(
                     probe.supervisor_full_observed.add_permits(1);
                 }
                 if foreground_handlers.len() >= FOREGROUND_HANDLER_CAP {
-                    let joined = foreground_handlers.join_next().await;
-                    observe_foreground_handler_join(joined);
+                    tokio::select! {
+                        biased;
+                        _ = stop_child.cancelled() => break None,
+                        joined = foreground_handlers.join_next() => {
+                            observe_foreground_handler_join(joined);
+                        }
+                    }
                     continue;
                 }
                 if foreground_handlers.is_empty() {
-                    break rx.recv().await;
+                    tokio::select! {
+                        biased;
+                        _ = stop_child.cancelled() => break None,
+                        bound_request = rx.recv() => break bound_request,
+                    }
                 }
                 tokio::select! {
+                    biased;
+                    _ = stop_child.cancelled() => break None,
                     bound_request = rx.recv() => break bound_request,
                     joined = foreground_handlers.join_next() => {
                         observe_foreground_handler_join(joined);
@@ -3082,6 +3238,7 @@ fn spawn_team_supervisor_with_environment(
                 }
             };
             let Some(bound_request) = bound_request else {
+                foreground_handlers.abort_all();
                 while let Some(joined) = foreground_handlers.join_next().await {
                     observe_foreground_handler_join(Some(joined));
                 }
@@ -3503,6 +3660,10 @@ fn spawn_team_supervisor_with_environment(
             });
         }
     });
+    SpawnSupervisorLifecycle {
+        stop,
+        join: Some(join),
+    }
 }
 
 /// When true (default), MCP connect runs after the engine is built so HTTP can
@@ -3533,13 +3694,7 @@ pub async fn build_session_engine(
     mcp: BTreeMap<String, McpServerConfig>,
     plugins: Vec<PluginSpec>,
     tool_config: (WebSearchConfig, InvocationPolicy),
-) -> anyhow::Result<(
-    Arc<SessionEngine>,
-    tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
-    tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
-    Arc<dyn hya_server::McpControl>,
-    Arc<hya_plugin::PluginHost>,
-)> {
+) -> anyhow::Result<BuiltSessionEngine> {
     build_session_engine_with_mcp_defer(
         store,
         router,
@@ -3562,13 +3717,7 @@ async fn build_session_engine_with_mcp_defer(
     plugins: Vec<PluginSpec>,
     tool_config: (WebSearchConfig, InvocationPolicy),
     options: EngineBuildOptions,
-) -> anyhow::Result<(
-    Arc<SessionEngine>,
-    tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
-    tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>,
-    Arc<dyn hya_server::McpControl>,
-    Arc<hya_plugin::PluginHost>,
-)> {
+) -> anyhow::Result<BuiltSessionEngine> {
     let owner_run_id = process_owner_run_id();
     let mut recovered_claims = Vec::new();
     for actor_id in store
@@ -3795,7 +3944,7 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("recreate recovered resident runtime owner")?;
     }
-    spawn_team_supervisor_with_environment(
+    let lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -3807,7 +3956,14 @@ async fn build_session_engine_with_mcp_defer(
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
-    Ok((engine, asks, questions, mcp_control, plugin_host))
+    Ok(BuiltSessionEngine {
+        engine,
+        asks: Some(asks),
+        questions: Some(questions),
+        mcp_control,
+        plugin_host,
+        lifecycle,
+    })
 }
 
 /// Exact-resolve a process-loss recovered resident from the current RuntimeSnapshot.
@@ -3899,6 +4055,7 @@ pub struct HyaRuntime {
     engine: Arc<SessionEngine>,
     app_state: hya_server::AppState,
     _plugin_host: Arc<hya_plugin::PluginHost>,
+    _built: BuiltSessionEngine,
 }
 
 impl HyaRuntime {
@@ -3933,7 +4090,7 @@ impl HyaRuntime {
         // Server/TUI AppState: agent base only. Per-turn guidance layers
         // Environment + current workdir AGENTS + references once.
         let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
-        let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
+        let mut built = build_session_engine(
             store,
             runtime.router,
             agent.as_ref(),
@@ -3942,6 +4099,15 @@ impl HyaRuntime {
             (runtime.websearch, runtime.permission),
         )
         .await?;
+        let engine = built.engine();
+        let questions = built.take_questions().ok_or_else(|| {
+            anyhow::anyhow!("BuiltSessionEngine questions receiver already taken")
+        })?;
+        let asks = built
+            .take_asks()
+            .ok_or_else(|| anyhow::anyhow!("BuiltSessionEngine asks receiver already taken"))?;
+        let mcp_control = built.mcp_control();
+        let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
@@ -3955,6 +4121,7 @@ impl HyaRuntime {
             engine,
             app_state,
             _plugin_host: plugin_host,
+            _built: built,
         })
     }
 
@@ -6243,6 +6410,7 @@ mod tests {
                 &mut handles,
                 1,
                 "forced RED1b cleanup",
+                None,
             )
             .await;
             assert!(cleaned, "direct-handle cleanup must be provable");
@@ -6786,7 +6954,7 @@ agents:
                 uniform_probe: Some(Arc::clone(&probe)),
             });
             let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-            spawn_team_supervisor_with_environment(
+            let _spawn_supervisor = spawn_team_supervisor_with_environment(
                 spawn_rx,
                 Arc::clone(&engine),
                 base,
@@ -6993,7 +7161,7 @@ agents:
             uniform_probe: Some(Arc::clone(&probe)),
         });
         let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-        spawn_team_supervisor_with_environment(
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
             spawn_rx,
             Arc::clone(&engine),
             base,
@@ -7426,7 +7594,7 @@ agents:
             uniform_probe: None,
         });
         let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-        spawn_team_supervisor_with_environment(
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
             spawn_rx,
             Arc::clone(&engine),
             base,
@@ -7822,7 +7990,7 @@ agents:
             uniform_probe: None,
         });
         let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-        spawn_team_supervisor_with_environment(
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
             spawn_rx,
             Arc::clone(&engine),
             base,
@@ -8135,7 +8303,7 @@ agents:
             uniform_probe: None,
         });
         let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-        spawn_team_supervisor_with_environment(
+        let _spawn_supervisor = spawn_team_supervisor_with_environment(
             spawn_rx,
             Arc::clone(&engine),
             base,
@@ -8206,6 +8374,56 @@ agents:
             projection.session.members.len() >= 2,
             "projection may observe members, but reply identity is owner-local"
         );
+    }
+
+    #[tokio::test]
+    async fn built_session_engine_shutdown_drains_supervisor() {
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        let engine = built.engine();
+        assert!(
+            engine
+                .tool_schemas()
+                .iter()
+                .any(|s| s.name.as_str() == "bash")
+        );
+        built
+            .shutdown()
+            .await
+            .expect("explicit shutdown must drain the spawn supervisor");
+        // Second shutdown is idempotent (no supervisor join left).
+        built
+            .shutdown()
+            .await
+            .expect("idempotent shutdown after drain");
+    }
+
+    #[tokio::test]
+    async fn built_session_engine_drop_is_nonblocking() {
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let built = build_session_engine(
+            SessionStore::connect_memory().await.unwrap(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        // Drop must not await drain; it only signals stop/abort.
+        drop(built);
     }
 
     #[tokio::test]
@@ -8591,7 +8809,7 @@ for line in sys.stdin:
         let store = SessionStore::connect_memory().await.unwrap();
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
-        let (engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+        let mut built = build_session_engine(
             store,
             router,
             &agent,
@@ -8607,6 +8825,12 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+        let engine = built.engine();
+        let _asks = built.take_asks();
+        let _questions = built.take_questions();
+        let _mcp = built.mcp_control();
+        let _plugins = built.plugin_host();
+        let _built = built;
 
         assert!(
             engine
@@ -8626,7 +8850,7 @@ for line in sys.stdin:
 
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
-        let (engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+        let mut built = build_session_engine(
             SessionStore::connect_memory().await.unwrap(),
             router,
             &agent,
@@ -8636,6 +8860,12 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+        let engine = built.engine();
+        let _asks = built.take_asks();
+        let _questions = built.take_questions();
+        let _mcp = built.mcp_control();
+        let _plugins = built.plugin_host();
+        let _built = built;
         assert!(!registry_path.exists());
 
         let old_binding = engine.bind_runtime(&workdir).unwrap();
@@ -8804,7 +9034,7 @@ You are the runtime-installed agent.
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
 
-        let _ = build_session_engine(
+        let _built = build_session_engine(
             store.clone(),
             router,
             &agent,
@@ -8927,7 +9157,7 @@ You are the runtime-installed agent.
         let store = SessionStore::connect(database.to_str().unwrap())
             .await
             .unwrap();
-        let (_engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+        let mut built = build_session_engine(
             store.clone(),
             router,
             &agent,
@@ -8937,6 +9167,12 @@ You are the runtime-installed agent.
         )
         .await
         .unwrap();
+        let _engine = built.engine();
+        let _asks = built.take_asks();
+        let _questions = built.take_questions();
+        let _mcp = built.mcp_control();
+        let _plugins = built.plugin_host();
+        let _built = built;
 
         let running = store.read_projection(running_root).await.unwrap();
         let running_entry = running.team.roster.get("running-1").unwrap();
@@ -9105,7 +9341,7 @@ You are the installed resident agent.
             .unwrap();
         let observed_store = store.clone();
 
-        let (engine, _asks, _questions, _mcp, _plugins) = build_session_engine(
+        let mut built = build_session_engine(
             store,
             router,
             &base,
@@ -9115,6 +9351,12 @@ You are the installed resident agent.
         )
         .await
         .expect("startup recovery must resolve the installed resident definition");
+        let engine = built.engine();
+        let _asks = built.take_asks();
+        let _questions = built.take_questions();
+        let _mcp = built.mcp_control();
+        let _plugins = built.plugin_host();
+        let _built = built;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let projection = observed_store.read_projection(root).await.unwrap();
@@ -9173,7 +9415,13 @@ You are the installed resident agent.
             EngineBuildOptions { defer_mcp: true },
         )
         .await;
-        let (_engine, _asks, _questions, mcp_control, _plugins) = result.unwrap();
+        let mut built = result.unwrap();
+        let _engine = built.engine();
+        let _asks = built.take_asks();
+        let _questions = built.take_questions();
+        let mcp_control = built.mcp_control();
+        let _plugins = built.plugin_host();
+        let _built = built;
         let elapsed = started.elapsed();
         assert!(
             elapsed < std::time::Duration::from_secs(2),
@@ -9216,7 +9464,11 @@ You are the installed resident agent.
             EngineBuildOptions { defer_mcp: false },
         )
         .await;
-        let (engine, _, _, _, _) = result.unwrap();
+        let mut built = result.unwrap();
+        let engine = built.engine();
+        let _ = built.take_asks();
+        let _ = built.take_questions();
+        let _built = built;
         let manifest = engine.runtime_registry().effective_manifest();
         assert_eq!(
             manifest.generation.get(),
@@ -9241,7 +9493,7 @@ You are the installed resident agent.
     async fn compat_mcp_control_publishes_and_removes_through_one_runtime_registry() {
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
-        let (engine, _, _, control, _) = build_session_engine(
+        let mut built = build_session_engine(
             SessionStore::connect_memory().await.unwrap(),
             router,
             &agent,
@@ -9251,6 +9503,11 @@ You are the installed resident agent.
         )
         .await
         .unwrap();
+        let engine = built.engine();
+        let _ = built.take_asks();
+        let _ = built.take_questions();
+        let control = built.mcp_control();
+        let _built = built;
         let workdir = tempdir();
         let before = engine.runtime_registry().bind_turn(&workdir).unwrap();
         control

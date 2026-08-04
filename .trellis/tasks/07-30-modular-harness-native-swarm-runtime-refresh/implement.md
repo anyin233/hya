@@ -2671,3 +2671,19 @@ Focused `owner_rehydrates_accepted_ordinals_exactly_once_on_wake` 1/1,
 tests 2/2, full `hya-app` lib 144/144, `cargo clippy -p hya-app --all-targets -- -D warnings`,
 `cargo fmt --all --check`, and `git diff --check` all green.
 
+## 18.20 Consult31 ordered-reply lock and BuiltSessionEngine lifecycle
+
+Consult31 RED 5 is already satisfied by ordinal-indexed owner evidence. Commit
+`69c39e0c` locked reverse-completion identical-member ordered replies with
+distinct MemberId/session identity without product change.
+
+The next product slice introduced public non-Clone `#[must_use] BuiltSessionEngine`
+from `build_session_engine`, owning engine products plus private
+`SpawnSupervisorLifecycle`. Explicit `shutdown` cancels intake, aborts handlers,
+and drains the supervisor JoinSet; Drop is nonblocking stop+abort only. Headless
+backend commands and serve paths shut down after body completion. Cleanup
+finalization wakes foreign owners only after durable commit (third finalize site).
+
+Focused lifecycle tests, full hya-app lib 147/147, clippy `-D warnings` on
+hya-app/hya-backend, and rustfmt are green.
+
