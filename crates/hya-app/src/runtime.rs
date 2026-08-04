@@ -6,12 +6,13 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Context as _;
 use hya_bundle::{BundleCatalog, PreparedAgent, PreparedCatalog, SpawnLifecycle};
 use hya_core::{
-    AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
-    CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberEvidence,
-    MemberSpec, MemberStatus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
-    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope, TurnBinding,
-    build_system_prompt, project_envelope, project_envelope_for_actor, run_mailbox_service,
+    AdmissionMemberIdentity, AgentResourcePolicy, AgentSpec, BoundSidecarFactory,
+    BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CompactionConfig, CoreError,
+    CreateSession, EventBus, MemberEvidence, MemberSpec, MemberStatus, ModelSummarizer, PromptEnv,
+    ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
+    TeamEvidenceEnvelope, TurnBinding, build_system_prompt, project_envelope,
+    project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
     run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
@@ -1455,7 +1456,19 @@ fn install_transient_admission_launch(
                 )
                 .await
             }
-            None => run_pre_admitted_team(engine.clone(), parent, vec![spec], cancel.clone()).await,
+            None => {
+                run_pre_admitted_member(
+                    engine.clone(),
+                    parent,
+                    spec,
+                    cancel.clone(),
+                    AdmissionMemberIdentity {
+                        operation_id,
+                        member_ordinal,
+                    },
+                )
+                .await
+            }
         };
         let failed =
             !matches!(evidence.as_slice(), [entry] if entry.status != MemberStatus::Failed);
@@ -2814,7 +2827,10 @@ mod tests {
         Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, OwnerRunId, RosterStatus,
         SubagentMode, ToolName, ToolSchema,
     };
-    use hya_provider::{FakeProvider, FakeStep, HttpProvider, ProviderKind};
+    use hya_provider::{
+        Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, HttpProvider,
+        Provider, ProviderError, ProviderKind,
+    };
     use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry};
     use hya_tool::{
         AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
@@ -4412,7 +4428,72 @@ mod tests {
     async fn recovered_transient_launch_executes_only_after_started_barrier() {
         let workdir = tempdir().join("recovered-transient-admission-workdir");
         std::fs::create_dir_all(&workdir).unwrap();
-        let engine = Arc::new(engine_with_catalog(builtin_catalog().unwrap()).await);
+        struct IdentityFakeProvider {
+            inner: FakeProvider,
+        }
+
+        #[async_trait]
+        impl Provider for IdentityFakeProvider {
+            fn id(&self) -> &str {
+                self.inner.id()
+            }
+
+            fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+                self.inner.capabilities(model)
+            }
+
+            fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+                Some(b"hya-test-configured-identity-v1".to_vec())
+            }
+
+            async fn stream(
+                &self,
+                request: CompletionRequest,
+                session: SessionId,
+                message: hya_proto::MessageId,
+            ) -> Result<EventStream, ProviderError> {
+                self.inner.stream(request, session, message).await
+            }
+        }
+
+        let provider = Arc::new(IdentityFakeProvider {
+            inner: FakeProvider::scripted_turns(vec![
+                vec![
+                    FakeStep::ToolCall {
+                        name: "task".to_string(),
+                        input: json!({
+                            "description": "recovered nested task",
+                            "prompt": "complete the nested task",
+                            "subagent_type": "general"
+                        }),
+                    },
+                    FakeStep::Finish(FinishReason::ToolCalls),
+                ],
+                vec![FakeStep::Finish(FinishReason::Stop)],
+            ]),
+        });
+        let router = Arc::new(ProviderRouter::new().with(provider));
+        let runtime = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) =
+            PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Task,
+                "*",
+                Mode::Allow,
+            )]));
+        let (spawn_sender, mut spawn_rx) = BoundSpawnSender::with_capacity(1);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender),
+        );
         let parent = engine
             .create(CreateSession {
                 parent: None,
@@ -4542,7 +4623,10 @@ mod tests {
             CancellationToken::new(),
             None,
         );
-        tokio::task::yield_now().await;
+        assert!(matches!(
+            spawn_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
         assert_eq!(engine.store().list_sessions().await.unwrap().len(), 1);
         assert!(
             engine
@@ -4567,12 +4651,37 @@ mod tests {
         assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
 
         let handle = installed.start(engine.store(), None).await.unwrap();
+        let bound_request =
+            tokio::time::timeout(std::time::Duration::from_secs(5), spawn_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            bound_request.parent_admission(),
+            Some(hya_core::AdmissionMemberIdentity {
+                operation_id: operation.operation_id(),
+                member_ordinal: 0,
+            })
+        );
+        let (_nested_binding, nested_request) = bound_request.into_parts();
+        let nested_parent = nested_request.parent;
+        let nested_session = SessionId::new();
+        nested_request
+            .reply
+            .send(Ok(vec![MemberOutcome {
+                member: "nested-member".to_string(),
+                session: nested_session.to_string(),
+                status: "done".to_string(),
+                summary: "nested task complete".to_string(),
+            }]))
+            .unwrap();
         let completion = handle.await.unwrap().unwrap();
         assert_eq!(completion.operation_id, operation.operation_id());
         assert_eq!(completion.member_ordinal, 0);
         assert_eq!(completion.evidence.status, MemberStatus::Done);
         assert_ne!(completion.evidence.session, "-");
         let child = completion.evidence.session.parse::<SessionId>().unwrap();
+        assert_eq!(nested_parent, child);
         assert_eq!(completion.promoted.len(), 0);
 
         let completed_record = engine
