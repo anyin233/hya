@@ -1446,3 +1446,243 @@ async fn parent_wait_claims_child_atomically_and_requeues_through_fair_scheduler
     assert_eq!(counts.non_active, 156);
     assert_eq!(counts.total, 256);
 }
+
+#[tokio::test]
+async fn active_release_promotes_boundedly_once_and_non_active_cancel_promotes_none() {
+    let temp_db = AdmissionTempDb::new();
+    let store = SessionStore::connect(temp_db.path()).await.unwrap();
+    let mut active_batch = claim(ToolCallId::new(), 52);
+    active_batch.admission_units = 103;
+    let active_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x52; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xb2; 32],
+        spawn_intent: vec![0xda, 0x01],
+    };
+    let active_claimed = store
+        .claim_admission_batch(&active_batch, vec![active_intent; 103])
+        .await
+        .unwrap();
+    assert!(matches!(
+        active_claimed,
+        AdmissionBatchClaimOutcome::Claimed(launches) if launches.len() == 100
+    ));
+    let active_records = store.admissions(active_batch.operation_id).await.unwrap();
+    assert_eq!(active_records.len(), 103);
+    assert!(active_records.iter().take(100).all(|record| {
+        record.state == AdmissionState::Accepted
+            && record.member_ordinal < 100
+            && record.batch_size == 103
+            && record.admission_units == 1
+    }));
+    assert!(active_records.iter().skip(100).all(|record| {
+        record.state == AdmissionState::Queued
+            && record.member_ordinal >= 100
+            && record.batch_size == 103
+            && record.admission_units == 1
+    }));
+    assert!(matches!(
+        store
+            .start_admission_member(active_batch.operation_id, 0, None)
+            .await
+            .unwrap(),
+        AdmissionStartOutcome::Started(record)
+            if record.member_ordinal == 0 && record.state == AdmissionState::Started
+    ));
+
+    let first = store
+        .finalize_admission_members(
+            &[(active_batch.operation_id, 0)],
+            AdmissionTerminal::Cancelled,
+            "release active member",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.finalized.len(), 1);
+    assert_eq!(
+        first.finalized[0].record.operation_id,
+        active_batch.operation_id
+    );
+    assert_eq!(first.finalized[0].record.member_ordinal, 0);
+    assert_eq!(first.finalized[0].record.state, AdmissionState::Cancelled);
+    assert!(first.finalized[0].release_required);
+    assert_eq!(first.promoted.len(), 1);
+    assert_eq!(
+        first.promoted[0].record.operation_id,
+        active_batch.operation_id
+    );
+    assert_eq!(first.promoted[0].record.member_ordinal, 100);
+    assert_eq!(first.promoted[0].record.state, AdmissionState::Accepted);
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 2);
+    assert_eq!(counts.total, 102);
+
+    let repeated = store
+        .finalize_admission_members(
+            &[(active_batch.operation_id, 0)],
+            AdmissionTerminal::Cancelled,
+            "release active member",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated.finalized.len(), 1);
+    assert_eq!(repeated.finalized[0].record, first.finalized[0].record);
+    assert!(!repeated.finalized[0].release_required);
+    assert!(repeated.promoted.is_empty());
+    assert_eq!(store.admission_counts().await.unwrap(), counts);
+
+    let accepted_releases = store
+        .finalize_admission_members(
+            &[
+                (active_batch.operation_id, 1),
+                (active_batch.operation_id, 2),
+            ],
+            AdmissionTerminal::Aborted,
+            "release accepted members",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted_releases.finalized.len(), 2);
+    for (member_ordinal, finalized) in [1_u32, 2].into_iter().zip(&accepted_releases.finalized) {
+        assert_eq!(finalized.record.operation_id, active_batch.operation_id);
+        assert_eq!(finalized.record.member_ordinal, member_ordinal);
+        assert_eq!(finalized.record.state, AdmissionState::Aborted);
+        assert!(!finalized.release_required);
+    }
+    assert_eq!(accepted_releases.promoted.len(), 2);
+    assert_eq!(
+        accepted_releases
+            .promoted
+            .iter()
+            .map(|launch| launch.record.member_ordinal)
+            .collect::<Vec<_>>(),
+        vec![101, 102]
+    );
+    assert!(
+        accepted_releases
+            .promoted
+            .iter()
+            .all(
+                |launch| launch.record.operation_id == active_batch.operation_id
+                    && launch.record.state == AdmissionState::Accepted
+            )
+    );
+    let counts = store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 100);
+
+    let non_active_db = AdmissionTempDb::new();
+    let non_active_store = SessionStore::connect(non_active_db.path()).await.unwrap();
+    let mut parent = claim(ToolCallId::new(), 53);
+    parent.admission_units = 1;
+    let parent_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x53; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xb3; 32],
+        spawn_intent: vec![0xda, 0x02],
+    };
+    assert!(matches!(
+        non_active_store
+            .claim_admission_batch(&parent, vec![parent_intent])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    assert!(matches!(
+        non_active_store
+            .start_admission_member(parent.operation_id, 0, None)
+            .await
+            .unwrap(),
+        AdmissionStartOutcome::Started(_)
+    ));
+    let mut child = claim(ToolCallId::new(), 54);
+    child.root_session = parent.root_session;
+    child.admission_units = 101;
+    let child_intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [0x54; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [0xb4; 32],
+        spawn_intent: vec![0xda, 0x03],
+    };
+    let child_claimed = non_active_store
+        .suspend_parent_and_claim_admission_batch(
+            parent.operation_id,
+            0,
+            &child,
+            vec![child_intent; 101],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        child_claimed,
+        AdmissionBatchClaimOutcome::Claimed(launches) if launches.len() == 100
+    ));
+    let parent_records = non_active_store
+        .admissions(parent.operation_id)
+        .await
+        .unwrap();
+    assert_eq!(parent_records.len(), 1);
+    assert_eq!(parent_records[0].state, AdmissionState::Waiting);
+    let child_records = non_active_store
+        .admissions(child.operation_id)
+        .await
+        .unwrap();
+    assert_eq!(child_records.len(), 101);
+    assert!(
+        child_records.iter().take(100).all(|record| {
+            record.state == AdmissionState::Accepted && record.member_ordinal < 100
+        })
+    );
+    assert_eq!(child_records[100].state, AdmissionState::Queued);
+    let counts = non_active_store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 2);
+    assert_eq!(counts.total, 102);
+
+    let non_active_finalized = non_active_store
+        .finalize_admission_members(
+            &[(parent.operation_id, 0), (child.operation_id, 100)],
+            AdmissionTerminal::Cancelled,
+            "cancel non-active members",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(non_active_finalized.finalized.len(), 2);
+    assert!(
+        non_active_finalized
+            .finalized
+            .iter()
+            .all(|finalized| !finalized.release_required
+                && finalized.record.state == AdmissionState::Cancelled)
+    );
+    assert!(non_active_finalized.promoted.is_empty());
+    let counts = non_active_store.admission_counts().await.unwrap();
+    assert_eq!(counts.active, 100);
+    assert_eq!(counts.non_active, 0);
+    assert_eq!(counts.total, 100);
+
+    let non_active_repeated = non_active_store
+        .finalize_admission_members(
+            &[(parent.operation_id, 0), (child.operation_id, 100)],
+            AdmissionTerminal::Cancelled,
+            "cancel non-active members",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        non_active_repeated.finalized,
+        non_active_finalized.finalized
+    );
+    assert!(non_active_repeated.promoted.is_empty());
+    assert_eq!(non_active_store.admission_counts().await.unwrap(), counts);
+}
