@@ -1720,11 +1720,25 @@ async fn resolve_current_admission_launches(
     ctx: &AdmissionLaunchResolutionCtx<'_>,
     launch: AdmissionLaunch,
 ) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
+    resolve_admission_launches_fifo(ctx.engine, launch, |launch| {
+        std::future::ready(resolve_admission_launches(ctx, vec![launch]))
+    })
+    .await
+}
+
+async fn resolve_admission_launches_fifo<F, Fut>(
+    engine: &SessionEngine,
+    launch: AdmissionLaunch,
+    mut resolve_one: F,
+) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError>
+where
+    F: FnMut(AdmissionLaunch) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<ResolvedAdmissionLaunch>, SpawnError>>,
+{
     let mut pending = std::collections::VecDeque::from([launch]);
     let mut resolved = Vec::new();
     while let Some(launch) = pending.pop_front() {
-        let records = ctx
-            .engine
+        let records = engine
             .store()
             .admissions(launch.record.operation_id)
             .await
@@ -1735,11 +1749,10 @@ async fn resolve_current_admission_launches(
             continue;
         }
 
-        match resolve_admission_launches(ctx, vec![launch.clone()]) {
+        match resolve_one(launch.clone()).await {
             Ok(mut launches) => resolved.append(&mut launches),
             Err(_) => {
-                let outcome = ctx
-                    .engine
+                let outcome = engine
                     .store()
                     .finalize_admission_members(
                         &[(launch.record.operation_id, launch.record.member_ordinal)],
@@ -1754,6 +1767,52 @@ async fn resolve_current_admission_launches(
         }
     }
     Ok(resolved)
+}
+
+#[allow(dead_code)]
+async fn resolve_recovered_admission_launches(
+    engine: &SessionEngine,
+    resolution: &AdmissionResolutionContext,
+    sidecar_environment: &dyn SidecarEnvironment,
+    launch: AdmissionLaunch,
+) -> Result<Vec<ResolvedAdmissionLaunch>, SpawnError> {
+    resolve_admission_launches_fifo(engine, launch, |launch| async move {
+        let intent =
+            SpawnIntentV1::decode_admission_launch(&launch).map_err(|_| SpawnError::Unavailable)?;
+        let projection = engine
+            .read_projection(intent.parent())
+            .await
+            .map_err(|_| SpawnError::Unavailable)?;
+        let caller = projection.session.agent.ok_or(SpawnError::Unavailable)?;
+        let workdir = projection
+            .session
+            .workdir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| resolution.base.workdir.clone());
+        let binding = engine
+            .bind_root_runtime(&workdir)
+            .await
+            .map_err(|_| SpawnError::Unavailable)?;
+        let allowed_agents = engine
+            .agent_roster_for_binding(&binding, caller.as_str())
+            .map_err(|_| SpawnError::Unavailable)?;
+        let ctx = AdmissionLaunchResolutionCtx {
+            engine,
+            binding: &binding,
+            resolution,
+            caller: caller.as_str(),
+            allowed_agents: allowed_agents.as_ref(),
+            guidance: None,
+            sidecar_environment,
+        };
+        let resolved =
+            resolve_admission_launches(&ctx, vec![launch]).map_err(|_| SpawnError::Unavailable)?;
+        if resolved.len() != 1 {
+            return Err(SpawnError::Unavailable);
+        }
+        Ok(resolved)
+    })
+    .await
 }
 
 pub fn spawn_team_supervisor(
@@ -3955,6 +4014,301 @@ mod tests {
         assert_eq!(
             engine.store().admission_counts().await.unwrap(),
             before_counts
+        );
+    }
+
+    #[tokio::test]
+    async fn recovered_promotions_reconstruct_each_parent_binding() {
+        let workdir_a = tempdir().join("recovered-promotion-parent-a");
+        let workdir_b = tempdir().join("recovered-promotion-parent-b");
+        std::fs::create_dir_all(&workdir_a).unwrap();
+        std::fs::create_dir_all(&workdir_b).unwrap();
+        write_skill(
+            &workdir_a.join(".hya/skills/runtime-a"),
+            "runtime-a",
+            "runtime A skill",
+            "runtime A skill body",
+        );
+        write_skill(
+            &workdir_b.join(".hya/skills/runtime-b"),
+            "runtime-b",
+            "runtime B skill",
+            "runtime B skill body",
+        );
+
+        let engine = engine_with_catalog(builtin_catalog().unwrap()).await;
+        let parent_a = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: workdir_a.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let parent_b = engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: workdir_b.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        assert_ne!(parent_a, parent_b);
+
+        let binding_a = engine.bind_runtime(&workdir_a).unwrap();
+        let binding_b = engine.bind_runtime(&workdir_b).unwrap();
+        assert_eq!(binding_a.workdir(), workdir_a);
+        assert_eq!(binding_b.workdir(), workdir_b);
+        let runtime_fingerprint_a = engine.runtime_semantic_fingerprint_v1(&binding_a).unwrap();
+        let runtime_fingerprint_b = engine.runtime_semantic_fingerprint_v1(&binding_b).unwrap();
+        assert_ne!(runtime_fingerprint_a, runtime_fingerprint_b);
+
+        let categories = Arc::new(CategoryRegistry::default());
+        let router = Arc::new(ProviderRouter::new());
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("current-base-model"),
+            system_prompt: "current-base-system-prompt".to_string(),
+            workdir: workdir_a.clone(),
+            reasoning: None,
+        };
+        let resolution = AdmissionResolutionContext::capture(
+            base.clone(),
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .unwrap();
+        let admission_fingerprint_a =
+            resolution.admission_binding_fingerprint_v1(runtime_fingerprint_a);
+        let admission_fingerprint_b =
+            resolution.admission_binding_fingerprint_v1(runtime_fingerprint_b);
+        let changed_resolution = AdmissionResolutionContext::capture(
+            AgentSpec {
+                model: ModelRef::new("changed-base-model"),
+                ..base
+            },
+            Arc::clone(&categories),
+            Arc::clone(&router),
+        )
+        .unwrap();
+        let changed_admission_fingerprint_a =
+            changed_resolution.admission_binding_fingerprint_v1(runtime_fingerprint_a);
+        assert_ne!(admission_fingerprint_a, changed_admission_fingerprint_a);
+
+        let member = |parent: SessionId, ordinal: u32| SpawnMember {
+            description: format!("recovered-parent-{parent}-description-{ordinal}"),
+            prompt: format!("recovered-parent-{parent}-prompt-{ordinal}"),
+            subagent_type: "general".to_string(),
+            task_id: None,
+            model: None,
+            category: None,
+            inline_agent: None,
+            resident: false,
+        };
+        let operation_a = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let intents_a = (0..100)
+            .map(|ordinal| {
+                SpawnIntentV1::new(SpawnIntentInputV1 {
+                    member: member(parent_a, ordinal),
+                    parent: parent_a,
+                    stable_target: AgentName::new("general"),
+                    background: true,
+                    operation: operation_a,
+                    member_ordinal: ordinal,
+                    batch_cardinality: 100,
+                    prior_start: PriorStartV1::NeverStarted,
+                    runtime_fingerprint: runtime_fingerprint_a,
+                    admission_binding_fingerprint: changed_admission_fingerprint_a,
+                    diagnostic_generation: binding_a.generation().get(),
+                })
+                .unwrap()
+                .into_admission_intent()
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let claim_a = hya_store::AdmissionClaim {
+            operation_id: operation_a.operation_id(),
+            source_tool_call_id: operation_a.source_tool_call_id(),
+            root_session: parent_a,
+            request_fingerprint: [0xa1; 32],
+            admission_units: 100,
+            actor_claim: None,
+        };
+        let launches_a = match engine
+            .store()
+            .claim_admission_batch(&claim_a, intents_a)
+            .await
+            .unwrap()
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh parent A admission batch must not already exist")
+            }
+        };
+        assert_eq!(launches_a.len(), 100);
+        assert!(
+            launches_a
+                .iter()
+                .all(|launch| { launch.record.state == hya_store::AdmissionState::Accepted })
+        );
+        let row0_launch = launches_a.first().cloned().unwrap();
+        assert_eq!(row0_launch.record.member_ordinal, 0);
+
+        let operation_b = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let request_fingerprint_a = [0xa1; 32];
+        let request_fingerprint_b = [0xb1; 32];
+        assert_ne!(operation_a.operation_id(), operation_b.operation_id());
+        assert_ne!(request_fingerprint_a, request_fingerprint_b);
+        let stale_generation_b = binding_b.generation().get().checked_add(1).unwrap();
+        assert_ne!(stale_generation_b, binding_b.generation().get());
+        let b_spawn_intent = SpawnIntentV1::new(SpawnIntentInputV1 {
+            member: member(parent_b, 0),
+            parent: parent_b,
+            stable_target: AgentName::new("general"),
+            background: true,
+            operation: operation_b,
+            member_ordinal: 0,
+            batch_cardinality: 1,
+            prior_start: PriorStartV1::NeverStarted,
+            runtime_fingerprint: runtime_fingerprint_b,
+            admission_binding_fingerprint: admission_fingerprint_b,
+            diagnostic_generation: stale_generation_b,
+        })
+        .unwrap();
+        let claim_b = hya_store::AdmissionClaim {
+            operation_id: operation_b.operation_id(),
+            source_tool_call_id: operation_b.source_tool_call_id(),
+            root_session: parent_b,
+            request_fingerprint: request_fingerprint_b,
+            admission_units: 1,
+            actor_claim: None,
+        };
+        let launches_b = match engine
+            .store()
+            .claim_admission_batch(
+                &claim_b,
+                vec![b_spawn_intent.clone().into_admission_intent().unwrap()],
+            )
+            .await
+            .unwrap()
+        {
+            hya_store::AdmissionBatchClaimOutcome::Claimed(launches) => launches,
+            hya_store::AdmissionBatchClaimOutcome::Existing => {
+                panic!("fresh parent B admission batch must not already exist")
+            }
+        };
+        assert!(launches_b.is_empty());
+        let records_b = engine
+            .store()
+            .admissions(operation_b.operation_id())
+            .await
+            .unwrap();
+        assert_eq!(records_b.len(), 1);
+        assert_eq!(records_b[0].state, hya_store::AdmissionState::Queued);
+
+        let sessions_before = engine.store().list_sessions().await.unwrap();
+        assert_eq!(sessions_before.len(), 2);
+        assert!(
+            sessions_before
+                .iter()
+                .all(|session| session.session == parent_a || session.session == parent_b)
+        );
+
+        struct CountingSidecarEnvironment {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl SidecarEnvironment for CountingSidecarEnvironment {
+            fn factory_for(
+                &self,
+                _binding: &TurnBinding,
+                _stable_id: &str,
+            ) -> Result<Option<Arc<dyn BoundSidecarFactory>>, CoreError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+        }
+
+        let sidecar_calls = Arc::new(AtomicUsize::new(0));
+        let sidecar_environment = CountingSidecarEnvironment {
+            calls: Arc::clone(&sidecar_calls),
+        };
+        let resolved = resolve_recovered_admission_launches(
+            &engine,
+            &resolution,
+            &sidecar_environment,
+            row0_launch,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+        let resolved_b = &resolved[0];
+        assert_eq!(
+            resolved_b.launch.record.operation_id,
+            operation_b.operation_id()
+        );
+        assert_eq!(resolved_b.launch.record.member_ordinal, 0);
+        assert_eq!(resolved_b.intent, b_spawn_intent);
+        assert_eq!(
+            resolved_b.resolved.authorized_target,
+            AgentName::new("general")
+        );
+        assert_eq!(resolved_b.resolved.binding.workdir(), workdir_b);
+        assert_eq!(
+            resolved_b.launch.intent.runtime_fingerprint,
+            runtime_fingerprint_b
+        );
+        assert_ne!(
+            resolved_b.launch.intent.runtime_fingerprint,
+            runtime_fingerprint_a
+        );
+        assert_eq!(sidecar_calls.load(Ordering::SeqCst), 1);
+
+        let records_a = engine
+            .store()
+            .admissions(operation_a.operation_id())
+            .await
+            .unwrap();
+        assert_eq!(records_a.len(), 100);
+        assert_eq!(records_a[0].state, hya_store::AdmissionState::Aborted);
+        assert_eq!(
+            records_a[0].terminal_reason.as_deref(),
+            Some("admission recovery resolution unavailable")
+        );
+        assert!(
+            records_a[1..]
+                .iter()
+                .all(|record| record.state == hya_store::AdmissionState::Accepted)
+        );
+        let records_b = engine
+            .store()
+            .admissions(operation_b.operation_id())
+            .await
+            .unwrap();
+        assert_eq!(records_b.len(), 1);
+        assert_eq!(records_b[0].state, hya_store::AdmissionState::Accepted);
+        assert_eq!(
+            engine.store().admission_counts().await.unwrap(),
+            hya_store::AdmissionCounts {
+                active: 100,
+                non_active: 0,
+                total: 100,
+            }
+        );
+
+        let sessions_after = engine.store().list_sessions().await.unwrap();
+        assert_eq!(sessions_after.len(), 2);
+        assert_eq!(
+            sessions_before
+                .iter()
+                .map(|session| session.session.to_string())
+                .collect::<BTreeSet<_>>(),
+            sessions_after
+                .iter()
+                .map(|session| session.session.to_string())
+                .collect::<BTreeSet<_>>()
         );
     }
 

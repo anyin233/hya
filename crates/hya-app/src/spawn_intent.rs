@@ -293,6 +293,10 @@ impl SpawnIntentV1 {
         &self.member
     }
 
+    pub(crate) fn parent(&self) -> SessionId {
+        self.parent
+    }
+
     pub(crate) fn stable_target(&self) -> &AgentName {
         &self.stable_target
     }
