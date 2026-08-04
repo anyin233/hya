@@ -802,7 +802,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "hya-app",
  "hya-native",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "hya-bundle"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "hya-proto",
  "serde",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "hya-client"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "hya-proto",
  "reqwest",
@@ -887,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "futures",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "axum",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -959,15 +959,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.34.11"
+version = "0.34.12"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.34.11"
+version = "0.34.12"
 
 [[package]]
 name = "hya-proto"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "base64",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "axum",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "hya-bundle",
  "hya-proto",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "async-trait",
  "base64",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "hya-ts"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "clap",
  "hya-app",
@@ -3205,7 +3205,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.34.11"
+version = "0.34.12"
 dependencies = [
  "anyhow",
  "serde",
