@@ -2750,3 +2750,21 @@ bundle/app/store deps):
 Workspace and TUI package versions advance to `0.34.13`; prior root changelog
 moved to `docs/changes/CHANGELOG_0.34.12.md`. Production activation remains
 owner-gated; `install.sh` remains break-glass.
+
+## 18.27 P8 product surface (CLI, skill, apply pipeline)
+
+Product gaps on the independent updater after the library cut:
+
+- `hya-updater` binary: `version`, `status`, `recover`, `apply`, `discard`,
+  `init-roots`
+- `apply_update` pipeline: recover → verify → local package fetch → stage →
+  optional smoke → activate only when `owner_authorized`
+- protocol_version / min_updater_version compatibility fields in signed metadata
+- `docs/self-update.md`, `docs/examples/self-update/`, built-in skill
+  `secure-self-update`
+- break-glass regression: `install.sh` path + `bash -n` + `restore_install`
+  retained
+
+Still owner-gated / not claimed: production auto-activation, OS package
+permission hardening proof, full disk-full fault injection matrix, signing-key
+custody/rotation service.

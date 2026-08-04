@@ -6,10 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 description = "Independent release metadata verifier and update TCB (no runtime/plugin/MCP/bundle deps)"
 
+[[bin]]
+name = "hya-updater"
+path = "src/bin/hya-updater.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
+clap = { workspace = true }
 ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

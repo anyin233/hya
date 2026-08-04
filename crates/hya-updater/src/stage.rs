@@ -84,6 +84,26 @@ pub fn stage_verified_release(
         file.sync_all().map_err(|error| {
             UpdaterError::InvalidMetadata(format!("fsync artifact `{name}`: {error}"))
         })?;
+        drop(file);
+        // Release packages are meant to be smoke-tested and selected for boot.
+        // Preserve a runnable mode on Unix; ownership remains root-level TCB.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path)
+                .map_err(|error| {
+                    UpdaterError::InvalidMetadata(format!(
+                        "stat artifact `{name}` for mode: {error}"
+                    ))
+                })?
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms).map_err(|error| {
+                UpdaterError::InvalidMetadata(format!(
+                    "set executable mode on artifact `{name}`: {error}"
+                ))
+            })?;
+        }
     }
     // Parent fsync is best-effort; File::sync_all on directory is not portable.
     // Presence of complete artifact set is the staging completeness check.
