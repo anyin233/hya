@@ -77,7 +77,7 @@ async fn cmd_exec(
     let store = open_store(db).await?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+    let mut built = build_session_engine(
         store,
         runtime.router,
         &agent,
@@ -86,6 +86,13 @@ async fn cmd_exec(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let _ = built.take_questions();
+    let _mcp_manager = built.mcp_control();
+    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -118,6 +125,10 @@ async fn cmd_exec(
             .context("read projection")?;
         print!("{}", render_transcript(&projection));
     }
+    built
+        .shutdown()
+        .await
+        .context("shutdown spawn supervisor")?;
     Ok(())
 }
 
@@ -129,7 +140,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .context("open in-memory store")?;
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+    let mut built = build_session_engine(
         store,
         runtime.router,
         &agent,
@@ -138,6 +149,13 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let _ = built.take_questions();
+    let _mcp_manager = built.mcp_control();
+    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -176,6 +194,10 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
             None => {}
         }
     }
+    built
+        .shutdown()
+        .await
+        .context("shutdown spawn supervisor")?;
     Ok(())
 }
 
@@ -192,7 +214,7 @@ async fn cmd_goal(
     let runtime = resolve_runtime(model_override).with_yolo(yolo);
     let evaluator_router = runtime.router.clone();
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let (engine, asks, _, _mcp_manager, _plugin_host) = build_session_engine(
+    let mut built = build_session_engine(
         store,
         runtime.router,
         &agent,
@@ -201,6 +223,13 @@ async fn cmd_goal(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let _ = built.take_questions();
+    let _mcp_manager = built.mcp_control();
+    let _plugin_host = built.plugin_host();
     let _responder = spawn_reject_responder(asks);
     let session = engine
         .create(CreateSession {
@@ -231,6 +260,10 @@ async fn cmd_goal(
     .await
     .context("run goal")?;
     println!("goal outcome: {outcome:?}");
+    built
+        .shutdown()
+        .await
+        .context("shutdown spawn supervisor")?;
     Ok(())
 }
 

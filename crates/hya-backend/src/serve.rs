@@ -18,7 +18,7 @@ pub(crate) async fn cmd_serve(
     // are discovered per turn so Bundle Some does not drop project AGENTS and
     // Bundle None does not duplicate startup-baked AGENTS.
     let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
-    let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
+    let mut built = build_session_engine(
         store,
         runtime.router,
         agent.as_ref(),
@@ -27,6 +27,15 @@ pub(crate) async fn cmd_serve(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let questions = built
+        .take_questions()
+        .ok_or_else(|| anyhow::anyhow!("questions receiver missing"))?;
+    let mcp_control = built.mcp_control();
+    let plugin_host = built.plugin_host();
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
@@ -43,10 +52,11 @@ pub(crate) async fn cmd_serve(
     let url = format!("http://{addr}");
     println!("hya server listening on {url}");
     emit_startup_mark("backend_listen", Some(&url));
-    axum::serve(listener, server_router(state))
+    let serve_result = axum::serve(listener, server_router(state))
         .await
-        .context("serve http")?;
-    Ok(())
+        .context("serve http");
+    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    serve_result.and(shutdown_result)
 }
 
 /// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
@@ -106,7 +116,7 @@ pub(crate) async fn cmd_tui_hya(
     }
     // Interactive TUI backend uses the same base-only AppState seam as serve.
     let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
-    let (engine, asks, questions, mcp_control, plugin_host) = build_session_engine(
+    let mut built = build_session_engine(
         store,
         runtime.router,
         agent.as_ref(),
@@ -115,6 +125,15 @@ pub(crate) async fn cmd_tui_hya(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let questions = built
+        .take_questions()
+        .ok_or_else(|| anyhow::anyhow!("questions receiver missing"))?;
+    let mcp_control = built.mcp_control();
+    let plugin_host = built.plugin_host();
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
@@ -138,8 +157,14 @@ pub(crate) async fn cmd_tui_hya(
 
     let result = launch_hya(&base_url, resume.as_deref()).await;
     server.abort();
+    let _ = server.await;
     drop(plugin_host);
-    result
+    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    match (result, shutdown_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
 }
 
 async fn launch_hya(base_url: &str, resume: Option<&str>) -> anyhow::Result<()> {
