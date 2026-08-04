@@ -267,7 +267,10 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
     std::fs::write(package.join("hya-backend"), bytes).unwrap();
     let (metadata, trust) = signed_release(&signing, 2, "hya-backend", bytes);
     write_trust_roots(&layout(&root).trust_roots, &[trust]).unwrap();
-    assert_eq!(load_trust_roots(&layout(&root).trust_roots).unwrap().len(), 1);
+    assert_eq!(
+        load_trust_roots(&layout(&root).trust_roots).unwrap().len(),
+        1
+    );
 
     // Seed floor 1 so sequence 2 is a real advance.
     verify_and_stage(&root, 1, 0, b"v1", "hya-backend");

@@ -43,10 +43,7 @@ pub fn smoke_staged_release(
         .current_dir(&dir)
         .status()
         .map_err(|error| {
-            UpdaterError::SmokeFailed(format!(
-                "spawn smoke `{}`: {error}",
-                command_path.display()
-            ))
+            UpdaterError::SmokeFailed(format!("spawn smoke `{}`: {error}", command_path.display()))
         })?;
     if !status.success() {
         return Err(UpdaterError::SmokeFailed(format!(

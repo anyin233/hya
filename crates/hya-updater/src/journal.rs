@@ -134,9 +134,12 @@ pub fn recover_activation(root: &Path) -> Result<ActivationSelector, UpdaterErro
             if selector.current_sequence == last.sequence {
                 // Selector switched; ensure floor matches and journal commits.
                 if selector.accepted_floor < last.sequence {
-                    write_floor(root, &AcceptedFloor {
-                        sequence: last.sequence,
-                    })?;
+                    write_floor(
+                        root,
+                        &AcceptedFloor {
+                            sequence: last.sequence,
+                        },
+                    )?;
                 }
                 write_journal(
                     root,
@@ -204,9 +207,7 @@ pub fn read_floor(root: &Path) -> Result<AcceptedFloor, UpdaterError> {
     }
 }
 
-fn read_last_journal_record(
-    root: &Path,
-) -> Result<Option<ActivationJournalRecord>, UpdaterError> {
+fn read_last_journal_record(root: &Path) -> Result<Option<ActivationJournalRecord>, UpdaterError> {
     let path = journal_path(root);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,

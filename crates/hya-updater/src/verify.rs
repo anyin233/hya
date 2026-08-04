@@ -30,9 +30,7 @@ struct CanonicalMetadata<'a> {
 /// Canonical domain-separated payload used for signing and verification.
 ///
 /// The signature field is intentionally excluded.
-pub fn canonical_metadata_payload(
-    metadata: &ReleaseMetadata,
-) -> Result<Vec<u8>, UpdaterError> {
+pub fn canonical_metadata_payload(metadata: &ReleaseMetadata) -> Result<Vec<u8>, UpdaterError> {
     if metadata.platform.is_empty() {
         return Err(UpdaterError::InvalidMetadata(
             "platform must be non-empty".to_string(),
@@ -65,10 +63,7 @@ pub fn canonical_metadata_payload(
             ));
         }
         if artifact.sha256_hex.len() != 64
-            || !artifact
-                .sha256_hex
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit())
+            || !artifact.sha256_hex.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return Err(UpdaterError::InvalidMetadata(format!(
                 "artifact `{}` digest must be 64 lower-hex chars",
@@ -187,8 +182,8 @@ pub fn verify_release_metadata(
         .map_err(|_| UpdaterError::InvalidTrustRootKey)?;
 
     let payload = canonical_metadata_payload(metadata)?;
-    let signature = Signature::from_slice(&metadata.signature)
-        .map_err(|_| UpdaterError::InvalidSignature)?;
+    let signature =
+        Signature::from_slice(&metadata.signature).map_err(|_| UpdaterError::InvalidSignature)?;
     verifying_key
         .verify(&payload, &signature)
         .map_err(|_| UpdaterError::InvalidSignature)?;
