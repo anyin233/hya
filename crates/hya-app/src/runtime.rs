@@ -382,9 +382,18 @@ struct ForegroundHandlerUniformProbe {
     owner_run_release: tokio::sync::Notify,
     supervisor_handler_active: std::sync::atomic::AtomicUsize,
     supervisor_handler_owned: std::sync::atomic::AtomicUsize,
+    max_handler_live: std::sync::atomic::AtomicUsize,
     reply_owners: std::sync::atomic::AtomicUsize,
     detached_postclaim_owner_spawns: std::sync::atomic::AtomicUsize,
     real_member_task_installations: std::sync::atomic::AtomicUsize,
+    supervisor_full_observed: tokio::sync::Semaphore,
+    handler_acquisitions: tokio::sync::Semaphore,
+    preparation_acquisitions: tokio::sync::Semaphore,
+    handler_releases: tokio::sync::Semaphore,
+    preparation_entries: std::sync::atomic::AtomicUsize,
+    watched_preparation_operation: std::sync::Mutex<Option<hya_proto::OperationId>>,
+    watched_preparation_entered: tokio::sync::Notify,
+    watched_preparation_release: tokio::sync::Notify,
 }
 
 #[cfg(test)]
@@ -401,10 +410,41 @@ impl ForegroundHandlerUniformProbe {
             owner_run_release: tokio::sync::Notify::new(),
             supervisor_handler_active: std::sync::atomic::AtomicUsize::new(0),
             supervisor_handler_owned: std::sync::atomic::AtomicUsize::new(0),
+            max_handler_live: std::sync::atomic::AtomicUsize::new(0),
             reply_owners: std::sync::atomic::AtomicUsize::new(0),
             detached_postclaim_owner_spawns: std::sync::atomic::AtomicUsize::new(0),
             real_member_task_installations: std::sync::atomic::AtomicUsize::new(0),
+            supervisor_full_observed: tokio::sync::Semaphore::new(0),
+            handler_acquisitions: tokio::sync::Semaphore::new(0),
+            preparation_acquisitions: tokio::sync::Semaphore::new(0),
+            handler_releases: tokio::sync::Semaphore::new(0),
+            preparation_entries: std::sync::atomic::AtomicUsize::new(0),
+            watched_preparation_operation: std::sync::Mutex::new(None),
+            watched_preparation_entered: tokio::sync::Notify::new(),
+            watched_preparation_release: tokio::sync::Notify::new(),
         }
+    }
+
+    fn watch_preparation(&self, operation: hya_proto::OperationId) {
+        let mut watched = self
+            .watched_preparation_operation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *watched = Some(operation);
+    }
+
+    fn mark_preparation_entered(&self, operation: hya_proto::OperationId) -> bool {
+        self.preparation_entries
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let watched = self
+            .watched_preparation_operation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|watched| watched == operation);
+        if watched {
+            self.watched_preparation_entered.notify_one();
+        }
+        watched
     }
 }
 
@@ -416,15 +456,20 @@ struct ForegroundHandlerProbeGuard {
 #[cfg(test)]
 impl ForegroundHandlerProbeGuard {
     fn new(probe: Arc<ForegroundHandlerUniformProbe>) -> Self {
-        probe
+        let live = probe
             .supervisor_handler_active
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
         probe
             .supervisor_handler_owned
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         probe
+            .max_handler_live
+            .fetch_max(live, std::sync::atomic::Ordering::SeqCst);
+        probe
             .reply_owners
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        probe.handler_acquisitions.add_permits(1);
         Self { probe }
     }
 }
@@ -441,6 +486,7 @@ impl Drop for ForegroundHandlerProbeGuard {
         self.probe
             .reply_owners
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.probe.handler_releases.add_permits(1);
     }
 }
 
@@ -2625,9 +2671,31 @@ impl ForegroundTransientAdmissionPreparation {
             req,
         } = self;
         #[cfg(test)]
+        let watched_preparation = sidecar_environment
+            .uniform_probe
+            .as_ref()
+            .is_some_and(|probe| probe.mark_preparation_entered(req.operation.operation_id()));
+        #[cfg(test)]
         if let Some(probe) = &sidecar_environment.uniform_probe {
             probe.prepare_entered.notify_one();
-            probe.prepare_release.notified().await;
+            let release = if watched_preparation {
+                probe.watched_preparation_release.notified()
+            } else {
+                probe.prepare_release.notified()
+            };
+            let mut release = Box::pin(release);
+            let mut parked = false;
+            std::future::poll_fn(|cx| match release.as_mut().poll(cx) {
+                std::task::Poll::Ready(()) => std::task::Poll::Ready(()),
+                std::task::Poll::Pending => {
+                    if !parked {
+                        probe.preparation_acquisitions.add_permits(1);
+                        parked = true;
+                    }
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
         }
         let operation_id = req.operation.operation_id();
         let actor_claim = req.operation.actor_claim();
@@ -2744,6 +2812,8 @@ fn observe_foreground_handler_join(joined: Option<Result<(), tokio::task::JoinEr
     }
 }
 
+const FOREGROUND_HANDLER_CAP: usize = 256;
+
 fn spawn_team_supervisor_with_environment(
     mut rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -2757,6 +2827,17 @@ fn spawn_team_supervisor_with_environment(
         let mut foreground_handlers = tokio::task::JoinSet::new();
         loop {
             let bound_request = loop {
+                #[cfg(test)]
+                if foreground_handlers.len() == FOREGROUND_HANDLER_CAP
+                    && let Some(probe) = &sidecar_environment.uniform_probe
+                {
+                    probe.supervisor_full_observed.add_permits(1);
+                }
+                if foreground_handlers.len() >= FOREGROUND_HANDLER_CAP {
+                    let joined = foreground_handlers.join_next().await;
+                    observe_foreground_handler_join(joined);
+                    continue;
+                }
                 if foreground_handlers.is_empty() {
                     break rx.recv().await;
                 }
@@ -3695,6 +3776,36 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct CountingDevProvider {
+        calls: Arc<AtomicUsize>,
+        inner: DevProvider,
+    }
+
+    #[async_trait]
+    impl Provider for CountingDevProvider {
+        fn id(&self) -> &str {
+            self.inner.id()
+        }
+
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            self.inner.capabilities(model)
+        }
+
+        fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+            self.inner.configured_identity_v1()
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+            session: SessionId,
+            message: hya_proto::MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.stream(request, session, message).await
+        }
+    }
 
     #[test]
     fn resident_owner_run_id_is_stable_for_the_process() {
@@ -6218,36 +6329,6 @@ agents:
 
     #[tokio::test]
     async fn foreground_handler_uniform_pre_admission() {
-        struct CountingProvider {
-            calls: Arc<AtomicUsize>,
-            inner: DevProvider,
-        }
-
-        #[async_trait]
-        impl Provider for CountingProvider {
-            fn id(&self) -> &str {
-                self.inner.id()
-            }
-
-            fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
-                self.inner.capabilities(model)
-            }
-
-            fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-                self.inner.configured_identity_v1()
-            }
-
-            async fn stream(
-                &self,
-                request: CompletionRequest,
-                session: SessionId,
-                message: hya_proto::MessageId,
-            ) -> Result<EventStream, ProviderError> {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                self.inner.stream(request, session, message).await
-            }
-        }
-
         #[derive(Debug)]
         struct BarrierSample {
             name: &'static str,
@@ -6286,7 +6367,7 @@ agents:
         for (case_name, filler_count, member_count, expected_states) in cases {
             let workdir = tempdir();
             let provider_calls = Arc::new(AtomicUsize::new(0));
-            let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingProvider {
+            let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
                 calls: Arc::clone(&provider_calls),
                 inner: DevProvider::new(),
             })));
@@ -6520,6 +6601,342 @@ agents:
                 .all(|observation| observation.contains("ok=true")),
             "foreground_handler_uniform_pre_admission ownership defect:\n{}",
             observations.join("\n")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn foreground_handler_cap_256() {
+        let workdir = tempdir();
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::clone(&provider_calls),
+            inner: DevProvider::new(),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(1);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "foreground handler cap base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+        let probe = Arc::new(ForegroundHandlerUniformProbe::new());
+        let sidecar_environment = Arc::new(BundleSidecarEnvironment {
+            command: None,
+            staging_root: tempdir(),
+            terminate_notify: None,
+            test_observer: None,
+            uniform_probe: Some(Arc::clone(&probe)),
+        });
+        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+        spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            Arc::clone(&resident_supervisor),
+            sidecar_environment,
+        );
+
+        let spawner = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let unsupported_member = |ordinal: usize| SpawnMember {
+            description: format!("cap member {ordinal}"),
+            prompt: format!("cap prompt {ordinal}"),
+            subagent_type: "general".to_string(),
+            inline_agent: Some(InlineAgent {
+                name: "unsupported".to_string(),
+                prompt: "unsupported".to_string(),
+                description: Some("unsupported inline description".to_string()),
+                ..InlineAgent::default()
+            }),
+            ..SpawnMember::default()
+        };
+
+        use std::future::Future as _;
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        let mut parked_requests = Vec::with_capacity(256);
+        for ordinal in 0..256 {
+            let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+            let request_spawner = spawner.clone();
+            let member = unsupported_member(ordinal);
+            let mut request = Box::pin(async move {
+                request_spawner
+                    .spawn(operation, vec![member], CancellationToken::new())
+                    .await
+            });
+            assert!(matches!(
+                request.as_mut().poll(&mut context),
+                std::task::Poll::Pending
+            ));
+            tokio::time::timeout(Duration::from_secs(5), probe.handler_acquisitions.acquire())
+                .await
+                .expect("foreground handler did not acquire its ownership probe")
+                .expect("foreground handler acquisition probe closed")
+                .forget();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                probe.preparation_acquisitions.acquire(),
+            )
+            .await
+            .expect("foreground preparation did not enter its ownership probe")
+            .expect("foreground preparation acquisition probe closed")
+            .forget();
+            parked_requests.push(request);
+        }
+
+        assert_eq!(
+            probe.supervisor_handler_active.load(Ordering::SeqCst),
+            256,
+            "all 256 foreground handlers must remain live before the overflow request"
+        );
+        assert_eq!(
+            probe.supervisor_handler_owned.load(Ordering::SeqCst),
+            256,
+            "all 256 foreground handlers must retain their owner guard"
+        );
+        assert_eq!(
+            probe.reply_owners.load(Ordering::SeqCst),
+            256,
+            "all 256 foreground handlers must retain their reply owner"
+        );
+        assert_eq!(
+            probe.max_handler_live.load(Ordering::SeqCst),
+            256,
+            "the parked baseline must not exceed 256 live handlers"
+        );
+        assert_eq!(
+            probe.preparation_entries.load(Ordering::SeqCst),
+            256,
+            "all 256 handlers must be parked before preparation"
+        );
+        assert_eq!(
+            engine.store().admission_counts().await.unwrap(),
+            hya_store::AdmissionCounts {
+                active: 0,
+                non_active: 0,
+                total: 0,
+            }
+        );
+        assert_eq!(
+            engine.store().list_sessions().await.unwrap().len(),
+            1,
+            "preparation-only handlers must not allocate child sessions"
+        );
+        assert!(
+            engine.store().active_actor_ids().await.unwrap().is_empty(),
+            "preparation-only handlers must not install resident actors"
+        );
+        assert_eq!(
+            provider_calls.load(Ordering::SeqCst),
+            0,
+            "preparation-only handlers must not invoke a provider"
+        );
+        assert_eq!(
+            probe.real_member_task_installations.load(Ordering::SeqCst),
+            0,
+            "preparation-only handlers must not install member work"
+        );
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            probe.supervisor_full_observed.acquire(),
+        )
+        .await
+        .expect("supervisor did not arm its full-cap intake branch")
+        .expect("supervisor full-cap observation probe closed")
+        .forget();
+
+        let operation_257 = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let operation_257_id = operation_257.operation_id();
+        probe.watch_preparation(operation_257_id);
+        let request_spawner_257 = spawner.clone();
+        let member_257 = unsupported_member(257);
+        let mut request_257 = Box::pin(async move {
+            request_spawner_257
+                .spawn(operation_257, vec![member_257], CancellationToken::new())
+                .await
+        });
+        assert!(matches!(
+            request_257.as_mut().poll(&mut context),
+            std::task::Poll::Pending
+        ));
+
+        let request_spawner_258 = spawner.clone();
+        let member_258 = unsupported_member(258);
+        let operation_258 = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
+        let mut request_258 = Box::pin(async move {
+            request_spawner_258
+                .spawn(operation_258, vec![member_258], CancellationToken::new())
+                .await
+        });
+        assert!(matches!(
+            request_258.as_mut().poll(&mut context),
+            std::task::Poll::Ready(Err(SpawnError::Overloaded))
+        ));
+
+        tokio::task::yield_now().await;
+        let target_entered_before_release = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe.watched_preparation_entered.notified(),
+        )
+        .await
+        .is_ok();
+        let full_cap_snapshot = (
+            probe.preparation_entries.load(Ordering::SeqCst),
+            probe.supervisor_handler_active.load(Ordering::SeqCst),
+            probe.supervisor_handler_owned.load(Ordering::SeqCst),
+            probe.reply_owners.load(Ordering::SeqCst),
+            probe.max_handler_live.load(Ordering::SeqCst),
+        );
+        assert_eq!(
+            (target_entered_before_release, full_cap_snapshot),
+            (false, (256, 256, 256, 256, 256)),
+            "foreground_handler_cap_256 intake defect before release: target_entered={}, preparation_entries={}, live={}, owned={}, reply_owners={}, max={}",
+            target_entered_before_release,
+            full_cap_snapshot.0,
+            full_cap_snapshot.1,
+            full_cap_snapshot.2,
+            full_cap_snapshot.3,
+            full_cap_snapshot.4,
+        );
+
+        probe.prepare_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), probe.handler_releases.acquire())
+            .await
+            .expect("one parked foreground handler did not release its ownership probe")
+            .expect("foreground handler release probe closed")
+            .forget();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            probe.watched_preparation_entered.notified(),
+        )
+        .await
+        .expect("request 257 did not enter foreground preparation after one slot released");
+        assert_eq!(
+            probe.preparation_entries.load(Ordering::SeqCst),
+            257,
+            "request 257 must enter preparation after one bounded-intake slot releases"
+        );
+        assert_eq!(
+            probe.supervisor_handler_active.load(Ordering::SeqCst),
+            256,
+            "one released handler must make room for request 257"
+        );
+        assert_eq!(
+            probe.max_handler_live.load(Ordering::SeqCst),
+            256,
+            "a bounded supervisor must never exceed the 256-handler peak"
+        );
+        probe.watched_preparation_release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), probe.handler_releases.acquire())
+            .await
+            .expect("request 257 handler did not release its ownership probe")
+            .expect("foreground handler release probe closed")
+            .forget();
+        let request_257_result = tokio::time::timeout(
+            Duration::from_secs(5),
+            std::future::poll_fn(|cx| request_257.as_mut().poll(cx)),
+        )
+        .await
+        .expect("request 257 did not return after its preparation gate released");
+        assert!(matches!(
+            request_257_result,
+            Err(SpawnError::UnsupportedInlineAgentField {
+                field: "description"
+            })
+        ));
+        assert!(
+            engine
+                .store()
+                .admissions(operation_257_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "request 257's unsupported inline field must fail before admission claim"
+        );
+        assert_eq!(
+            engine.store().admission_counts().await.unwrap(),
+            hya_store::AdmissionCounts {
+                active: 0,
+                non_active: 0,
+                total: 0,
+            }
+        );
+        assert_eq!(
+            engine.store().list_sessions().await.unwrap().len(),
+            1,
+            "request 257 must not allocate a child session"
+        );
+        assert!(
+            engine.store().active_actor_ids().await.unwrap().is_empty(),
+            "request 257 must not install a resident actor"
+        );
+        assert_eq!(
+            provider_calls.load(Ordering::SeqCst),
+            0,
+            "request 257 must not invoke a provider"
+        );
+        assert_eq!(
+            probe.real_member_task_installations.load(Ordering::SeqCst),
+            0,
+            "request 257 must not install member work"
+        );
+        for _ in 0..255 {
+            probe.prepare_release.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), probe.handler_releases.acquire())
+                .await
+                .expect("parked foreground handler did not release its ownership probe")
+                .expect("foreground handler release probe closed")
+                .forget();
+        }
+        for mut request in parked_requests {
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                std::future::poll_fn(|cx| request.as_mut().poll(cx)),
+            )
+            .await
+            .expect("parked request did not finish after its preparation gate released");
+            assert!(matches!(
+                result,
+                Err(SpawnError::UnsupportedInlineAgentField {
+                    field: "description"
+                })
+            ));
+        }
+
+        assert_eq!(
+            probe.supervisor_handler_active.load(Ordering::SeqCst),
+            0,
+            "all parked foreground handlers must release during test cleanup"
         );
     }
 
