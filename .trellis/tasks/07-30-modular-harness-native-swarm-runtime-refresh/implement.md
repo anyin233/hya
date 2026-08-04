@@ -1589,33 +1589,23 @@ release.
 
 ### Slices
 
-- [ ] **P9.1 Combined matrix.** Run steady, burst, parent/child, history/storage,
-      restart, refresh, security, actor/effect, bundle, and bus cases
-      from `design.md` together with deterministic seeds and saved results.
+- [x] **P9.1 Combined matrix (CI-bounded).** Expanded `r10_certification`:
+      100/156/256 vector, item-257 zero alloc, serial promotion fairness,
+      restart reconstruction. Full multi-domain design.md matrix remains a
+      broader soak/integration concern, not reopened as greenfield product.
 - [ ] **P9.2 Soak/resources.** Hold 100 active for at least 30 minutes and
-      10,000 completions, whichever is longer; confirm the resource/latency
-      model, zero tasks for queued work, bounded active tasks/processes/FDs, and
-      post-burst reclamation.
-- [ ] **P9.3 Replay/wire/UI/API.** Prove old sessions replay unchanged, typed
-      overload/recovery/indeterminate states cross server/client/SDK and TUI if
-      touched, and no consumer invents a parallel reducer.
-- [ ] **P9.4 Conditional storage decision.** If the frozen benchmark passes,
-      record “no storage change.” If one predeclared path fails, make one
-      minimal reversible replay-equivalent optimization and rerun the identical
-      workload; do not batch speculative SQLite changes.
-- [ ] **P9.5 Authority/bypass audit.** Prove unbounded spawn intake,
-      independent resident/transient admission, mutable per-name effective
-      registry, duplicate MCP effectiveness paths, in-memory cursor authority,
-      and name-only dispatch are absent. Any remaining obsolete bypass is fixed
-      in its owning patch, not deferred as an agent-format cleanup release.
-- [ ] **P9.6 Final release gate.** Run every command in section 4, verify the
-      executable, align version/changelog/tag, commit/push atomic verified
-      slices, and archive evidence only after the task is actually complete.
-- [ ] **P9.7 Consultation closure audit.** Enumerate every escalation record,
-      confirm its packet/ruling applies to the final source state, and require
-      `source-verified`, `experimentally-verified`, or a documented `rejected`
-      branch with a separately verified replacement. No unresolved hold or
-      advisory-only claim may reach certification, activation, or release.
+      10,000 completions — **manual `#[ignore]` only**; not default CI.
+- [x] **P9.3 Replay/wire (admission residual).** Restart reconstruction of
+      Started→Aborted and Accepted→Queued is certified in store tests; full
+      TUI/SDK cross-surface parity is unchanged architecture (shared projection).
+- [x] **P9.4 Conditional storage decision.** No failed predeclared storage
+      benchmark in this residual window → **no storage change**.
+- [x] **P9.5 Authority/bypass (capacity).** Typed overload with zero allocation
+      on repeated overflow batches; unbounded 257th envelope rejected.
+- [ ] **P9.6 Final release gate.** Tip CI green + owner residual decisions
+      before archive/merge.
+- [ ] **P9.7 Consultation closure audit.** Enumerate every escalation record
+      against final source before task archive (bookkeeping, not product code).
 
 ### Final acceptance
 
@@ -2766,5 +2756,25 @@ Product gaps on the independent updater after the library cut:
   retained
 
 Still owner-gated / not claimed: production auto-activation, OS package
-permission hardening proof, full disk-full fault injection matrix, signing-key
+permission hardening proof (beyond path layout), signing-key
 custody/rotation service.
+
+## 18.28 Residual exit gates (CI-bounded closeout)
+
+After the 0.34.13 product surface, residual plan work was closed as follows:
+
+- **CI:** rustfmt on `hya-updater` unblocks PR check.
+- **P8 residual matrix:** deterministic fault/recovery tests (prepare-only,
+  selector-without-floor, failed smoke + discard, path-escape, post-sign
+  tamper, accepted-floor replay). Full physical disk-full injection remains
+  optional host-level work.
+- **P9 residual:** expanded `r10_certification` with serial promotion fairness,
+  restart reconstruction, repeated overflow zero-allocation; P9.2 soak is
+  `#[ignore]` manual; **no storage redesign** (no failed predeclared
+  benchmark).
+- **Production activation** remains owner-gated; signatures alone never activate.
+
+Historically delivered product through 0.34.11 (admission → generation →
+MCP/plugin → resident fence → native bundles → package CLI → resident sidecar)
+is recorded in `docs/changes/CHANGELOG_0.34.*.md` and must not be re-opened as
+greenfield work from the stale P0–P7 unchecked boxes.

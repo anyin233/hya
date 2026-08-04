@@ -10,12 +10,12 @@ use std::path::Path;
 use crate::error::UpdaterError;
 use crate::fetch::{fetch_artifacts_from_dir, resolve_package_source};
 use crate::journal::{
-    commit_activation, journal_prepare, read_selector, recover_activation, ActivationSelector,
+    ActivationSelector, commit_activation, journal_prepare, read_selector, recover_activation,
 };
 use crate::layout::{assert_no_session_or_secret_reads, assert_tcb_outside_candidate, layout};
 use crate::metadata::{AcceptedFloor, ReleaseMetadata, TrustRoot, VerifiedRelease};
 use crate::smoke::smoke_staged_release;
-use crate::stage::{stage_verified_release, StagedRelease};
+use crate::stage::{StagedRelease, stage_verified_release};
 use crate::trust::load_trust_roots;
 use crate::verify::verify_release_metadata;
 
@@ -130,10 +130,7 @@ pub fn discard_staged_release(root: &Path, sequence: u64) -> Result<(), UpdaterE
         )));
     }
     fs::remove_dir_all(&dir).map_err(|error| {
-        UpdaterError::InvalidMetadata(format!(
-            "discard staged release {}: {error}",
-            dir.display()
-        ))
+        UpdaterError::InvalidMetadata(format!("discard staged release {}: {error}", dir.display()))
     })?;
     Ok(())
 }

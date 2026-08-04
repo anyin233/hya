@@ -7,8 +7,7 @@ use hya_updater::{
 use sha2::{Digest, Sha256};
 
 fn sign_metadata(signing: &SigningKey, metadata: &mut ReleaseMetadata) {
-    let payload = hya_updater::canonical_metadata_payload(metadata)
-        .expect("canonical payload");
+    let payload = hya_updater::canonical_metadata_payload(metadata).expect("canonical payload");
     let sig = signing.sign(&payload);
     metadata.signature = sig.to_bytes().to_vec();
 }
@@ -257,6 +256,34 @@ fn min_updater_version_too_new_is_rejected() {
         UpdaterError::UpdaterTooOld {
             have: UPDATER_PACKAGE_VERSION.to_string(),
             need: "99.0.0".to_string(),
+        }
+    );
+}
+
+#[test]
+fn replaying_already_accepted_sequence_is_rejected() {
+    let signing = SigningKey::from_bytes(&[7u8; 32]);
+    let roots = [TrustRoot {
+        key_id: "ci-root-1".to_string(),
+        verifying_key: signing.verifying_key().to_bytes(),
+    }];
+    let mut metadata = base_metadata(4, "ci-root-1");
+    sign_metadata(&signing, &mut metadata);
+
+    // Floor already at 4 after a prior commit — classic anti-replay.
+    let err = verify_release_metadata(
+        &metadata,
+        &roots,
+        &AcceptedFloor { sequence: 4 },
+        1_800_000_000,
+        "x86_64-unknown-linux-gnu",
+    )
+    .expect_err("replay at accepted floor must fail");
+    assert_eq!(
+        err,
+        UpdaterError::NonIncreasingSequence {
+            sequence: 4,
+            floor: 4
         }
     );
 }

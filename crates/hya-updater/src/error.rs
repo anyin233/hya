@@ -19,9 +19,7 @@ pub enum UpdaterError {
     Expired,
     #[error("unsupported metadata protocol version {got} (supported {supported})")]
     UnsupportedProtocol { got: u32, supported: u32 },
-    #[error(
-        "updater version {have} is below required min_updater_version {need}"
-    )]
+    #[error("updater version {have} is below required min_updater_version {need}")]
     UpdaterTooOld { have: String, need: String },
     #[error("artifact digest mismatch for `{name}`")]
     ArtifactDigestMismatch { name: String },

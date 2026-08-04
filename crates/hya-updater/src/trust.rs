@@ -23,14 +23,10 @@ struct TrustRootRecord {
 /// Load trust roots from `root/trust_roots.json` (or an explicit path).
 pub fn load_trust_roots(path: &Path) -> Result<Vec<TrustRoot>, UpdaterError> {
     let text = fs::read_to_string(path).map_err(|error| {
-        UpdaterError::InvalidMetadata(format!(
-            "read trust roots {}: {error}",
-            path.display()
-        ))
+        UpdaterError::InvalidMetadata(format!("read trust roots {}: {error}", path.display()))
     })?;
-    let parsed: TrustRootsFile = serde_json::from_str(&text).map_err(|error| {
-        UpdaterError::InvalidMetadata(format!("parse trust roots: {error}"))
-    })?;
+    let parsed: TrustRootsFile = serde_json::from_str(&text)
+        .map_err(|error| UpdaterError::InvalidMetadata(format!("parse trust roots: {error}")))?;
     if parsed.roots.is_empty() {
         return Err(UpdaterError::InvalidMetadata(
             "trust roots file must list at least one root".to_string(),
@@ -74,9 +70,8 @@ pub fn write_trust_roots(path: &Path, roots: &[TrustRoot]) -> Result<(), Updater
             UpdaterError::InvalidMetadata(format!("create trust roots parent: {error}"))
         })?;
     }
-    fs::write(path, format!("{json}\n")).map_err(|error| {
-        UpdaterError::InvalidMetadata(format!("write trust roots: {error}"))
-    })
+    fs::write(path, format!("{json}\n"))
+        .map_err(|error| UpdaterError::InvalidMetadata(format!("write trust roots: {error}")))
 }
 
 fn decode_hex_key(hex: &str) -> Result<[u8; 32], UpdaterError> {

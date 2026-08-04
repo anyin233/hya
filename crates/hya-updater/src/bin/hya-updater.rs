@@ -12,8 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use hya_updater::{
-    ApplyOptions, apply_update, discard_staged_release, layout, load_trust_roots, read_selector,
-    recover_activation, write_trust_roots, ReleaseMetadata, TrustRoot, UPDATER_PACKAGE_VERSION,
+    ApplyOptions, ReleaseMetadata, TrustRoot, UPDATER_PACKAGE_VERSION, apply_update,
+    discard_staged_release, layout, load_trust_roots, read_selector, recover_activation,
+    write_trust_roots,
 };
 
 #[derive(Parser)]
@@ -187,9 +188,9 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::InitRoots { path, roots } => {
             let mut parsed = Vec::new();
             for entry in roots {
-                let (key_id, hex) = entry.split_once('=').ok_or_else(|| {
-                    format!("--root expects KEY_ID=HEX32, got `{entry}`")
-                })?;
+                let (key_id, hex) = entry
+                    .split_once('=')
+                    .ok_or_else(|| format!("--root expects KEY_ID=HEX32, got `{entry}`"))?;
                 if hex.len() != 64 {
                     return Err(format!("verifying key for `{key_id}` must be 64 hex chars"));
                 }
