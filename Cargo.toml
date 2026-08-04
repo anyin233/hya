@@ -6,7 +6,7 @@ members = ["crates/*"]
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.34.12"
+version = "0.34.13"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -32,6 +32,7 @@ futures = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
 sha2 = "0.10"
+ed25519-dalek = "2"
 axum = { version = "0.7", features = ["macros", "ws"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
