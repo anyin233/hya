@@ -81,6 +81,8 @@ pub enum SpawnError {
     OperationIdConflict,
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    #[error("spawn cancelled before activation")]
+    Cancelled,
     #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
     UnknownAgentId { agent_id: String },
     #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]

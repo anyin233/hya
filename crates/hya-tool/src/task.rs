@@ -283,6 +283,7 @@ impl Tool for TaskTool {
         .map_err(|error| match error {
             SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
             SpawnError::Unavailable => ToolError::Other(error.to_string()),
+            SpawnError::Cancelled => ToolError::Other(error.to_string()),
             SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
             SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
             SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
