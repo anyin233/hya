@@ -1,0 +1,41 @@
+# Agent feature matrix registry (Track P process E2E + index-only pointers).
+
+[[scenario]]
+id = "T0.1"
+title = "backend boots"
+track = "P"
+path = "crates/hya-e2e/tests/p01_session_prompt.rs"
+tags = ["pr", "bootstrap"]
+timeout_secs = 60
+
+[[scenario]]
+id = "T1.2"
+title = "prompt + assistant text via FakeLlm"
+track = "P"
+path = "crates/hya-e2e/tests/p01_session_prompt.rs"
+tags = ["pr", "session"]
+timeout_secs = 60
+
+[[scenario]]
+id = "T1.3"
+title = "multi-round tool loop"
+track = "P"
+path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
+tags = ["pr", "tools"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.4"
+title = "read/write files"
+track = "P"
+path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
+tags = ["pr", "tools"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.5"
+title = "shell tool"
+track = "P"
+path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
+tags = ["pr", "tools"]
+timeout_secs = 90
