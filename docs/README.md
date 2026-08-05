@@ -51,6 +51,7 @@ If you want to understand the codebase:
 8. [Server and Client](architecture/server-client.md)
 9. [TUI](architecture/tui.md)
 10. [Development](development.md)
+11. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 
 ## Docs Map
 
@@ -72,6 +73,9 @@ If you want to understand the codebase:
 | [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, and backend SDK boundary. |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
+| [Testing](testing/README.md) | Track I/P/T testing model, process E2E harness, agent matrix, CI snippet. |
+| [Agent feature matrix](testing/agent-matrix.md) | PR-matrix scenario IDs for tools, permissions, MCP, subagents, hyabundle, TUI. |
+| [Process E2E harness](testing/process-e2e.md) | How `crates/hya-e2e` scripts FakeLlm and asserts product outcomes. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
 
 ## Source Entrypoints

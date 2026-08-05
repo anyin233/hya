@@ -84,8 +84,9 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin-compat` | Compat plugin compatibility. Rust crate pins the supported Compat package versions; the Bun adapter discovers Compat plugin config, loads plugins, translates hook/tool/event methods, and exposes the adapter runtime over JSON-RPC. |
 | `crates/hya-plugin-example` | Minimal plugin binary used as a concrete fixture/example for host and transport behavior. |
 | `crates/xtask` | Dev-tooling entry point. Currently a small scaffold for future workspace maintenance commands. |
+| `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya-backend` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
 | `.trellis` | Project workflow knowledge: task lifecycle, package/layer specs, session journals, and task artifacts. Read the relevant `.trellis/spec/**/index.md` before changing code in that layer. |
-| `docs` | Supplemental project notes such as Compat parity and follow-up work. |
+| `docs` | Project documentation: user guides, architecture, Compat parity, and testing/agent matrix under `docs/testing/`. |
 | `DESIGN.md` | TUI design system: terminal-first visual rules, theme tokens, layout, transcript/input/overlay behavior. Read before touching TUI rendering. |
 
 ## Change Guidance
@@ -118,6 +119,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+For process agent E2E (`crates/hya-e2e`) or agent-surface features that must not
+regress the PR matrix (permissions, skills, MCP, subagents, hyabundle), also:
+
+```sh
+cargo build -p hya-backend --bin hya-backend
+cargo test -p hya-e2e -- --test-threads=1
+```
+
+Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`,
+`docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
+
 For Compat adapter changes, also run from
 `crates/hya-plugin-compat/adapter`:
 
@@ -131,4 +143,11 @@ For TypeScript TUI changes, also run from `packages/hya-tui-ts`:
 ```sh
 bun run typecheck
 bun test
+```
+
+For real-backend SDK / multi-agent presentation paths, prefer the focused Track T
+files (after `cargo build -p hya-backend --bin hya-backend`):
+
+```sh
+bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
 ```
