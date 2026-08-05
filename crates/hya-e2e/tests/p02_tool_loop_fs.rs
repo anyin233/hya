@@ -56,16 +56,16 @@ async fn t1_3_to_t1_5_write_read_shell_via_fake_tool_calls() {
     for env_evt in events {
         match env_evt.event {
             Event::TextDelta { delta, .. } => {
-                text_bits.push_str(&delta);
                 if delta.contains("TOOLS_DONE") {
                     saw_done = true;
                 }
+                text_bits.push_str(&delta);
             }
             Event::TextReplace { text, .. } => {
-                text_bits.push_str(&text);
                 if text.contains("TOOLS_DONE") {
                     saw_done = true;
                 }
+                text_bits.push_str(&text);
             }
             _ => {}
         }
