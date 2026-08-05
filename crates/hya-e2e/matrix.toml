@@ -39,3 +39,148 @@ track = "P"
 path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
 tags = ["pr", "tools"]
 timeout_secs = 90
+
+[[scenario]]
+id = "T1.7"
+title = "permissions ask/once/reject"
+track = "P"
+path = "crates/hya-e2e/tests/p03_permissions.rs"
+tags = ["pr", "permissions"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.8"
+title = "question tool + reply"
+track = "P"
+path = "crates/hya-e2e/tests/p04_questions.rs"
+tags = ["pr", "questions"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.9"
+title = "skills load"
+track = "P"
+path = "crates/hya-e2e/tests/p05_skills.rs"
+tags = ["pr", "skills"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.10"
+title = "MCP tool call"
+track = "P"
+path = "crates/hya-e2e/tests/p06_mcp.rs"
+tags = ["pr", "mcp"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T1.11"
+title = "session list + resume"
+track = "P"
+path = "crates/hya-e2e/tests/p07_session_lifecycle.rs"
+tags = ["pr", "session"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T2.1"
+title = "subagent task spawn"
+track = "P"
+path = "crates/hya-e2e/tests/p08_subagent_task.rs"
+tags = ["pr", "subagent"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.2"
+title = "nested subagent tree depth>=2"
+track = "P"
+path = "crates/hya-e2e/tests/p09_nested_subagent.rs"
+tags = ["pr", "subagent", "nested"]
+timeout_secs = 180
+
+[[scenario]]
+id = "T2.3"
+title = "agent roster / roles API"
+track = "P"
+path = "crates/hya-e2e/tests/p10_agent_roster.rs"
+tags = ["pr", "roster"]
+timeout_secs = 60
+
+[[scenario]]
+id = "T2.7"
+title = "hyabundle install/list/info/uninstall"
+track = "P"
+path = "crates/hya-e2e/tests/p11_hyabundle.rs"
+tags = ["pr", "hyabundle"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T2.8"
+title = "hyabundle spawn package agent"
+track = "P"
+path = "crates/hya-e2e/tests/p11_hyabundle.rs"
+tags = ["pr", "hyabundle"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T3.1"
+title = "TUI real-backend permission reply"
+track = "T"
+path = "packages/hya-tui-ts/test/real-backend.test.ts"
+tags = ["pr", "tui", "permissions"]
+timeout_secs = 60
+
+[[scenario]]
+id = "T3.2"
+title = "TUI multi-agent task presentation"
+track = "T"
+path = "packages/hya-tui-ts/test/task-presentation.test.ts"
+tags = ["pr", "tui", "multi-agent"]
+timeout_secs = 30
+
+[[scenario]]
+id = "T3.3"
+title = "TUI real-backend agent roster"
+track = "T"
+path = "packages/hya-tui-ts/test/real-backend-agents.test.ts"
+tags = ["pr", "tui", "roster"]
+timeout_secs = 60
+
+# Index-only deep engine coverage (not duplicated in Track P).
+[[scenario]]
+id = "I.nested"
+title = "nested spawn tree (in-process)"
+track = "I"
+path = "crates/hya-app/tests/nested_spawn_tree.rs"
+tags = ["index-only", "nested"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.subagent"
+title = "subagent/resident core"
+track = "I"
+path = "crates/hya-core/tests/subagent.rs"
+tags = ["index-only", "subagent"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.permission_api"
+title = "compat permission/question API"
+track = "I"
+path = "crates/hya-server/tests/compat_permission_question_api.rs"
+tags = ["index-only", "permissions"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.mcp_api"
+title = "compat MCP API"
+track = "I"
+path = "crates/hya-server/tests/compat_mcp_api.rs"
+tags = ["index-only", "mcp"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.bundle_cli"
+title = "backend bundle CLI unit"
+track = "I"
+path = "crates/hya-backend/tests/bundle_cli.rs"
+tags = ["index-only", "hyabundle"]
+timeout_secs = 0
