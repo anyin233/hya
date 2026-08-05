@@ -54,8 +54,12 @@ async fn t2_7_hyabundle_install_list_info_uninstall() {
     assert!(info.status.success());
     let info_out = String::from_utf8_lossy(&info.stdout);
     assert!(
-        info_out.contains(BUNDLE_AGENT) || info_out.contains("origin=installed"),
-        "info missing agent/origin: {info_out}"
+        info_out.contains(BUNDLE_AGENT),
+        "info must list package agent {BUNDLE_AGENT}: {info_out}"
+    );
+    assert!(
+        info_out.contains("origin=installed"),
+        "info missing origin=installed: {info_out}"
     );
 
     let uninstall = env
@@ -67,7 +71,10 @@ async fn t2_7_hyabundle_install_list_info_uninstall() {
         "uninstall failed: {}",
         String::from_utf8_lossy(&uninstall.stderr)
     );
-    let final_list = env.backend.bundle_cli(&["bundle", "list"]).expect("final list");
+    let final_list = env
+        .backend
+        .bundle_cli(&["bundle", "list"])
+        .expect("final list");
     let final_out = String::from_utf8_lossy(&final_list.stdout);
     assert!(
         !final_out.contains(BUNDLE_ID),
@@ -96,14 +103,11 @@ async fn t2_8_hyabundle_spawn_installed_package_agent() {
         .expect("e2e env");
     let _ = std::fs::remove_dir_all(&package_dir);
 
-    // Catalog refresh may expose the installed agent on /api/agent.
-    let agents = env.list_agents().await.unwrap_or(serde_json::json!([]));
+    let agents = env.list_agents().await.expect("list agents");
     let agents_text = agents.to_string();
     assert!(
-        agents_text.contains(BUNDLE_AGENT)
-            || agents_text.contains("public-fixture")
-            || agents_text.contains("build"),
-        "agents surface should be reachable; agents={agents}; {}",
+        agents_text.contains(BUNDLE_AGENT),
+        "roster must include installed package agent {BUNDLE_AGENT}; agents={agents}; {}",
         env.diagnostics()
     );
 
@@ -126,13 +130,8 @@ async fn t2_8_hyabundle_spawn_installed_package_agent() {
         }
     }
     assert!(
-        text.contains("BUNDLE_AGENT_OK") || env.fake_saw_request().unwrap(),
-        "installed package agent should complete FakeLlm turn; text={text:?}; {}",
-        env.diagnostics()
-    );
-    assert!(
-        env.fake_saw_request().unwrap(),
-        "fake llm must be hit; {}",
+        text.contains("BUNDLE_AGENT_OK"),
+        "package agent session must stream BUNDLE_AGENT_OK; text={text:?}; {}",
         env.diagnostics()
     );
 }

@@ -109,8 +109,12 @@ impl BackendProcess {
             std::fs::write(path, body)?;
         }
 
+        // Resolve relative MCP command paths against the project cwd so deferred
+        // or absolute-spawned children still find fixture scripts.
+        let mcp = resolve_mcp_commands(&spec.mcp, &project);
+
         let model_ref = format!("{}/{}", spec.provider_id, spec.model_id);
-        let mcp_yaml = render_mcp(&spec.mcp);
+        let mcp_yaml = render_mcp(&mcp);
         let config = format!(
             r#"default_model: {model_ref}
 providers:
@@ -180,6 +184,11 @@ permission:
             .env_remove("HYA_MODEL")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // MCP connect is deferred by default; for process E2E we need tools in
+        // the registry before the first FakeLlm tool call or they stay unknown.
+        if !mcp.is_empty() {
+            cmd.env("HYA_DEFER_SIDEPLANES", "0");
+        }
 
         let mut child = cmd
             .spawn()
@@ -258,6 +267,29 @@ fn render_mcp(mcp: &[McpFixture]) -> String {
         out.push_str("    enabled: true\n");
     }
     out
+}
+
+fn resolve_mcp_commands(mcp: &[McpFixture], project: &Path) -> Vec<McpFixture> {
+    mcp.iter()
+        .map(|server| {
+            let command = server
+                .command
+                .iter()
+                .map(|part| {
+                    let candidate = project.join(part);
+                    if candidate.is_file() {
+                        candidate.display().to_string()
+                    } else {
+                        part.clone()
+                    }
+                })
+                .collect();
+            McpFixture {
+                name: server.name.clone(),
+                command,
+            }
+        })
+        .collect()
 }
 
 fn temp_root(label: &str) -> Result<PathBuf, E2eError> {

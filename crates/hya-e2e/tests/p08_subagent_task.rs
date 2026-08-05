@@ -1,7 +1,9 @@
 //! T2.1 — single-member `task` subagent spawn via FakeLlm.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
+use hya_e2e::{
+    E2eEnvBuilder, text_step, tool_step, tree_children, tree_session_ids, tree_subagent_types,
+};
 use hya_proto::Event;
 use serde_json::json;
 
@@ -26,19 +28,32 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         .expect("e2e env");
 
     let session = env.create_session().await.expect("session");
+    let root_id = session.to_string();
     let _ = env
         .prompt(session, "spawn a general subagent")
         .await
         .expect("task prompt");
 
     let tree = env.session_tree(&session).await.expect("session tree");
-    let tree_text = tree.to_string();
+    let children = tree_children(&tree);
     assert!(
-        tree_text.contains("general")
-            || tree_text.contains("CHILD")
-            || tree_text.contains("ses_")
-            || tree_text.contains("hysec_"),
-        "run tree should reflect a child session; tree={tree}; {}",
+        !children.is_empty(),
+        "run tree must have >=1 child after task spawn; tree={tree}; {}",
+        env.diagnostics()
+    );
+
+    let kinds = tree_subagent_types(&tree);
+    assert!(
+        kinds.iter().any(|k| k == "general"),
+        "child member.subagent_type must be general; kinds={kinds:?}; tree={tree}; {}",
+        env.diagnostics()
+    );
+
+    let ids = tree_session_ids(&tree);
+    let child_ids: Vec<_> = ids.iter().filter(|id| *id != &root_id).collect();
+    assert!(
+        !child_ids.is_empty(),
+        "tree must include a distinct child session id; root={root_id}; ids={ids:?}; tree={tree}; {}",
         env.diagnostics()
     );
 
@@ -52,13 +67,8 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         }
     }
     assert!(
-        text.contains("PARENT_AFTER_TASK") || env.fake.requests().unwrap().len() >= 2,
-        "parent should resume after subagent; text={text:?}; {}",
-        env.diagnostics()
-    );
-    assert!(
-        env.fake.requests().unwrap().len() >= 2,
-        "root + child llm turns expected; {}",
+        text.contains("PARENT_AFTER_TASK"),
+        "parent must resume with final text after subagent; text={text:?}; {}",
         env.diagnostics()
     );
 }

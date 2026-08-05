@@ -375,6 +375,24 @@ impl E2eEnv {
             self.backend.project.display()
         )
     }
+
+    /// Wait until `/mcp` reports `name` with status `connected`.
+    pub async fn wait_mcp_connected(
+        &self,
+        name: &str,
+        timeout: Duration,
+    ) -> Result<Value, E2eError> {
+        wait_until(&format!("mcp {name} connected"), timeout, || async {
+            let status = self.get_json("/mcp").await.unwrap_or(Value::Null);
+            Ok(status
+                .get(name)
+                .and_then(|s| s.get("status"))
+                .and_then(|s| s.as_str())
+                == Some("connected"))
+        })
+        .await?;
+        self.get_json("/mcp").await
+    }
 }
 
 async fn auto_reply_permission(
@@ -468,4 +486,77 @@ fn extract_request_id(body: &Value) -> Option<String> {
     body.get("id")
         .and_then(|id| id.as_str())
         .map(str::to_string)
+}
+
+/// Immediate children of a run-tree node (`/session/{id}/tree`).
+pub fn tree_children(tree: &Value) -> &[Value] {
+    tree.get("children")
+        .and_then(|c| c.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+/// Max edge depth from `tree` (0 = leaf with no children).
+pub fn tree_max_depth(tree: &Value) -> usize {
+    let kids = tree_children(tree);
+    if kids.is_empty() {
+        return 0;
+    }
+    1 + kids.iter().map(tree_max_depth).max().unwrap_or(0)
+}
+
+/// Collect every session id string present anywhere in the tree (root included).
+pub fn tree_session_ids(tree: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_session_ids(tree, &mut out);
+    out
+}
+
+fn collect_session_ids(node: &Value, out: &mut Vec<String>) {
+    if let Some(id) = node.get("session").and_then(|s| s.as_str()) {
+        out.push(id.to_string());
+    }
+    for child in tree_children(node) {
+        collect_session_ids(child, out);
+    }
+}
+
+/// Collect `member.subagent_type` values from non-root nodes.
+pub fn tree_subagent_types(tree: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_subagent_types(tree, &mut out, true);
+    out
+}
+
+fn collect_subagent_types(node: &Value, out: &mut Vec<String>, is_root: bool) {
+    if !is_root
+        && let Some(kind) = node
+            .get("member")
+            .and_then(|m| m.get("subagent_type"))
+            .and_then(|s| s.as_str())
+    {
+        out.push(kind.to_string());
+    }
+    // Also accept agent field on child nodes when member is sparse.
+    if !is_root
+        && let Some(kind) = node.get("agent").and_then(|a| a.as_str())
+        && !out.iter().any(|existing| existing == kind)
+    {
+        out.push(kind.to_string());
+    }
+    for child in tree_children(node) {
+        collect_subagent_types(child, out, false);
+    }
+}
+
+/// Dump a later FakeLlm request body (index `n` and beyond) as one string.
+/// Use this to assert tool *results* reached the model, not the tool-call args
+/// from the same turn that requested the tool.
+pub fn fake_requests_from(requests: &[Value], from_index: usize) -> String {
+    requests
+        .iter()
+        .skip(from_index)
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }

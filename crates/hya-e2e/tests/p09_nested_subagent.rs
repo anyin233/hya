@@ -1,7 +1,9 @@
 //! T2.2 — nested subagent tree depth ≥ 2 via `task` tool.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
+use hya_e2e::{
+    E2eEnvBuilder, text_step, tool_step, tree_max_depth, tree_session_ids, tree_subagent_types,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -34,34 +36,39 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
         .expect("e2e env");
 
     let session = env.create_session().await.expect("session");
+    let root_id = session.to_string();
     let _ = env
         .prompt(session, "nested subagents")
         .await
         .expect("nested prompt");
 
     let tree = env.session_tree(&session).await.expect("tree");
-    let tree_text = tree.to_string();
-    let depth_hint = tree_text.matches("explore").count()
-        + tree_text.matches("plan").count()
-        + tree_text.matches("children").count();
+    let depth = tree_max_depth(&tree);
     assert!(
-        depth_hint >= 1 || env.fake.requests().unwrap().len() >= 3,
-        "expected nested spawn evidence in tree or fake turns; tree={tree}; {}",
-        env.diagnostics()
-    );
-    assert!(
-        env.fake.requests().unwrap().len() >= 3,
-        "root + child + grandchild llm turns expected; {}",
+        depth >= 2,
+        "nested spawn must produce tree depth>=2 (root→child→grandchild); depth={depth}; tree={tree}; {}",
         env.diagnostics()
     );
 
-    // Flatten tree strings for depth≥2: grandchildren or two nested session ids.
-    let session_id_count = tree_text.matches("ses_").count() + tree_text.matches("hysec_").count();
+    let kinds = tree_subagent_types(&tree);
     assert!(
-        session_id_count >= 2
-            || (tree_text.contains("explore") && tree_text.contains("plan"))
-            || env.fake.requests().unwrap().len() >= 4,
-        "depth>=2 should show multiple sessions or explore+plan; tree={tree}; {}",
+        kinds.iter().any(|k| k == "explore"),
+        "tree must include explore child; kinds={kinds:?}; tree={tree}; {}",
+        env.diagnostics()
+    );
+    assert!(
+        kinds.iter().any(|k| k == "plan"),
+        "tree must include plan grandchild; kinds={kinds:?}; tree={tree}; {}",
+        env.diagnostics()
+    );
+
+    let ids = tree_session_ids(&tree);
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert!(
+        unique.len() >= 3,
+        "depth>=2 requires >=3 distinct session ids (root+child+grandchild); root={root_id}; ids={unique:?}; tree={tree}; {}",
         env.diagnostics()
     );
 }
