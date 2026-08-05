@@ -14,8 +14,11 @@ use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     SessionEngine,
 };
-use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
-use hya_provider::{FakeProvider, ProviderRouter};
+use hya_proto::{AgentName, Event, MemberId, MessageId, ModelRef, SessionId, SubagentMode};
+use hya_provider::{
+    Capabilities, CompletionRequest, EventStream, FakeProvider, Provider, ProviderError,
+    ProviderRouter,
+};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, ToolRegistry};
@@ -30,9 +33,43 @@ struct NestedSpawn {
     grandchild: SessionId,
 }
 
+/// Wraps `FakeProvider` with a stable configured identity.
+///
+/// Durable spawn admission resolves a canonical provider identity and fails
+/// closed when any router member leaves `configured_identity_v1` unset, so a
+/// bare `FakeProvider` router cannot reach the admission path.
+struct IdentityFakeProvider {
+    inner: FakeProvider,
+}
+
+#[async_trait::async_trait]
+impl Provider for IdentityFakeProvider {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        self.inner.capabilities(model)
+    }
+
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
+        Some(b"hya-test-nested-spawn-identity-v1".to_vec())
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        self.inner.stream(request, session, message).await
+    }
+}
+
 async fn nested_spawn() -> NestedSpawn {
-    let provider_router =
-        Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
+    let provider_router = Arc::new(ProviderRouter::new().with(Arc::new(IdentityFakeProvider {
+        inner: FakeProvider::scripted(Vec::new()),
+    })));
     let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(1);
     let engine = Arc::new(
