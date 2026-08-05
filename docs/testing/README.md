@@ -18,7 +18,7 @@ Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../cr
 | --- | --- |
 | [Agent feature matrix](agent-matrix.md) | Tier 0–2 scenario inventory (Track P/T implemented + Track I index-only) |
 | [Process E2E harness](process-e2e.md) | How `hya-e2e` builds environments, scripts FakeLlm, and asserts outcomes |
-| [CI agent e2e snippet](ci-agent-e2e-snippet.yml) | Optional workflow fragment to run Track P after workspace tests |
+| [CI wiring](ci-agent-e2e-snippet.yml) | Historical note — Track P and Track T are now enforced directly in `.github/workflows/ci.yml` |
 
 ## Default quality gate
 
@@ -27,8 +27,16 @@ From the workspace root (see also [Development](../development.md)):
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude hya-e2e
 ```
+
+`--exclude hya-e2e` matches CI: Track P spawns real backend processes and is run
+separately below with `--test-threads=1`.
+
+All three tracks are **enforced** in `.github/workflows/ci.yml`. Each gate step
+carries `if: ${{ !cancelled() }}`, so a failure in one step no longer skips the
+rest — a red `fmt` used to abort the job before the test step ever ran, which
+hid six failing tests for weeks.
 
 Process agent E2E needs a built backend binary (not always present after a bare
 `cargo test` matrix without prior build):
