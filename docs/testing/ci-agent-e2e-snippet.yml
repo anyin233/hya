@@ -1,30 +1,21 @@
-# Optional CI fragment: run process agent E2E (Track P) after workspace tests.
-# Add to .github/workflows/ci.yml when the token has workflow write scope.
+# SUPERSEDED — this fragment is no longer needed.
 #
-# Why exclude hya-e2e from the default `cargo test --workspace` job:
-# - Track P needs a prebuilt `target/debug/hya-backend` binary.
-# - After `cargo clean`, workspace test alone does not guarantee that binary.
-# - Concurrent backends are unstable; use --test-threads=1.
-
-# Replace the generic test step:
-#   cargo test --workspace --jobs 1
-# With:
-#   cargo test --workspace --jobs 1 --exclude hya-e2e
+# Track P (process agent E2E) and Track T are now wired directly into
+# .github/workflows/ci.yml as enforced gate steps:
 #
-# Then append:
-
-# - name: build agent e2e binaries
-#   run: cargo build --locked -p hya-backend --bin hya-backend
+#   - name: test
+#     run: cargo test --workspace --jobs 1 --exclude hya-e2e
+#   - name: build agent e2e binaries
+#     run: cargo build --locked -p hya-backend --bin hya-backend
+#   - name: agent process e2e (Track P)
+#     run: cargo test -p hya-e2e -- --test-threads=1
 #
-# - name: agent process e2e (Track P)
-#   run: cargo test -p hya-e2e -- --test-threads=1
+# Every gate step there carries `if: ${{ !cancelled() }}` so that one failing
+# step reports on its own instead of skipping the rest of the gate.
 #
-# - name: agent tui real-backend e2e (Track T, non-PTY)
-#   working-directory: packages/hya-tui-ts
-#   run: |
-#     bun test \
-#       test/real-backend.test.ts \
-#       test/task-presentation.test.ts \
-#       test/real-backend-agents.test.ts
-
+# Track T's enforced set is named explicitly (real-backend.test.ts,
+# task-presentation.test.ts, real-backend-agents.test.ts). The remainder of the
+# bun suite, PTY smoke included, runs in a non-gating step.
+#
+# This file is kept only so existing links do not break.
 # Docs: docs/testing/README.md, docs/testing/agent-matrix.md, docs/testing/process-e2e.md

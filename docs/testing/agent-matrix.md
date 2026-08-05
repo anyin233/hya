@@ -55,8 +55,18 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T3.2 | Multi-agent task presentation | `packages/hya-tui-ts/test/task-presentation.test.ts` |
 | T3.3 | Real-backend agent roster | `packages/hya-tui-ts/test/real-backend-agents.test.ts` |
 
+These three scenarios are the **enforced** Track T gate in
+`.github/workflows/ci.yml`; the workflow names them explicitly rather than
+running a blanket `bun test`.
+
 Full PTY matrix for every feature ID is **not** required for the PR gate; PTY
-remains presentation smoke (`pty-smoke.test.ts`).
+remains presentation smoke (`pty-smoke.test.ts`). The rest of the bun suite,
+PTY included, runs in a **non-gating** step (`continue-on-error: true`) so it
+still reports without being able to block the Rust gate. That is not a
+hypothetical concern: on 2026-08-05, run `31053432077` failed on a
+`pty-smoke.test.ts` timeout and skipped `fmt`, `clippy`, `build`, the entire
+workspace test suite, and `verify-no-http`. The identical commit passed the
+same step in two other runs.
 
 ## Track I (index-only)
 
