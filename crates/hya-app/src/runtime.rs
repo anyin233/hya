@@ -3407,7 +3407,15 @@ fn spawn_team_supervisor_with_environment(
                 }
             };
             let Some(bound_request) = bound_request else {
-                foreground_handlers.abort_all();
+                // This branch is reached two ways: the stop token was cancelled
+                // (explicit shutdown), or intake closed because the last
+                // `BoundSpawnSender` was dropped. Only shutdown aborts in-flight
+                // handlers; a closed intake must drain already-admitted work to
+                // completion, or its reply oneshot is dropped and the caller sees
+                // a spurious `SpawnError::Unavailable`.
+                if stop_child.is_cancelled() {
+                    foreground_handlers.abort_all();
+                }
                 while let Some(joined) = foreground_handlers.join_next().await {
                     observe_foreground_handler_join(Some(joined));
                 }
@@ -9638,6 +9646,102 @@ agents:
             .shutdown()
             .await
             .expect("idempotent shutdown after drain");
+    }
+
+    /// Explicit shutdown must still abort in-flight handlers.
+    ///
+    /// Only a closed intake drains them (see the supervisor's request-loop exit
+    /// branch), so the abort now sits behind the stop token. This pins the other
+    /// half of that condition: the member is parked in the gated provider and
+    /// will never finish on its own, so a supervisor that drained instead of
+    /// aborting would leave `shutdown()` waiting until the timeout fires.
+    #[tokio::test]
+    async fn shutdown_aborts_in_flight_foreground_handler() {
+        let workdir = tempdir();
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) = PermissionPlane::new(PermissionRules::default());
+        let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(4);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::clone(&router),
+                runtime,
+                permission,
+                EventBus::default(),
+            )
+            .with_spawn_sender(spawn_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "shutdown abort base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let parent = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+        let mut lifecycle = spawn_team_supervisor_with_environment(
+            spawn_rx,
+            Arc::clone(&engine),
+            base,
+            Arc::clone(&router),
+            Arc::new(CategoryRegistry::default()),
+            ResidentSupervisor::start(Arc::clone(&engine)),
+            Arc::new(BundleSidecarEnvironment {
+                command: None,
+                staging_root: tempdir(),
+                terminate_notify: None,
+                test_observer: None,
+                uniform_probe: None,
+            }),
+        );
+
+        let scoped = spawn_sender
+            .for_binding(&binding)
+            .for_session_with_agents(parent, agents);
+        let _in_flight = tokio::spawn(async move {
+            scoped
+                .spawn(
+                    ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+                    vec![SpawnMember {
+                        description: "in-flight member".to_string(),
+                        prompt: "SHUTDOWN-ABORT-MARKER".to_string(),
+                        subagent_type: "general".to_string(),
+                        ..SpawnMember::default()
+                    }],
+                    CancellationToken::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(10), provider_gate.entered.notified())
+            .await
+            .expect("admitted member must reach the gated provider before shutdown");
+
+        tokio::time::timeout(Duration::from_secs(10), lifecycle.shutdown())
+            .await
+            .expect("shutdown must abort the gated in-flight handler")
+            .expect("supervisor must join cleanly after shutdown");
     }
 
     #[tokio::test]
