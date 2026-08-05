@@ -23,7 +23,11 @@ async fn t1_13_compat_prompt_includes_project_agents_md_in_model_request() {
     // /sessions/:id/prompt does not.
     let session = env.compat_create_session().await.expect("compat session");
     let _ = env
-        .compat_prompt_and_wait(session, "follow project agents guidance", Duration::from_secs(30))
+        .compat_prompt_and_wait(
+            session,
+            "follow project agents guidance",
+            Duration::from_secs(30),
+        )
         .await
         .expect("compat prompt");
 

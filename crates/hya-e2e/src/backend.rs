@@ -340,10 +340,7 @@ fn parse_listen_url(text: &str) -> Option<String> {
     for line in text.lines() {
         if let Some(idx) = line.find("http://127.0.0.1:") {
             let rest = &line[idx..];
-            let url: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_graphic())
-                .collect();
+            let url: String = rest.chars().take_while(|c| c.is_ascii_graphic()).collect();
             if url.starts_with("http://127.0.0.1:") {
                 return Some(url);
             }

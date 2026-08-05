@@ -9,7 +9,7 @@ use hya_proto::api::{CreateSessionRequest, PromptRequest};
 use serde_json::Value;
 
 use crate::backend::{
-    BackendProcess, BackendSpec, McpFixture, MCP_ECHO_SCRIPT_REL, default_backend_bin,
+    BackendProcess, BackendSpec, MCP_ECHO_SCRIPT_REL, McpFixture, default_backend_bin,
     mcp_echo_command, mcp_echo_script,
 };
 use crate::error::E2eError;
@@ -371,9 +371,7 @@ impl E2eEnv {
         let status = resp.status();
         let text = resp.text().await?;
         if !(status.is_success() || status.as_u16() == 204) {
-            return Err(E2eError::Http(format!(
-                "POST compact -> {status}: {text}"
-            )));
+            return Err(E2eError::Http(format!("POST compact -> {status}: {text}")));
         }
         Ok(())
     }
@@ -423,9 +421,8 @@ impl E2eEnv {
         let http = self.http.clone();
         let base = self.backend.url.clone();
         let reply = reply.to_string();
-        let replier = tokio::spawn(async move {
-            auto_reply_permission(http, base, &reply, timeout).await
-        });
+        let replier =
+            tokio::spawn(async move { auto_reply_permission(http, base, &reply, timeout).await });
         let prompt_result = self.prompt(session, text).await;
         match replier.await {
             Ok(Ok(())) => {}
@@ -452,9 +449,8 @@ impl E2eEnv {
     ) -> Result<hya_proto::api::PromptResponse, E2eError> {
         let http = self.http.clone();
         let base = self.backend.url.clone();
-        let replier = tokio::spawn(async move {
-            auto_reply_question(http, base, answers, timeout).await
-        });
+        let replier =
+            tokio::spawn(async move { auto_reply_question(http, base, answers, timeout).await });
         let prompt_result = self.prompt(session, text).await;
         match replier.await {
             Ok(Ok(())) => {}
@@ -517,7 +513,10 @@ async fn auto_reply_permission(
             .await
             .map_err(|e| E2eError::Http(e.to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| E2eError::Http(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| E2eError::Http(e.to_string()))?;
         if status.is_success()
             && let Ok(body) = serde_json::from_str::<Value>(&text)
             && let Some(id) = extract_request_id(&body)
@@ -553,7 +552,10 @@ async fn auto_reply_question(
             .await
             .map_err(|e| E2eError::Http(e.to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| E2eError::Http(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| E2eError::Http(e.to_string()))?;
         if status.is_success()
             && let Ok(body) = serde_json::from_str::<Value>(&text)
             && let Some(id) = extract_request_id(&body)

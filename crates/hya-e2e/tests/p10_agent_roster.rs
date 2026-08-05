@@ -19,9 +19,8 @@ async fn t2_3_agent_roster_lists_build_and_spawnable_roles() {
         env.diagnostics()
     );
     // Built-in ordinary agents used for task spawn.
-    let has_spawnable = text.contains("general")
-        || text.contains("explore")
-        || text.contains("plan");
+    let has_spawnable =
+        text.contains("general") || text.contains("explore") || text.contains("plan");
     assert!(
         has_spawnable,
         "roster should expose spawnable agent roles; agents={agents}; {}",

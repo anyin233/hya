@@ -24,10 +24,7 @@ async fn t1_9_skill_tool_loads_project_skill_body() {
         .expect("e2e env");
 
     let skills = env
-        .get_json(&format!(
-            "/skill?directory={}",
-            env.backend.workdir_str()
-        ))
+        .get_json(&format!("/skill?directory={}", env.backend.workdir_str()))
         .await
         .expect("skill list");
     let listed = skills
