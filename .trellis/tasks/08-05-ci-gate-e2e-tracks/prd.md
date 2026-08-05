@@ -24,6 +24,37 @@ spawning concurrent backend processes — precisely what
 `docs/testing/process-e2e.md` says is unstable and requires `--test-threads=1`.
 So today's CI both fails to gate the suite deliberately and runs it wrong.
 
+## Evidence from child 1 (2026-08-05) — this changes the requirements
+
+Child 1 landed the suite and, in doing so, produced hard evidence about how this
+workflow actually fails. Full detail in
+`.trellis/tasks/08-05-land-swarm-branch-to-main/findings.md`.
+
+**The workflow is one job with a linear step list, so any early failure skips
+everything after it.** That is not hypothetical — it has hidden real defects
+twice:
+
+1. **`fmt` (step 9) had been failing on `main` for weeks.** Every step after it
+   — `clippy`, `build`, `test`, `verify-no-http` — was skipped on every run. Six
+   broken tests, three of them regressions, shipped completely unnoticed because
+   the test step never executed. Child 1 found them only by running the gate
+   locally.
+2. **A PTY test the docs call non-gating blocks the entire Rust gate.** After
+   the push, CI failed at **step 8, "Test TypeScript TUI"**, on
+   `test/pty-smoke.test.ts` (`timed out waiting for root draft`, 64.97s) — and
+   `fmt`, `clippy`, `build`, `test`, `verify-no-http` were all skipped again.
+   Proven flaky: the identical code passed that step in two other runs, and
+   passes 3/3 locally.
+
+Meanwhile `docs/testing/agent-matrix.md` says: *"Full PTY matrix for every
+feature ID is **not** required for the PR gate; PTY remains presentation
+smoke."* The blanket `bun test` at step 8 contradicts that doc — it runs PTY
+smoke and lets it gate everything.
+
+**So the real requirement is to fix the failure class, not to append two steps
+to a fragile linear list.** A gate where one flaky, explicitly-non-essential
+test can prevent the entire Rust suite from running is not a gate.
+
 ## Requirements
 
 - R1. Exclude `hya-e2e` from the generic workspace test step and run it as a
@@ -42,6 +73,20 @@ So today's CI both fails to gate the suite deliberately and runs it wrong.
   `docs/testing/ci-agent-e2e-snippet.yml` so they describe the gate that now
   exists. The snippet file is either deleted or reduced to a pointer — it must
   not keep claiming the wiring is optional and unapplied.
+- R6. **Decouple the steps so one early failure cannot skip the rest.** The Rust
+  gate must run even when the TypeScript/PTY steps fail, and vice versa. Split
+  into independent jobs (or otherwise ensure independent steps report
+  independently) so a red `fmt` never again hides a red `test`. This supersedes
+  a naive "append two steps" reading of R1/R2.
+- R7. **Make Track T's enforced set explicit.** Replace the blanket `bun test`
+  with the three registered Track T scenarios (`real-backend.test.ts`,
+  `task-presentation.test.ts`, `real-backend-agents.test.ts`), matching what
+  `agent-matrix.md` already documents as the PR requirement. PTY smoke may still
+  run, but must not gate the Rust suite — either in a non-blocking job or
+  quarantined until its flakiness is fixed.
+- R8. **Decide and record what happens to `pty-smoke.test.ts`.** It is
+  demonstrably flaky under CI load. Options: quarantine, retry, raise its
+  timeout, or fix the underlying wait. Do not leave it silently gating.
 
 ## Constraints
 

@@ -257,6 +257,60 @@ and work in the main checkout, so no one edits a stale tree by accident.
   the pre-merge tip/stash/worktree records). Safe to delete once the unrelated
   dirty work above is committed by its own task.
 
+## CI is green — first full run in recent history
+
+Run 31053324678 on `16bde844` (the commit carrying every code change):
+**all 15 steps success**, including the two that matter most here:
+
+| Step | Result | Note |
+| --- | --- | --- |
+| 9. `fmt` | success | first pass in weeks — this is what had been aborting every run |
+| 13. `test` | success | the full workspace suite had **never executed** on CI in recent history |
+| 15. `verify-no-http` | success | also never reached before |
+
+So the local gate result (1324 passed / 0 failed) is now corroborated by CI on a
+clean checkout with a fresh toolchain, not just on this machine.
+
+## Post-push CI finding — a non-gating PTY test gates everything
+
+The first CI run after the push (`d737bb28`) failed, but **not** at any Rust
+step. It failed at workflow **step 8, "Test TypeScript TUI"**, on
+`test/pty-smoke.test.ts:589` — `error: timed out waiting for root draft`, after
+64.97s. Every step after it (`fmt`, `clippy`, `build`, `test`,
+`verify-no-http`) was **skipped**.
+
+### It is a flake, not a regression from this work
+
+| Run | Commit | Step 8 result |
+| --- | --- | --- |
+| 30283950013 | `156d0ad3` (pre-merge main) | success |
+| 30990755344 | `3c07de55` (branch tip) | success |
+| 31053432077 | `d737bb28` | **failure** |
+| 31053324678 | `16bde844` | success |
+| 31053472545 | `b64118bf` | success |
+
+`d737bb28` is `16bde844` plus a **docs-only** commit (`.trellis` markdown). The
+compiled code is identical, and `16bde844` passed the same step. Locally
+`bun test test/pty-smoke.test.ts` passes 3/3. Two passes and one failure on
+byte-identical code is a flake on a slower/loaded runner, not a defect
+introduced here.
+
+### The structural problem this exposes — for child 2
+
+`docs/testing/agent-matrix.md` states plainly: *"Full PTY matrix for every
+feature ID is **not** required for the PR gate; PTY remains presentation smoke."*
+But `ci.yml` runs a blanket `bun test` at step 8, which executes
+`pty-smoke.test.ts` anyway — and because it precedes every Rust step, a flaky
+test the docs call non-gating can block `fmt`, `clippy`, `build`, the whole
+workspace test suite, and `verify-no-http` from running at all.
+
+This is the *same structural defect* as the `fmt`-before-`test` ordering that
+let 6 broken tests ship unnoticed: an early, non-essential step aborts the
+entire job. Child 2 should fix the class, not just the instance — e.g. run the
+Rust gate in a job that does not depend on PTY smoke, and make Track T's
+enforced set explicitly the three registered scenarios rather than a blanket
+`bun test`.
+
 ## Handover to sibling children
 
 - **Child 2 (`ci-gate-e2e-tracks`)** — the gate command sequence is now proven
