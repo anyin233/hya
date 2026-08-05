@@ -71,6 +71,18 @@ Suite location at audit time: `crates/hya-e2e` on branch
 - **D2 — CI is edited directly.** `.github/workflows/ci.yml` is modified in
   place rather than shipped as a detached patch. The pre-existing snippet's
   "add when the token has workflow write scope" caveat is treated as resolved.
+
+  > **D2 was wrong — corrected 2026-08-05 during child 2.** The caveat is
+  > still live. Pushing a `.github/workflows/` change is rejected:
+  > `refusing to allow an OAuth App to create or update workflow
+  > .github/workflows/ci.yml without 'workflow' scope`. `gh auth status`
+  > confirms the token carries only `gist`, `read:org`, `repo`.
+  > D2 was accepted at planning time without verifying it — the assumption
+  > should have been tested by attempting a trivial workflow push before it
+  > was written into the plan as settled.
+  > Editing the file locally works; **publishing it needs the `workflow`
+  > scope** (`gh auth refresh -s workflow`) or a push by a credential that
+  > has it. Child 2 is blocked on this and nothing else.
 - **D3 — Work happens on `main` after landing.** All four gap-closing children
   target `main`, not the feature branch.
 
