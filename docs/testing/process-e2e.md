@@ -60,8 +60,22 @@ Helpers:
 - `env.prompt_with_permission_reply(session, text, "once"|"reject", timeout)`
 - `env.prompt_with_question_reply(session, text, answers, timeout)`
 - `env.wait_mcp_connected("echo", timeout)`
+- `env.session_context` / `env.compact_session` / `env.summarize_session_legacy`
+- `env.compat_create_session` / `env.compat_prompt_and_wait` (AGENTS guidance path)
+- `env.session_todos` / `env.wait_session_idle`
 - `tree_children` / `tree_max_depth` / `tree_session_ids` / `tree_subagent_types`
   for `/session/{id}/tree`
+
+### Context management notes
+
+- **Native** `POST /sessions/:id/prompt` is synchronous and does **not** inject
+  per-turn AGENTS/reference guidance (server AppState keeps agent base only).
+- **Compat** `POST /api/session/:id/prompt` is async and runs
+  `run_turn_with_external_dirs_and_guidance` after discovering workdir
+  `AGENTS.md`. Use `compat_prompt_and_wait` for T1.13-style tests.
+- **Compact** (`POST /api/session/:id/compact`) and legacy summarize call
+  `ModelSummarizer`, which hits the same FakeLlm as normal turns — script an
+  extra `text_step` for the summary body before any post-compact turn.
 
 ## Oracle rules (do not weaken)
 
@@ -75,6 +89,11 @@ Helpers:
 | Nested | `tree_max_depth >= 2` and ≥ 3 distinct session ids |
 | Hyabundle CLI | `bundle install/list/info/uninstall` stdout markers |
 | Package agent | `/api/agent` lists package agent; event text matches scripted final token |
+| Session context | `/api/session/{id}/context` includes multi-turn user/assistant content |
+| Project AGENTS.md | Compat-guided FakeLlm request contains AGENTS body (not only native prompt) |
+| Compact / summarize | Context contains summary marker after compact; follow-up turn still works |
+| Todo | `/session/{id}/todo` lists items written via `todowrite` |
+| Edit | Disk file content after `edit` tool |
 
 Avoid asserting only FakeLlm request counts or substring matches that appear in
 tool-call arguments without results.
