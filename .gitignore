@@ -2,6 +2,9 @@
 /.worktrees
 **/*.rs.bk
 *.pdb
+# coverage instrumentation drops these next to the binary's cwd
+*.profraw
+*.profdata
 # local runtime / secrets
 *.db
 *.sqlite

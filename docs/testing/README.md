@@ -54,6 +54,17 @@ cd packages/hya-tui-ts
 bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
 ```
 
+## Coverage
+
+Line-coverage baseline and how to regenerate it:
+[coverage-baseline.md](coverage-baseline.md). Current workspace figure is
+**85.56% lines** (`hya-e2e` excluded).
+
+```sh
+cargo llvm-cov --no-report --workspace --exclude hya-e2e --no-fail-fast
+cargo llvm-cov report --summary-only
+```
+
 ## Live model smoke (optional)
 
 Live provider keys (`HYA_E2E_LIVE` and similar) are **not** part of the PR gate.
