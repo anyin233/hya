@@ -208,3 +208,76 @@ match store.claim_admission(&claim).await? {
     Existing(_) => return Err(OperationAlreadyHandled),
 }
 ```
+
+---
+
+## Scenario: Test Fixtures That Route Through Durable Spawn Admission
+
+### 1. Scope / Trigger
+
+Any test whose spawn reaches `prepare_spawn_admission` — i.e. where
+`uses_durable_admission_owner` is true (single member, non-resident,
+`spawn_lifecycle: transient`, background). Learned 2026-08-05 from three
+`nested_spawn_tree.rs` tests that failed with an opaque `SpawnError::Unavailable`.
+
+### 2. Contracts
+
+Durable admission journals a runtime fingerprint, and the fingerprint is only
+defined when **both** preconditions hold. Each fails closed, and each surfaces
+as the same generic `SpawnError::Unavailable`, so they are hard to tell apart:
+
+1. **The bundle catalog must carry verified provenance.**
+   `BundleCatalog::from_prepared` hard-sets `semantic_identity_v1: None`; only
+   `from_verified_catalogs` / `with_verified_catalogs` populate it. Without it,
+   `TurnBinding::semantic_fingerprint_v1` returns `None` →
+   `SpawnError::Unavailable`. Production always uses the verified constructors.
+2. **Every provider in the router must report a configured identity.**
+   `ProviderRouter::configured_identities_v1()` returns `None` if *any* provider
+   leaves the `configured_identity_v1` trait default, which is `None` by design
+   ("providers without a complete identity fail closed"). A bare `FakeProvider`
+   leaves that default.
+
+Fixing only (1) moves the failure to `ProviderIdentityUnavailable` — the two are
+independent and both are required.
+
+### 3. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Fails closed at the fingerprint, then again at provider identity.
+let catalog = BundleCatalog::from_prepared(&[bundle]);
+let router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![])));
+```
+
+#### Correct
+
+```rust
+let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])?;
+let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])?;
+
+// Wrap the fake locally; do NOT implement `configured_identity_v1` on
+// `FakeProvider` itself — `runtime.rs` asserts a bare FakeProvider router must
+// fail closed, and other crates depend on that.
+struct IdentityFakeProvider { inner: FakeProvider }
+impl Provider for IdentityFakeProvider {
+    fn configured_identity_v1(&self) -> Option<Vec<u8>> { Some(b"test-identity-v1".to_vec()) }
+    /* delegate id / capabilities / stream */
+}
+```
+
+### 4. Common Mistakes
+
+- Adding `configured_identity_v1` to `FakeProvider` to "fix it once" — this
+  breaks the fail-closed assertion in `crates/hya-app/src/runtime.rs` and
+  perturbs admission fingerprints across every crate that uses the fake.
+- Asserting a governor budget with a bare `assert_eq!` right after completion.
+  The journal row (`Completed + logical_released`) and the in-memory governor
+  debit are written by **different tasks**; background owners reply at
+  registration, so there is no ordering guarantee. Use a bounded poll.
+- Assuming `remaining_budget` can prove an *exact* debit: `release_operation`
+  clamps with `.min(per_run_budget)`, so at `per_run_budget = 1` a double
+  release is indistinguishable from a single one.
+- Copying a verified-runtime helper into one test file instead of the shared
+  `tests/support/`. That exact drift is what left `nested_spawn_tree.rs` broken
+  while `spawn_admission.rs` passed.
