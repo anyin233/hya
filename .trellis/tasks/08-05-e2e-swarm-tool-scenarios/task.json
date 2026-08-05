@@ -3,7 +3,7 @@
   "name": "e2e-swarm-tool-scenarios",
   "title": "Add Track P scenarios for swarm tools",
   "description": "Add Track P scenarios covering send/roster/channels/join/leave/list_agents with recipient-side oracles, raising tool coverage from 8/25.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
