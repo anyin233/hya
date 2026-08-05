@@ -11,7 +11,11 @@ mod error;
 mod fake_llm;
 mod scenario;
 
-pub use backend::{BackendProcess, BackendSpec};
+pub use backend::{
+    BackendProcess, BackendSpec, McpFixture, MCP_ECHO_SCRIPT_REL, default_backend_bin,
+    materialize_public_bundle, mcp_echo_command, mcp_echo_script, public_bundle_fixture,
+    public_bundle_source,
+};
 pub use error::E2eError;
 pub use fake_llm::{
     FakeLlm, FakeLlmHandle, ScriptStep, ToolCallStep, text_step, tool_step, tools_step,
