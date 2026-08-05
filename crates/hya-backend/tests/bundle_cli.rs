@@ -152,7 +152,7 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
         "ciphertext_digest: 6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
         "authentication: unverified",
         "payload: opaque",
-        "activation: unsupported-in-0.34.11",
+        concat!("activation: unsupported-in-", env!("CARGO_PKG_VERSION")),
     ] {
         assert!(
             info_stdout.lines().any(|line| line == expected),
