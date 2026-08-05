@@ -37,6 +37,10 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T1.9 | Skills load | `tests/p05_skills.rs` | `/skill` lists skill; follow-up FakeLlm has body marker |
 | T1.10 | MCP tool call | `tests/p06_mcp.rs` | `/mcp` connected; follow-up has `echo:…` result |
 | T1.11 | Session list + resume | `tests/p07_session_lifecycle.rs` | Compat list shows active sessions; second prompt on same id |
+| T1.12 | Session context API | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `/api/session/{id}/context` |
+| T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
+| T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact injects summary into context; follow-up turn works |
+| T1.15 | todowrite + edit | `tests/p15_todo_and_edit.rs` | Todo route lists item; edit rewrites file on disk |
 | T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `general`, distinct child session |
 | T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, explore+plan, ≥ 3 session ids |
 | T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `/api/agent` lists build + spawnable roles |
@@ -66,6 +70,9 @@ replace these.
 | I.permission_api | Compat permission/question | `crates/hya-server/tests/compat_permission_question_api.rs` |
 | I.mcp_api | Compat MCP | `crates/hya-server/tests/compat_mcp_api.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/bundle_cli.rs` |
+| I.context_api | Compat session context | `crates/hya-server/tests/compat_session_v2_context_api.rs` |
+| I.compact_api | Compat compact | `crates/hya-server/tests/compat_session_v2_compact_api.rs` |
+| I.compact_engine | Engine compact_context | `crates/hya-core/tests/compact_context.rs` |
 
 ## Adding a scenario
 

@@ -81,6 +81,38 @@ tags = ["pr", "session"]
 timeout_secs = 90
 
 [[scenario]]
+id = "T1.12"
+title = "session context API multi-turn"
+track = "P"
+path = "crates/hya-e2e/tests/p12_context_api.rs"
+tags = ["pr", "context"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.13"
+title = "project AGENTS.md guidance on Compat prompt"
+track = "P"
+path = "crates/hya-e2e/tests/p13_project_agents_context.rs"
+tags = ["pr", "context", "agents"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T1.14"
+title = "compact and summarize context management"
+track = "P"
+path = "crates/hya-e2e/tests/p14_compact_summarize.rs"
+tags = ["pr", "context", "compact"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T1.15"
+title = "todowrite and edit tools"
+track = "P"
+path = "crates/hya-e2e/tests/p15_todo_and_edit.rs"
+tags = ["pr", "tools"]
+timeout_secs = 90
+
+[[scenario]]
 id = "T2.1"
 title = "subagent task spawn"
 track = "P"
@@ -183,4 +215,28 @@ title = "backend bundle CLI unit"
 track = "I"
 path = "crates/hya-backend/tests/bundle_cli.rs"
 tags = ["index-only", "hyabundle"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.context_api"
+title = "compat session context API"
+track = "I"
+path = "crates/hya-server/tests/compat_session_v2_context_api.rs"
+tags = ["index-only", "context"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.compact_api"
+title = "compat session compact API"
+track = "I"
+path = "crates/hya-server/tests/compat_session_v2_compact_api.rs"
+tags = ["index-only", "context", "compact"]
+timeout_secs = 0
+
+[[scenario]]
+id = "I.compact_engine"
+title = "engine compact_context prunes provider window"
+track = "I"
+path = "crates/hya-core/tests/compact_context.rs"
+tags = ["index-only", "context", "compact"]
 timeout_secs = 0

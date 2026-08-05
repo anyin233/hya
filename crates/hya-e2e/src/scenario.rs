@@ -284,6 +284,111 @@ impl E2eEnv {
         self.get_json(&format!("/session/{session}/tree")).await
     }
 
+    /// Compat v2 session context (projected messages for the session).
+    pub async fn session_context(&self, session: &SessionId) -> Result<Value, E2eError> {
+        self.get_json(&format!("/api/session/{session}/context"))
+            .await
+    }
+
+    /// Compat session todo list.
+    pub async fn session_todos(&self, session: &SessionId) -> Result<Value, E2eError> {
+        self.get_json(&format!("/session/{session}/todo")).await
+    }
+
+    /// Compat run statuses map (`session_id` → `{type: "busy"}` while running).
+    pub async fn session_statuses(&self) -> Result<Value, E2eError> {
+        self.get_json("/session/status").await
+    }
+
+    /// Wait until the session is not listed as busy under `/session/status`.
+    pub async fn wait_session_idle(
+        &self,
+        session: &SessionId,
+        timeout: Duration,
+    ) -> Result<(), E2eError> {
+        let key = session.to_string();
+        wait_until("session idle", timeout, || async {
+            let statuses = self.session_statuses().await?;
+            let busy = statuses
+                .get(&key)
+                .and_then(|s| s.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("busy");
+            Ok(!busy)
+        })
+        .await
+    }
+
+    /// Create a session via Compat v2 (`/api/session`) so workdir/location is explicit.
+    pub async fn compat_create_session(&self) -> Result<SessionId, E2eError> {
+        let body = serde_json::json!({
+            "agent": self.agent,
+            "location": { "directory": self.backend.workdir_str() },
+            "model": {
+                "providerID": "fake",
+                "id": "model"
+            }
+        });
+        let created = self.post_json("/api/session", &body).await?;
+        let id = created
+            .pointer("/data/id")
+            .and_then(|v| v.as_str())
+            .or_else(|| created.get("id").and_then(|v| v.as_str()))
+            .ok_or_else(|| E2eError::Other(format!("compat create missing id: {created}")))?;
+        id.parse()
+            .map_err(|e| E2eError::Other(format!("parse session id {id}: {e}")))
+    }
+
+    /// Async Compat v2 prompt (spawns turn with AGENTS/reference guidance), then wait idle.
+    pub async fn compat_prompt_and_wait(
+        &self,
+        session: SessionId,
+        text: impl Into<String>,
+        timeout: Duration,
+    ) -> Result<Value, E2eError> {
+        let before = self.fake.requests().map(|r| r.len()).unwrap_or(0);
+        let body = serde_json::json!({
+            "prompt": { "text": text.into() },
+            "resume": true
+        });
+        let admitted = self
+            .post_json(&format!("/api/session/{session}/prompt"), &body)
+            .await?;
+        // Wait for at least one new FakeLlm hit and the run registry to clear.
+        wait_until("compat turn FakeLlm", timeout, || async {
+            let n = self.fake.requests().map(|r| r.len()).unwrap_or(0);
+            Ok(n > before)
+        })
+        .await?;
+        self.wait_session_idle(&session, timeout).await?;
+        Ok(admitted)
+    }
+
+    /// POST `/api/session/{id}/compact` (sync summarize + inject system message).
+    pub async fn compact_session(&self, session: &SessionId) -> Result<(), E2eError> {
+        let url = format!("{}/api/session/{session}/compact", self.backend.url);
+        let resp = self.http.post(url).send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !(status.is_success() || status.as_u16() == 204) {
+            return Err(E2eError::Http(format!(
+                "POST compact -> {status}: {text}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// POST legacy `/session/{id}/summarize` with provider/model metadata.
+    pub async fn summarize_session_legacy(&self, session: &SessionId) -> Result<Value, E2eError> {
+        let body = serde_json::json!({
+            "providerID": "fake",
+            "modelID": "model",
+            "auto": false
+        });
+        self.post_json(&format!("/session/{session}/summarize"), &body)
+            .await
+    }
+
     /// Wait until permission list is non-empty; return first request id.
     pub async fn wait_permission_id(&self, timeout: Duration) -> Result<String, E2eError> {
         wait_until("permission request", timeout, || async {
