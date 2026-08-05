@@ -1,0 +1,32 @@
+{
+  "id": "e2e-suite-hardening",
+  "name": "e2e-suite-hardening",
+  "title": "E2E test suite hardening",
+  "description": "Parent: act on the 2026-08-05 E2E coverage audit \u2014 land the suite on main, gate it in CI, cover swarm tools, measure line coverage, and make matrix.toml enforced.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-08-05",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-05-land-swarm-branch-to-main",
+    "08-05-ci-gate-e2e-tracks",
+    "08-05-e2e-swarm-tool-scenarios",
+    "08-05-coverage-baseline-llvm-cov",
+    "08-05-matrix-toml-runner"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
