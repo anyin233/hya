@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": "AGENTS.md", "reason": "Verification commands and commit rules"}
+{"file": ".trellis/tasks/08-05-land-swarm-branch-to-main/findings.md", "reason": "Evidence: I.nested and I.bundle_cli were red while the registry advertised them"}
