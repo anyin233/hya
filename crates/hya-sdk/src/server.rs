@@ -310,6 +310,21 @@ fn parse_listen_url(line: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Serializes the tests that mutate `HYA_DB_ENV`.
+    ///
+    /// `std::env::set_var` / `remove_var` are process-global, and cargo runs the
+    /// tests in this binary on parallel threads, so without this lock one test
+    /// can clear the variable while another sits between its `set_var` and its
+    /// assertion. That raced in CI (run 31055250033): the explicit-env test read
+    /// the default state-dir path instead of the value it had just set.
+    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take the env lock, ignoring poisoning — a panic in one env test must not
+    /// cascade into spurious failures in the others.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn parses_verified_listen_line() {
         let line = "compat server listening on http://127.0.0.1:4096";
@@ -341,6 +356,7 @@ mod tests {
 
     #[test]
     fn default_session_db_path_uses_state_dir_when_env_unset() {
+        let _env = env_guard();
         // SAFETY: test-only process-env mutation; restored below.
         let previous = std::env::var_os(HYA_DB_ENV);
         unsafe { std::env::remove_var(HYA_DB_ENV) };
@@ -355,6 +371,7 @@ mod tests {
 
     #[test]
     fn default_session_db_path_empty_env_means_memory() {
+        let _env = env_guard();
         let previous = std::env::var_os(HYA_DB_ENV);
         unsafe { std::env::set_var(HYA_DB_ENV, "") };
         assert!(default_session_db_path().is_none());
@@ -366,6 +383,7 @@ mod tests {
 
     #[test]
     fn default_session_db_path_honors_explicit_env() {
+        let _env = env_guard();
         let previous = std::env::var_os(HYA_DB_ENV);
         unsafe { std::env::set_var(HYA_DB_ENV, "/tmp/custom-hya-sessions.db") };
         assert_eq!(
