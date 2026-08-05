@@ -20,4 +20,7 @@ pub use error::E2eError;
 pub use fake_llm::{
     FakeLlm, FakeLlmHandle, ScriptStep, ToolCallStep, text_step, tool_step, tools_step,
 };
-pub use scenario::{E2eEnv, E2eEnvBuilder, wait_until};
+pub use scenario::{
+    E2eEnv, E2eEnvBuilder, fake_requests_from, tree_children, tree_max_depth, tree_session_ids,
+    tree_subagent_types, wait_until,
+};

@@ -1,7 +1,7 @@
 //! T1.9 — project skill discovery + skill tool load.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
+use hya_e2e::{E2eEnvBuilder, fake_requests_from, text_step, tool_step};
 use serde_json::json;
 
 const SKILL_MD: &str = r#"---
@@ -36,7 +36,9 @@ async fn t1_9_skill_tool_loads_project_skill_body() {
         .or_else(|| skills.get("data").and_then(|d| d.as_array()).cloned())
         .unwrap_or_default();
     assert!(
-        listed.iter().any(|s| s.get("name").and_then(|n| n.as_str()) == Some("e2e-skill")),
+        listed
+            .iter()
+            .any(|s| s.get("name").and_then(|n| n.as_str()) == Some("e2e-skill")),
         "project skill must appear in /skill; body={skills}; {}",
         env.diagnostics()
     );
@@ -48,15 +50,17 @@ async fn t1_9_skill_tool_loads_project_skill_body() {
         .expect("skill prompt");
 
     let requests = env.fake.requests().expect("fake requests");
-    let dumped = serde_json::to_string(&requests).unwrap_or_default();
-    assert!(
-        dumped.contains("E2E_SKILL_BODY_MARKER") || dumped.contains("e2e-skill"),
-        "skill tool output should reach the next model turn; dump={dumped}; {}",
-        env.diagnostics()
-    );
     assert!(
         requests.len() >= 2,
-        "skill + final text turns expected; {}",
+        "skill tool turn + follow-up model turn required; {}",
+        env.diagnostics()
+    );
+    // Marker only appears after skill tool loads SKILL.md into the tool result
+    // that is sent on the *next* completion request — not in the tool-call args.
+    let follow_up = fake_requests_from(&requests, 1);
+    assert!(
+        follow_up.contains("E2E_SKILL_BODY_MARKER"),
+        "follow-up FakeLlm request must include loaded skill body; follow_up={follow_up}; {}",
         env.diagnostics()
     );
 }
