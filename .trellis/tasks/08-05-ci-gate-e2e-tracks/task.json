@@ -3,7 +3,7 @@
   "name": "ci-gate-e2e-tracks",
   "title": "Wire E2E tracks into CI gate",
   "description": "Make Track P and non-PTY Track T an enforced PR gate in ci.yml, run with --test-threads=1 and --exclude hya-e2e as the harness docs require.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
