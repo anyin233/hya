@@ -32,7 +32,10 @@ async fn t1_14_compact_injects_summary_and_allows_follow_up_turn() {
         .await
         .expect("compact session");
 
-    let context = env.session_context(&session).await.expect("context after compact");
+    let context = env
+        .session_context(&session)
+        .await
+        .expect("context after compact");
     let blob = context.to_string();
     assert!(
         blob.contains("E2E_COMPACT_SUMMARY_MARKER")
