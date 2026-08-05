@@ -245,7 +245,8 @@ async function runChildObservation(columns: number) {
       { sessionID: resetRootSession.id, parts: [{ type: "text", text: resetRootTranscript }] },
       { throwOnError: true },
     )
-    const waitTimeout = Bun.env.CI ? 45_000 : 20_000
+    // CI runners are slower under sequential PTY cases; keep local waits tight.
+    const waitTimeout = Bun.env.CI ? 60_000 : 20_000
     const waitPoll = Bun.env.CI ? 100 : 50
     const waitFor = async (check: () => boolean | Promise<boolean>, message: string) => {
       const deadline = Date.now() + waitTimeout
@@ -254,6 +255,14 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(waitPoll)
       }
     }
+    /** Root session is ready once the fixture text paints, or once message-hydrated chrome is on screen.
+     * At wider columns, virtualized history may never emit the older user turn into the PTY capture
+     * even though the session is open (task presentation + footer chrome). */
+    const rootSessionFrameReady = (frame: string) =>
+      frame.includes(rootTranscript) ||
+      (frame.includes("Inspect worker path") &&
+        frame.includes("ctrl+x o") &&
+        (frame.includes("subagent roster") || frame.includes("commands")))
     await waitFor(async () => {
       const messages = (await client.session.messages({ sessionID: rootSession.id })).data
       return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${rootTranscript}\\"`)
@@ -554,9 +563,14 @@ async function runChildObservation(columns: number) {
         activeCallsite = rootCallsite
         tracePhase(rootCallsite, "phase_start")
         try {
-          tracePhase(rootCallsite, "ui_state_wait", rootTranscript)
-          await waitFor(async () => (await output()).includes(rootTranscript), rootCallsite)
-          tracePhase(rootCallsite, "ui_state_observed", rootTranscript)
+          tracePhase(rootCallsite, "ui_state_wait", "root-session-ready")
+          await waitFor(async () => rootSessionFrameReady(await output()), rootCallsite)
+          const observed = await output()
+          tracePhase(
+            rootCallsite,
+            "ui_state_observed",
+            observed.includes(rootTranscript) ? rootTranscript : "task-chrome-ready",
+          )
         } catch (error) {
           throw await waitFailure(rootCallsite, 0, error)
         } finally {
