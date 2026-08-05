@@ -1,0 +1,3 @@
+{"file": "AGENTS.md", "reason": "Binding verification commands, TDD gate, and commit/push rules for this repo; step 7's quality gate must match them"}
+{"file": ".trellis/tasks/08-05-e2e-suite-hardening/prd.md", "reason": "Parent PRD: measured audit baseline and decision D1 (full ff-merge) that this task executes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality bar the merged main must satisfy before the push gate"}

@@ -1,0 +1,3 @@
+{"file": "AGENTS.md", "reason": "Verification commands the check phase must re-run against merged main"}
+{"file": ".trellis/tasks/08-05-land-swarm-branch-to-main/design.md", "reason": "Collision analysis and risk table the check must confirm was honored"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Check-phase quality conventions"}
