@@ -33,6 +33,34 @@ all: the workflow only fired on `push: [main]` and `pull_request`, so the plan's
 original "push a scratch branch and let CI run" step could never have worked.
 That was a defect in the plan, found while executing it.
 
+## Outcome — `main` is fully green under the new gate
+
+Runs 31056356655 (`0acfc919`) and 31056395527 (`31a66f8f`): **all 18 steps
+success**, including step 16 `agent process e2e (Track P)`. Track P is now an
+enforced gate, not a documented aspiration.
+
+### Cost delta (PRD constraint)
+
+| | Wall-clock |
+| --- | --- |
+| Last run of the old workflow (`b64118bf`) | 935s |
+| First green run of the new workflow (`31a66f8f`) | 978s |
+| **Delta** | **+43s (+4.6%)** |
+
+Per-step, for the four steps this task added:
+
+| Step | Time |
+| --- | --- |
+| Test TypeScript TUI (Track T — 3 scenarios) | 1s |
+| TUI smoke (non-gating, the rest of the bun suite) | 37s |
+| build agent e2e binaries | 31s |
+| agent process e2e (Track P) | 23s |
+
+Narrowing Track T from a blanket `bun test` (37s) to the three registered
+scenarios (1s) roughly pays for Track P's 54s. At +4.6% there is no case for
+splitting into parallel jobs (`design.md` option A) — that stays a documented
+alternative, not a pending action.
+
 ## What the new gate immediately caught
 
 Two pre-existing flakes, both previously invisible because the steps that would
