@@ -964,6 +964,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-e2e"
+version = "0.34.13"
+dependencies = [
+ "axum",
+ "hya-client",
+ "hya-proto",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-mcp"
 version = "0.34.13"
 dependencies = [

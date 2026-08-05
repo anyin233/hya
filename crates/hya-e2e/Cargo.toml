@@ -1,0 +1,25 @@
+[package]
+name = "hya-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Process-level agent E2E harness: real hya-backend + scripted FakeLlm"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+hya-client = { path = "../hya-client" }
+hya-proto = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+# integration tests may use unwrap

@@ -1,0 +1,12 @@
+# Add these steps to .github/workflows/ci.yml after "cargo test --workspace"
+# (requires workflow write scope to push the workflow file itself).
+#
+# Replace:
+#   cargo test --workspace --jobs 1
+# With:
+#   cargo test --workspace --jobs 1 --exclude hya-e2e
+# Then:
+#   - name: build agent e2e binaries
+#     run: cargo build --locked -p hya-backend --bin hya-backend
+#   - name: agent process e2e
+#     run: cargo test -p hya-e2e -- --test-threads=1
