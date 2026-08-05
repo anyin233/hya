@@ -110,3 +110,22 @@ hya-backend serve --bind 127.0.0.1:8080 --db hya.db
 
 Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; hya
 prints the actual listening address on startup.
+
+## Process Agent E2E (`hya-e2e`) Fails
+
+Track P tests spawn a real `hya-backend` against a local FakeLlm. Common failures:
+
+1. **Binary missing** — build first:
+   ```sh
+   cargo build -p hya-backend --bin hya-backend
+   cargo test -p hya-e2e -- --test-threads=1
+   ```
+2. **Port / process flakiness** — always use `--test-threads=1`.
+3. **MCP `unknown tool: mcp__…`** — MCP must finish connecting before the tool
+   call. The harness sets `HYA_DEFER_SIDEPLANES=0` for MCP fixtures and waits on
+   `GET /mcp` status `connected`. See [process-e2e.md](testing/process-e2e.md).
+4. **Hyabundle “exact lowercase .hyabundle suffix”** — install paths must end in
+   `.hyabundle` (use `materialize_public_bundle`, not the raw `.7z` fixture path).
+5. **Weak-looking asserts** — oracles should check disk effects, tree depth, or
+   follow-up FakeLlm **tool results**, not only request counts. Inventory:
+   [agent-matrix.md](testing/agent-matrix.md).

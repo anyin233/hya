@@ -46,6 +46,9 @@ hya-core::SessionEngine
 | `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` launcher. |
 | `hya-ts` | [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs) | TypeScript TUI supervisor: CLI parsing, backend/runtime discovery, process-group handoff, and cleanup. |
 | `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC, and interactive startup that launches the current `hya` frontend. |
+| `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh. |
+| `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | AgentBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. |
+| `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya-backend` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
 
 ## `hya-proto`
 
@@ -215,19 +218,24 @@ SDK boundary.
 
 ## Tests
 
-Tests are crate-local and map closely to runtime boundaries:
+Tests are crate-local and map closely to runtime boundaries. Product-path
+process E2E is layered on top (Track P/T); see [Testing](testing/README.md).
 
 | Path | Coverage |
 | --- | --- |
 | [`../crates/hya-core/tests`](../crates/hya-core/tests) | Turn loop, goal/loop gates, teams, subagents, categories, worktrees. |
+| [`../crates/hya-app/tests`](../crates/hya-app/tests) | Nested spawn tree, admission, installed-bundle refresh, runtime composition. |
 | [`../crates/hya-provider/tests`](../crates/hya-provider/tests) | OpenAI/Anthropic conformance, provider preflight, canonical event shape. |
 | [`../crates/hya-store/tests`](../crates/hya-store/tests) | Migration, projection, session scoping, persistence, token ledger. |
 | [`../crates/hya-tool/tests`](../crates/hya-tool/tests) | Permission evaluation and builtin tools. |
 | [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and Compat-compatible route behavior. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
 | [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
+| [`../crates/hya-backend/tests`](../crates/hya-backend/tests) | Bundle CLI, backend command integration. |
 | [`../crates/hya/tests`](../crates/hya/tests), [`../crates/hya-ts/tests`](../crates/hya-ts/tests) | Canonical launcher delegation, process supervision, argument forwarding, and native transport integration. |
-| [`../packages/hya-tui-ts/test`](../packages/hya-tui-ts/test) | TypeScript frontend state, SDK integration, rendering, and interaction behavior. |
+| [`../packages/hya-tui-ts/test`](../packages/hya-tui-ts/test) | TypeScript frontend state, SDK integration, real-backend permission/roster, multi-agent presentation, PTY smoke. |
+| [`../crates/hya-e2e`](../crates/hya-e2e) | Track P process agent suite (FakeLlm + real backend). Matrix: [`../crates/hya-e2e/matrix.toml`](../crates/hya-e2e/matrix.toml). |
+| [`testing/`](testing/) | Human docs for tracks, oracles, and optional CI snippet. |
 
 ## Dependency Direction
 

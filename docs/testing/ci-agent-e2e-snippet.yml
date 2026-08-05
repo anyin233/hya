@@ -1,12 +1,30 @@
-# Add these steps to .github/workflows/ci.yml after "cargo test --workspace"
-# (requires workflow write scope to push the workflow file itself).
+# Optional CI fragment: run process agent E2E (Track P) after workspace tests.
+# Add to .github/workflows/ci.yml when the token has workflow write scope.
 #
-# Replace:
+# Why exclude hya-e2e from the default `cargo test --workspace` job:
+# - Track P needs a prebuilt `target/debug/hya-backend` binary.
+# - After `cargo clean`, workspace test alone does not guarantee that binary.
+# - Concurrent backends are unstable; use --test-threads=1.
+
+# Replace the generic test step:
 #   cargo test --workspace --jobs 1
 # With:
 #   cargo test --workspace --jobs 1 --exclude hya-e2e
-# Then:
-#   - name: build agent e2e binaries
-#     run: cargo build --locked -p hya-backend --bin hya-backend
-#   - name: agent process e2e
-#     run: cargo test -p hya-e2e -- --test-threads=1
+#
+# Then append:
+
+# - name: build agent e2e binaries
+#   run: cargo build --locked -p hya-backend --bin hya-backend
+#
+# - name: agent process e2e (Track P)
+#   run: cargo test -p hya-e2e -- --test-threads=1
+#
+# - name: agent tui real-backend e2e (Track T, non-PTY)
+#   working-directory: packages/hya-tui-ts
+#   run: |
+#     bun test \
+#       test/real-backend.test.ts \
+#       test/task-presentation.test.ts \
+#       test/real-backend-agents.test.ts
+
+# Docs: docs/testing/README.md, docs/testing/agent-matrix.md, docs/testing/process-e2e.md
