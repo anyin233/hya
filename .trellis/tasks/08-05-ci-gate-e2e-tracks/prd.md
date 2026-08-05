@@ -55,6 +55,25 @@ smoke and lets it gate everything.
 to a fragile linear list.** A gate where one flaky, explicitly-non-essential
 test can prevent the entire Rust suite from running is not a gate.
 
+## Scope change — 2026-08-05, during execution
+
+Making the gate real immediately surfaced two pre-existing flaky tests that the
+old cascading workflow had been hiding. Both were invisible before because the
+steps that ran them were being skipped.
+
+- **Fixed here** (`0acfc919`): `crates/hya-sdk/src/server.rs` ran three tests
+  that mutate the process-global `HYA_DB` env var on parallel threads, so one
+  could clear the variable while another sat between its `set_var` and its
+  assertion. Reproduced locally — **1 failure in 15 runs** when only those three
+  run — and fixed with a module-level mutex; **0 failures in 25 runs** after.
+  Fixed inside this task rather than deferred because it was keeping `main`'s
+  CI red, which would have made the new gate useless on arrival.
+- **Not fixed — recorded for follow-up**: `crates/hya/tests/frontend_cli.rs`,
+  `missing_adjacent_launcher_reports_its_path` failed once with
+  `Os { code: 26, kind: ExecutableFileBusy }` (ETXTBSY) on the probe run. That
+  is the classic race of exec'ing a binary still held open for writing. Seen
+  once; root cause not established; deliberately **not** guessed at here.
+
 ## Requirements
 
 - R1. Exclude `hya-e2e` from the generic workspace test step and run it as a
