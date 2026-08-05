@@ -595,14 +595,24 @@ async fn admitted_background_transient_releases_its_exact_debit_on_completion() 
     })
     .await
     .expect("operation did not finalize");
-    assert_eq!(
-        fixture
-            .engine
-            .governor()
-            .unwrap()
-            .remaining_budget(fixture.parent),
-        1
-    );
+    // The journal row is finalized by the member task, while the owner returns
+    // the operation's governor units later; poll instead of assuming ordering.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture
+                .engine
+                .governor()
+                .unwrap()
+                .remaining_budget(fixture.parent)
+                == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("operation did not release its debit");
 
     let retry = fixture
         .scoped_spawner()
