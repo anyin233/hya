@@ -39,15 +39,10 @@ async fn t0_1_and_t1_2_session_prompt_streams_fake_text() {
                 .take(80)
                 .collect::<String>(),
         );
-        if let Event::TextDelta { delta, .. } = &env_evt.event {
-            if delta.contains("E2E_HELLO") {
-                saw_text = true;
-            }
-        }
-        if let Event::TextReplace { text, .. } = &env_evt.event {
-            if text.contains("E2E_HELLO") {
-                saw_text = true;
-            }
+        match &env_evt.event {
+            Event::TextDelta { delta, .. } if delta.contains("E2E_HELLO") => saw_text = true,
+            Event::TextReplace { text, .. } if text.contains("E2E_HELLO") => saw_text = true,
+            _ => {}
         }
     }
     let fake_n = env.fake.requests().unwrap().len();
