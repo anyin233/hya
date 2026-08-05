@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets the gate be run manually on any branch — useful for validating workflow
+  # changes themselves, which `push: [main]` + `pull_request` alone cannot cover.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,34 +24,74 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - name: Install Bun 1.3.14
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
           test "$("$HOME/.bun/bin/bun" --version)" = "1.3.14"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      # `bun run typecheck` is a gate in its own right, not just setup — it must not
+      # be able to skip the Rust gate below.
       - name: Prepare TypeScript TUI
+        if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-ts
         run: |
           "$HOME/.bun/bin/bun" install --frozen-lockfile
           "$HOME/.bun/bin/bun" run typecheck
           "$HOME/.bun/bin/bun" run build
       - name: Build TypeScript TUI test binaries
+        if: ${{ !cancelled() }}
         run: cargo build --locked -p hya -p hya-backend -p hya-ts --bins
-      - name: Test TypeScript TUI
+      # Track T gate: exactly the scenarios registered in crates/hya-e2e/matrix.toml.
+      - name: Test TypeScript TUI (Track T)
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-ts
+        run: |
+          "$HOME/.bun/bin/bun" test \
+            test/real-backend.test.ts \
+            test/task-presentation.test.ts \
+            test/real-backend-agents.test.ts
+      # Everything else in the bun suite, PTY smoke included. docs/testing/agent-matrix.md
+      # states PTY is presentation smoke and not a PR requirement, so it reports but
+      # must never gate: pty-smoke.test.ts is flaky under CI load and has already
+      # blocked the entire Rust gate once (run 31053432077).
+      - name: TUI smoke (non-gating)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
         working-directory: packages/hya-tui-ts
         run: |
           "$HOME/.bun/bin/bun" test
+      # Every gate step below carries `if: ${{ !cancelled() }}` so that one failure
+      # reports on its own instead of skipping the rest. A red `fmt` used to skip the
+      # test step entirely, which hid six failing tests for weeks — see
+      # .trellis/tasks/08-05-land-swarm-branch-to-main/findings.md.
       - name: fmt
+        if: ${{ !cancelled() }}
         run: cargo fmt --all --check
       - name: clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: build
+        if: ${{ !cancelled() }}
         run: cargo build --workspace
+      # Keeps runner disk in check before the test build (added by ff70f461).
       - name: clean build artifacts before tests
+        if: ${{ !cancelled() }}
         run: cargo clean
+      # hya-e2e is excluded here and run below with --test-threads=1: it spawns real
+      # backend processes, and docs/testing/process-e2e.md requires serial execution.
       - name: test
-        run: cargo test --workspace --jobs 1
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --jobs 1 --exclude hya-e2e
+      - name: build agent e2e binaries
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p hya-backend --bin hya-backend
+      - name: agent process e2e (Track P)
+        if: ${{ !cancelled() }}
+        run: cargo test -p hya-e2e -- --test-threads=1
       - name: install strace
+        if: ${{ !cancelled() }}
         run: sudo apt-get update && sudo apt-get install -y strace
       - name: verify-no-http (native transport opens zero inet sockets)
+        if: ${{ !cancelled() }}
         run: bash scripts/verify-no-http.sh
