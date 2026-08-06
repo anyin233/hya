@@ -27,9 +27,14 @@ original single-input invariant.
   placement, and manager navigation; it never buffers or submits prompt text.
 - Escape in an observation view returns focus to the main view and restores the Prompt composer;
   closing an observation view remains an explicit close action.
-- Navigation initially reuses existing observation controls: Ctrl+X . cycles focus, Ctrl+X W closes
-  the focused observation view, and Escape returns to the main view. No dedicated tab-next/tab-prev
-  bindings are introduced for this redesign.
+- **Navigation (current shipped keymap):** Escape returns to the main view; `<leader>w` (`pane_close`)
+  closes the focused observation; `<leader>.` / `<leader>right` cycle focus forward and
+  `<leader>left` cycle reverse (`pane_cycle` / `pane_cycle_reverse`); `<leader>0` focuses Main.
+  While an observation is focused, unmodified digits `1`–`9` jump to the corresponding entry on the
+  pane strip (1 = Main). *Historical note:* an earlier draft of this ADR said navigation would only
+  reuse Ctrl+X `.` / Ctrl+X W / Escape with no dedicated tab-next/tab-prev chords; the shipped
+  keymap added the leader left/right and digit-jump bindings above without changing the single-input
+  invariant.
 - To redirect a subagent the user tells the *main* agent, which messages/re-tasks it — there is no
   direct-to-subagent input.
 - Permission and question prompts raised by subagents remain global main-owned modals. Observation
@@ -45,9 +50,14 @@ original single-input invariant.
   In this preselected mode, Enter commits the preselected placement; explicit placement keys may
   override it before commit.
 - Each observation view renders the subagent Session's transcript plus a compact status header
-  (handle, agent type/status/current task, placement, read-only marker) and omits the Prompt composer.
-- Observation transcript scrolling follows new output until the user manually scrolls; manual scroll
-  pins that view and surfaces a new-output indicator until the user returns to bottom.
+  and omits the Prompt composer. **Current header content:** handle, agent type, lifecycle label,
+  current task, placement (`tab`/`vertical`/`horizontal`), focus state (`focused`/`open`), a
+  fixed `read-only` marker, optional shortcut hint when focused, and a working spinner while the
+  observed agent is active.
+- Observation transcripts use sticky scroll starting at bottom (`stickyScroll` /
+  `stickyStart="bottom"`): new output keeps the view at the bottom until the user scrolls away.
+  *Current fact:* there is **no** separate new-output indicator UI when pinned mid-history (an
+  earlier draft of this ADR assumed one; it was not implemented).
 - A live subagent handle owns at most one observation view. Selecting an already-open subagent focuses
   that view and moves it to the requested placement when the action asked for a different tab/split.
 - Manager rows show handle, agent type, status, current task, and an open/focused marker when an

@@ -45,6 +45,70 @@ without retry; mail committed after the marker remains queued for the new
 epoch. Repeating startup recovery may advance the epoch again, but does not
 duplicate terminal events or admission refunds.
 
+### Explicit stop and inbox cursor
+
+An `AgentActivityChanged` with `status = Failed` **and**
+`current_task == "resident stopped"` (exact literal) is treated by the shared
+reducer as an **explicit stop**, not a generic failure. For a resident roster
+entry it jumps `resident_cursor` to the **full inbox length** so a later
+restart of that handle does not replay mail the stopped actor never needed to
+see.
+
+That literal is load-bearing: `SessionStore::finalize_resident_stop` writes it
+via `finalize_resident_failure(..., "resident stopped")`, and the reducer keys
+on the same string. Other failure reasons (for example recovery's
+`"aborted by resident recovery"`) do **not** trigger this full-inbox cursor jump.
+
+### Terminal cleanup events for a lost / stopped actor
+
+When recovery aborts in-flight work for a resident that had crossed
+`ResidentWorkStarted` (or when stop/failure terminalizes the actor session),
+`resident_effect_terminal_events` appends exactly:
+
+| Event | When |
+| --- | --- |
+| `MemberFinished { status: Cancelled, summary: <reason> }` | Every member still `Spawning` or `Running` on the **actor** session |
+| `ToolError` with `value: { "code": "STALE_ACTOR_CLAIM" }` and `message_text: <reason>` | Every tool part still `Pending` or `Running` on an unfinished assistant message |
+| `MessageFinished { finish: Cancelled }` | Every unfinished assistant message |
+
+Clients can key off the `STALE_ACTOR_CLAIM` code to distinguish takeover/stop
+cleanup from a genuine tool failure. The same helper is used for both recovery
+(`reason = "aborted by resident recovery"`) and explicit stop/failure paths.
+
+### `finalize_resident_stop` / `finalize_resident_failure`
+
+Both live on `SessionStore` (`hya-store` mailbox module):
+
+1. Fence the actor claim (`BEGIN IMMEDIATE`).
+2. **Idempotent early return:** if the claim is already stale **and** a matching
+   `released` claim already exists with the roster entry in `Failed`, return
+   empty envelopes and admissions (no duplicate terminalization).
+3. Append the terminal cleanup events above for the actor session.
+4. Abort `accepted`/`started` admissions for that actor/epoch (`state = aborted`);
+   rows that were `started` set `logical_released = 1` for exactly-once governor
+   refund.
+5. Append root `AgentActivityChanged { status: Failed, current_task: Some(reason) }`
+   (`reason` is `"resident stopped"` for explicit stop).
+6. Flip `resident_actor_claim` to `released` for the full claim tuple.
+
+### `RecoveredResidentWork` / `RecoveredResidentOutcome`
+
+`recover_resident_actor` returns `RecoveredResidentOutcome`:
+
+| Field | Meaning |
+| --- | --- |
+| `work` | Classification of what the new process should do next |
+| `envelopes` | Envelopes to publish **after** commit |
+| `admissions` | Aborted admission rows (refund when `logical_released`) |
+
+`RecoveredResidentWork`:
+
+| Variant | Meaning |
+| --- | --- |
+| `Idle` | No pending inbox work and no interrupted turn |
+| `Queued { inbox_cursor }` | Committed mail (or pending user turn while idle) remains after the cursor |
+| `AbortedRunning { inbox_cursor, queued_after }` | Crossed `ResidentWorkStarted`; running work aborted; `queued_after` if inbox grew past the marker |
+
 Resident event appends, mailbox mutations, child transitions, spawn admission,
 and tool-result commits validate the full actor claim in the same SQLite
 transaction as their canonical mutation. Event-bus publication happens only

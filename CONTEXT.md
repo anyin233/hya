@@ -183,8 +183,11 @@ _Avoid_: message (too generic — a model message is different), DM
 
 **Channel**:
 A named (`#name`) multi-subscriber endpoint. Sending to a channel fans out to every current
-subscriber's inbox. **Broadcast** is a well-known channel everyone joins. One delivery mechanism
-underlies both direct mail and channels.
+**eligible** subscriber's inbox: the channel log still receives the message, but a **resident**
+subscriber whose roster status is `Done` or `Failed` is skipped so a stopped actor's inbox stops
+growing. Writer-side delivery also requires an `active` `resident_actor_claim` for residents (see
+ADR-0001 delivery rules). **Broadcast** is a well-known channel everyone joins. One delivery
+mechanism underlies both direct mail and channels.
 _Avoid_: room, topic, group chat
 
 **Roster**:
