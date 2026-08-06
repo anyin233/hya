@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -119,8 +120,15 @@ fn canonical_missing_bun_error_uses_hya_branding() -> Result<(), Box<dyn std::er
 fn missing_adjacent_launcher_reports_its_path() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-frontend-missing-launcher")?;
     let relocated = env.root.join("hya");
-    std::fs::write(&relocated, std::fs::read(env!("CARGO_BIN_EXE_hya"))?)?;
-    std::fs::set_permissions(&relocated, std::fs::Permissions::from_mode(0o755))?;
+    // Hard link, not copy: `fs::write` holds a write descriptor on the new inode,
+    // and a concurrent `Command::spawn` from another test thread forks a child
+    // that transiently inherits it (`O_CLOEXEC` clears at exec, not at fork), so
+    // the exec below raced `ETXTBSY` (measured at 18.5% in an isolated probe).
+    // Linking exec's the cargo-built inode, which nothing writes during the run.
+    // A failure here (e.g. `EXDEV`) must propagate — falling back to a copy would
+    // restore the race exactly where it matters. Mode is inherited from the
+    // linked inode; do not `set_permissions`, that would mutate the real binary.
+    std::fs::hard_link(env!("CARGO_BIN_EXE_hya"), &relocated)?;
 
     let output = Command::new(&relocated).output()?;
 
@@ -303,9 +311,27 @@ fn executable(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     std::fs::set_permissions(path, permissions)
 }
 
+/// Creates an isolated root for one test, under cargo's per-target temp dir.
+///
+/// `CARGO_TARGET_TMPDIR` rather than `std::env::temp_dir()` on purpose:
+/// `missing_adjacent_launcher_reports_its_path` hard-links `CARGO_BIN_EXE_hya`
+/// into this root, and `hard_link` fails `EXDEV` across filesystems — `/tmp` is
+/// routinely a different mount from `target/`, while `CARGO_TARGET_TMPDIR` is
+/// always beside the built binary.
+///
+/// The atomic serial makes the path unique per call rather than per nanosecond;
+/// tests in this file run on parallel threads, where `as_nanos()` alone can
+/// repeat. The current prefixes are already distinct, so this hardens against
+/// the next test added here rather than fixing an observed collision.
 fn temp_dir(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()));
+    let serial = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+    let target_tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&target_tmp)?;
+    // `create_dir`, not `create_dir_all`: a collision must fail loudly instead of
+    // silently handing two tests the same root.
+    let dir = target_tmp.join(format!("{prefix}-{}-{nonce}-{serial}", std::process::id()));
     std::fs::create_dir(&dir)?;
     Ok(dir)
 }
