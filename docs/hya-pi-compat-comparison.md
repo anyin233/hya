@@ -218,10 +218,13 @@ mailbox, and task-board state; `WorktreeManager` can allocate owned git
 worktrees under `.hya/worktrees`.
 
 Important constraints make this intentionally controlled rather than unbounded:
-subagents cannot recursively spawn more subagents through `TaskTool`, and
-background execution is constrained. The shipped CLI surfaces the main TUI,
-headless runs, goal mode, server, replay, session, auth/catalog, and JSONL RPC;
-the underlying team machinery is more developed than the end-user team UI.
+nested `task` spawns are allowed, but depth and fan-out are bounded by
+`SubagentGovernor` (`max_depth`, `per_run_budget`, stream concurrency, and
+per-team turn/message budgets). Background `task` is limited to a single
+member; multi-member background is rejected. Resident spawns are non-blocking
+and wake only on mail. The shipped CLI surfaces the main TUI, headless runs,
+goal mode, server, replay, session, auth/catalog, and JSONL RPC; the underlying
+team machinery is more developed than the end-user team UI.
 
 Evidence: [Runtime](architecture/runtime.md),
 [`crates/hya-tool/src/task.rs`](../crates/hya-tool/src/task.rs),
