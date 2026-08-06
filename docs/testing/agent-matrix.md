@@ -99,6 +99,18 @@ hypothetical concern: on 2026-08-05, run `31053432077` failed on a
 workspace test suite, and `verify-no-http`. The identical commit passed the
 same step in two other runs.
 
+### `pty-smoke.test.ts` is a known flake, and stays non-gating
+
+Status as of `fee38938`: `continue-on-error: true`. Observed once as
+`timed out waiting for root draft` (`test/pty-smoke.test.ts:589`, ~65s) on run
+`31053432077`; byte-identical code passed the same step in two other CI runs,
+and it passes 3/3 locally. No root cause established.
+
+It is deliberately not chased further: it can no longer block the Rust gate, and
+the cost of diagnosing a single-observation PTY timing flake is out of proportion
+to that. A red pty-smoke step is therefore **reported, not ignored** — check
+whether the failure is this timeout before reading it as a PTY regression.
+
 ## Track I (index-only)
 
 Deep engine / API coverage owned by in-process suites. Process E2E does not
