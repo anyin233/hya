@@ -5,14 +5,20 @@
 //! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
 //! cannot run inside the transaction sqlx wraps migrations in.
 
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
 mod admission;
 mod bundle_registry;
+/// Typed store errors shared by session and bundle registry APIs.
 pub mod error;
 mod mailbox;
 mod permission;
 mod resident_claim;
 mod sync;
 
+/// Upper bound on durable `spawn_intent` bytes (1 MiB); mirrored by SQL CHECK.
 pub const MAX_ADMISSION_INTENT_BYTES: usize = 1_048_576;
 
 use std::str::FromStr;
@@ -37,31 +43,50 @@ pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use permission::SavedPermission;
 pub use resident_claim::RecoveredActorClaim;
 
+/// SQLite-backed session event log, token ledger, admission journal, and related tables.
+///
+/// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
+/// Projection is folded on read via `hya_proto::Projection` — there is no separate
+/// materialized read model.
 #[derive(Clone)]
 pub struct SessionStore {
     pool: sqlx::SqlitePool,
 }
 
+/// One session row from `list_sessions`: id, time bounds, and event count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionInfo {
+    /// Session identity.
     pub session: SessionId,
+    /// Earliest event timestamp in the log (unix millis).
     pub started_millis: i64,
+    /// Latest event timestamp in the log (unix millis).
     pub updated_millis: i64,
+    /// Number of rows in `event_log` for this session.
     pub events: u64,
 }
 
+/// One token-usage row written by the engine after a completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LedgerEntry {
+    /// Session the usage belongs to.
     pub session: SessionId,
+    /// Role label (e.g. assistant / system accounting bucket).
     pub role: String,
+    /// Optional multi-step iteration index.
     pub iteration: Option<i64>,
+    /// Optional id correlating multiple ledger rows for one completion run.
     pub completion_run_id: Option<String>,
+    /// Prompt-side token count.
     pub prompt_tokens: i64,
+    /// Completion-side token count.
     pub completion_tokens: i64,
+    /// Confidence or estimation quality label stored with the row.
     pub confidence: String,
 }
 
 impl SessionStore {
+    /// Open or create a file-backed store at `sqlite://{path}`, run migrations, enable WAL.
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
@@ -77,6 +102,7 @@ impl SessionStore {
         Ok(Self { pool })
     }
 
+    /// Open an in-memory store (single connection) and run migrations.
     pub async fn connect_memory() -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
             .foreign_keys(true)
@@ -94,6 +120,7 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Append one domain event to the session log; returns the assigned sequence.
     pub async fn append_event(
         &self,
         session: SessionId,
@@ -113,6 +140,7 @@ impl SessionStore {
         Ok(EventSeq(seq.max(0) as u64))
     }
 
+    /// Load all envelopes for a session in sequence order (payload JSON decoded to `Event`).
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, StoreError> {
         let key = session.storage_key();
         let rows =
@@ -135,6 +163,7 @@ impl SessionStore {
         Ok(out)
     }
 
+    /// Delete ledger and event rows for a session; returns whether any event rows were removed.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
         let key = session.storage_key();
         let mut tx = self.pool.begin().await?;
@@ -150,10 +179,12 @@ impl SessionStore {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Fold the session event log into a [`Projection`] via the shared reducer.
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
         Ok(Projection::from_events(&self.replay(session).await?))
     }
 
+    /// Sessions present in the event log, newest-updated first.
     pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>, StoreError> {
         let rows = sqlx::query(
             "SELECT session_id, MIN(ts) AS started, MAX(ts) AS updated, COUNT(*) AS n \
@@ -179,6 +210,7 @@ impl SessionStore {
         Ok(out)
     }
 
+    /// Insert one token-ledger row (new UUID primary key, current timestamp).
     pub async fn record_usage(&self, entry: &LedgerEntry) -> Result<(), StoreError> {
         let id = uuid::Uuid::now_v7().as_bytes().to_vec();
         let session = entry.session.storage_key();
@@ -201,6 +233,7 @@ impl SessionStore {
         Ok(())
     }
 
+    /// All token-ledger rows for a session in timestamp order.
     pub async fn read_usage(&self, session: SessionId) -> Result<Vec<LedgerEntry>, StoreError> {
         let key = session.storage_key();
         let rows = sqlx::query(
