@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, BundleSource, HarnessAccess,
-    ModelPolicy, PreparedAgent, PreparedBundle, ResourceView, SourceFile, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
@@ -39,43 +39,6 @@ use tokio::sync::Notify;
 const TRIGGER_GUIDANCE: &str = "TRIGGERING_TURN_GUIDANCE_MARKER_0_34_8";
 const CHILD_SCAN_POISON: &str = "CHILD_WORKDIR_SCAN_MUST_NOT_APPEAR";
 const POST_SPAWN_MUTATION: &str = "POST_SPAWN_SOURCE_MUTATION_MARKER";
-
-fn verified_admission_test_runtime(
-    tools: Arc<ToolRegistry>,
-    agents: &[(&str, AgentRole, &[&str])],
-) -> Arc<RuntimeRegistry> {
-    let mut manifest = String::from(
-        "api_version: hya.agent-bundle/v1\nkind: AgentBundle\nidentity:\n  id: hya/app-tests\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n",
-    );
-    let mut files = Vec::with_capacity(agents.len() + 1);
-    for (stable_id, role, can_spawn) in agents {
-        let role = match role {
-            AgentRole::Main => "main",
-            AgentRole::Subagent => "subagent",
-        };
-        manifest.push_str(&format!(
-            "  - local_id: {stable_id}\n    stable_id: {stable_id}\n    role: {role}\n    prompt: prompts/{stable_id}.md\n    spawn_lifecycle: transient\n    harness_access: full\n"
-        ));
-        if !can_spawn.is_empty() {
-            manifest.push_str("    can_spawn: [");
-            manifest.push_str(&can_spawn.join(", "));
-            manifest.push_str("]\n");
-        }
-        files.push(SourceFile::new(
-            format!("prompts/{stable_id}.md"),
-            format!("{stable_id} prompt").into_bytes(),
-        ));
-    }
-    files.push(SourceFile::new("bundle.yaml", manifest.into_bytes()));
-    let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])
-        .expect("test bundle must prepare");
-    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
-        .expect("test bundle must retain verified identity");
-    Arc::new(RuntimeRegistry::from_snapshot(
-        tools.snapshot(),
-        Arc::new(catalog),
-    ))
-}
 
 struct AdmissionFixture {
     engine: Arc<SessionEngine>,
@@ -449,7 +412,7 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         SessionEngine::new(
             store,
             provider_router.clone(),
-            verified_admission_test_runtime(
+            support::test_runtime(
                 Arc::new(ToolRegistry::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
@@ -1445,7 +1408,7 @@ async fn admission_fixture_with_store_and_gate(
         SessionEngine::new(
             store,
             provider_router.clone(),
-            verified_admission_test_runtime(
+            support::test_runtime(
                 Arc::new(ToolRegistry::builtins()),
                 &[
                     ("build", AgentRole::Main, &["quick"]),
@@ -1564,7 +1527,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         tools_by_session,
         inner: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
     })));
-    let runtime = verified_admission_test_runtime(
+    let runtime = support::test_runtime(
         Arc::new(ToolRegistry::builtins()),
         &[
             ("build", AgentRole::Main, &["quick"]),
@@ -1635,6 +1598,11 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         .expect("quick agent in old prepared catalog");
     assert_eq!(quick.prompt.as_deref(), Some(OLD_QUICK_PROMPT));
     quick.prompt = Some(NEW_CATALOG_CHILD_PROMPT.to_string());
+    // Deliberately UNVERIFIED: this catalog exists only to prove the already-queued
+    // request keeps using the parent's pinned TurnBinding (which came from the
+    // verified `support::test_runtime` catalog above). Do not "fix" this to
+    // `from_verified_catalogs` — it also cannot be: the bundles were hand-mutated
+    // just above, and the verified constructors take `&[&PreparedCatalog]`.
     let published_catalog =
         BundleCatalog::from_prepared(&published_bundles).expect("complete replacement catalog");
     runtime
@@ -1678,8 +1646,11 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         resident,
     );
 
-    let outcomes = queued_spawn
+    // Bound the join itself: a supervisor that never replies must fail this test
+    // rather than hang the whole binary.
+    let outcomes = tokio::time::timeout(Duration::from_secs(5), queued_spawn)
         .await
+        .expect("queued foreground spawn timed out")
         .expect("queued spawn task")
         .expect("queued foreground spawn");
     let child: SessionId = outcomes[0].session.parse().expect("child session id");
@@ -1767,7 +1738,7 @@ async fn guidance_spawn_fixture(
         SessionEngine::new(
             SessionStore::connect_memory().await.unwrap(),
             provider_router.clone(),
-            verified_admission_test_runtime(Arc::new(ToolRegistry::builtins()), agents),
+            support::test_runtime(Arc::new(ToolRegistry::builtins()), agents),
             permission,
             EventBus::default(),
         )
