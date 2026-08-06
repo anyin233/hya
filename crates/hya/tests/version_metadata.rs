@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const EXPECTED_RELEASE: &str = "0.34.13";
+const EXPECTED_RELEASE: &str = "0.34.14";
 
 #[test]
 fn release_metadata_matches_hya_package_version() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         VERSION, EXPECTED_RELEASE,
-        "the 0.34.13 stage must bump the workspace package version before release metadata checks"
+        "the 0.34.14 stage must bump the workspace package version before release metadata checks"
     );
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
