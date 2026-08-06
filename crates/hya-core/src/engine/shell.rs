@@ -27,6 +27,7 @@ struct ShellPart {
 }
 
 impl SessionEngine {
+    /// Run a shell command as a session operation with hooks and permissions.
     pub async fn run_shell(
         &self,
         session: SessionId,

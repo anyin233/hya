@@ -4,6 +4,7 @@ use super::SessionEngine;
 use crate::error::CoreError;
 
 impl SessionEngine {
+    /// Record an agent switch event for the session.
     pub async fn switch_agent(
         &self,
         session: SessionId,
@@ -20,6 +21,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Record a model switch event for the session.
     pub async fn switch_model(&self, session: SessionId, model: ModelRef) -> Result<(), CoreError> {
         self.emit(
             session,
@@ -32,16 +34,19 @@ impl SessionEngine {
         .await
     }
 
+    /// Set the session title.
     pub async fn set_title(&self, session: SessionId, title: String) -> Result<(), CoreError> {
         self.emit(session, Event::SessionTitled { session, title })
             .await
     }
 
+    /// Update the session working directory.
     pub async fn set_workdir(&self, session: SessionId, workdir: String) -> Result<(), CoreError> {
         self.emit(session, Event::SessionMoved { session, workdir })
             .await
     }
 
+    /// Set arbitrary session metadata key/value.
     pub async fn set_metadata(
         &self,
         session: SessionId,
@@ -51,6 +56,7 @@ impl SessionEngine {
             .await
     }
 
+    /// Update session permission snapshot rules.
     pub async fn set_permission(
         &self,
         session: SessionId,
@@ -66,6 +72,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Mark the session archived or active.
     pub async fn set_archived(
         &self,
         session: SessionId,
@@ -75,16 +82,19 @@ impl SessionEngine {
             .await
     }
 
+    /// Record a share URL for the session.
     pub async fn set_share(&self, session: SessionId, url: String) -> Result<(), CoreError> {
         self.emit(session, Event::SessionShareSet { session, url })
             .await
     }
 
+    /// Clear any share URL on the session.
     pub async fn clear_share(&self, session: SessionId) -> Result<(), CoreError> {
         self.emit(session, Event::SessionShareCleared { session })
             .await
     }
 
+    /// Delete a message from the session projection path.
     pub async fn delete_message(
         &self,
         session: SessionId,
@@ -94,6 +104,7 @@ impl SessionEngine {
             .await
     }
 
+    /// Delete a part within a message.
     pub async fn delete_part(
         &self,
         session: SessionId,
@@ -111,6 +122,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Replace text content of a message part.
     pub async fn replace_text_part(
         &self,
         session: SessionId,
@@ -130,6 +142,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Replace reasoning content on a message part.
     pub async fn replace_reasoning_part(
         &self,
         session: SessionId,
@@ -149,6 +162,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Update a tool part state (input/output/error) in the session.
     pub async fn update_tool_part(
         &self,
         session: SessionId,

@@ -5,6 +5,7 @@ use crate::error::CoreError;
 use crate::title;
 
 impl SessionEngine {
+    /// Delete an empty unnamed session if it matches cleanup policy.
     pub async fn cleanup_empty_unnamed_session(
         &self,
         session: SessionId,

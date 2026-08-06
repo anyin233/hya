@@ -9,13 +9,18 @@ use crate::engine::AgentSpec;
 /// order on unavailability), plus optional prompt/token shaping.
 #[derive(Clone, Debug)]
 pub struct CategoryEntry {
+    /// Preferred concrete model.
     pub model: ModelRef,
+    /// Ordered failover models after `model`.
     pub fallback: Vec<ModelRef>,
+    /// Text appended into the agent system prompt for this category.
     pub prompt_append: String,
+    /// Optional soft token budget hint for callers.
     pub token_budget: Option<u64>,
 }
 
 impl CategoryEntry {
+    /// Build an entry with a single preferred model and prompt append.
     #[must_use]
     pub fn new(model: &str, prompt_append: &str) -> Self {
         Self {
@@ -46,12 +51,18 @@ impl CategoryEntry {
     }
 }
 
+/// Concrete resolution of a named category for spawn/model selection.
 #[derive(Clone, Debug)]
 pub struct ResolvedCategory {
+    /// Category key from config.
     pub category: String,
+    /// Preferred model after resolution.
     pub model: ModelRef,
+    /// Full ordered failover chain including preferred.
     pub fallback_chain: Vec<ModelRef>,
+    /// Prompt append material.
     pub prompt_append: String,
+    /// Optional token budget.
     pub token_budget: Option<u64>,
 }
 
@@ -65,6 +76,7 @@ pub struct CategoryRegistry {
 }
 
 impl CategoryRegistry {
+    /// Empty registry (no categories resolve).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -76,6 +88,7 @@ impl CategoryRegistry {
         Self { entries }
     }
 
+    /// Overlay additional/replacement entries.
     #[must_use]
     pub fn with_overrides(mut self, overrides: HashMap<String, CategoryEntry>) -> Self {
         for (k, v) in overrides {
@@ -84,6 +97,7 @@ impl CategoryRegistry {
         self
     }
 
+    /// Whether no categories are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -154,6 +168,7 @@ impl CategoryRegistry {
     }
 }
 
+/// Append a skills section to a base system prompt when `skills` is non-empty.
 #[must_use]
 pub fn inject_skills(base_prompt: &str, skills: &[String]) -> String {
     if skills.is_empty() {
@@ -168,6 +183,7 @@ pub fn inject_skills(base_prompt: &str, skills: &[String]) -> String {
     out
 }
 
+/// Build a member [`AgentSpec`] from a base agent, resolved category, and skill blobs.
 #[must_use]
 pub fn build_member_agent(
     base: &AgentSpec,

@@ -1,3 +1,5 @@
+//! Loop mode: independent verifier + planner over iterative lead turns.
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -14,40 +16,73 @@ use crate::completion::{
 use crate::engine::{AgentSpec, CreateSession, SessionEngine};
 use crate::error::CoreError;
 
+/// How strongly the transcript supports the loop target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EvidenceQuality {
+    /// No relevant evidence.
     Missing,
+    /// Claims without support.
     ClaimOnly,
+    /// Partial supporting evidence.
     Supported,
+    /// Fully verified against the target.
     Verified,
 }
 
+/// Result of one verifier pass.
 #[derive(Clone, Debug)]
 pub struct VerifierVerdict {
+    /// Score 0–100 used with [`LoopConfig::satisfaction_threshold`].
     pub score: u8,
+    /// Whether the verifier considers the target satisfied.
     pub satisfied: bool,
+    /// Evidence quality band.
     pub evidence_quality: EvidenceQuality,
+    /// Remaining gaps the planner should address.
     pub critical_gaps: Vec<String>,
+    /// Short summary of this iteration's work.
     pub iteration_summary: String,
+    /// Free-form reason string.
     pub reason: String,
 }
 
+/// Independent loop grader (not the worker agent).
+///
+/// **Contract:** Grade only `target` + `transcript`. Do not mutate the session.
 #[async_trait]
 pub trait LoopVerifier: Send + Sync {
+    /// Produce a structured verdict for the current transcript.
+    ///
+    /// # Errors
+    /// Propagate model/runtime failures.
     async fn grade(&self, target: &str, transcript: &str) -> Result<VerifierVerdict, CoreError>;
 }
 
+/// Planner output for the next worker directive.
 #[derive(Clone, Debug)]
 pub struct PlannerOutput {
+    /// Next directive for the lead turn.
     pub directive: String,
+    /// Continuity notes for the worker.
     pub continuity_brief: String,
+    /// Notes retained across iterations.
     pub planner_notes: String,
+    /// Whether strategy changed this step.
     pub strategy_change: bool,
+    /// Explanation of strategy change.
     pub change_note: String,
 }
 
+/// Produces the next worker directive from history and the last verdict.
+///
+/// **Contract:** Pure planning relative to inputs; engine owns stop decisions via
+/// the verifier and [`LoopConfig`].
 #[async_trait]
 pub trait LoopPlanner: Send + Sync {
+    /// Plan the next directive.
+    ///
+    /// # Errors
+    /// Propagate model/runtime failures.
     async fn plan_next(
         &self,
         target: &str,
@@ -57,11 +92,16 @@ pub trait LoopPlanner: Send + Sync {
     ) -> Result<PlannerOutput, CoreError>;
 }
 
+/// Tunables for loop satisfaction and no-progress detection.
 #[derive(Clone, Copy, Debug)]
 pub struct LoopConfig {
+    /// Maximum iterations (also bounded by hard ceiling in preflight).
     pub budget: u32,
+    /// Stop when verifier marks satisfied above threshold.
     pub stop_when_satisfied: bool,
+    /// Minimum score treated as satisfied when `stop_when_satisfied`.
     pub satisfaction_threshold: u8,
+    /// Consecutive no-progress iterations before giving up.
     pub max_no_progress: u32,
 }
 
@@ -106,6 +146,7 @@ struct LoopState {
     no_progress: u32,
 }
 
+/// [`IterationGate`] combining verifier + planner with no-progress tracking.
 pub struct LoopGate {
     target: String,
     verifier: Arc<dyn LoopVerifier>,
@@ -115,6 +156,7 @@ pub struct LoopGate {
 }
 
 impl LoopGate {
+    /// Build a gate for `target` with the given verifier, planner, and config.
     #[must_use]
     pub fn new(
         target: String,
@@ -190,6 +232,7 @@ impl IterationGate for LoopGate {
     }
 }
 
+/// [`IterationExecutor`] that runs each loop step in a fresh child session.
 pub struct WorkerSessionExecutor {
     engine: Arc<SessionEngine>,
     lead_session: SessionId,
@@ -230,6 +273,7 @@ impl IterationExecutor for WorkerSessionExecutor {
     }
 }
 
+/// Drive loop iterations with the given gate/executor under safety caps.
 pub async fn drive_loop(
     executor: &dyn IterationExecutor,
     verifier: Arc<dyn LoopVerifier>,
@@ -249,6 +293,7 @@ pub async fn drive_loop(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// High-level loop mode entry: create gate and drive until outcome.
 pub async fn run_loop(
     engine: Arc<SessionEngine>,
     lead_session: SessionId,

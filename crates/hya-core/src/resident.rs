@@ -48,6 +48,7 @@ use crate::orchestrator::TeamBudget;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
+/// Runtime pieces needed to resume a resident after process restart.
 pub type ResolvedResidentRuntime = (
     TurnBinding,
     Arc<[AgentDef]>,
@@ -55,25 +56,39 @@ pub type ResolvedResidentRuntime = (
     Option<Arc<dyn BoundSidecarFactory>>,
 );
 
+/// Durable recovery disposition for a resident actor after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentRecovery {
+    /// No pending work; park idle.
     Idle,
+    /// Mail queued; run a turn from this inbox cursor.
     Queued {
+        /// Projection cursor for unread mail.
         inbox_cursor: u64,
     },
+    /// Was mid-turn; abort and optionally re-queue.
     AbortedRunning {
+        /// Cursor at abort.
         inbox_cursor: u64,
+        /// Whether more mail arrived after the aborted turn.
         queued_after: bool,
     },
 }
 
+/// Outcome of recovering one resident actor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResidentRecoveryReport {
+    /// Work disposition for the supervisor.
     pub work: ResidentRecovery,
+    /// How many in-flight operations were aborted.
     pub aborted_operations: usize,
 }
 
 impl SessionEngine {
+    /// Recover durable resident state after restart and report next work.
+    ///
+    /// # Errors
+    /// Returns store/validation failures.
     pub async fn recover_resident_actor(
         &self,
         recovered: &hya_store::RecoveredActorClaim,
@@ -1335,6 +1350,7 @@ impl ResidentSupervisor {
     }
 
     #[must_use]
+    /// Start a supervisor owned by `owner_run_id` (cancels with the owner).
     pub fn start_with_owner(engine: Arc<SessionEngine>, owner_run_id: OwnerRunId) -> Arc<Self> {
         let rx = engine.bus().subscribe();
         let supervisor = Arc::new(Self {
@@ -1424,6 +1440,7 @@ impl ResidentSupervisor {
         })
     }
 
+    /// Stop and deregister a resident handle under `root`.
     pub async fn stop_resident(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
         let team = self.teams().get(&root).cloned();
         let Some(team) = team else {
@@ -1869,6 +1886,7 @@ impl ResidentSupervisor {
         Ok(())
     }
 
+    /// Re-register a recovered resident into the live supervisor map.
     pub async fn register_recovered_resident(
         &self,
         root: SessionId,

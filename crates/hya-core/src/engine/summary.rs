@@ -11,6 +11,7 @@ use crate::error::CoreError;
 const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
 
 impl SessionEngine {
+    /// Compact the session transcript when thresholds are exceeded.
     pub async fn compact_context(
         &self,
         session: SessionId,
@@ -20,6 +21,7 @@ impl SessionEngine {
             .await
     }
 
+    /// Produce a summary message for the session via the summarizer.
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
         let projection = self.store.read_projection(session).await?;
         // Empty projection has no session id; fail before workdir/catalog lookup.

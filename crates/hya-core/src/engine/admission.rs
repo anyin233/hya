@@ -13,16 +13,23 @@ use crate::hooks::{
 };
 use crate::orchestrator::OperationReservation;
 
+/// Result of beginning a spawn admission against governor + durable claims.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpawnAdmissionOutcome {
+    /// Fresh admission started for this operation.
     Started,
+    /// Operation already admitted; returns durable state.
     Existing(AdmissionState),
+    /// Per-run budget or concurrency overloaded.
     Overloaded,
+    /// Subagent recursion depth exceeded.
     MaxDepth,
+    /// Cancelled before admission completed.
     Cancelled,
 }
 
 impl SessionEngine {
+    /// Start admission for a spawn request; reserves budget and validates roster.
     pub async fn begin_spawn_admission(
         &self,
         parent: SessionId,
@@ -124,6 +131,7 @@ impl SessionEngine {
         }
     }
 
+    /// Commit a successful spawn admission after the child session exists.
     pub async fn finalize_spawn_admission(
         &self,
         operation_id: OperationId,
@@ -143,6 +151,7 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Finalize all pending admissions under a root session.
     pub async fn finalize_root_spawn_admissions(&self, root: SessionId) -> Result<(), CoreError> {
         if let Some(governor) = &self.governor {
             governor.cancel_operations(root);
@@ -162,6 +171,7 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Abort operations recovered after resident restart.
     pub async fn abort_recovered_actor_operations(
         &self,
         recovered: &RecoveredActorClaim,
@@ -253,6 +263,7 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Append a system message to the session transcript.
     pub async fn inject_system_message(
         &self,
         session: SessionId,
@@ -357,6 +368,7 @@ impl SessionEngine {
         Ok(message)
     }
 
+    /// Admit a user prompt message and return its id.
     pub async fn admit_user_prompt(
         &self,
         session: SessionId,
@@ -366,6 +378,7 @@ impl SessionEngine {
             .await
     }
 
+    /// Admit a user prompt with a caller-supplied message id.
     pub async fn admit_user_prompt_with_id(
         &self,
         session: SessionId,
@@ -490,6 +503,7 @@ impl SessionEngine {
         Ok(message)
     }
 
+    /// Record attached files/agents context for an admitted prompt.
     pub async fn record_user_prompt_context(
         &self,
         session: SessionId,
@@ -512,6 +526,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Admit a command-triggered prompt.
     pub async fn admit_command_prompt(
         &self,
         session: SessionId,
@@ -523,6 +538,7 @@ impl SessionEngine {
             .await
     }
 
+    /// Admit a command-triggered prompt with a fixed message id.
     pub async fn admit_command_prompt_with_id(
         &self,
         session: SessionId,

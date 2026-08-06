@@ -2,8 +2,11 @@ use std::path::{Path, PathBuf};
 
 /// Process-local environment facts rendered into the Harness prompt layer.
 pub struct PromptEnv {
+    /// Absolute or display cwd string.
     pub cwd: String,
+    /// OS/platform label for the Environment block.
     pub platform: String,
+    /// Calendar date string (`YYYY-MM-DD`).
     pub date: String,
 }
 

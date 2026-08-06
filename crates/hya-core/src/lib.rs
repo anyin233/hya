@@ -1,22 +1,55 @@
-//! `hya-core` — SessionEngine, the agent turn loop, and the in-process EventBus.
-//! Team orchestration and the completion (goal + loop) engines land in later phases.
+//! Agent runtime: session engine, turn loop, orchestration, and live event fan-out.
+//!
+//! This crate owns:
+//! - **[`SessionEngine`]** — create/delete sessions, admit prompts, run turns,
+//!   compact/summarize, and emit canonical events through the store and bus.
+//! - **[`EventBus`]** — in-process broadcast of [`hya_proto::Envelope`] for SSE/TUI.
+//! - **Extension traits** implemented by the app/plugin layers:
+//!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`], goal/loop
+//!   gates and verifiers, and [`RuntimeSourceOwner`].
+//! - **Team/subagent orchestration** — admission, governors, resident supervisors,
+//!   and mailbox delivery over the same event-sourced log.
+//!
+//! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
+//! crate stays free of terminal UI and HTTP routing.
 
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
+/// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
+/// Model category resolution and member-agent construction.
 pub mod category;
+/// Context compaction thresholds, token estimates, and summarizer trait.
 pub mod compaction;
+/// Goal-mode iteration driver, safety caps, and independent evaluators.
 pub mod completion;
+/// Session engine, agent specs, and turn admission.
 pub mod engine;
+/// Shared error type for the core runtime.
 pub mod error;
+/// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
+/// Loop-mode verifier/planner traits and drive helpers.
 pub mod loop_mode;
+/// Team mailbox service loop (event-sourced mail/channels).
 pub mod mailbox;
+/// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
+/// System prompt construction and context file discovery.
 pub mod prompt;
+/// Long-lived resident actors and recovery.
 pub mod resident;
+/// Immutable runtime snapshots, sources, and turn bindings.
 pub mod runtime_registry;
+/// Bundle sidecar lifecycle for executable public packages.
 pub mod sidecar;
+/// Multi-member team admission and fan-out execution.
 pub mod subagent;
+/// Session title generation helpers.
 pub mod title;
+/// Git worktree and tmux helpers for isolated workers.
 pub mod workspace;
 
 #[cfg(test)]

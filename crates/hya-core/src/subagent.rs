@@ -90,18 +90,26 @@ async fn resolve_member_id(
         .unwrap_or(preferred)
 }
 
+/// Terminal status of one team member in lead-visible evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberStatus {
+    /// Member finished successfully.
     Done,
+    /// Member failed or was aborted.
     Failed,
 }
 
+/// Lead-visible row for one member (never full child transcripts).
 #[derive(Clone, Debug, Serialize)]
 pub struct MemberEvidence {
+    /// Member handle or label.
     pub member: String,
+    /// Child session id as string.
     pub session: String,
+    /// Terminal status.
     pub status: MemberStatus,
+    /// Short summary for the parent.
     pub summary: String,
 }
 
@@ -109,19 +117,26 @@ pub struct MemberEvidence {
 /// per-member status + a short summary, NEVER the full child transcripts.
 #[derive(Clone, Debug, Serialize)]
 pub struct TeamEvidenceEnvelope {
+    /// One entry per member that ran in the turn, in spawn order.
     pub members: Vec<MemberEvidence>,
 }
 
+/// Failure admitting a multi-member team before any child runs.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum TeamAdmissionError {
+    /// Nested depth would exceed the governor max.
     #[error("max recursion depth reached")]
     MaxDepth,
+    /// Per-run spawn budget exhausted.
     #[error("run agent budget exhausted")]
     BudgetExhausted,
 }
 
+/// Fully resolved specification for one team member spawn.
 pub struct MemberSpec {
+    /// Member id for tree rows.
     pub id: MemberId,
+    /// Effective agent for the child turn.
     pub agent: AgentSpec,
     /// Exact immutable runtime snapshot captured by the parent turn.
     pub binding: TurnBinding,
@@ -138,6 +153,7 @@ pub struct MemberSpec {
     /// Short UI label from the task tool (3–5 words). Empty falls back to a
     /// truncated directive so observers still get a readable row title.
     pub description: String,
+    /// Optional existing child session to resume.
     pub session: Option<SessionId>,
     /// Request-scoped sidecar factory already bound by the application.
     /// This opaque capability is not persisted with the member specification.
@@ -466,6 +482,7 @@ pub async fn run_pre_admitted_member(
     .await
 }
 
+/// Run a pre-admitted team under an actor claim fence.
 pub async fn run_pre_admitted_team_for_actor(
     engine: Arc<SessionEngine>,
     lead: SessionId,
@@ -654,6 +671,7 @@ pub async fn project_envelope(
     Ok(())
 }
 
+/// Project a team evidence envelope for an actor-scoped observation.
 pub async fn project_envelope_for_actor(
     engine: &SessionEngine,
     lead: SessionId,

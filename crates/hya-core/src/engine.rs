@@ -84,19 +84,30 @@ async fn authorize_tool_call(
 
 pub use admission::SpawnAdmissionOutcome;
 
+/// Parameters for creating a new session event log.
 pub struct CreateSession {
+    /// Parent session for subagents; `None` for a root/interactive session.
     pub parent: Option<SessionId>,
+    /// Agent name recorded on `SessionCreated`.
     pub agent: AgentName,
+    /// Initial model for the session.
     pub model: ModelRef,
+    /// Working directory string stored on the session.
     pub workdir: String,
 }
 
+/// Turn-time agent identity: name, model, prompt, workdir, and reasoning effort.
 #[derive(Clone)]
 pub struct AgentSpec {
+    /// Agent display / catalog name.
     pub name: AgentName,
+    /// Model route for completions.
     pub model: ModelRef,
+    /// System prompt base before guidance/skills composition.
     pub system_prompt: String,
+    /// Filesystem workdir for tools and path resolution.
     pub workdir: PathBuf,
+    /// Optional reasoning effort for capable models.
     pub reasoning: Option<ReasoningEffort>,
 }
 
@@ -107,7 +118,9 @@ pub struct AgentSpec {
 /// session or event authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmissionMemberIdentity {
+    /// Operation id of the parent tool call that admitted the member.
     pub operation_id: OperationId,
+    /// Zero-based ordinal within that admission batch.
     pub member_ordinal: u32,
 }
 
@@ -145,8 +158,18 @@ impl DirectMailPreAppendGate {
     }
 }
 
+/// Optional app-owned hook to refresh the runtime catalog before a root bind.
+///
+/// **Contract:** Called from [`SessionEngine::bind_root_runtime`]. Return
+/// `Ok(true)` when a new generation was published, `Ok(false)` when nothing
+/// changed. Errors abort the bind. Implementors own MCP/plugin discovery I/O;
+/// the engine only rebinds after a successful refresh.
 #[async_trait]
 pub trait RuntimeCatalogRefresh: Send + Sync {
+    /// Refresh `runtime` if external sources changed.
+    ///
+    /// # Errors
+    /// Propagate discovery or publication failures as [`CoreError`].
     async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError>;
 }
 
@@ -167,6 +190,7 @@ impl BoundSpawnRequest {
         self.admission
     }
 
+    /// Consume into the retained turn binding and the raw tool-plane spawn request.
     #[must_use]
     pub fn into_parts(self) -> (TurnBinding, SpawnRequest) {
         (self.binding, self.request)
@@ -180,6 +204,7 @@ pub struct BoundSpawnSender {
 }
 
 impl BoundSpawnSender {
+    /// Create a bounded channel pair for the app's spawn worker loop.
     #[must_use]
     pub fn with_capacity(
         capacity: usize,
@@ -225,6 +250,11 @@ impl SpawnRequestSink for BoundSpawnRequestSink {
     }
 }
 
+/// Central session runtime: persistence, providers, tools, and turn execution.
+///
+/// Construct with [`SessionEngine::new`], then chain `with_*` builders for
+/// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
+/// events to the store and publish on the bus; observers never write the log.
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
@@ -249,6 +279,9 @@ pub struct SessionEngine {
 }
 
 impl SessionEngine {
+    /// Build an engine with disconnected mailbox/spawner and default tool planes.
+    ///
+    /// Wire product planes with `with_*` before serving interactive traffic.
     #[must_use]
     pub fn new(
         store: SessionStore,
@@ -298,30 +331,35 @@ impl SessionEngine {
         self
     }
 
+    /// Install plugin/host hooks for command/tool/chat interception and events.
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
         self.hooks = Some(hooks);
         self
     }
 
+    /// Install the environment used to start Bundle sidecars for public packages.
     #[must_use]
     pub fn with_sidecar_environment(mut self, environment: Arc<dyn SidecarEnvironment>) -> Self {
         self.sidecar_environment = Some(environment);
         self
     }
 
+    /// Install optional catalog refresh before root runtime binds.
     #[must_use]
     pub fn with_catalog_refresh(mut self, refresh: Arc<dyn RuntimeCatalogRefresh>) -> Self {
         self.catalog_refresh = Some(refresh);
         self
     }
 
+    /// Replace the default disconnected interaction plane.
     #[must_use]
     pub fn with_interaction(mut self, interaction: InteractionPlane) -> Self {
         self.interaction = interaction;
         self
     }
 
+    /// Install the bound spawn sender used by the `task` tool plane.
     #[must_use]
     pub fn with_spawn_sender(mut self, spawner: BoundSpawnSender) -> Self {
         self.spawner = spawner;
@@ -346,29 +384,34 @@ impl SessionEngine {
         self
     }
 
+    /// Borrow the installed subagent governor, if any.
     #[must_use]
     pub fn governor(&self) -> Option<&crate::orchestrator::SubagentGovernor> {
         self.governor.as_ref()
     }
 
+    /// Replace the default disconnected LSP plane.
     #[must_use]
     pub fn with_lsp(mut self, lsp: LspPlane) -> Self {
         self.lsp = lsp;
         self
     }
 
+    /// Replace the default disconnected formatter plane.
     #[must_use]
     pub fn with_formatter(mut self, formatter: FormatterPlane) -> Self {
         self.formatter = formatter;
         self
     }
 
+    /// Replace the default web-search plane configuration.
     #[must_use]
     pub fn with_websearch(mut self, websearch: WebSearchPlane) -> Self {
         self.websearch = websearch;
         self
     }
 
+    /// Enable compaction with a summarizer implementation and thresholds.
     #[must_use]
     pub fn with_compaction(
         mut self,
@@ -380,55 +423,72 @@ impl SessionEngine {
         self
     }
 
+    /// Live event bus for this engine.
     #[must_use]
     pub fn bus(&self) -> &EventBus {
         &self.bus
     }
 
+    /// Session event store.
     #[must_use]
     pub fn store(&self) -> &SessionStore {
         &self.store
     }
 
+    /// LSP plane used by tools and post-edit hooks.
     #[must_use]
     pub fn lsp(&self) -> &LspPlane {
         &self.lsp
     }
 
+    /// Snapshot of resource permission rules currently active on the plane.
     #[must_use]
     pub fn permission_rules(&self) -> PermissionRules {
         self.permission.snapshot_rules()
     }
 
+    /// Formatter plane used after write/edit/patch.
     #[must_use]
     pub fn formatter(&self) -> &FormatterPlane {
         &self.formatter
     }
 
+    /// Provider catalog models exposed to the UI/API.
     #[must_use]
     pub fn provider_catalog(&self) -> Vec<ProviderModel> {
         self.providers.catalog()
     }
 
+    /// Tool schemas from the current effective runtime snapshot.
     #[must_use]
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.runtime.tool_schemas()
     }
 
+    /// Shared runtime registry handle.
     #[must_use]
     pub fn runtime_registry(&self) -> Arc<RuntimeRegistry> {
         self.runtime.clone()
     }
 
+    /// Semantic fingerprint for a bound turn (tools + permissions + sources).
     #[must_use]
     pub fn runtime_semantic_fingerprint_v1(&self, binding: &TurnBinding) -> Option<[u8; 32]> {
         binding.semantic_fingerprint_v1(&self.permission)
     }
 
+    /// Bind a turn against the current registry without refreshing catalogs.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::RuntimeRefresh`] when binding fails.
     pub fn bind_runtime(&self, workdir: &std::path::Path) -> Result<TurnBinding, CoreError> {
         Ok(self.runtime.bind_turn(workdir)?)
     }
 
+    /// Optionally refresh external catalogs, then bind a root turn for `workdir`.
+    ///
+    /// # Errors
+    /// Propagates catalog refresh or bind failures.
     pub async fn bind_root_runtime(
         &self,
         workdir: &std::path::Path,
@@ -439,6 +499,10 @@ impl SessionEngine {
         Ok(self.runtime.bind_turn(workdir)?)
     }
 
+    /// Resolve a catalog agent into an [`AgentSpec`] using `binding`.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::AgentDefinitionMissing`] or bundle errors.
     pub fn agent_spec_for_binding(
         &self,
         binding: &TurnBinding,
@@ -448,6 +512,10 @@ impl SessionEngine {
         agent_from_definition(base, stable_id, binding)
     }
 
+    /// Build the caller's authorized spawn roster for tools.
+    ///
+    /// # Errors
+    /// Returns catalog/resolution errors.
     pub fn agent_roster_for_binding(
         &self,
         binding: &TurnBinding,
@@ -456,6 +524,10 @@ impl SessionEngine {
         agent_roster(binding, caller)
     }
 
+    /// Resource/tool policy for `stable_id` under `binding`.
+    ///
+    /// # Errors
+    /// Returns catalog/resolution errors.
     pub fn agent_resource_policy_for_binding(
         &self,
         binding: &TurnBinding,
@@ -464,6 +536,10 @@ impl SessionEngine {
         Ok(binding.agent_resource_policy(stable_id)?)
     }
 
+    /// Publish a new runtime candidate via the registry builder callback.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeRefreshError`] when the candidate is rejected.
     pub fn refresh_runtime(
         &self,
         build: impl FnOnce(&mut RuntimeCandidate) -> Result<(), RuntimeRefreshError>,
@@ -471,10 +547,18 @@ impl SessionEngine {
         self.runtime.refresh(build)
     }
 
+    /// Replay the full ordered event log for `session`.
+    ///
+    /// # Errors
+    /// Returns store failures as [`CoreError::Store`].
     pub async fn replay(&self, session: SessionId) -> Result<Vec<Envelope>, CoreError> {
         Ok(self.store.replay(session).await?)
     }
 
+    /// Fold the session log into a projection.
+    ///
+    /// # Errors
+    /// Returns store failures as [`CoreError::Store`].
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, CoreError> {
         Ok(self.store.read_projection(session).await?)
     }
@@ -570,10 +654,18 @@ impl SessionEngine {
         self.bus.publish(envelope);
     }
 
+    /// Create a new session id and append `SessionCreated`.
+    ///
+    /// # Errors
+    /// Returns store/append failures.
     pub async fn create(&self, spec: CreateSession) -> Result<SessionId, CoreError> {
         self.create_with_id(None, spec).await
     }
 
+    /// Create a session under a resident actor claim (fenced append).
+    ///
+    /// # Errors
+    /// Returns claim validation or store failures.
     #[doc(hidden)]
     pub async fn create_for_actor(
         &self,
@@ -596,6 +688,10 @@ impl SessionEngine {
         Ok(id)
     }
 
+    /// Create or re-open a session with an optional fixed id (idempotent if log non-empty).
+    ///
+    /// # Errors
+    /// Returns store/append failures.
     pub async fn create_with_id(
         &self,
         id: Option<SessionId>,
@@ -619,6 +715,10 @@ impl SessionEngine {
         Ok(id)
     }
 
+    /// Delete a session log from the store.
+    ///
+    /// # Errors
+    /// Returns store failures.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
         Ok(self.store.delete_session(session).await?)
     }

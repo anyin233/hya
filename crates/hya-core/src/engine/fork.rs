@@ -6,6 +6,7 @@ use super::SessionEngine;
 use crate::error::CoreError;
 
 impl SessionEngine {
+    /// Copy selected messages into a forked session log.
     pub async fn copy_messages_to_session(
         &self,
         target: SessionId,
