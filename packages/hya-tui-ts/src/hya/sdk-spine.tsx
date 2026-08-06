@@ -11,11 +11,26 @@ import { SDKProvider } from "../upstream/context/sdk"
 import { SyncProvider, useSync } from "../upstream/context/sync"
 import { HyaPaths } from "./platform"
 
+/**
+ * Snapshot of SDK sync + data provider state observed by {@link observeSdkSpine}.
+ */
 export type SdkSpineState = {
+  /** Live sync store data from {@link useSync}. */
   sync: ReturnType<typeof useSync>["data"]
+  /** Live data provider API from {@link useData}. */
   data: ReturnType<typeof useData>
 }
 
+/**
+ * Mount a minimal Solid provider tree and wait until `ready` returns true.
+ *
+ * Used by tests to prove `launch`/SDK bootstrap reaches a usable sync/data
+ * state without rendering the full TUI. Times out after 5 seconds.
+ *
+ * @param input - Same launch input shape as the full TUI (`url`, `directory`, …)
+ * @param ready - Predicate over {@link SdkSpineState}; resolve when it returns true
+ * @returns Promise that resolves when ready, or rejects on timeout / exit error
+ */
 export function observeSdkSpine(input: TuiInput, ready: (state: SdkSpineState) => boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     let dispose = () => {}
