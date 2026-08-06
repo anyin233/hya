@@ -25,7 +25,7 @@ hya-core::SessionEngine
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../crates/xtask`](../crates/xtask) | Developer tooling crate. Currently a scaffold. |
+| [`../crates/xtask`](../crates/xtask) | Developer tooling: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities
@@ -38,16 +38,19 @@ hya-core::SessionEngine
 | `hya-mcp` | [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs) | MCP stdio client/manager, resource discovery, and tool bridge. |
 | `hya-plugin` | [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs) | Stdio JSON-RPC plugin host, manifest/config merge, hook dispatch, tool and permission bridge. |
 | `hya-plugin-compat` | [`../crates/hya-plugin-compat`](../crates/hya-plugin-compat) | Bundled Bun adapter for Compat plugin SDK compatibility. |
-| `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Minimal fixture/example plugin binary. |
-| `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger. |
-| `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, hooks, goal/loop drivers, teams, worktrees. |
+| `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Placeholder stub (`fn main() {}`); does **not** speak the plugin protocol. Future native-plugin QA fixture. Real ABI: [plugin-protocol.md](plugin-protocol.md). |
+| `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
+| `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
 | `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API and Compat-compatible routes over `SessionEngine`. |
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
+| `hya-sdk` | [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs) | Integration SDK: `Client` + HTTP/native transport, `DIRECTORY_HEADER`, `ServerHandle`, live `MessageStore`, team projection, V2Event reducer. |
+| `hya-native` | [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs) | In-process axum `Router` transport via tower `oneshot` (no TCP) and `spawn_event_bridge` for `/global/event`. |
+| `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | Independent self-update TCB; see [self-update.md](self-update.md). |
 | `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` launcher. |
 | `hya-ts` | [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs) | TypeScript TUI supervisor: CLI parsing, backend/runtime discovery, process-group handoff, and cleanup. |
 | `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC, and interactive startup that launches the current `hya` frontend. |
 | `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh. |
-| `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | AgentBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. |
+| `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | AgentBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. Catalog builders: `from_prepared` / `from_verified_catalogs` / `with_verified_catalogs` index agents by stable id and `bundle:<id>/agent/<local_id>`, resources by `(ExportKind, stable id)` plus bundle-local names/aliases; reads include `resolve_agent`, `resolve_resource`, `bundle_resources`, `resolve_spawn`, `spawnable_agents`. |
 | `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya-backend` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
 
 ## `hya-proto`
@@ -119,40 +122,66 @@ Builtins currently include:
 | `glob`, `find` | `Glob` | Search path names under a directory. |
 | `grep` | `Grep` | Regex-search file contents under a path. |
 | `shell`, `bash` | `Bash` | Run a shell command in the agent workdir. |
-| `webfetch` (`fetch`), `websearch` (`search`) | Web planes | Fetch URLs or query a configured web-search provider. |
-| `question`, `ask_user` | Interaction plane | Ask the human a select or free-text question. |
-| `lsp` | LSP plane | Dispatch workspace-symbol/diagnostic-style LSP operations. |
-| `skill` | Skill plane | Load and expose local `SKILL.md` content. |
-| `task` | Spawner plane | Start foreground/background subagent member work. |
-| `todowrite` (`todo`) | Todo plane | Store the latest session todo snapshot. |
-| `plan_exit` (`plan`) | Plan tool | Signal plan-mode completion semantics to the model. |
-| `invalid` | None | Structured response for unknown tool calls. |
+| `webfetch` (`fetch`), `websearch` (`search`) | `WebFetch` / `WebSearch` | Fetch URLs or query a configured web-search provider. |
+| `question`, `ask_user` | `Tool` | Ask the human a select or free-text question (interaction plane). |
+| `lsp` | `Tool` | Dispatch workspace-symbol/diagnostic-style LSP operations. |
+| `skill` | `Tool` | Load and expose local `SKILL.md` content. |
+| `list_agents` | `Tool` | List spawnable agents for the model. |
+| `task` | `Tool` | Start foreground/background subagent member work (spawner plane). |
+| `todowrite` (`todo`) | `Tool` | Store the latest session todo snapshot. |
+| `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
+| `send`, `roster`, `channels`, `join`, `leave` | `Tool` | Team mailbox / roster / channel tools. |
+| `invalid` | `Tool` | Structured response for unknown tool calls. |
 
-Tool output is capped at 16 KiB for large text fields. Search-style tools such
-as `glob` and `grep` cap returned rows at 100 while preserving count and
-truncation metadata.
+Successful tool output is capped at **5000 characters** for model consumption
+([`output_cap.rs`](../crates/hya-tool/src/output_cap.rs)); oversized results keep
+a trailing window plus a truncation notice. Shell has its own larger buffer
+limits. Search-style tools such as `glob` and `grep` also cap returned rows
+(for example 100) while preserving count and truncation metadata.
 
 ## `hya-store`
 
-`hya-store` persists the canonical event log in SQLite.
+`hya-store` persists the canonical event log in SQLite and related journals.
 
-Important files:
+Important modules:
 
 | File | Purpose |
 | --- | --- |
-| [`src/lib.rs`](../crates/hya-store/src/lib.rs) | Store connections, migrations, append/replay/projection/usage APIs. |
+| [`src/lib.rs`](../crates/hya-store/src/lib.rs) | Connections, append/replay/`read_projection`, list/delete sessions, token ledger, `decode_session_key`. |
+| [`src/admission.rs`](../crates/hya-store/src/admission.rs) | Durable spawn-admission journal (queue, bindings, fairness). |
+| [`src/mailbox.rs`](../crates/hya-store/src/mailbox.rs) | Event-sourced mail writes, resident recovery, stop/failure finalization. |
+| [`src/resident_claim.rs`](../crates/hya-store/src/resident_claim.rs) | Actor claim fencing primitives. |
+| [`src/sync.rs`](../crates/hya-store/src/sync.rs) | Compat sync history/replay helpers. |
+| [`src/permission.rs`](../crates/hya-store/src/permission.rs) | Saved permissions. |
+| [`src/bundle_registry.rs`](../crates/hya-store/src/bundle_registry.rs) | **Separate** installed-bundle registry SQLite DB (not the session event log). |
 | [`src/error.rs`](../crates/hya-store/src/error.rs) | Store error wrapper. |
-| [`migrations/0001_init.sql`](../crates/hya-store/migrations/0001_init.sql) | Initial schema. |
 
-Current read path:
+Session-store migrations (`migrations/`):
+
+| Migration | Role |
+| --- | --- |
+| `0001_init.sql` | Core schema: event log plus reserved tables (sessions, messages, parts, teams, mail, tasks, goals). Projection remains event-log based. |
+| `0002_sync_event.sql` | Compat sync event history. |
+| `0003_saved_permission.sql` | Saved permission rows. |
+| `0004_admission_journal.sql` | Spawn admission journal. |
+| `0005_resident_actor_claim.sql` | Resident actor claims. |
+| `0006_admission_queue_states.sql` | Admission queue states. |
+| `0007_admission_bindings.sql` | Admission bindings. |
+| `0008_admission_fairness.sql` | Admission fairness bookkeeping. |
+
+Bundle registry uses a **separate** migration set under
+`bundle_migrations/0001_init.sql` for the installed-bundle database file.
+
+`BundleRegistryRecord` columns (installed bundles): `bundle_id`, `version`,
+`publisher`, 32-byte `source_digest`, `prepared_digest`, `prepared_bytes`,
+`installed_at`, tracked under a monotonically increasing registry `generation`
+that drives catalog reload (see [cli.md](cli.md) bundle section).
+
+Current event-log path:
 
 1. `append_event` inserts serialized `Event` JSON into `event_log`.
 2. `replay` returns ordered `Envelope`s for one session.
 3. `read_projection` folds replayed envelopes through `hya_proto::Projection`.
-
-The migration also creates tables for sessions, messages, parts, teams, mail,
-tasks, and goals. Those tables reserve schema for broader runtime features; the
-current projection read path is still event-log based.
 
 ## `hya-core`
 
@@ -173,13 +202,30 @@ Important modules:
 | [`completion.rs`](../crates/hya-core/src/completion.rs) | Generic iteration driver, goal mode, model-backed evaluator, transcript rendering. |
 | [`loop_mode.rs`](../crates/hya-core/src/loop_mode.rs) | Planner/verifier loop mode with budget, no-progress, and repeated-directive gates. |
 | [`subagent.rs`](../crates/hya-core/src/subagent.rs) | Supervised child-session member runs and bounded team evidence projection. |
-| [`team.rs`](../crates/hya-core/src/team.rs) | Team lifecycle state machine, mailbox, and task board primitives. |
+| [`mailbox.rs`](../crates/hya-core/src/mailbox.rs) | Mailbox service loop draining `MailboxRequest`. |
+| [`engine/mailbox.rs`](../crates/hya-core/src/engine/mailbox.rs) | Team-root mail delivery, roster/channel queries, `MAIN_HANDLE`. |
+| [`resident.rs`](../crates/hya-core/src/resident.rs) | `ResidentSupervisor`, team state, per-team lock and quiescence. |
+| [`orchestrator.rs`](../crates/hya-core/src/orchestrator.rs) | `SubagentLimits`, `SubagentGovernor`, stream permits, per-team budgets. |
+| [`runtime_registry.rs`](../crates/hya-core/src/runtime_registry.rs) | `RuntimeRegistry`, `TurnBinding`, config-generation publication. |
+| [`sidecar.rs`](../crates/hya-core/src/sidecar.rs) | `SidecarLifecycle` contract for Bundle sidecars. |
+| [`prompt.rs`](../crates/hya-core/src/prompt.rs) | Prompt construction helpers. |
+| [`title.rs`](../crates/hya-core/src/title.rs) | Session title generation. |
 | [`category.rs`](../crates/hya-core/src/category.rs) | Category-to-model routing helpers and skill prompt injection. |
 | [`workspace.rs`](../crates/hya-core/src/workspace.rs) | Git worktree allocation/cleanup and tmux pane helper. |
 | [`error.rs`](../crates/hya-core/src/error.rs) | Runtime error wrapper. |
 
-`SessionEngine` is the central write path. It appends every event through the
-store and immediately publishes the same envelope on the `EventBus`.
+(`team.rs` / `TeamControlPlane` were removed; see ADR-0001. Mailbox and resident
+modules above are the live replacements.)
+
+`SessionEngine` is the central durable write path: it appends events through the
+store for committed work. Live-only envelopes use `publish_live` (seq `0`) and
+**do not** go through the durable log. `publish_envelope` dispatches global and
+activation/sidecar hooks **before** publishing on the `EventBus`, so the bus is
+not the only consumer of an envelope.
+
+The projection reducer applies `seq == 0` as live-only (does not advance
+`last_seq`); durable envelopes with `seq <= last_seq` are ignored; otherwise the
+event folds and `last_seq` advances.
 
 ## `hya-server` and `hya-client`
 
@@ -200,6 +246,49 @@ Compat-shaped HTTP bodies; exact parity is tracked in
 [`compat-parity.md`](compat-parity.md).
 
 `hya-client` is a small typed wrapper around create session, prompt, and events.
+
+## `hya-sdk`, `hya-native`, and `hya-updater`
+
+### `hya-sdk`
+
+Integration SDK for TUI and embedders talking to **`hya-server`** (or an
+in-process bridge) over the Compat-compatible HTTP/SSE surface.
+
+| Module | Purpose |
+| --- | --- |
+| [`client.rs`](../crates/hya-sdk/src/client.rs) | Typed `Client` trait and HTTP transport. |
+| [`native.rs`](../crates/hya-sdk/src/native.rs) | In-process stdio/native bridge client surface. |
+| [`server.rs`](../crates/hya-sdk/src/server.rs) | `ServerHandle` — spawn/supervise `hya-backend serve` and parse the listen URL. |
+| [`events.rs`](../crates/hya-sdk/src/events.rs) | Global SSE helpers. |
+| [`store.rs`](../crates/hya-sdk/src/store.rs) | Live `MessageStore` projection for UI. |
+| [`team.rs`](../crates/hya-sdk/src/team.rs) | Frontend `TeamProjection` mirror. |
+| [`reducer.rs`](../crates/hya-sdk/src/reducer.rs) | `session.next.*` V2Event timeline reducer. |
+| [`types.rs`](../crates/hya-sdk/src/types.rs) | Shared SDK wire types. |
+| [`pending.rs`](../crates/hya-sdk/src/pending.rs) | Pending ask/permission coordination slots. |
+| [`error.rs`](../crates/hya-sdk/src/error.rs) | SDK errors and `Result` alias. |
+
+Wire constant: `DIRECTORY_HEADER` = `x-opencode-directory` (working-directory
+scope on every request).
+
+### `hya-native`
+
+In-process embedding: [`HyaNativeTransport`](../crates/hya-native/src/transport.rs)
+drives the hya axum `Router` with tower `oneshot` — **no TCP, no reqwest** —
+injecting the directory header on every request. This is the Rust analogue of
+the Compat adapter’s in-process `app.fetch` and the supported way to embed hya
+inside another Rust process.
+
+[`spawn_event_bridge`](../crates/hya-native/src/events.rs) subscribes to
+in-process `GET /global/event` SSE, decodes frames into
+`hya_sdk::GlobalEvent`, and forwards them on an `mpsc` channel. Undecodable
+frames are **skipped** (not fatal); on stream loss it re-subscribes after a
+**50 ms** backoff; the task stops when the receiver is dropped.
+
+### `hya-updater`
+
+Independent self-update TCB (signed metadata, staged generations, smoke,
+owner-gated activation). Not part of `hya-backend`. See
+[self-update.md](self-update.md).
 
 ## Interactive Frontend
 

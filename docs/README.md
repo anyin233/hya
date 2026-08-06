@@ -15,7 +15,10 @@ If you want to run hya:
 1. [Getting Started](getting-started.md)
 2. [Configuration](configuration.md)
 3. [CLI Reference](cli.md)
-4. [Troubleshooting](troubleshooting.md)
+4. [TUI Keybindings](tui-keybindings.md) — slash commands, leader chords, and the command palette
+5. [TUI Reference](tui-reference.md) — screens, transcript, dialogs, and prompt behavior
+6. [Skills](skills.md) — discovery, skill tool, and authoring
+7. [Troubleshooting](troubleshooting.md)
 
 If you want to compare hya with adjacent coding agents:
 
@@ -25,12 +28,15 @@ If you want to package a public AgentBundle:
 
 1. Run `hya bundle info -f example.hyabundle`, then
    `hya bundle install example.hyabundle`.
-2. Read [AgentBundle Authoring](agent-bundle-authoring.md), start from the
-   [single-file static example](examples/bundle.hya.md), or the
-   [transient Bun example](examples/bun-transient/), or the
-   [resident Bun example](examples/bun-resident/), or the
-   [disjoint Bun example](examples/bun-disjoint/), and use the
-   [bundle CLI reference](cli.md#bundle-commands).
+2. Read [AgentBundle Authoring](agent-bundle-authoring.md). Sources use **exactly
+   one** root form: directory `bundle.yaml` (shipped built-ins) **or**
+   `bundle.hya.md` (markdown frontmatter form) — never both. Start from the
+   [single-file static example](examples/bundle.hya.md), the
+   [transient Bun example](examples/bun-transient/), the
+   [resident Bun example](examples/bun-resident/), the
+   [disjoint Bun example](examples/bun-disjoint/), or the
+   [built-in `bundle.yaml` layout](../bundles/builtin/hya-core-agents/bundle.yaml),
+   and use the [bundle CLI reference](cli.md#bundle-commands).
 
 If you want the independent self-update path (0.34.13+):
 
@@ -44,14 +50,16 @@ If you want to understand the codebase:
 1. [Project Structure](project-structure.md)
 2. [Architecture Overview](architecture/overview.md)
 3. [Runtime](architecture/runtime.md)
-4. [Event Model](architecture/event-model.md)
-5. [Providers](architecture/providers.md)
-6. [Tools and Permissions](architecture/tools-and-permissions.md)
-7. [Storage](architecture/storage.md)
-8. [Server and Client](architecture/server-client.md)
-9. [TUI](architecture/tui.md)
-10. [Development](development.md)
-11. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
+4. [Admission and Governor](architecture/admission-and-governor.md)
+5. [Event Model](architecture/event-model.md)
+6. [Providers](architecture/providers.md)
+7. [Tools and Permissions](architecture/tools-and-permissions.md)
+8. [Storage](architecture/storage.md)
+9. [Server and Client](architecture/server-client.md)
+10. [Plugin protocol](plugin-protocol.md)
+11. [TUI](architecture/tui.md)
+12. [Development](development.md)
+13. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 
 ## Docs Map
 
@@ -59,21 +67,28 @@ If you want to understand the codebase:
 | --- | --- |
 | [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
-| [CLI Reference](cli.md) | Document shipped `hya` commands and flags. |
+| [CLI Reference](cli.md) | Document shipped `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
+| [TUI Keybindings](tui-keybindings.md) | Full keyboard shortcuts, slash commands, leader chords, and which-key. |
+| [TUI Reference](tui-reference.md) | User-facing screens, transcript, dialogs, prompt, and overlays. |
+| [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
+| [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
+| [Compat plugins](compat-plugins.md) | Bun adapter for OpenCode/Compat JS plugins over the native host. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundles, including static and Bun-sidecar forms. |
 | [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |
+| [Admission and Governor](architecture/admission-and-governor.md) | Spawn admission journal, subagent governor budgets, and depth limits. |
 | [Event Model](architecture/event-model.md) | Explain canonical events, envelopes, messages, parts, ids, and projections. |
-| [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, and Google protocols, SSE decoding, and fallback providers. |
+| [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, Responses, and Google protocols, SSE decoding, and fallback providers. |
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, Compat-compatible route groups, and the typed client crate. |
 | [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, and backend SDK boundary. |
+| [TypeScript TUI package](../packages/hya-tui-ts/README.md) | Frontend-only package: launch with `--url`, layout, env flags, and re-sync rules. See also [scripts](../packages/hya-tui-ts/scripts/README.md) and [tests](../packages/hya-tui-ts/test/README.md). |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
-| [Testing](testing/README.md) | Track I/P/T testing model, process E2E harness, agent matrix, CI snippet. |
+| [Testing](testing/README.md) | Track I/P/T testing model, process E2E harness, agent matrix, CI snippet. Package-level TUI tests: [hya-tui-ts test README](../packages/hya-tui-ts/test/README.md). |
 | [Agent feature matrix](testing/agent-matrix.md) | PR-matrix scenario IDs for tools, permissions, MCP, subagents, hyabundle, TUI. |
 | [Process E2E harness](testing/process-e2e.md) | How `crates/hya-e2e` scripts FakeLlm and asserts product outcomes. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
@@ -91,6 +106,10 @@ If you want to understand the codebase:
 - Compat adapter: [`../crates/hya-plugin-compat/README.md`](../crates/hya-plugin-compat/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
 - Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
+- SDK: [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
+- Native in-process transport: [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs)
+- Self-update TCB: [`../crates/hya-updater`](../crates/hya-updater)
 - Canonical frontend entrypoint: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
 - Frontend supervisor: [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs)
 - TUI application: [`../packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx)
+- TUI package docs: [`../packages/hya-tui-ts/README.md`](../packages/hya-tui-ts/README.md)

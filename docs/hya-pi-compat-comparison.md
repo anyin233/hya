@@ -213,23 +213,29 @@ and [`packages/core/package.json`](https://raw.githubusercontent.com/anomalyco/c
 hya has native multi-agent runtime machinery. The `task` tool can launch one or
 many child-session members and return bounded evidence to the lead session.
 `run_team` and `run_member` keep child transcripts separate instead of dumping
-full worker context into the parent. `TeamControlPlane` models lifecycle,
-mailbox, and task-board state; `WorktreeManager` can allocate owned git
-worktrees under `.hya/worktrees`.
+full worker context into the parent. Team mailbox state is event-sourced
+(`MailSent` / channel join-leave folded into `hya_proto::TeamProjection`);
+`ResidentSupervisor` owns team lifecycle and quiescence. `WorktreeManager` can
+allocate owned git worktrees under `.hya/worktrees`. (`TeamControlPlane` was
+removed; see ADR-0001.)
 
-Important constraints make this intentionally controlled rather than unbounded:
-nested `task` spawns are allowed, but depth and fan-out are bounded by
-`SubagentGovernor` (`max_depth`, `per_run_budget`, stream concurrency, and
-per-team turn/message budgets). Background `task` is limited to a single
-member; multi-member background is rejected. Resident spawns are non-blocking
-and wake only on mail. The shipped CLI surfaces the main TUI, headless runs,
-goal mode, server, replay, session, auth/catalog, and JSONL RPC; the underlying
-team machinery is more developed than the end-user team UI.
+Nested `task` spawns are supported and **bounded** (not forbidden):
+`SubagentGovernor` enforces `max_depth` (default 5), `per_run_budget`, stream
+concurrency, and per-team turn/message budgets; depth-0 vs nested turns take
+different stream-permit paths; `AdmissionMemberIdentity` attributes nested
+spawns to the parent member. Background `task` is limited to a single member;
+multi-member background is rejected. Resident spawns are non-blocking and wake
+only on mail. The shipped CLI surfaces the main TUI, headless runs, goal mode,
+server, replay, session, auth/catalog, and JSONL RPC; the underlying team
+machinery is more developed than the end-user team UI.
 
 Evidence: [Runtime](architecture/runtime.md),
+[Admission and Governor](architecture/admission-and-governor.md),
 [`crates/hya-tool/src/task.rs`](../crates/hya-tool/src/task.rs),
 [`crates/hya-core/src/subagent.rs`](../crates/hya-core/src/subagent.rs),
-[`crates/hya-core/src/team.rs`](../crates/hya-core/src/team.rs), and
+[`crates/hya-core/src/resident.rs`](../crates/hya-core/src/resident.rs),
+[`crates/hya-core/src/orchestrator.rs`](../crates/hya-core/src/orchestrator.rs),
+and
 [`crates/hya-core/src/workspace.rs`](../crates/hya-core/src/workspace.rs).
 
 ### Pi coding agent
@@ -336,7 +342,8 @@ Evidence: Compat [TUI](https://compat.ai/docs/tui),
 ### hya
 
 hya's plugin host is a native stdio JSON-RPC system. Plugins can be configured in
-`config.yaml` or discovered from `<workdir>/.hya/plugins/**/plugin.toml`.
+`config.yaml` or discovered from **immediate** children of
+`<workdir>/.hya/plugins/<name>/plugin.toml` (not a recursive `**` walk).
 Runtime composition connects configured plugins, registers declared tools into
 the same registry as built-ins and MCP tools, installs hook dispatch, and can add
 a permission interceptor. The host also tracks workspace-adapter metadata and

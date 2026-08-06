@@ -71,13 +71,14 @@ For ChatGPT Codex or Grok Build subscription OAuth (no API key):
 hya oauth login --provider codex --type openai-codex
 hya oauth login --provider grok --type grok-build
 hya oauth status
-# same commands work on hya-ts:
-hya oauth login --provider codex --type openai-codex
-hya oauth status
+# same surface on the hya-ts binary (diagnostics / non-canonical branding):
+hya-ts oauth login --provider codex --type openai-codex
+hya-ts oauth status
 ```
 
 See [docs/configuration.md](docs/configuration.md) for first-run behavior,
-the full environment-variable reference, and a fully-commented sample config.
+the `HYA_*` (and related) environment-variable tables, and a fully-commented
+sample config.
 
 ## What hya Can Do
 
@@ -108,12 +109,15 @@ with `hya bundle info -f example.hyabundle` and
 | [docs/README.md](docs/README.md) | Documentation index and reading paths. |
 | [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, run the TUI, headless turns, goal mode, server, and a first live provider. |
 | [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
-| [docs/cli.md](docs/cli.md) | `hya` commands, flags, and the TUI slash-command reference. |
+| [docs/cli.md](docs/cli.md) | `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
+| [docs/tui-keybindings.md](docs/tui-keybindings.md) | Full TUI keybinds, slash commands, leader chords, and which-key. |
+| [docs/tui-reference.md](docs/tui-reference.md) | TUI screens, transcript, dialogs, and prompt behavior. |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, terminal, permission, and server issues. |
 | [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
 | [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, server/client, and TUI internals. |
 | [docs/compat-parity.md](docs/compat-parity.md) | Compat compatibility status. |
 | [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
+| [packages/hya-tui-ts/README.md](packages/hya-tui-ts/README.md) | TypeScript TUI package (requires a running backend + `--url`). |
 
 ## License
 
