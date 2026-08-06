@@ -50,13 +50,55 @@ pub(crate) async fn cmd_serve(
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
     let url = format!("http://{addr}");
+    // Install the termination handlers BEFORE announcing readiness. Callers that parse the
+    // listen line and then signal us (the e2e harness) would otherwise race handler setup,
+    // and losing that race means the default disposition kills the process outright —
+    // measured: SIGTERM 7ms after the listen line died by signal, 500ms after it exited 0.
+    let terminate = install_termination_signals().context("install termination handlers")?;
     println!("hya server listening on {url}");
     emit_startup_mark("backend_listen", Some(&url));
+    // Without a shutdown future `axum::serve` never returns, so `built.shutdown()` below
+    // would be unreachable and the process could only ever die by signal — skipping atexit
+    // handlers (and therefore any coverage/profile flush). Handing it SIGTERM/Ctrl-C makes
+    // the already-written teardown path run and lets `main` return normally.
     let serve_result = axum::serve(listener, server_router(state))
+        .with_graceful_shutdown(wait_for_termination(terminate))
         .await
         .context("serve http");
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     serve_result.and(shutdown_result)
+}
+
+/// Registered SIGTERM/SIGINT/SIGHUP streams, held so the handlers are live before we serve.
+type TerminationSignals = (
+    tokio::signal::unix::Signal,
+    tokio::signal::unix::Signal,
+    tokio::signal::unix::Signal,
+);
+
+/// Register the stop signals eagerly.
+///
+/// Returns the live streams; dropping them restores the default disposition, so the caller
+/// must keep them until shutdown. Mirrors the idiom in `crates/hya-ts/src/main.rs`, except
+/// registration is eager rather than on first poll (see the race note in `cmd_serve`).
+/// SIGHUP is included because a terminal hangup should drain, not kill.
+fn install_termination_signals() -> std::io::Result<TerminationSignals> {
+    use tokio::signal::unix::{SignalKind, signal};
+    Ok((
+        signal(SignalKind::terminate())?,
+        signal(SignalKind::interrupt())?,
+        signal(SignalKind::hangup())?,
+    ))
+}
+
+/// Resolve once any of the registered stop signals fires.
+async fn wait_for_termination(signals: TerminationSignals) {
+    let (mut terminate, mut interrupt, mut hangup) = signals;
+    tokio::select! {
+        _ = terminate.recv() => {}
+        _ = interrupt.recv() => {}
+        _ = hangup.recv() => {}
+    }
 }
 
 /// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
