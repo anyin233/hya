@@ -216,9 +216,17 @@ match store.claim_admission(&claim).await? {
 ### 1. Scope / Trigger
 
 Any test whose spawn reaches `prepare_spawn_admission` — i.e. where
-`uses_durable_admission_owner` is true (single member, non-resident,
-`spawn_lifecycle: transient`, background). Learned 2026-08-05 from three
-`nested_spawn_tree.rs` tests that failed with an opaque `SpawnError::Unavailable`.
+`uses_durable_admission_owner` is true. That is broader than "background": every
+member must be non-resident with `spawn_lifecycle: transient`, and then
+
+- **foreground** batches go durable at **any** member count, and
+- **background** batches go durable only when there is exactly one member.
+
+Multi-member background batches and any batch containing a resident member stay
+on the legacy route. Learned 2026-08-05 from three `nested_spawn_tree.rs` tests
+that failed with an opaque `SpawnError::Unavailable`; the "background"-only
+wording corrected 2026-08-06 against `uses_durable_admission_owner`'s
+`if req.background { len() == 1 } else { true }`.
 
 ### 2. Contracts
 
@@ -252,19 +260,29 @@ let router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))
 
 #### Correct
 
-```rust
-let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])?;
-let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])?;
+In `hya-app`, both halves already live in `crates/hya-app/tests/support/mod.rs`.
+Use them; do not re-derive either one locally.
 
-// Wrap the fake locally; do NOT implement `configured_identity_v1` on
-// `FakeProvider` itself — `runtime.rs` asserts a bare FakeProvider router must
-// fail closed, and other crates depend on that.
-struct IdentityFakeProvider { inner: FakeProvider }
-impl Provider for IdentityFakeProvider {
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> { Some(b"test-identity-v1".to_vec()) }
-    /* delegate id / capabilities / stream */
-}
+```rust
+mod support;
+
+// (1) verified catalog — `test_runtime` goes through `prepare_builtins` +
+//     `BundleCatalog::from_verified_catalogs`, so the fingerprint is defined.
+let runtime = support::test_runtime(
+    Arc::new(ToolRegistry::builtins()),
+    &[("build", AgentRole::Main, &["quick"]), ("quick", AgentRole::Subagent, &[])],
+);
+
+// (2) provider identity — wrap the fake; do NOT implement
+//     `configured_identity_v1` on `FakeProvider` itself. `runtime.rs` asserts a
+//     bare FakeProvider router must fail closed, and other crates depend on that.
+let router = ProviderRouter::new().with(Arc::new(
+    support::IdentityFakeProvider::new(FakeProvider::scripted(vec![])),
+));
 ```
+
+Outside `hya-app`, mirror the same shape rather than reaching for
+`BundleCatalog::from_prepared`.
 
 ### 4. Common Mistakes
 
