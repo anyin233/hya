@@ -2,7 +2,7 @@
   "id": "e2e-suite-hardening",
   "name": "e2e-suite-hardening",
   "title": "E2E test suite hardening",
-  "description": "Parent: act on the 2026-08-05 E2E coverage audit \u2014 land the suite on main, gate it in CI, cover swarm tools, measure line coverage, and make matrix.toml enforced.",
+  "description": "Parent: act on the 2026-08-05 E2E coverage audit — land the suite on main, gate it in CI, cover swarm tools, measure line coverage, and make matrix.toml enforced.",
   "status": "completed",
   "dev_type": null,
   "scope": null,
