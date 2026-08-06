@@ -1,10 +1,34 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const LIST_HEADER: &str = "NAME VERSION ORIGIN FORMAT STATE IMMUTABLE";
 const BUNDLE_ID: &str = "hya/public-fixture";
+
+/// Creates and returns a data root that no other test in this binary can share.
+///
+/// Every test here runs on its own thread, so `std::process::id()` is constant
+/// across them and `as_nanos()` is not a reliable discriminator: seven threads
+/// released together observe the identical nanosecond in ~1.6% of rounds
+/// (measured, minimum delta 0ns), which is how
+/// `bundle_info_lists_prepared_static_resources` once hit `AlreadyExists` on
+/// `fs::create_dir`. The atomic serial makes uniqueness a guarantee instead of a
+/// probability — same idiom as `hya-app`'s runtime test `tempdir()`.
+///
+/// Returns the freshly created directory; callers must not create it again.
+fn unique_data_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    static NEXT_DATA_ROOT: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let serial = NEXT_DATA_ROOT.fetch_add(1, Ordering::Relaxed);
+    let data_root = std::env::temp_dir().join(format!(
+        "hya-backend-bundle-cli-{}-{nanos}-{serial}",
+        std::process::id()
+    ));
+    fs::create_dir(&data_root)?;
+    Ok(data_root)
+}
 
 fn bundle_command(data_root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hya-backend"));
@@ -26,12 +50,7 @@ fn assert_success(action: &str, output: &Output) {
 
 #[test]
 fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let package = write_fixture(&data_root)?;
 
     let install = bundle_command(&data_root)
@@ -122,12 +141,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
 #[tokio::test]
 async fn private_info_is_opaque_and_install_does_not_mutate_registry()
 -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let private_package = data_root.join("private.hyabundle");
     fs::write(&private_package, private_v1_envelope())?;
     let registry_dir = data_root.join("hya/bundles");
@@ -205,12 +219,7 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
 #[test]
 fn builtins_list_and_info_without_registry_and_are_immutable()
 -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
     assert!(!registry_path.exists());
 
@@ -295,12 +304,7 @@ fn builtins_list_and_info_without_registry_and_are_immutable()
 
 #[test]
 fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let package = write_fixture(&data_root)?;
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
     assert!(
@@ -342,12 +346,7 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
 #[test]
 fn install_and_info_file_require_exact_lowercase_hyabundle_suffix()
 -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let packages = [
         data_root.join("demo.HYABUNDLE"),
         data_root.join("demo.hyabundle.extra"),
@@ -398,12 +397,7 @@ fn install_and_info_file_require_exact_lowercase_hyabundle_suffix()
 
 #[tokio::test]
 async fn bundle_info_lists_prepared_static_resources() -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let registry_parent = data_root.join("hya/bundles");
     fs::create_dir_all(&registry_parent)?;
     let registry_path = registry_parent.join("registry.sqlite3");
@@ -484,12 +478,7 @@ You are the resource info lead.
 #[tokio::test]
 async fn public_bun_bundle_install_publishes_resources_atomically()
 -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}",
-        std::process::id()
-    ));
-    fs::create_dir(&data_root)?;
+    let data_root = unique_data_root()?;
     let package = data_root.join("archive-js.hyabundle");
     fs::write(
         &package,
