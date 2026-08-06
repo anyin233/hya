@@ -40,6 +40,7 @@ where
 /// Builder for an isolated E2E environment.
 pub struct E2eEnvBuilder {
     scripts: Vec<ScriptStep>,
+    routes: Vec<(String, Vec<ScriptStep>)>,
     yolo: bool,
     agent: String,
     binary: Option<PathBuf>,
@@ -54,6 +55,7 @@ impl Default for E2eEnvBuilder {
     fn default() -> Self {
         Self {
             scripts: Vec::new(),
+            routes: Vec::new(),
             yolo: true,
             agent: "build".into(),
             binary: None,
@@ -75,6 +77,17 @@ impl E2eEnvBuilder {
     #[must_use]
     pub fn scripts(mut self, scripts: Vec<ScriptStep>) -> Self {
         self.scripts = scripts;
+        self
+    }
+
+    /// Pin `steps` to the teammate whose system prompt contains `marker`.
+    ///
+    /// Multi-agent scenarios must route: residents and the main agent issue
+    /// interleaved completion requests, and the shared queue has no way to tell
+    /// them apart. See [`FakeLlm::route`].
+    #[must_use]
+    pub fn route(mut self, marker: impl Into<String>, steps: Vec<ScriptStep>) -> Self {
+        self.routes.push((marker.into(), steps));
         self
     }
 
@@ -135,6 +148,9 @@ impl E2eEnvBuilder {
 
     pub async fn build(self) -> Result<E2eEnv, E2eError> {
         let fake = FakeLlm::start(self.scripts).await?;
+        for (marker, steps) in self.routes {
+            fake.route(marker, steps)?;
+        }
         let mut spec = BackendSpec::new(
             self.binary.unwrap_or_else(default_backend_bin),
             fake.base_url(),
@@ -475,6 +491,66 @@ impl E2eEnv {
             self.backend.url,
             self.backend.project.display()
         )
+    }
+
+    /// Every request body attributed to `marker`'s route, joined into one string.
+    ///
+    /// This is the recipient-side observation channel for mailbox delivery: mail
+    /// reaches a resident only by being injected as a `[mail from …] …` user
+    /// prompt into its next turn, so a delivered body shows up here — and in no
+    /// other agent's dump.
+    pub fn route_dump(&self, marker: &str) -> Result<String, E2eError> {
+        let requests = self
+            .fake
+            .route_requests(marker)?
+            .ok_or_else(|| E2eError::Other(format!("no FakeLlm route registered for {marker}")))?;
+        Ok(requests
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    /// Wait until `marker`'s route has been asked at least `count` times.
+    ///
+    /// Use this to prove a resident is actually running a turn loop rather than
+    /// merely being registered in the roster.
+    pub async fn wait_route_requests(
+        &self,
+        marker: &str,
+        count: usize,
+        timeout: Duration,
+    ) -> Result<(), E2eError> {
+        wait_until(
+            &format!("route {marker} reaches {count} requests"),
+            timeout,
+            || async {
+                Ok(self
+                    .fake
+                    .route_requests(marker)?
+                    .is_some_and(|requests| requests.len() >= count))
+            },
+        )
+        .await
+    }
+
+    /// Wait until `needle` appears in `marker`'s recorded request bodies.
+    ///
+    /// Mailbox delivery is asynchronous (send appends an event, the supervisor
+    /// wakes the recipient, the recipient then asks the model), so scenarios
+    /// must poll on the recipient's own observable state instead of sleeping.
+    pub async fn wait_route_contains(
+        &self,
+        marker: &str,
+        needle: &str,
+        timeout: Duration,
+    ) -> Result<(), E2eError> {
+        wait_until(
+            &format!("route {marker} sees {needle}"),
+            timeout,
+            || async { Ok(self.route_dump(marker)?.contains(needle)) },
+        )
+        .await
     }
 
     /// Wait until `/mcp` reports `name` with status `connected`.
