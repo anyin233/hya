@@ -20,10 +20,6 @@
 //! [`Resource`]. Downstream crates (`hya-core`, `hya-app`) wire planes and run
 //! tools; this crate stays free of the session engine.
 
-// This crate is fully documented; keep it that way. Remove once the workspace
-// lint table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 mod agents;
 mod apply_patch;
 mod edit;

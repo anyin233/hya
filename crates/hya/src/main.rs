@@ -6,10 +6,6 @@
 //! while the actual TUI ships as a separate executable. Because it `exec()`s
 //! rather than spawning, no extra process remains in the tree.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitCode};
 

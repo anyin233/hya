@@ -1,4 +1,4 @@
-//! Load optional formatter configuration into a [`FormatterPlane`].
+//! Load optional formatter configuration into a `FormatterPlane`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

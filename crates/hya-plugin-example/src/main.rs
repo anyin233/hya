@@ -5,8 +5,4 @@
 //! or `tool/call` on stdin/stdout. Use it as a concrete crate target for host
 //! packaging tests and as a scaffold when authoring a real plugin binary.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 fn main() {}

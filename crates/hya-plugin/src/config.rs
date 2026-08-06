@@ -1,4 +1,4 @@
-//! `plugins:` config entries and the merged [`PluginSpec`] the host consumes.
+//! `plugins:` config entries and the merged `PluginSpec` the host consumes.
 
 use std::collections::{BTreeMap, BTreeSet};
 

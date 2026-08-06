@@ -9,10 +9,6 @@
 //! The host spawns each configured binary, runs `initialize`, then dispatches
 //! tools and hooks over newline-delimited JSON on the child's stdio.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 mod activation_dispatcher;
 /// Per-process JSON-RPC client and child process lifecycle.
 pub mod client;

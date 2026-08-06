@@ -11,10 +11,6 @@
 //! CORS mirrors the request origin and headers and allows any method. See
 //! `docs/architecture/server-client.md` for request bodies and status codes.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};

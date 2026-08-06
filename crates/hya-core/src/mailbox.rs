@@ -1,8 +1,8 @@
-//! The mailbox service loop: drains [`MailboxRequest`]s from the tool plane and
+//! The mailbox service loop: drains `MailboxRequest`s from the tool plane and
 //! services them against the engine (ADR-0001).
 //!
-//! Mirrors [`spawn_team_supervisor`](crate::) usage of the spawner channel: the
-//! app builds a [`MailboxPlane`] + receiver, injects the plane into the engine
+//! Mirrors `spawn_team_supervisor` usage of the spawner channel: the
+//! app builds a `MailboxPlane` + receiver, injects the plane into the engine
 //! (`with_mailbox`), and spawns [`run_mailbox_service`] to own the receiver. Each
 //! request is handled by an engine method that appends the relevant event to the
 //! team-root log and/or reads the team projection.

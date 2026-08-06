@@ -4,10 +4,6 @@
 //! This is **not** the Compat-shaped TUI SDK surface (`hya-sdk`); use this crate
 //! for simple native `/sessions/*` integration tests and tooling.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 use hya_proto::api::{CreateSessionRequest, CreateSessionResponse, PromptRequest, PromptResponse};
 use hya_proto::{Envelope, SessionId};
 

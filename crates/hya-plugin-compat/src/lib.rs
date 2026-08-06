@@ -11,10 +11,6 @@
 //! may import APIs that no longer exist, or the host may reject an unexpected
 //! plugin SDK surface. Treat a change here as a coordinated release.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 /// Pinned `@opencode-ai/plugin` version the Compat Bun adapter is built against.
 pub const COMPAT_PLUGIN_VERSION: &str = "1.17.9";
 
