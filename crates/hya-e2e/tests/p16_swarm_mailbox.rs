@@ -285,9 +285,16 @@ async fn t2_6_channel_send_reaches_subscribers_and_reports_real_recipients() {
         env.diagnostics()
     );
 
-    // And the receipt A saw counted exactly the one live subscriber — A never
-    // joined, so a count of 1 can only come from B's membership.
-    expect_route_sees(&env, &[SYS_A, SYS_B], SYS_A, "\\\"recipients\\\":1").await;
+    // And the receipt A saw counted exactly the one live subscriber. The needle
+    // must name the *channel*: a direct `send` hard-codes `recipients: 1`
+    // (`Engine::mail_send_for_actor`) regardless of delivery, so bare
+    // `recipients:1` would already be satisfied by A's earlier direct send to B
+    // and would prove nothing about channel fan-out. Only the channel branch
+    // counts real subscribers (`SessionStore::append_channel_mail` walks
+    // `channels[squad].members`), and A never joined, so `to #squad
+    // (1 recipient)` can only come from B's membership.
+    let channel_receipt = format!("Delivered from {H2} to #squad (1 recipient).");
+    expect_route_sees(&env, &[SYS_A, SYS_B], SYS_A, &channel_receipt).await;
 }
 
 /// T2.9 — `channels` lists the team's channels with real member and message
@@ -420,11 +427,20 @@ async fn t2_10_join_changes_the_set_of_channel_recipients() {
 ///
 /// 1. **C**, a still-subscribed member, receives the post — so the send itself
 ///    demonstrably delivered.
-/// 2. **B**, the departed member, is directly pinged in the *same* tool batch,
-///    immediately after the channel post. A wake injects the entire unread inbox
-///    in sequence order, so B seeing the later direct ping proves the earlier
-///    channel post was not merely in flight: had B still been subscribed, both
-///    would have been injected together.
+/// 2. **B**, the departed member, is directly pinged from the *same* tool batch,
+///    immediately after the channel post — so the ping is strictly later in the
+///    team log than the post. B seeing the ping therefore proves the post was not
+///    merely still in flight.
+///
+/// Control 2 rests on a cursor invariant, not on both messages landing in one
+/// wake (they usually do not — a mutation run that left B subscribed delivered
+/// them in two consecutive turns). `ResidentSupervisor::run_one_turn` injects
+/// *every* inbox entry from `cursor` to the snapshot length, in sequence order,
+/// and only then advances `cursor` to that length; nothing else moves it
+/// forward. A resident can therefore never be shown message N+1 without having
+/// been shown an unread message N. `route_dump` is cumulative across all of B's
+/// requests, so "B saw the ping" ⇒ "B would also have seen the post, had it ever
+/// entered B's inbox".
 ///
 /// Without those controls, "the message did not arrive" would only mean "the
 /// test did not wait long enough".
