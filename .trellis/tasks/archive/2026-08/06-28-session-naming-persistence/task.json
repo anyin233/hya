@@ -11,7 +11,7 @@
   "creator": "cydia2001",
   "assignee": "cydia2001",
   "createdAt": "2026-06-28",
-  "completedAt": "2026-06-29",
+  "completedAt": "2026-08-06",
   "branch": "finish/session-naming-persistence",
   "base_branch": "main",
   "worktree_path": ".worktrees/finish-session-naming-persistence",
