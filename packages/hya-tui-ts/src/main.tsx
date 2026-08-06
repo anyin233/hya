@@ -8,6 +8,17 @@ import { startupMark } from "./hya/startup-trace"
 import { run, type TuiInput } from "./upstream"
 import { resolve } from "./upstream/config"
 
+/**
+ * Parse Bun CLI argv and start the TypeScript TUI against a running backend.
+ *
+ * **Requires `--url`.** This package is frontend-only and will not start
+ * `hya-backend`. Prefer `hya` / `hya-ts` for normal use; they supply `--url`.
+ *
+ * @param argv - CLI arguments after the script name (typically `process.argv.slice(2)`)
+ * @param runner - Optional TUI runner; defaults to Effect-backed `run` with `HyaPlatform`
+ * @returns Promise that resolves when the runner completes
+ * @throws Error when `--url` is missing or the URL/project path is invalid
+ */
 export async function launch(argv: string[], runner: (input: TuiInput) => Promise<unknown> = runTui) {
   startupMark("bun_entry")
   const { values, positionals } = parseArgs({
@@ -46,6 +57,12 @@ export async function launch(argv: string[], runner: (input: TuiInput) => Promis
   })
 }
 
+/**
+ * Default runner: provide `HyaPaths` via Effect and enter the upstream TUI `run`.
+ *
+ * @param input - Parsed launch input (url, directory, args, config, plugin host)
+ * @returns Promise that resolves when the TUI Effect program finishes
+ */
 function runTui(input: TuiInput) {
   return Effect.runPromise(run(input).pipe(Effect.provideService(HyaPlatform, HyaPaths)))
 }

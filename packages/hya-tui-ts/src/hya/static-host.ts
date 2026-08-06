@@ -3,6 +3,15 @@ import type { TuiPluginApi, TuiPluginMeta, TuiPluginStatus, TuiSlotPlugin } from
 import { createBuiltinPlugins } from "../upstream/feature-plugins/builtins"
 import type { TuiPluginHost } from "../upstream/plugin/runtime"
 
+/**
+ * Create the static (in-process) TUI plugin host used by hya.
+ *
+ * Loads only enabled built-in plugins from `createBuiltinPlugins()` — no dynamic
+ * external plugin loader. Tracks dispose hooks, slot registrations, routes,
+ * events, and keymap layers so `dispose()` tears them down in reverse order.
+ *
+ * @returns A {@link TuiPluginHost} with `start` and `dispose` methods
+ */
 export function createStaticPluginHost(): TuiPluginHost {
   let dispose: (() => Promise<void>) | undefined
 

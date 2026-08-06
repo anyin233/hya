@@ -9,6 +9,12 @@ import {
 } from "./product"
 import { BUILTIN_IDS } from "../upstream/feature-plugins/builtins"
 
+/**
+ * Stable snapshot of public hya presentation constants for architecture tests.
+ *
+ * Consumed by `test/branding-pruning.test.ts` so rebrand regressions fail in CI.
+ * Not a runtime configuration object — values are fixed at build time.
+ */
 export const auditSurface = {
   product: PRODUCT_NAME,
   presentation: {
