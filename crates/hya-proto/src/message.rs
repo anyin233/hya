@@ -94,7 +94,7 @@ impl SubagentMode {
 /// Live activity of a team member in the roster (ADR-0002). Drives the TUI status
 /// column and the team-scoped quiescence detector.
 ///
-/// `Default` is `Idle` and it is `#[serde(default)]` on [`RosterEntry`], so older
+/// `Default` is `Idle` and it is `#[serde(default)]` on `RosterEntry`, so older
 /// logs replay with idle members.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

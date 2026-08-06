@@ -5,10 +5,6 @@
 //! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
 //! cannot run inside the transaction sqlx wraps migrations in.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 mod admission;
 mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.

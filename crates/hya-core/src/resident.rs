@@ -6,7 +6,7 @@
 //! publishes (Phase 3) — that is the wake seam — so nothing new polls.
 //!
 //! ## Guarantees (see the per-method docs for where each is enforced)
-//! - **Zero idle cost.** Every resident parks on a [`Notify`]; the bus listener
+//! - **Zero idle cost.** Every resident parks on a `Notify`; the bus listener
 //!   parks on `recv()`. No timers, no polling, no turns without a triggering mail.
 //! - **Exactly one turn per wake, with coalescing.** A resident runs at most one
 //!   turn at a time. Mail that arrives while it is mid-turn is *not lost*: it sets

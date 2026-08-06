@@ -4,10 +4,6 @@
 //! a newtype per id. This crate is dependency-light (serde / uuid only) so the
 //! TUI can share types without pulling sqlx/tokio into its build graph.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 /// Native HTTP request/response DTOs for session create, prompt, shell, and event queries.
 pub mod api;
 /// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.

@@ -6,10 +6,6 @@
 //! and the HTTP server both call into this crate so they share one composition
 //! path without duplicating bootstrap glue in each binary.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
 /// `config.yaml` load, first-run bootstrap, and Compat import.

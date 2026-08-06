@@ -1,7 +1,7 @@
 //! Per-plugin JSON-RPC client and child-process lifecycle.
 //!
 //! [`PluginClient`] speaks NDJSON requests/notifications over async stdio.
-//! [`ChildGuard`] owns the spawned process, stderr tail, and shutdown/terminate.
+//! `ChildGuard` owns the spawned process, stderr tail, and shutdown/terminate.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;

@@ -13,10 +13,6 @@
 //! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
 //! crate stays free of terminal UI and HTTP routing.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
 /// Model category resolution and member-agent construction.

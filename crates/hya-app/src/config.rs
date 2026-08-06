@@ -371,7 +371,7 @@ fn config_path() -> Option<PathBuf> {
 
 /// Where hya expects its config file, whether or not it currently exists.
 ///
-/// Unlike [`config_path`] (which only returns a path that exists), this always
+/// Unlike `config_path` (which only returns a path that exists), this always
 /// yields the location a user should create — preferring
 /// `$XDG_CONFIG_HOME/hya/config.yaml`, then `$HOME/.config/hya/config.yaml`,
 /// and finally the conventional `~/.config/...` spelling when neither env var

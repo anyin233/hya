@@ -376,7 +376,7 @@ impl SessionEngine {
         self
     }
 
-    /// Install the [`SubagentGovernor`] that bounds nested/parallel subagent
+    /// Install the `SubagentGovernor` that bounds nested/parallel subagent
     /// streaming concurrency and per-run budget.
     #[must_use]
     pub fn with_governor(mut self, governor: crate::orchestrator::SubagentGovernor) -> Self {

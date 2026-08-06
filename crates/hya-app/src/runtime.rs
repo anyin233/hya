@@ -80,7 +80,7 @@ fn builtin_catalog_from(bytes: &[u8], expected_digest: &str) -> anyhow::Result<A
 /// fail-closed for the process lifetime without silent retry or substitution.
 /// Read-only public accessor for consumers (e.g. `hya-backend` agent list) that
 /// must share the same process-wide `Arc` — no second embed, decode, or cache.
-/// Injectable [`builtin_catalog_from`] remains uncached for tamper tests.
+/// Injectable `builtin_catalog_from` remains uncached for tamper tests.
 pub fn builtin_catalog() -> anyhow::Result<Arc<BundleCatalog>> {
     use hya_bundle::BundleError;
 
@@ -4398,7 +4398,7 @@ impl HyaRuntime {
         self.engine.clone()
     }
 
-    /// Clone of the HTTP [`AppState`] wrapped by the router.
+    /// Clone of the HTTP `AppState` wrapped by the router.
     #[must_use]
     pub fn app_state(&self) -> hya_server::AppState {
         self.app_state.clone()
