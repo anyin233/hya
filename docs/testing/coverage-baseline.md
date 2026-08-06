@@ -75,7 +75,77 @@ even when a test fails.
 - These are **not** a quality target. This is a baseline. Nothing in this task
   adds tests to move it.
 
-## Track P's contribution — measurement blocked, and why
+## Track P's contribution — measured, and why the number is not publishable
+
+**Attempted, and the answer is that it cannot be measured as the harness stands.**
+This section records the evidence instead of a misleading figure.
+
+### What was tried
+
+No source change was needed. `cargo llvm-cov show-env --sh` exports the
+instrumentation environment; building with the **default** target dir then puts
+an instrumented `hya-backend` at `target/debug/hya-backend`, which is exactly
+where `default_backend_bin()` looks. The spawned child inherits
+`LLVM_PROFILE_FILE`, so in principle it emits its own profile data.
+
+```sh
+cargo llvm-cov clean --workspace
+eval "$(cargo llvm-cov show-env --sh)"
+cargo build --bin hya-backend          # instrumented, into target/debug
+cargo test -p hya-e2e -- --test-threads=1
+cargo llvm-cov report --summary-only
+```
+
+All 18 Track P test binaries passed, and 6 `.profraw` files were produced.
+
+### The result, and why it is wrong
+
+| Crate | Line coverage |
+| ---: | --- |
+| hya-backend | 23.9% |
+| hya-store | 8.8% |
+| hya-app | 0.2% |
+| **hya-server** | **0.0%** |
+| **hya-core** | **0.0%** |
+| hya-plugin | 0.0% |
+
+`hya-server` and `hya-core` at 0.0% is self-contradictory: those crates *are*
+what serves every prompt, tool call, and session in a Track P run. A report
+claiming Track P contributes 1.64% of lines would be false.
+
+### Root cause
+
+`crates/hya-e2e/src/backend.rs`:
+
+```rust
+impl Drop for BackendProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        …
+```
+
+`std::process::Child::kill()` sends **SIGKILL** on Unix. A SIGKILL'd process
+never runs atexit handlers, and LLVM writes `.profraw` from an atexit handler.
+So every `serve` process is destroyed before it can flush its coverage data.
+
+The 23.9% / 8.8% that *did* appear comes from the short-lived CLI invocations
+that exit normally — `hya-backend bundle install/list/info/uninstall` in
+`p11_hyabundle.rs`. Those are real; the serving path is simply absent.
+
+### What would make it measurable
+
+The harness would have to stop the backend gracefully — SIGTERM plus a wait for
+normal exit, with the backend handling SIGTERM by returning from `main` — the
+way `crates/hya-sdk/src/server.rs` already does it (SIGTERM to the process
+group, ~1s grace, then SIGKILL). That is a harness change, out of scope for a
+measurement task, and it is a prerequisite for any future Track P coverage
+number.
+
+Until then: **the workspace figure above excludes Track P entirely, and Track P's
+contribution is unknown.** `hya-client`'s 0.0% in the table above is the visible
+symptom of that hole.
+
+## Earlier analysis (superseded by the measurement above)
 
 `cargo llvm-cov` builds instrumented binaries into `target/llvm-cov-target/debug/`,
 but the E2E harness spawns the backend from a hard-coded
