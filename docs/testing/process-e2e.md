@@ -129,6 +129,7 @@ Helpers:
 | Todo | `/session/{id}/todo` lists items written via `todowrite` |
 | Edit | Disk file content after `edit` tool |
 | Mailbox `send` | The **recipient's** next FakeLlm request contains `[mail from …] <body>` — never the sender's success string or call args |
+| Mailbox `send` receipts | A *direct* send hard-codes `recipients: 1`; only a `#channel` send counts real subscribers. Any receipt assertion must name the channel (`to #squad (N recipient…)`), never bare `recipients:1` |
 | Mailbox `roster` / `channels` | Follow-up request carries state the caller never supplied (teammate session id, channel membership) |
 | Mailbox `leave` | Negative claim needs both controls: a still-subscribed member that *did* receive the post, and a later direct ping the departed member *did* receive |
 

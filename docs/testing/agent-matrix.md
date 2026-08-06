@@ -46,7 +46,7 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `/api/agent` lists build + spawnable roles |
 | T2.4 | Swarm `roster` + `list_agents` | `tests/p16_swarm_mailbox.rs` | Caller's follow-up carries the teammate's handle, type, status and **real session id** |
 | T2.5 | Swarm `send` (direct) | `tests/p16_swarm_mailbox.rs` | **Recipient's** next request contains `[mail from general-2] …` |
-| T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt `recipients:1` matches real membership |
+| T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt reads `to #squad (1 recipient)` — the channel-branch count, not the direct-send constant |
 | T2.7 | Hyabundle CLI lifecycle | `tests/p11_hyabundle.rs` | install/list/info/uninstall stdout |
 | T2.8 | Hyabundle spawn agent | `tests/p11_hyabundle.rs` | Roster has package agent; events have scripted text |
 | T2.9 | Swarm `channels` | `tests/p16_swarm_mailbox.rs` | Result reports `members:["general-1"]` and `messages:1` the caller never supplied |
