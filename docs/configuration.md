@@ -2,13 +2,21 @@
 
 hya reads its own YAML config from:
 
-1. `$XDG_CONFIG_HOME/hya/config.yaml`
+1. `$XDG_CONFIG_HOME/hya/config.yaml` (when that file exists)
 2. `$HOME/.config/hya/config.yaml`
+
+The file is parsed strictly as YAML via `serde_norway::from_str`
+([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs)). JSON and
+TOML are **not** accepted. Unknown top-level keys are ignored without warning —
+there is no `deny_unknown_fields` — so a misspelled section such as `provider:`
+instead of `providers:` is silently dropped. After editing, verify with
+`hya-backend models`. A file that is empty or whitespace-only is treated exactly
+like a missing file and hya runs offline.
 
 If no usable provider route is configured, hya falls back to `DevProvider`, the
 offline echo provider from [`../crates/hya-provider/src/dev.rs`](../crates/hya-provider/src/dev.rs).
-The same config file also drives tools, MCP servers, plugins, permissions, and
-formatter status.
+The same config file also drives tools, MCP servers, plugins, permissions,
+subagent limits, model categories, and formatter status.
 
 ## First-Run / Offline Behavior
 
@@ -29,15 +37,32 @@ permission:
   rules: []
 ```
 
-A missing, empty, or provider-less config is **not an error** — hya falls back
-to the offline `DevProvider` so the whole stack stays runnable without API keys.
-hya runs offline when any of these hold:
+A missing or unusable config is **not an error** — hya falls back to the offline
+`DevProvider` so the whole stack stays runnable without API keys.
 
-- No usable provider route exists in `config.yaml`.
-- The file exists but is empty.
-- It declares no usable provider routes, MCP servers, or plugins.
+`load()` returns “no usable config” (offline) when any of these hold
+([`config.rs`](../crates/hya-app/src/config.rs) around the empty-config gate):
+
+- No config file, or the file is empty / whitespace-only.
+- After resolution there are **no** providers, **no** MCP servers, **no**
+  plugins, **no meaningful** `permission` block, and **no** `tools:` block.
 - A provider has models but no resolvable key (no inline `api_key` and no saved
-  `hya-backend login` token), so it is dropped.
+  `hya-backend login` token), so it is dropped — and nothing else above remains.
+
+**Meaningful permission:** a `permission:` block counts only if its `model`
+differs from `default` **or** it has at least one rule
+(`has_meaningful_permission`). The literal starter block
+`permission: { model: default, rules: [] }` is treated as **absent**. A
+permission-only config keeps hya’s config active only when that block is
+meaningful by this rule.
+
+**Independent re-reads:** `categories:` and `subagents:` are re-read by separate
+loaders that reopen and reparse `config.yaml` independently of the main
+`load()` (`load_categories`, `load_subagent_limits`). Both still take effect
+even when hya is running on the offline provider because `load()` returned
+`None`. A parse failure on those paths degrades silently to defaults — no error
+is printed — so a malformed `categories:` / `subagents:` block looks like the
+keys being ignored.
 
 Canonical `hya` imports Compat configuration only when requested explicitly:
 
@@ -46,7 +71,7 @@ hya --import compat
 ```
 
 The command imports provider base URLs, model IDs, API key values or templates,
-and supported local MCP servers from the first discovered Compat config
+and supported **local** MCP servers from the first discovered Compat config
 (`$COMPAT_CONFIG`, `$XDG_CONFIG_HOME/compat/{opencode.json,config.json,opencode.jsonc}`,
 `$HOME/.config/opencode/{...}`, then `$HOME/.opencode/{...}`). The import is
 local and does not print secret values. Skills import is not implemented yet.
@@ -90,6 +115,20 @@ default_model: claude-sonnet-4-6
 # Falls back to the built-in `build` agent when omitted.
 default_agent: build
 
+# Nested subagent caps (optional; defaults shown).
+subagents:
+  max_depth: 5
+  max_concurrency: 100
+  per_run_budget: 1024
+  per_team_turn_budget: 1024
+  per_team_message_budget: 1024
+
+# Logical model categories → ordered provider/model failover lists.
+categories:
+  deep:
+    - anthropic/claude-sonnet-4-6
+    - gateway/gpt-5.6-sol
+
 # Invocation policy. Selectors are Rust regular expressions and are evaluated
 # in order. Use anchors when you need a full-name or full-command match.
 permission:
@@ -125,21 +164,23 @@ providers:
     models: [claude-sonnet-4-6]          # providers with no models are skipped
 
 # MCP servers. Tools are registered as mcp__<server>__<tool>.
+# Stdio/local only — there is no url/remote transport key.
 mcp:
   filesystem:
-    command: [node, /path/to/server.js]  # stdio command for the server process
+    command: [node, /path/to/server.js]  # argv array for the stdio server process
     env:
-      TOKEN: "{env:MCP_TOKEN}"           # env values also accept {env:}/{file:}
-    timeout_ms: 1000
+      TOKEN: "{env:MCP_TOKEN}"           # env values accept {env:}/{file:}
+    timeout_ms: 1000                     # milliseconds; omit for 30s default
     # enabled: false                     # set to skip this server
 
-# Plugins. May also be discovered from <workdir>/.hya/plugins/**/plugin.toml.
+# Plugins. Also discovered from <workdir>/.hya/plugins/<name>/plugin.toml
+# (one directory deep — not recursive).
 plugins:
   memory:
     command: [python3, memory.py]        # stdio JSON-RPC process
     timeout_ms: 500
     env:
-      TOKEN: literal-token
+      TOKEN: literal-token               # NOT templated — see Plugins
   compat:
     kind: compat                       # rust (default) | compat | other
 ```
@@ -198,6 +239,66 @@ content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
 defaulting to `high`. Grok streams must end with `response.completed` or
 `response.incomplete`; `[DONE]` alone is not completion.
 
+### Reasoning metadata
+
+Models may use a string id or a detailed entry:
+
+```yaml
+models:
+  - gpt-5.5
+  - id: gpt-5.6-sol
+    reasoning:
+      default: medium
+      variants: [none, minimal, low, medium, high, xhigh, max]
+```
+
+Accepted effort strings (case-insensitive after trim): `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max`. Compatibility aliases: `off` → `none`,
+`med` → `medium`. Any other string is a config error.
+
+An explicit non-`none` default must appear in `variants`. When `variants` is set
+on a model, it **replaces** (does not extend) the provider-kind default menu.
+
+**Per-kind default variant menus** (used when a model has no
+`reasoning.variants` override), from
+[`crates/hya-provider/src/http.rs`](../crates/hya-provider/src/http.rs):
+
+| `kind` | Default variants |
+| --- | --- |
+| `anthropic` | `low`, `medium`, `high`, `max` |
+| `openai` / `openai-compatible` / `openai-completion` | `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `openai-response`, `openai-codex` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `grok-build` | `low`, `medium`, `high` |
+| `google` | `high`, `max` |
+
+When `reasoning.default` is omitted, the effective default is the **highest**
+effort in the resulting list (ordering Off &lt; Minimal &lt; Low &lt; Medium &lt;
+High &lt; XHigh &lt; Max). Full default resolution
+([`resolve_default_reasoning`](../crates/hya-provider/src/lib.rs)):
+
+1. Explicit `reasoning.default` from config.
+2. Otherwise the last-used effort, kept when it is `none`/`off` or present in the advertised variants.
+3. Otherwise the highest supported level.
+
+If the model advertises no reasoning at all, the result is `None` and no default
+is shown. A route emits an empty variant list when `reasoning_request` is false.
+
+**Provider budget / label mapping:**
+
+| Effort | Anthropic thinking budget | Google `thinkingBudget` | OpenAI `reasoning_effort` label |
+| --- | --- | --- | --- |
+| `none` / `off` | none (disabled) | none | omitted |
+| `minimal` | none (disabled) | none | `minimal` |
+| `low` | 1024 | none | `low` |
+| `medium` | 4096 | none | `medium` |
+| `high` | 16000 | 16000 | `high` |
+| `xhigh` | 24000 | 20000 | `xhigh` |
+| `max` | 31999 | 32768 if model id contains both `2.5` and `pro`, else 24576 | `xhigh` |
+
+Surprise: Google does **not** attach a thinking budget for off/minimal/low/medium.
+Responses sends configured labels unchanged; Chat Completions omits `none` and
+collapses both `xhigh` and `max` to the label `xhigh`.
+
 ### OAuth login (`openai-codex` and `grok-build`)
 
 Interactive OAuth is implemented entirely in Rust:
@@ -221,23 +322,89 @@ hya oauth status
 
 On success hya:
 
-1. Writes an OAuth credential bundle to `~/.config/hya/auth/<provider>.yaml`
-   (`access_token`, `refresh_token`, `expires_at`, optional `account_id`).
+1. Writes an OAuth credential bundle to the auth directory (see
+   [Auth Tokens](#auth-tokens)).
 2. Fetches the live model catalog with the new token:
-   - `openai-codex` → `GET https://chatgpt.com/backend-api/codex/models`
+   - `openai-codex` → `GET https://chatgpt.com/backend-api/codex/models?client_version=0.144.0`
+     with `OpenAI-Beta: responses=experimental` and `User-Agent: codex_cli_rs`
    - `grok-build` → `GET <base_url>/models` (CLI chat proxy)
 3. Upserts a non-secret provider route into `config.yaml` (`kind`, `base_url`,
    full `models` list, including reasoning metadata when the catalog provides
    it). Secrets are **not** written into `config.yaml`. If the catalog fetch
    fails, hya still saves credentials and writes a single default model.
 
-Access tokens are refreshed automatically when near expiry. If the refresh
-token is revoked (`invalid_grant`), provider calls fail with a clear re-login
-hint:
+**Catalog filter:** before writing models into `config.yaml`, any model id
+containing `imagine`, `image`, or `video` is dropped (media-generation models the
+agent catalog cannot use). Add those by hand under `providers.<id>.models` if
+needed.
 
-```text
-hya-backend oauth login --provider <name> --type <openai-codex|grok-build>
-```
+**`default_model` side-effect:** overwritten only when it is missing, empty, or
+literally `offline` — an existing real default is preserved.
+
+**Provider id validation:** `--provider` ids containing `/`, `\`, `..`, or
+whitespace are rejected, because the id becomes the `auth/<id>.yaml` filename.
+
+#### Access-token refresh
+
+`ensure_access_token` loads the saved credential on every stream and refreshes
+first when the token is within a **5-minute (300s)** skew of its stated expiry. A
+plain `type: api` credential is returned untouched. Refresh is guarded by a
+process-wide mutex plus a re-read after acquiring the lock, so concurrent
+sessions cannot both burn a rotated refresh token.
+
+Two failure modes surface as `ProviderError::AuthExpired{provider, hint}`:
+
+1. **NeedsLogin** — refresh token revoked/invalid (`invalid_grant`, or HTTP
+   400/401 on the Grok token endpoint). Hint is the re-login command:
+
+   ```text
+   hya-backend oauth login --provider <name> --type <openai-codex|grok-build>
+   ```
+
+2. **Entitlement** — HTTP 403 from the Grok refresh endpoint means the account
+   lacks subscription entitlement. The hint explains the API-key / upgrade path;
+   **re-login will not fix it**.
+
+Grok refresh requires a rotated refresh token when the response supplies one.
+
+#### Codex OAuth endpoints
+
+Useful for proxy/firewall allowlisting
+([`openai_codex.rs`](../crates/hya-app/src/oauth/openai_codex.rs)):
+
+| Constant | Value |
+| --- | --- |
+| `client_id` | `app_EMoamEEZ73f0CkXaXp7hrann` |
+| Issuer / authorize / token | `https://auth.openai.com` |
+| Device API base | `https://auth.openai.com/api/accounts` |
+| Scope | `openid profile email offline_access` |
+
+The ChatGPT account id sent as `chatgpt-account-id` is read from the `id_token`
+(falling back to the access token) by decoding the JWT payload **without**
+signature verification and reading
+`https://api.openai.com/auth`.`chatgpt_account_id`.
+
+Codex returns the device-flow `interval` as a JSON **string** rather than a
+number; hya parses either form, floors it at 1 second, and defaults to 5 seconds
+when absent.
+
+Note: `client_version=0.144.0` is **pinned** and may need bumping if the models
+endpoint starts rejecting it.
+
+#### Grok OAuth endpoints
+
+([`grok_build.rs`](../crates/hya-app/src/oauth/grok_build.rs)):
+
+| Constant | Value |
+| --- | --- |
+| `client_id` | `b1a00492-073a-47ea-816f-4c329264a828` |
+| Device / token | `https://auth.x.ai/oauth2/device/code`, `https://auth.x.ai/oauth2/token` |
+| Scope | `openid profile email offline_access grok-cli:access api:access conversations:read conversations:write` |
+
+Device-code polling: `authorization_pending` keeps polling; each `slow_down`
+adds 5s to the interval capped at 30s; `access_denied` / `expired_token` fail
+fast. When the token response omits `expires_in`, `expires_at` is derived from
+the access token’s JWT `exp` claim.
 
 #### OpenAI Codex (`kind: openai-codex`)
 
@@ -276,23 +443,37 @@ Every `grok-build` request uses CLI chat-proxy session headers:
 You can still paste a bearer with `hya-backend login grok <token>` or an
 inline `api_key`, but that path has no automatic refresh.
 
-Models may use the existing string form or a detailed entry with per-model
-reasoning metadata:
+## Categories
+
+Top-level `categories:` maps a logical category name to an ordered list of
+concrete `provider/model` refs. The first entry is preferred; the rest form a
+spawn-time failover chain (first candidate whose provider is configured wins).
 
 ```yaml
-models:
-  - gpt-5.5
-  - id: gpt-5.6-sol
-    reasoning:
-      default: medium
-      variants: [none, minimal, low, medium, high, xhigh, max]
+categories:
+  deep:
+    - anthropic/claude-sonnet-4-6
+    - gateway/gpt-5.6-sol
+  quick:
+    - gateway/gpt-5.6-sol
 ```
 
-Reasoning values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
-`max`. An explicit non-`none` default must appear in `variants`. When reasoning
-metadata is omitted, hya uses the provider's variants and selects their highest
-supported effort as the startup default. Responses sends every configured label
-unchanged; Chat Completions omits `none` and sends `max` as `xhigh`.
+Semantics ([`crates/hya-core/src/category.rs`](../crates/hya-core/src/category.rs),
+[`config.rs`](../crates/hya-app/src/config.rs)):
+
+- Empty or whitespace-only candidates are trimmed and dropped.
+- A category whose list is entirely empty is dropped from the registry.
+- Resolution picks the first candidate the router can actually serve; otherwise
+  it falls back to the first candidate so failure surfaces as a real provider
+  error instead of a silent misroute.
+- There are **no** built-in categories (old `tier-cheap` / `strong` placeholders
+  were removed).
+- An unknown category fails to resolve and falls through the agent
+  model-precedence chain to the global default model.
+
+See [ADR-0004](adr/0004-model-category-resolution-and-precedence.md) for full
+spawn/inline/bundle precedence. Categories are still loaded while offline (see
+[First-Run / Offline Behavior](#first-run--offline-behavior)).
 
 ## Auth Tokens
 
@@ -314,9 +495,38 @@ hya-backend oauth status
 hya-backend auth logout anthropic
 ```
 
-Tokens are stored under `~/.config/hya/auth/<provider>.yaml` (plain API keys or
-OAuth bundles). HTTP auth headers are marked sensitive and redirects are
-disabled so a secret is not forwarded to another host.
+### On-disk auth file schema
+
+Directory: `$XDG_CONFIG_HOME/hya/auth` when `XDG_CONFIG_HOME` is set, otherwise
+`$HOME/.config/hya/auth` ([`auth.rs`](../crates/hya-app/src/auth.rs)). Any saved
+credential always beats an inline `providers.<id>.api_key`.
+
+**Static API key:**
+
+```yaml
+type: api
+token: sk-...
+```
+
+**OAuth bundle:**
+
+```yaml
+type: oauth
+oauth_type: openai-codex   # or grok-build
+access_token: ...
+refresh_token: ...
+expires_at: "2026-01-01T00:00:00Z"   # RFC3339 UTC
+account_id: optional
+id_token: optional
+```
+
+Writes are atomic: a temp `.<provider>.yaml.tmp` is created, chmodded to `0600`
+on Unix, then renamed into place. If YAML deserialization yields no credential,
+hya scrapes a bare `token: "..."` line and unquotes it as an API credential, so
+a hand-written one-line file still works.
+
+HTTP auth headers are marked sensitive and redirects are disabled so a secret is
+not forwarded to another host.
 
 ## Model Selection
 
@@ -341,6 +551,55 @@ hya-backend models gateway --verbose
 The selected model must be served by one configured route. If no route reports
 capabilities for the model, the router returns `unknown provider for model`.
 
+### Model ref forms
+
+A route serves a model ref addressed as:
+
+| Form | Example |
+| --- | --- |
+| Bare `modelID` | `gpt-5.6-sol` |
+| `providerID/modelID` (provider id must match the route) | `gateway/gpt-5.6-sol` |
+| Either form with a non-empty `#variant` suffix | `gateway/gpt-5.6-sol#high` |
+
+The `#variant` suffix is split off before matching and is **never** sent
+upstream — it only selects the reasoning variant. An empty variant (trailing
+`#`) is not treated as a suffix.
+
+Compat HTTP surfaces additionally accept a model-ref object
+`{ providerID, modelID|id, variant? }` or a plain string; `providerID: "hya"` is
+dropped so the bare id still resolves, and `variant` becomes the `#variant`
+suffix.
+
+## Subagent Limits
+
+Top-level `subagents:` caps nested and parallel subagent fan-out
+([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs),
+[`crates/hya-core/src/orchestrator.rs`](../crates/hya-core/src/orchestrator.rs)).
+Every field is optional; omitted fields keep their default. Still applied while
+offline (independent loader). See also
+[ADR-0002](adr/0002-resident-actor-model-and-autonomous-main-agent.md).
+
+```yaml
+subagents:
+  max_depth: 5
+  max_concurrency: 100
+  per_run_budget: 1024
+  per_team_turn_budget: 1024
+  per_team_message_budget: 1024
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `max_depth` | u32 | `5` | Maximum nesting depth of subagent spawns (lead session = depth 0). |
+| `max_concurrency` | usize | `100` | Ceiling on concurrently streaming general members (`1..=100`); excess members park rather than fail. |
+| `per_run_budget` | u64 | `1024` | Maximum total members spawned under one top-level run. |
+| `per_team_turn_budget` | u64 | `1024` | Total resident turns one team may run; tripping it **kills the team** (runaway re-wake backstop). |
+| `per_team_message_budget` | u64 | `1024` | Total `MailSent` events one team may emit; tripping it **kills the team** (A↔B message-loop backstop). |
+
+Environment overrides for these five keys win over the file (see
+[Environment Variables](#environment-variables)). Unparseable env values fall
+back to the config/default value.
+
 ## Web Search
 
 Web search is enabled by default and uses Exa without authentication. Override
@@ -358,7 +617,8 @@ tools:
 `endpoint` and `key` are optional. Exa sends the key as the `exaApiKey` query
 parameter; Parallel sends it as a bearer token. Set `enabled: false` to remove
 the built-in `websearch` tool. When enabled, the tool is available to every
-model provider.
+model provider. Provider, endpoint, key, and enabled come **only** from this
+config block — there are no websearch-related environment variables.
 
 ## Permissions
 
@@ -404,46 +664,129 @@ checks auto-approve unless a snapshot rule explicitly denies them.
 Interactive TUI and server modes forward asks to their existing permission UI
 or endpoint. Headless `exec`, RPC, and goal modes reject unresolved asks.
 `--yolo` replaces the effective model with `danger` before engine construction.
-Omitting `permission` is equivalent to `model: default` with no rules; a
-permission-only config remains active while hya uses the offline provider.
+
+Omitting `permission` is equivalent to `model: default` with no rules. A
+permission-only config remains active while hya uses the offline provider **only
+when the block is meaningful** (non-default model or at least one rule) — see
+[First-Run / Offline Behavior](#first-run--offline-behavior).
 
 ## Environment Variables
 
-hya reads the following `HYA_*` variables (verified against the source listed
-in each row). Unset variables fall back to the documented default. Beyond these,
-hya honors the standard `HOME` and `XDG_CONFIG_HOME` for config/auth paths.
+The tables below list environment variables the codebase reads, grouped by
+layer. They are **not** a claim of exhaustive completeness across every binary
+and plugin; each row cites its source.
+
+Unset variables fall back to the documented default unless noted. Beyond these,
+hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
+`XDG_CACHE_HOME` for path derivation.
+
+### Backend / runtime (`HYA_*`)
 
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
 | `HYA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/config.rs`, `crates/hya-app/src/runtime.rs` |
-| `HYA_COMPACTION_THRESHOLD` | Token count that triggers context compaction. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().token_threshold` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
-| `HYA_COMPACTION_KEEP_RECENT` | Number of most-recent messages kept verbatim when compacting. Parsed as a number; unparseable values are ignored. | `CompactionConfig::default().keep_recent` | `crates/hya-app/src/runtime.rs` (`compaction_config`) |
-| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (used for `kind: compat` plugins). | Bundled adapter in `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
-| `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH`. | `crates/hya-backend/src/serve.rs` (`resolve_hya_bin`) |
+| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction. Env-only (no config.yaml key). Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/runtime.rs` |
+| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Env-only. Unparseable values ignored. | `6` | same |
+| `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
+| `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
+| `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
+| `HYA_SUBAGENT_TURN_BUDGET` | Overrides `subagents.per_team_turn_budget`. Env wins. | `1024` | same |
+| `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
+| `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
+| `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
+| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (`kind: compat` plugins). | Bundled adapter in `crates/hya-plugin-compat/adapter` | `crates/hya-app/src/plugins.rs` |
+| `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH` | `crates/hya-backend/src/serve.rs` |
+| `HYA_BACKEND_BIN` | Path to the `hya-backend` binary the `hya` / `hya-ts` launcher spawns. After CLI `--backend-bin`, before sibling and `target/{release,debug}` fallbacks. | sibling / workspace target | `crates/hya-ts/src/lib.rs` |
+| `HYA_TUI_TS_DIR` | Highest-priority override for the TypeScript TUI runtime directory. Order: (1) this env, (2) `<exe_dir>/../lib/hya/hya-tui-ts`, (3) `<workspace>/packages/hya-tui-ts`. | installed or workspace path | `crates/hya-ts/src/lib.rs` |
+| `HYA_DB` | Session SQLite path for the backend. Empty string forces in-memory. | `$XDG_STATE_HOME/hya/sessions.db` (see `docs/cli.md`) | `crates/hya-sdk/src/server.rs` |
+| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), emit newline-delimited JSON startup marks to stderr: `{"hya_startup":true,"mark":"<mark>","wall_ms":…,"detail":…}` (`detail` omitted when none). Marks include `hya_ts_start`, `backend_spawn`, `backend_listen`, plus backend and TUI marks. | off | `crates/hya-ts/src/main.rs`, `crates/hya-backend/src/serve.rs`, `packages/hya-tui-ts/src/hya/startup-trace.ts` |
 
-Related, non-`HYA_` variables that also affect behavior:
+### TUI environment variables
+
+| Variable | Effect | Default | Source |
+| --- | --- | --- | --- |
+| `HYA_DISABLE_MOUSE` | Truthy `1`/`true` disables OpenTUI mouse capture regardless of the `mouse` config key. | off | `packages/hya-tui-ts/src/hya/platform.ts` |
+| `HYA_DISABLE_TERMINAL_TITLE` | Suppresses all terminal-title writes even when `terminal.title.toggle` is on. | off | same |
+| `HYA_DISABLE_COPY_ON_SELECT` | Disables copy-on-mouse-selection and the selection key intercept. **Always true on win32.** | off (except win32) | same |
+| `HYA_SHOW_TTFD` | Renders OpenTUI’s first-paint overlay. | off | same |
+| `HYA_WAIT_THEME` | Classic mode: block first paint up to 1s waiting for OS light/dark. Default is instant dark with async correction. | off | same |
+| `HYA_SYNC_PLUGIN_START` | Classic mode: gate shell routes on sequential builtin plugin-host start. Default paints shell chrome immediately. | off | same |
+| `HYA_VERSION` | Version string in sidebar/home footer. | `local` | same |
+| `HYA_CHANNEL` | Release channel string. A channel other than `latest` also reveals the raw session id in the sidebar title. | `local` | same |
+| `HYA_STARTUP_TRACE` | (Also listed above.) TUI emits its own marks when enabled. | off | `packages/hya-tui-ts/src/hya/startup-trace.ts` |
+| `HYA_ROUTE` | JSON picking the initial route (`home` / `session`+sessionID / `plugin`+id). | unset | `packages/hya-tui-ts/src/upstream/app.tsx` |
+| `HYA_FAST_BOOT` | When set, skips the initial loading overlay. | unset | same |
+
+### Compat adapter (`HYA_*` / `COMPAT_*`)
+
+Read by the bundled Compat plugin adapter
+([`crates/hya-plugin-compat/adapter`](../crates/hya-plugin-compat/adapter)):
+
+| Variable | Effect | Default / notes | Source |
+| --- | --- | --- | --- |
+| `HYA_COMPAT_OPTIONS_JSON` | JSON blob with a `plugin: [spec \| [spec, options]]` array **appended** after discovered specs. Malformed JSON becomes an `INVALID_PARAMS` initialize error. | empty → no extra plugins | `loader/discovery.ts` |
+| `HYA_DIRECTORY` | Adapter working directory. | `process.cwd()` | `initialize.ts` |
+| `HYA_WORKTREE` | Stop boundary for the ancestor config walk. | same as directory | same |
+| `HYA_SERVER_URL` | `serverUrl` handed to plugins. | `http://127.0.0.1:0` | same |
+| `HYA_PROJECT_ID` | Compat project id. | worktree path | `client_adapter.ts` |
+| `COMPAT_CONFIG` | Explicit Compat config file path. | unset | `initialize.ts` |
+| `COMPAT_CONFIG_DIR` | Extra config directory. | unset | same |
+| `COMPAT_CONFIG_CONTENT` | Inline JSON config. | unset | same |
+| `COMPAT_DISABLE_PROJECT_CONFIG` | Skip the project-config ancestor walk. | off | same |
+| `COMPAT_PURE` | When `true` or `1`, load **zero** plugins (escape hatch when a plugin breaks startup). | off | same |
+
+### Related non-`HYA_` variables
 
 | Variable | Effect | Source |
 | --- | --- | --- |
 | `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
-| `COMPAT_WEBSEARCH_PROVIDER` | Selects the web-search backend used by the websearch tool. | `crates/hya-tool/src/websearch.rs` |
-| `PARALLEL_API_KEY`, `EXA_API_KEY` | API keys for the corresponding websearch providers. | `crates/hya-tool/src/websearch.rs` |
+| `EDITOR` / `VISUAL` | External editor for the TUI `/editor` slash command (`<leader>e`). `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
+| `SHELL` | Shell program for PTY sessions on Compat PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when unset or empty for PTY spawn. | `crates/hya-server/src/compat/pty_payload.rs`, `pty_shell.rs` |
+| `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/compat/reference_repository.rs` |
+| `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/compat/pty_state.rs` |
+
+The frontend also probes `TERM_PROGRAM`, `TMUX`, `STY`, `ZED_TERM`, `DISPLAY`,
+`WAYLAND_DISPLAY`, `OPENCODE_EDITOR_SSE_PORT`, `OPENCODE_ZED_DB`, and
+`CLAUDE_CODE_SSE_PORT` for editor/terminal integration. None of those are
+hya-specific settings.
 
 ## MCP Servers
 
-MCP servers are configured under `mcp`:
+hya supports **stdio/local MCP servers only**. `mcp.<name>.command` is an argv
+array. There is **no** `url` / remote transport key on the hya config shape. When
+importing a Compat/OpenCode config, only entries with `type: local` (and a
+non-empty command, no remote URL) are kept — `type: remote` / URL entries are
+**dropped silently**, not converted and not warned about in the import path
+beyond skip counts. For a remote server, run a local stdio proxy.
 
 ```yaml
 mcp:
   filesystem:
     command: [node, /path/to/server.js]
     env:
-      TOKEN: "{env:MCP_TOKEN}"
-    timeout_ms: 1000
+      TOKEN: "{env:MCP_TOKEN}"   # {env:}/{file:} templating applies here
+    timeout_ms: 1000             # milliseconds; omit → 30s per subsequent call
   disabled-example:
     enabled: false
     command: [node, server.js]
 ```
+
+`timeout_ms` is milliseconds. When omitted, the per-call timeout is **30 s**
+(`DEFAULT_CALL_TIMEOUT` in [`crates/hya-mcp/src/client.rs`](../crates/hya-mcp/src/client.rs)).
+
+### Connection handshake
+
+When connecting an enabled server, hya:
+
+1. Spawns `command` over stdio.
+2. Sends `initialize` with `protocolVersion: "2025-06-18"` and `clientInfo`
+   naming `hya`, under a **5-second** initialize timeout.
+3. Sends the required `notifications/initialized` notification.
+4. Calls `tools/list` (uses `timeout_ms` / 30s default).
+5. Best-effort `resources/list` — a failing resources list still leaves the
+   server **Connected** with zero resources.
+
+Only steps 1–4 are mandatory for a successful connection.
 
 Enabled servers are prepared during runtime composition. Their tools keep the
 external name `mcp__<server>__<tool>` and use the existing permission plane.
@@ -455,6 +798,11 @@ turn; a failed handshake or name collision leaves the prior effective view
 unchanged, and disconnect removes the source for the next turn while an
 already-running turn retains its old binding. These routes do not durably
 rewrite `config.yaml`.
+
+With default `HYA_DEFER_SIDEPLANES`, the HTTP listener can come up before MCP
+handshakes finish, so `GET /mcp` may briefly report servers as not yet connected
+right after startup. See [Environment Variables](#environment-variables) and
+[`docs/testing/process-e2e.md`](testing/process-e2e.md).
 
 ### Runnable dynamic MCP control example
 
@@ -535,6 +883,11 @@ starting a TUI:
 hya --import compat
 ```
 
+The discovered Compat config is parsed as **strict JSON first**; if that fails,
+`//` and `/* */` comments and trailing commas are stripped and it is re-parsed as
+JSONC. This applies to any candidate filename, so a commented `opencode.json`
+also imports.
+
 The explicit import currently supports Compat provider/model config and local
 stdio MCP entries. It replaces `default_model` and `providers` in `config.yaml`,
 merges imported MCP servers by name, and preserves existing hya-only MCP entries
@@ -543,6 +896,16 @@ plus non-model sections such as `plugins` and `default_agent`. Compat
 `command`, `env`, `enabled`, and `timeout_ms`. Remote/OAuth MCP entries are
 skipped and counted in the command summary. Skills remain a TODO; future import
 sources such as Codex and Claude are reserved but not implemented yet.
+
+**Provider `kind` inference:** hya lowercases the Compat provider id plus its npm
+package and display name and guesses `kind` — containing `anthropic` →
+`anthropic`; containing `google` or `gemini` → `google`; anything else →
+`openai-compatible`. Review and fix `kind` by hand after import for providers
+that need `openai-response`, `openai-codex`, or `grok-build`.
+
+**Filtering:** disabled providers are skipped, as is any provider without a
+`base_url` or without at least one model; when the Compat default model belongs
+to a provider, its id is folded into that provider’s model list.
 
 To mirror Compat-owned MCP and skill surfaces into the default hya runtime,
 use the workspace xtask migration entrypoint:
@@ -604,7 +967,8 @@ skills.
 ## Plugins
 
 Plugins may be declared directly in config or discovered from
-`<workdir>/.hya/plugins/**/plugin.toml`:
+`<workdir>/.hya/plugins/<name>/plugin.toml` (**one directory deep** — nested
+`plugin.toml` files are never found):
 
 ```yaml
 plugins:
@@ -624,15 +988,101 @@ Config entries support:
 | `kind` | `rust`, `compat`, or `other`; default is `rust`. |
 | `command` | Process command for stdio JSON-RPC. |
 | `enabled` | Defaults to `true`; disabled entries are skipped. |
-| `timeout_ms` | Optional request timeout. |
-| `env` | Environment variables passed to the plugin process as configured. |
+| `timeout_ms` | Optional per-call timeout in **milliseconds**. When omitted: **30 s**. Fixed non-configurable timeouts: initialize **5 s**, shutdown **1 s**. |
+| `env` | Environment variables passed **verbatim** to the child. The `{env:VAR}` / `{file:/path}` secret templating supported by `providers.<id>.api_key` and `mcp.<name>.env` is **not** applied here. Export the variable in the parent shell instead. |
+
+### Directory manifests
+
+Layout: `<workdir>/.hya/plugins/<name>/plugin.toml` scanned from each
+**immediate** subdirectory of `.hya/plugins` only
+([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)). A
+subdirectory whose `plugin.toml` is unreadable or unparseable is **skipped**
+with a notice on stderr rather than failing startup.
+
+Example:
+
+```toml
+id = "memory"
+kind = "rust"           # rust | compat (alias: opencode) | other; default rust
+command = ["python3", "memory.py"]
+enabled = true
+timeout_ms = 500
+
+[[hooks]]
+name = "tool.execute.before"
+posture = "safe"        # safe | open
+
+[[hooks]]
+name = "event"
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Required; must match the plugin’s handshake id. |
+| `kind` | `rust` (default), `compat` (alias `opencode`), or `other`. |
+| `command` | Required argv array. |
+| `enabled` | Default `true`. |
+| `timeout_ms` | Optional per-call override (ms). |
+| `[[hooks]]` | Repeated tables: `name` plus optional `posture` (`safe` \| `open`). |
+
+An **unknown** hook name is warned about and dropped; the manifest still loads
+and the plugin runs without that hook. Manifest posture entries act as posture
+overrides and survive the config/manifest merge; YAML config entries carry no
+posture overrides.
+
+### Config-over-manifest merge
+
+From [`hya_plugin::config::merge`](../crates/hya-plugin/src/config.rs):
+
+1. Config entries are emitted **first** (skipping any with `enabled: false`).
+2. Manifests are appended only if their id was **not** already claimed by a
+   config entry **and** the manifest itself is enabled.
+
+Consequences: config always beats a same-id manifest; config order determines
+hook-chain fold order; setting `enabled: false` in config does **not** re-open
+the id for a manifest to claim — the plugin is simply absent.
 
 For `kind: compat` entries without `command`, hya uses the bundled Bun
 adapter from `crates/hya-plugin-compat/adapter`. Set `BUN` to choose a Bun
 binary or `HYA_COMPAT_ADAPTER_DIR` to point at an alternate adapter checkout.
 If Bun is not available, that plugin is skipped.
 
-The plugin host supports registered tools, command/message/text/chat hooks,
+### Hook name vocabulary
+
+A plugin may declare these hook names in its initialize handshake
+([`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs)).
+Default posture when the plugin omits one: **Safe** for `permission.ask` and
+`tool.execute.before`; **Open** for all others.
+
+| Hook name | Default posture |
+| --- | --- |
+| `event` | Open |
+| `command.execute.before` | Open |
+| `experimental.text.complete` | Open |
+| `message.user.before` | Open |
+| `chat.params` | Open |
+| `tool.execute.before` | Safe |
+| `tool.execute.after` | Open |
+| `permission.ask` | Safe |
+| `goal.evaluate` | Open |
+| `loop.verifier` | Open |
+| `loop.planner` | Open |
+
+**AgentBundle sidecars** may select only the three bundle-legal IDs: `event`,
+`tool.execute.before`, and `tool.execute.after`. The wider list applies to
+config-declared (and directory-manifest) plugins only.
+
+### `chat_params` hook
+
+Each plugin declaring the ChatParams hook can rewrite the outgoing completion
+request before dispatch. The wire form exposes `model`, `system`, `messages`,
+`tools`, `temperature`, `max_output_tokens`, `reasoning`, and `headers`
+([`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)). `headers` become
+per-request extra HTTP headers merged over the route’s auth headers. A
+plugin-supplied `reasoning` string that fails to parse as a `ReasoningEffort`
+leaves the **original** effort in place rather than clearing it.
+
+The plugin host also supports registered tools, command/message/text/chat hooks,
 event notifications, permission hooks, shell/tool hooks, and workspace adapter
 metadata.
 
@@ -649,13 +1099,15 @@ unchanged.
 ## Formatter
 
 The `formatter` key controls the formatter plane exposed through tools and the
-Compat-compatible `/formatter` route:
+Compat-compatible `/formatter` route. It is untagged: either a bool or a map.
+
+When the key is **absent**, the default is `false` (`FormatterConfig::Disabled`).
+`true` enables the built-in formatter set; a mapping supplies fully custom
+entries.
 
 ```yaml
 formatter: true
 ```
-
-enables built-in formatters. A map configures custom commands:
 
 ```yaml
 formatter:
@@ -667,34 +1119,197 @@ formatter:
 ```
 
 Custom entries support `disabled`, `command`, `environment`, and `extensions`.
-The formatter runs after successful `write`, `edit`, and `apply_patch` tool
-operations when a matching provider entry is available.
+`$FILE` in `command` is the placeholder for the file being formatted.
+
+The formatter block is parsed **independently** of the rest of `config.yaml`. A
+parse error there disables only formatting and prints on stderr:
+
+```text
+hya: formatter config error (...); formatter status disabled
+```
+
+It does not abort startup and does not push hya offline. The formatter runs
+after successful `write`, `edit`, and `apply_patch` tool operations when a
+matching provider entry is available.
+
+## Project Config (`opencode.json`)
+
+At runtime hya reads, in this order:
+
+1. `{workdir}/opencode.json`
+2. `{workdir}/opencode.jsonc`
+3. `{workdir}/.opencode/opencode.json`
+4. `{workdir}/.opencode/opencode.jsonc`
+
+A **later** file that sets a key overrides an earlier one
+([`bound_agent_metadata.rs`](../crates/hya-server/src/compat/bound_agent_metadata.rs)).
+Only **`default_agent`** is honoured for agent selection — inline `agent`,
+`permission`, `model`, and `options` fields present in an OpenCode project
+config are deliberately **not** read. Unreadable or invalid files are skipped
+silently with no error.
+
+```json
+{
+  "default_agent": "build"
+}
+```
+
+The same four paths may also declare inline slash commands (see
+[Custom Commands](#custom-commands)).
 
 ## Custom Commands
 
-The TUI loads markdown prompt commands from:
+Built-in slash commands (`/sessions`, `/models`, `/help`, …) are documented in
+[TUI Keybindings](tui-keybindings.md). This section covers **user-defined**
+prompt commands.
 
-1. `$HOME/.config/opencode/commands/*.md`
-2. `$HOME/.config/opencode/command/*.md`
-3. `$HOME/.config/hya/prompts/*.md`
-4. `<workdir>/.opencode/commands/*.md`
-5. `<workdir>/.opencode/command/*.md`
-6. `<workdir>/.hya/prompts/*.md`
+### Disk markdown commands
 
-Project commands override user commands with the same file stem. The file stem
-becomes the slash command name. Optional frontmatter fields are parsed:
+hya scans exactly two project-local roots
+([`command_sources.rs`](../crates/hya-server/src/compat/command_sources.rs)
+`disk_commands`):
+
+1. `<workdir>/.opencode/command/**/*.md`
+2. `<workdir>/.opencode/commands/**/*.md`
+
+Files are collected **recursively** and sorted by path. The file stem becomes the
+slash-command name. There is **no** user/home tier and no `.hya/prompts` path.
+
+Optional YAML frontmatter:
+
+| Field | Meaning |
+| --- | --- |
+| `description` | Shown in the command list. |
+| `agent` | Switch to this agent profile before the turn. |
+| `model` | Switch the submitted turn to this model. |
+| `subtask` | When `true`, run the command in a **child session**. |
 
 ```markdown
 ---
 description: Create a component
 agent: build
 model: claude-sonnet-4-6
+subtask: true
 ---
 Create $1 in $2.
 
 All args: $ARGUMENTS
 ```
 
+`$1`, `$2`, … and `$ARGUMENTS` inside the body become numbered hint slots.
 Expanded command bodies are submitted as normal prompts. If `agent` names a
-built-in TUI profile, hya applies that profile before the turn starts. If
-`model` is present, hya switches the submitted turn to that model.
+built-in TUI profile, hya applies that profile before the turn starts.
+
+### Inline config commands
+
+The same four project config paths may carry **both** a singular `command` map
+and a plural `commands` map; the two are read and concatenated. Each entry is
+keyed by command name:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `template` | yes | Prompt body (`$1` / `$ARGUMENTS` hint slots apply). |
+| `description` | no | List description. |
+| `agent` | no | Agent override. |
+| `model` | no | Model override. |
+| `subtask` | no | `true` → child session. |
+
+These are upserted over the backend built-ins, so an entry named `review`
+replaces the built-in `/review`.
+
+```json
+{
+  "commands": {
+    "review": {
+      "template": "Review $ARGUMENTS with a focus on correctness.",
+      "description": "Code review pass",
+      "agent": "build",
+      "subtask": false
+    }
+  }
+}
+```
+
+## Skills
+
+Skill discovery directories, first-wins name resolution, and `SKILL.md`
+frontmatter (`name`, `description`, `allowed-tools`, `model`, `disable`,
+`license`, body) are documented in the dedicated Skills reference batch (see
+[`crates/hya-tool/src/skill_catalog.rs`](../crates/hya-tool/src/skill_catalog.rs)
+for the current source of truth until that document lands).
+
+## Project Context (`AGENTS.md`)
+
+hya canonicalizes the workdir and walks **upward** toward the filesystem root
+collecting every `AGENTS.md` it finds, **stopping** once it has processed
+`$HOME` (files above the home directory are never read). The list is then
+reversed so the outermost/parent `AGENTS.md` appears first in the system prompt
+and the workdir-local one last
+([`crates/hya-core/src/prompt.rs`](../crates/hya-core/src/prompt.rs)). Unreadable
+or missing files are skipped silently. This is the sole discovery
+implementation — callers re-export it rather than reimplement walk order.
+
+## TUI Configuration
+
+The TypeScript TUI validates a config object through
+[`packages/hya-tui-ts/src/upstream/config/index.tsx`](../packages/hya-tui-ts/src/upstream/config/index.tsx).
+The current launcher entrypoint applies **defaults only** via
+`resolve({}, { terminalSuspend: … })` and does **not** load a separate on-disk
+TUI config file. The schema below is the validated shape and its defaults when a
+host supplies a non-empty object (or when defaults apply).
+
+| Key | Default / range | Meaning |
+| --- | --- | --- |
+| `theme` | `hya` | Theme name. |
+| `keybinds` | factory defaults | Per-command overrides. Unknown keys throw `Unrecognized keybind(s): …`. A value may be `false`, `"none"`, a key string, a keystroke object (`event` / `preventDefault` / `fallthrough`), or an array of those. Full command table: [TUI Keybindings](tui-keybindings.md). |
+| `leader_timeout` | `2000` (positive int, ms) | Leader chord timeout. |
+| `attention.enabled` | `false` | Master switch for notifications/sounds. |
+| `attention.notifications` | `true` | Desktop notifications when attention is enabled. |
+| `attention.sound` | `true` | Sound when attention is enabled. |
+| `attention.volume` | `0.4` (0–1) | Playback volume. |
+| `attention.sound_pack` | `hya.default` | Active sound pack id. |
+| `attention.sounds` | `{}` | Per-slot file overrides: `default`, `question`, `permission`, `error`, `done`, `subagent_done`. |
+| `prompt.max_height` | ⅓ of terminal height, min 6 | Caps the prompt textarea. |
+| `prompt.max_width` | `75`, or `"auto"` = max(75, 70% width) | Home prompt max width. |
+| `scroll_speed` | ≥ `0.001` | Scroll multiplier. |
+| `scroll_acceleration` | `{ enabled }` | Applied to every scrollbox including the sidebar and observation panes. |
+| `diff_style` | `auto` | `auto` = split above 120 columns; `stacked` = always unified. |
+| `mouse` | `true` | ANDed with `HYA_DISABLE_MOUSE`. |
+
+Example object (when a host loads it):
+
+```json
+{
+  "theme": "catppuccin",
+  "leader_timeout": 2000,
+  "attention": {
+    "enabled": true,
+    "volume": 0.4,
+    "sound_pack": "hya.default"
+  },
+  "prompt": { "max_width": "auto" },
+  "diff_style": "auto",
+  "mouse": true
+}
+```
+
+### Where the TUI stores state
+
+| XDG base | Directory | Contents |
+| --- | --- | --- |
+| `XDG_DATA_HOME` | `…/hya` (fallback `~/.local/share/hya`) | Data root; plus `/worktree` for the TUI worktree root |
+| `XDG_CACHE_HOME` | `…/hya` (fallback `~/.cache/hya`) | Cache |
+| `XDG_CONFIG_HOME` | `…/hya` (fallback `~/.config/hya`) | Config dir (shared naming with backend) |
+| `XDG_STATE_HOME` | `…/hya` (fallback `~/.local/state/hya`) | `model.json` (recent + favorite models), session pin list for nine quick-switch slots, other KV |
+
+Invalid `model.json` entries toast a warning rather than failing startup. Stale
+pins whose session no longer exists are filtered out on read.
+
+### Editor context integration
+
+The TUI discovers a live editor connection via `OPENCODE_EDITOR_SSE_PORT` or
+`CLAUDE_CODE_SSE_PORT`, and reads Zed’s selection database at `OPENCODE_ZED_DB`
+(Zed detected via `ZED_TERM` / `TERM_PROGRAM`) to attach the current file and
+selection to the prompt. The attached label appears in the prompt footer;
+`prompt.editor_context.clear` dismisses it
+([`packages/hya-tui-ts/src/upstream/context/editor.ts`](../packages/hya-tui-ts/src/upstream/context/editor.ts)).
