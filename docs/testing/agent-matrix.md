@@ -111,6 +111,37 @@ the cost of diagnosing a single-observation PTY timing flake is out of proportio
 to that. A red pty-smoke step is therefore **reported, not ignored** — check
 whether the failure is this timeout before reading it as a PTY regression.
 
+### Open flakes recorded but not fixed (2026-08-06)
+
+Three tests are known to fail intermittently and are deliberately **not** fixed.
+Each is recorded with its observation count so a red run is recognised rather
+than re-investigated from scratch. None is a regression from the
+2026-08-06 hardening round.
+
+| Test | Symptom | Evidence |
+| --- | --- | --- |
+| `transient_sidecar_loss_interrupts_running_member_before_provider_release` (`crates/hya-core/tests/subagent.rs:3904`) | assertion failure | **1 CI observation** (run `31061204771`, on `573924f4`); 3 later CI runs on `main` green |
+| `foreign_promotion_is_wake_only` (`crates/hya-app/src/runtime.rs`) | `Elapsed(())` on a store-state poll | 4/30 runs, **only under artificial 24× CPU saturation**; never observed on CI |
+| `oauth::callback::tests::captures_code_and_state_from_callback` (`crates/hya-app/src/oauth/callback.rs:160`) | `ConnectionRefused` | 3/60 runs under the same artificial load; never observed on CI |
+
+Notes that matter for whoever picks these up:
+
+- The **first** is the only one with real CI evidence. It fired on the commit
+  *preceding* the hardening round and has not recurred in 3 subsequent runs, so
+  its rate on CI is at most ~1 in 4. Root cause **not established** — do not
+  assume the hardening round fixed it; nothing in that round touched
+  `hya-core`'s subagent tests.
+- The **second** busy-spins on `tokio::task::yield_now()` while polling the
+  store, which starves the very promotion task it waits for. Under 24×
+  oversubscription that is largely self-inflicted by the probe, not evidence of a
+  CI-relevant defect.
+- The **third** is a genuine race by inspection, independent of load: the test
+  binds a port, drops the listener, spawns a thread to re-bind, and then sleeps
+  50 ms before connecting. The correct fix is to remove the rebind window by
+  having `wait_for_callback` accept an already-bound `TcpListener` — **not** a
+  longer sleep and **not** a connect retry, either of which would convert an
+  intermittent failure into a slow one.
+
 ## Track I (index-only)
 
 Deep engine / API coverage owned by in-process suites. Process E2E does not
