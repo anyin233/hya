@@ -293,9 +293,102 @@ Outside `hya-app`, mirror the same shape rather than reaching for
   The journal row (`Completed + logical_released`) and the in-memory governor
   debit are written by **different tasks**; background owners reply at
   registration, so there is no ordering guarantee. Use a bounded poll.
-- Assuming `remaining_budget` can prove an *exact* debit: `release_operation`
-  clamps with `.min(per_run_budget)`, so at `per_run_budget = 1` a double
-  release is indistinguishable from a single one.
+- Assuming `remaining_budget` can prove an *exact* debit. It cannot, for two
+  reasons: `release_operation` clamps with `.min(per_run_budget)`, so at
+  `per_run_budget = 1` a second credit is invisible; and `remaining_budget`
+  falls back to `per_run_budget` when the root has *no* entry, so a full budget
+  is also what a never-debited or wholly-dropped root reads. Use the debit entry
+  instead — see "Proving an exact governor release" below.
 - Copying a verified-runtime helper into one test file instead of the shared
   `tests/support/`. That exact drift is what left `nested_spawn_tree.rs` broken
   while `spawn_admission.rs` passed.
+
+---
+
+## Scenario: Governor Release Accounting
+
+### 1. Scope / Trigger
+
+Applies when reasoning about *when* a spawn operation's governor debit is
+returned, or when writing a test that asserts a release happened. Records
+decisions reached in `08-06-governor-release-accounting`.
+
+### 2. Proving an exact governor release
+
+`SubagentGovernor::release_operation` removes the operation from its debit map
+**before** any arithmetic and returns `false` when the entry is already gone:
+
+```rust
+let Some(debit) = budgets.operations.remove(&operation) else {
+    return false;
+};
+```
+
+Two consequences, both verified by mutation testing:
+
+- A repeated release is a **no-op**, not a silent double-credit. The
+  `.min(per_run_budget)` clamp is a belt-and-braces guard; the `remove` is what
+  actually prevents corruption. Firing the owner's release twice on purpose
+  changes no observable.
+- The **boolean return is a precise observable**. After the owner has released,
+  a test calling `release_operation(op)` must get `false`. Getting `true` means
+  the budget was restored while the debit stayed outstanding — the real
+  corruption mode, and one that `remaining_budget` alone cannot see. Mutating
+  `release_operation` to leave the entry in the map is caught by this assertion
+  and *not* by a `remaining_budget` check.
+
+So assert release exactness with the boolean, not with the budget number. Unit
+coverage: `operation_debit_and_release_are_exactly_once`
+(`crates/hya-core/src/orchestrator.rs`). Integration coverage:
+`admitted_background_transient_releases_its_exact_debit_on_completion`
+(`crates/hya-app/tests/spawn_admission.rs`).
+
+### 3. Known defect: the journal-finalize / governor-release window
+
+**Classification: real defect, user-visible, deliberately unfixed.**
+
+A member task finalizes its admission row to `Completed + logical_released` via
+`store().finalize_admission_members(...)`, which bypasses hya-core's
+governor-releasing `finalize_spawn_admission`. The owning
+`ForegroundTransientAdmissionPreparation` returns the in-memory debit only later,
+in `release_transient_operation`, after draining completions, quiescing handles,
+and projecting the evidence envelope.
+
+Inside that window the durable journal reports capacity as logically released
+while the governor still holds the debit, so a concurrent spawn on the same root
+is rejected `Overloaded` against capacity that is logically free. Measured at
+**191/200 iterations** at `per_run_budget = 1` (four runs of 50: 49, 48, 47, 47);
+in every run the `Overloaded` count equalled the count of samples where the
+governor still held the debit at the instant the journal read terminal.
+
+Reproduction: the `#[ignore]`d
+`released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root`
+(`crates/hya-app/tests/spawn_admission.rs`). It asserts the intended invariant,
+so it fails today; un-ignore it in the task that fixes this.
+
+**Do not fix it by releasing at member-finalize time.** The debit is
+`cardinality` units released as one unit by the owner, so a per-member early
+release hands back capacity for members still running in a multi-member batch.
+The remedy is a design question and belongs to its own task.
+
+### 4. Invariant: spawn-intake liveness
+
+The team supervisor's drain branch — entered when `rx.recv()` yields `None` —
+waits for in-flight foreground handlers **without** watching `stop_child`. That
+is safe only while this holds:
+
+> `SessionEngine` owns the `BoundSpawnSender` in a plain field that is only ever
+> set by the builder and never taken back out, and the supervisor task holds an
+> `Arc<SessionEngine>` for as long as it runs. The last sender therefore cannot
+> drop while the receiver-owning task is alive, so a closed intake is
+> unreachable in production.
+
+Today the closed-intake path is reached only from the `spawn_team_supervisor`
+test helper, which hands the receiver to a supervisor that does not own the
+sender. Severity is **entirely contingent on that ownership**: if the engine ever
+holds a `Weak`, the sender moves out of the engine, or the supervisor stops
+holding the engine, then a `shutdown()` with handlers in flight would block
+instead of aborting — `fail_after_claim` can park on
+`std::future::pending::<()>()` — and the drain loop must be made stop-aware in
+the same change. The invariant is also recorded at the `with_spawn_sender` call
+site in `crates/hya-app/src/runtime.rs`, which is where it would be broken.
