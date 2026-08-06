@@ -557,3 +557,47 @@ Replaced canonical hya with the adjacent hya-ts exec path, preserved launcher/im
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: E2E suite hardening: land swarm branch, gate CI, cover swarm tools, measure coverage, enforce the registry
+
+**Date**: 2026-08-06
+**Task**: E2E suite hardening: land swarm branch, gate CI, cover swarm tools, measure coverage, enforce the registry
+**Branch**: `main`
+
+### Summary
+
+Closed the four gaps from the E2E coverage audit, plus the branch landing they all depended on. Fast-forwarded 83 commits onto main after fixing 6 tests the branch shipped broken (3 of them regressions), all hidden because CI died at fmt before ever running the test step. Made every CI gate step report independently (if: !cancelled()) and proved it by observing fmt red while test still ran; Track P and the three registered Track T scenarios are now enforced, PTY smoke is explicitly non-gating. Added 6 swarm mailbox scenarios with recipient-side oracles (tool coverage 8/25 -> 14/25). Measured the first line-coverage baseline (85.56%) and reported Track P's contribution as unmeasurable, with evidence: the harness SIGKILLs the backend so LLVM never flushes profraw. Made matrix.toml enforced via cargo xtask matrix-check with bidirectional drift detection, and retired the undefined T1.1/T1.6 ids.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `16bde844` | (see git log) |
+| `fa04b489` | (see git log) |
+| `607c24be` | (see git log) |
+| `0acfc919` | (see git log) |
+| `ce7584db` | (see git log) |
+| `a6ff136f` | (see git log) |
+| `c315cac3` | (see git log) |
+| `db2f2cc7` | (see git log) |
+| `f23229a4` | (see git log) |
+| `fbdad8a1` | (see git log) |
+| `6cb254af` | (see git log) |
+| `fee38938` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
