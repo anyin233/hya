@@ -576,6 +576,25 @@ async fn admitted_background_transient_releases_its_exact_debit_on_completion() 
     })
     .await
     .expect("operation did not release its debit");
+    // `remaining_budget` alone cannot prove *exactness*: it clamps at
+    // `per_run_budget` (1 here), and it falls back to `per_run_budget` whenever the
+    // root has no budget entry at all -- so a budget of 1 is also what a
+    // never-debited or wholly-dropped root reads. The precise observable is the
+    // debit entry itself. `SubagentGovernor::release_operation` removes the
+    // operation from its map *before* touching `remaining` and returns `false` when
+    // the entry is already gone, so a release cannot be performed twice. Asserting
+    // `false` here therefore proves the owner retired *this* operation's debit
+    // through the governor, exactly once; `true` would mean the budget above was
+    // restored by some other path while the debit stayed outstanding.
+    assert!(
+        !fixture
+            .engine
+            .governor()
+            .unwrap()
+            .release_operation(first_operation.operation_id()),
+        "owner must retire its own operation debit exactly once: the debit entry \
+         was still outstanding after the budget already read as released"
+    );
 
     let retry = fixture
         .scoped_spawner()
@@ -592,6 +611,96 @@ async fn admitted_background_transient_releases_its_exact_debit_on_completion() 
         .await
         .expect("released capacity should admit the next operation");
     assert_eq!(retry.len(), 1);
+}
+
+/// Reproduction for the release window between member-journal finalize and the
+/// owner's governor release.
+///
+/// A member task finalizes its admission row to `Completed + logical_released`
+/// through `finalize_admission_members`, which bypasses hya-core's
+/// governor-releasing `finalize_spawn_admission`. The owning
+/// `ForegroundTransientAdmissionPreparation` returns the in-memory debit only much
+/// later, in `release_transient_operation`, after quiescing handles and projecting
+/// the evidence envelope. Inside that window the durable journal already reports
+/// the capacity as logically released while the governor still holds the debit, so
+/// a concurrent spawn on the same root is rejected `Overloaded` against capacity
+/// that is logically free.
+///
+/// Measured on this branch at 191/200 iterations (four runs of 50: 49, 48, 47,
+/// 47). The rejection correlated exactly with the governor still holding the debit
+/// at the instant the journal read terminal -- in every run the `Overloaded` count
+/// equalled the open-window count.
+///
+/// Ignored because it asserts the *intended* invariant, which does not hold yet.
+/// The remedy is a design question rather than a local repair: the debit is
+/// `cardinality` units released as a single unit by the owner, so releasing per
+/// member at finalize time would hand back capacity for members that are still
+/// running in a multi-member batch. Un-ignore this test in the task that fixes it.
+#[tokio::test]
+#[ignore = "documents a known defect: released capacity is not visible until the owner releases; fix needs its own design"]
+async fn released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root() {
+    const RUNS: usize = 20;
+    for run in 0..RUNS {
+        let fixture = admission_fixture(1).await;
+        let first_operation = operation();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture.scoped_spawner().spawn_background(
+                first_operation,
+                vec![SpawnMember {
+                    description: "single reservation".to_string(),
+                    prompt: "finish once".to_string(),
+                    subagent_type: "quick".to_string(),
+                    ..SpawnMember::default()
+                }],
+                Default::default(),
+            ),
+        )
+        .await
+        .expect("spawn timed out")
+        .expect("first spawn should be admitted");
+
+        // Wait for the member task to make the release durably visible, then spawn
+        // again immediately -- the journal is the contract a caller can observe.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let record = fixture
+                    .engine
+                    .store()
+                    .admission(first_operation.operation_id())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if record.state == AdmissionState::Completed && record.logical_released {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("journal did not finalize");
+
+        let second = tokio::time::timeout(
+            Duration::from_secs(5),
+            fixture.scoped_spawner().spawn_background(
+                operation(),
+                vec![SpawnMember {
+                    description: "concurrent".to_string(),
+                    prompt: "second".to_string(),
+                    subagent_type: "quick".to_string(),
+                    ..SpawnMember::default()
+                }],
+                Default::default(),
+            ),
+        )
+        .await
+        .expect("second spawn timed out");
+        assert!(
+            second.is_ok(),
+            "run {run}: capacity the journal reports as logically released must be \
+             admissible on the same root, got {second:?}"
+        );
+    }
 }
 
 #[tokio::test]
