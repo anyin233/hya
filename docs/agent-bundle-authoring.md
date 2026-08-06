@@ -42,6 +42,12 @@ Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 - An **empty** body plus an explicit per-agent `prompt:` path is allowed for multi-agent sources only when **every** agent names a prompt file (then the body is not used as a prompt).
 - If the body is nonempty, the source must have exactly one agent without a `prompt` path.
 
+An empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents;
+every agent in that form needs an explicit prompt path.
+
+The archive rules are: undeclared directory files are ignored; unreferenced archive files
+are rejected.
+
 ### `bundle.yaml` constraints
 
 - Plain YAML only (no markdown body).
@@ -334,11 +340,13 @@ From `docs/examples/bun-disjoint/`:
 7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md prompts/alpha.md prompts/beta.md prompts/static.md extensions/alpha.js extensions/beta.js
 ```
 
-`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject. Supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks.
+`hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject; supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks. Harness host hooks stay outside AgentBundle metadata.
 
-Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle. Only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
+Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
 
-Tool and Hook initialize declarations must equal the selected expected sets. Generic superset modules are rejected and must be split.
+Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
+
+The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
 ---
 
@@ -346,7 +354,8 @@ Tool and Hook initialize declarations must equal the selected expected sets. Gen
 
 The sidecar wire is newline-delimited JSON-RPC 2.0 using hya plugin protocol
 version 1 (see [Plugin protocol](plugin-protocol.md)). Initialize remains
-request/reply with `protocol_version` and `host`, plus activation metadata
+request/reply: initialize retains existing `protocol_version` and `host`
+fields, and the only activation-specific metadata is
 `{ activation_id, lifecycle }`. Activation begins only after initialize succeeds
 and declarations match the prepared Bundle.
 
