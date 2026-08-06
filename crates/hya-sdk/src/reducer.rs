@@ -1,10 +1,11 @@
 //! The v2 projected-timeline cache (`data`) and its turn-stream reducer.
 //!
-//! `V2Event` is the FROZEN enum shape (W0) covering the 29 `session.next.*` turn-stream
-//! events from `data.tsx`. `apply` is the FROZEN reducer SIGNATURE — its full 29-arm body,
-//! tested against a recorded `turn_stream.jsonl`, is the W2 deliverable. Today it is a no-op
-//! skeleton, except that `prompt.admitted` is *intentionally* silent (durable inbox row;
-//! the visible user message only appears on `prompt.promoted`).
+//! [`V2Event`] covers the `session.next.*` turn-stream events used by the TUI
+//! timeline. [`apply`] folds those events into a per-session newest-first
+//! [`Data`] cache (assistant/user/shell/compaction rows and part deltas).
+//! `prompt.admitted` is intentionally silent (durable inbox only); the visible
+//! user message appears on `prompt.promoted`. Unknown kinds become
+//! [`V2Event::Unknown`] and leave the timeline unchanged.
 
 use std::collections::HashMap;
 
@@ -27,116 +28,188 @@ impl Data {
     }
 }
 
-/// Decoded `session.next.*` turn-stream events. FROZEN enum shape (W0).
+/// Decoded `session.next.*` turn-stream events for the timeline reducer.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum V2Event {
     /// SILENT durable inbox row — must NOT mutate the visible timeline.
     PromptAdmitted {
+        /// Session receiving the admission.
         session_id: String,
     },
     /// Materializes the visible user message.
     PromptPromoted {
+        /// Session whose timeline gains a user row.
         session_id: String,
     },
+    /// Assistant step/turn started (new assistant row).
     StepStarted {
+        /// Target session.
         session_id: String,
     },
+    /// Assistant step finished successfully.
     StepEnded {
+        /// Target session.
         session_id: String,
     },
+    /// Assistant step failed.
     StepFailed {
+        /// Target session.
         session_id: String,
     },
+    /// Text part opened on the current assistant row.
     TextStarted {
+        /// Target session.
         session_id: String,
+        /// Part id for subsequent deltas.
         part_id: String,
     },
+    /// Incremental text for an open text part.
     TextDelta {
+        /// Target session.
         session_id: String,
+        /// Part receiving the delta.
         part_id: String,
+        /// Appended text fragment.
         text: String,
     },
+    /// Text part completed.
     TextEnded {
+        /// Target session.
         session_id: String,
+        /// Closed part id.
         part_id: String,
     },
+    /// Reasoning part opened.
     ReasoningStarted {
+        /// Target session.
         session_id: String,
+        /// Part id for reasoning deltas.
         part_id: String,
     },
+    /// Incremental reasoning text.
     ReasoningDelta {
+        /// Target session.
         session_id: String,
+        /// Part receiving the delta.
         part_id: String,
+        /// Appended reasoning fragment.
         text: String,
     },
+    /// Reasoning part completed.
     ReasoningEnded {
+        /// Target session.
         session_id: String,
+        /// Closed part id.
         part_id: String,
     },
+    /// Tool-call part opened (pending input).
     ToolInputStarted {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Tool argument streaming in progress.
     ToolInputDelta {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Tool arguments finished streaming.
     ToolInputEnded {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Tool execution started (running).
     ToolCalled {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Intermediate tool progress update.
     ToolProgress {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Tool completed successfully.
     ToolSuccess {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Tool failed.
     ToolFailed {
+        /// Target session.
         session_id: String,
+        /// Tool part id.
         part_id: String,
     },
+    /// Agent switch marker row.
     AgentSwitched {
+        /// Target session.
         session_id: String,
     },
+    /// Model switch marker row.
     ModelSwitched {
+        /// Target session.
         session_id: String,
     },
+    /// Generic “prompted” marker (timeline no-op or light touch).
     Prompted {
+        /// Target session.
         session_id: String,
     },
+    /// Context/attachment update marker.
     ContextUpdated {
+        /// Target session.
         session_id: String,
     },
+    /// Synthetic system/timeline row.
     Synthetic {
+        /// Target session.
         session_id: String,
     },
+    /// Shell command started.
     ShellStarted {
+        /// Target session.
         session_id: String,
     },
+    /// Shell command finished.
     ShellEnded {
+        /// Target session.
         session_id: String,
     },
+    /// Turn retry marker.
     Retried {
+        /// Target session.
         session_id: String,
     },
+    /// Compaction started.
     CompactionStarted {
+        /// Target session.
         session_id: String,
     },
+    /// Compaction progress delta.
     CompactionDelta {
+        /// Target session.
         session_id: String,
     },
+    /// Compaction finished.
     CompactionEnded {
+        /// Target session.
         session_id: String,
     },
     /// Tolerated unknown turn-stream event (reducer no-op).
     Unknown {
+        /// Original event type string.
         kind: String,
     },
 }
