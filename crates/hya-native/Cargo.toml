@@ -17,3 +17,6 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 hya-app = { workspace = true }
+
+[lints]
+workspace = true

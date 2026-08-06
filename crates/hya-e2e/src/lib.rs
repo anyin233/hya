@@ -4,8 +4,6 @@
 //! OpenAI-compatible FakeLlm. Product code under test is the production binary
 //! path (config → HttpProvider → SessionEngine → tools → HTTP API).
 
-#![allow(missing_docs)]
-
 mod backend;
 mod error;
 mod fake_llm;
