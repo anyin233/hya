@@ -65,6 +65,11 @@ jobs:
       # reports on its own instead of skipping the rest. A red `fmt` used to skip the
       # test step entirely, which hid six failing tests for weeks — see
       # .trellis/tasks/08-05-land-swarm-branch-to-main/findings.md.
+      # Fails if matrix.toml and the real tests disagree in either direction, or
+      # if a T-series numbering hole is neither used nor retired.
+      - name: matrix registry check
+        if: ${{ !cancelled() }}
+        run: cargo run -p xtask -- matrix-check
       - name: fmt
         if: ${{ !cancelled() }}
         run: cargo fmt --all --check
