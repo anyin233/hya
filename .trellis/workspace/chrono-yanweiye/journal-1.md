@@ -601,3 +601,56 @@ Closed the four gaps from the E2E coverage audit, plus the branch landing they a
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Close the four E2E hardening follow-up tasks
+
+**Date**: 2026-08-06
+**Task**: Close the four E2E hardening follow-up tasks
+**Branch**: `main`
+
+### Summary
+
+Closed all four E2E hardening follow-ups. Established root causes by measurement rather than inspection: bundle_cli temp-path collisions (nanosecond timestamps collide across simultaneously-started threads, 1336/200000 rounds -> 0 with an atomic serial); frontend_cli ETXTBSY (fs::write's write-fd inherited by a concurrent fork, O_CLOEXEC clears at exec not fork; ~3-18% -> 0/13000 via hard_link); and the hya-app admission flake family (process-global HOME feeds skill_dirs_for_workdir, whose skills are hashed into the runtime fingerprint that durable admission records at claim time and recomputes at resolve time -- 12/60 loaded runs -> 0/60 via an RwLock read guard). Catalog fixture survey found only 1 of 99 from_prepared sites can reach prepare_spawn_admission and it must stay unverified, so R2 was a no-op and the helper dedupe was the real fix; the PRD's YAML bareword hazard did not reproduce and was replaced by the hazards that do corrupt the generated manifest. e2e backend now drains on SIGTERM/SIGINT/SIGHUP -- hya-backend had no signal handler at all, and default SIGTERM disposition also skips atexit, so the harness-only fix would have flushed nothing; Track P coverage went hya-server 0.0%->21.6%, hya-core 0.0%->51.2%, hya-client 0.0%->98.3% at +2ms/backend. Governor investigation returned three decisions: the release window is a REAL user-visible defect (191/200 rejections correlating exactly with the open window, filed as 08-06-close-governor-release-window with an ignored repro asserting the intended invariant), exactness IS provable via release_operation's boolean (mutation gate: old test passed and new test failed under a real double-credit), and the drain-loop ownership invariant was recorded at its site. Version bumped 0.34.13 -> 0.34.14 across the six-site release-consistency chain. Three open flakes recorded with observation counts in agent-matrix.md, including transient_sidecar_loss_interrupts_running_member_before_provider_release which failed CI on the pre-work commit and is NOT fixed by this round.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dd0621f2` | (see git log) |
+| `620256d6` | (see git log) |
+| `d8c5a918` | (see git log) |
+| `922832e7` | (see git log) |
+| `0c5b0391` | (see git log) |
+| `44c669eb` | (see git log) |
+| `f4a88d6c` | (see git log) |
+| `a1e0cac2` | (see git log) |
+| `85704622` | (see git log) |
+| `4c12dde8` | (see git log) |
+| `3f18e6e5` | (see git log) |
+| `d7724d65` | (see git log) |
+| `92aebe3f` | (see git log) |
+| `42afd0d6` | (see git log) |
+| `15e75d3c` | (see git log) |
+| `4ca89798` | (see git log) |
+| `44f378e6` | (see git log) |
+| `2035f1b3` | (see git log) |
+| `e834a5c7` | (see git log) |
+| `500c7277` | (see git log) |
+| `a02a5d10` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
