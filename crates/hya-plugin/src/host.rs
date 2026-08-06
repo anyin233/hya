@@ -29,34 +29,44 @@ const EVENT_DROP_WARN_EVERY: u64 = 256;
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(60);
 
+/// Lifecycle status of one loaded plugin connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginStatus {
+    /// Child is running and accepting calls.
     Alive,
+    /// Child exited or EOF; next call may respawn within the restart budget.
     Dead,
+    /// Respawned child changed its initialize declaration; no longer usable.
     DeclarationDrift,
+    /// Restart budget exceeded; host will not respawn.
     Disabled,
 }
 
+/// Multi-plugin manager: connect-all, tools, hooks, and crash/restart policy.
 pub struct PluginHost {
     plugins: Vec<Arc<PluginConn>>,
 }
 
+/// One successfully connected plugin, ready for tool registration and dispatch.
 #[derive(Clone)]
 pub struct PreparedPlugin {
     conn: Arc<PluginConn>,
 }
 
 impl PreparedPlugin {
+    /// Configured plugin id.
     #[must_use]
     pub fn id(&self) -> &str {
         &self.conn.id
     }
 
+    /// Canonical bytes of the initialize declaration (identity / drift checks).
     #[must_use]
     pub fn canonical_declaration(&self) -> &[u8] {
         &self.conn.canonical_declaration
     }
 
+    /// Tool adapters for this plugin only (`inputSchema.type` must be `"object"`).
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.conn
@@ -291,10 +301,15 @@ fn canonical_json(value: &Value) -> Value {
 }
 
 impl PluginHost {
+    /// Connect every spec in parallel; failed plugins are logged and omitted.
     pub async fn connect_all(specs: Vec<PluginSpec>, host: HostInfo) -> Self {
         Self::connect_all_observed(specs, host).await.0
     }
 
+    /// Like [`PluginHost::connect_all`], but also returns per-id connect failures.
+    ///
+    /// Successful plugins keep their original `specs` order. Failures map plugin
+    /// id → [`PluginError`].
     pub async fn connect_all_observed(
         specs: Vec<PluginSpec>,
         host: HostInfo,
@@ -322,21 +337,25 @@ impl PluginHost {
         (Self { plugins }, failures)
     }
 
+    /// Whether no plugins connected successfully.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
     }
 
+    /// Number of successfully connected plugins.
     #[must_use]
     pub fn len(&self) -> usize {
         self.plugins.len()
     }
 
+    /// Plugin ids in declared load order.
     #[must_use]
     pub fn plugin_ids(&self) -> Vec<String> {
         self.plugins.iter().map(|conn| conn.id.clone()).collect()
     }
 
+    /// Raw tool declarations per plugin id (before `PluginTool` filtering).
     #[must_use]
     pub fn declared_tools(&self) -> Vec<(&str, &[ToolInfo])> {
         self.plugins
@@ -345,6 +364,7 @@ impl PluginHost {
             .collect()
     }
 
+    /// Connected plugins as [`PreparedPlugin`] handles (same order as connect).
     #[must_use]
     pub fn prepared_plugins(&self) -> Vec<PreparedPlugin> {
         self.plugins
@@ -353,6 +373,7 @@ impl PluginHost {
             .collect()
     }
 
+    /// Workspace adapters from every plugin's initialize reply, concatenated.
     #[must_use]
     pub fn workspace_adapters(&self) -> Vec<WorkspaceAdapterInfo> {
         self.plugins
@@ -361,6 +382,7 @@ impl PluginHost {
             .collect()
     }
 
+    /// All plugin tools as host [`Tool`] adapters (invalid schemas silently dropped).
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.plugins
@@ -373,6 +395,7 @@ impl PluginHost {
             .collect()
     }
 
+    /// Current lifecycle status for `id`, if that plugin is loaded.
     pub async fn plugin_status(&self, id: &str) -> Option<PluginStatus> {
         for conn in &self.plugins {
             if conn.id == id {

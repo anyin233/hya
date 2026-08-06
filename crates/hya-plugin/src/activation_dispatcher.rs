@@ -29,6 +29,10 @@ pub struct ActivationHookDispatcher {
 }
 
 impl ActivationHookDispatcher {
+    /// Bind a dispatcher to an already-initialized client and its hook registrations.
+    ///
+    /// Builds the effective posture map and, if `event` is registered, starts a
+    /// background drain that notifies the plugin of envelopes.
     #[must_use]
     pub fn new(client: PluginClient, registrations: &[HookRegistration]) -> Self {
         let hooks = registrations
