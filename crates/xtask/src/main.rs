@@ -1,5 +1,6 @@
 //! Dev tooling entrypoint.
 
+mod matrix_check;
 mod startup_bench;
 mod sync_compat;
 
@@ -12,8 +13,9 @@ fn main() {
         Some("sync-compat") => sync_compat::run(args.collect()),
         Some("migrate") => sync_compat::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
+        Some("matrix-check") => matrix_check::run(args.collect()),
         _ => {
-            eprintln!("usage: cargo xtask <sync-compat|migrate|startup-bench>");
+            eprintln!("usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check>");
             Ok(())
         }
     };
