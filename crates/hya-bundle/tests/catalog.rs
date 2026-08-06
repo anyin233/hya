@@ -1,3 +1,5 @@
+//! Catalog assembly: bundle sources, duplicate detection, and the spawn graph.
+
 use hya_bundle::{
     BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, PreparedResource,
     SourceFile, prepare_builtins, prepare_package,

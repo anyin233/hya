@@ -1,3 +1,5 @@
+//! Decoder behaviour across the OpenAI, Anthropic, and Google protocols.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_proto::{Event, FinishReason, MessageId, SessionId, ToolName, ToolSchema};

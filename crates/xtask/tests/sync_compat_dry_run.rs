@@ -1,3 +1,5 @@
+//! `sync-compat` dry run reporting of MCP and skill actions.
+
 #![allow(clippy::expect_used)]
 
 mod common;

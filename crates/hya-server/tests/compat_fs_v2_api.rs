@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat fs v2 api.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

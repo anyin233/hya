@@ -1,3 +1,5 @@
+//! Integration tests for `hya-plugin`: text complete dispatch.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;

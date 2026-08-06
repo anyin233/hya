@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: session cleanup.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

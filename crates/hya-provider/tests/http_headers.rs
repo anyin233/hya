@@ -1,3 +1,5 @@
+//! Per-request header construction and provider auth styles.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{collections::BTreeMap, time::Duration};

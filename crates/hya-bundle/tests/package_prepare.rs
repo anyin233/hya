@@ -1,3 +1,5 @@
+//! Package preparation and canonical round-tripping of the prepared catalog.
+
 use hya_bundle::{BundleOrigin, BundleSource, PreparedCatalog, SourceFile, prepare_package};
 
 fn public_package_source() -> BundleSource {

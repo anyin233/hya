@@ -1,3 +1,5 @@
+//! Source preparation, digesting, and rehashing of bundles.
+
 use hya_bundle::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_builtins};
 use sha2::{Digest, Sha256};
 

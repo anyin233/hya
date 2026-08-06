@@ -1,3 +1,5 @@
+//! Integration tests for `hya-sdk`: native spike.
+
 use std::path::PathBuf;
 use std::time::Duration;
 

@@ -1,3 +1,5 @@
+//! Projection replay: durable-cursor advancement and serde round-tripping.
+
 #![allow(clippy::expect_used)]
 
 use hya_proto::{Envelope, Event, EventSeq};

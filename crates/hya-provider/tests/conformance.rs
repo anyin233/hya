@@ -1,3 +1,5 @@
+//! Cross-provider conformance of the shared protocol surface.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::{Arc, Mutex};

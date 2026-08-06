@@ -1,3 +1,5 @@
+//! Bundle registry generations and installed-candidate resolution.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 

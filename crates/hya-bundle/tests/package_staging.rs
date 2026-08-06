@@ -1,3 +1,5 @@
+//! Staging isolation and conservative cleanup of owned, unlocked staging roots.
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicU64, Ordering};

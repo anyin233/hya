@@ -1,3 +1,5 @@
+//! `plan_exit` approval flow and its decline path.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-app`: installed bundle refresh.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

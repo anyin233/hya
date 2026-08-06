@@ -1,3 +1,5 @@
+//! `read` output caps and truncation behaviour.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

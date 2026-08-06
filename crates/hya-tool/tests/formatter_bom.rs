@@ -1,3 +1,5 @@
+//! Formatter plane behaviour on UTF-8 BOM inputs.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};

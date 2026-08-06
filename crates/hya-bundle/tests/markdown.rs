@@ -1,3 +1,5 @@
+//! Single-file markdown bundles: manifest markers and exact-filename rules.
+
 use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_builtins};
 
 fn markdown(

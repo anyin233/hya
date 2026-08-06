@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: compact context.
+
 #![allow(clippy::expect_used)]
 
 mod support;

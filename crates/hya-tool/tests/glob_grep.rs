@@ -1,3 +1,5 @@
+//! `glob` and `grep` matching and workdir scoping.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

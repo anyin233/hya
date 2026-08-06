@@ -1,3 +1,5 @@
+//! Integration tests for `hya-backend`: compat agent cli.
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, Output};

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat session v2 errors api.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

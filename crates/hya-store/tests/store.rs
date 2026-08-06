@@ -1,3 +1,5 @@
+//! Migrations, idempotent replay by sequence, and session-scoped projection.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_proto::{

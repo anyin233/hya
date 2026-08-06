@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat agent metadata api.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

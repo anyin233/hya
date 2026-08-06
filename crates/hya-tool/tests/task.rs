@@ -1,3 +1,5 @@
+//! Integration tests for `hya-tool`: task.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

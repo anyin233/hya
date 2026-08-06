@@ -1,3 +1,5 @@
+//! Manifest validation: alias collisions and `can_spawn` resolution across the catalog.
+
 use hya_bundle::{
     BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, SourceFile,
     prepare_builtins, prepare_package,

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-tool`: formatter.
+
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
