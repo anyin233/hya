@@ -137,6 +137,30 @@ tags = ["pr", "roster"]
 timeout_secs = 60
 
 [[scenario]]
+id = "T2.4"
+title = "swarm roster + list_agents from a resident"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "roster"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.5"
+title = "swarm send delivers direct mail to a resident"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.6"
+title = "swarm send delivers channel mail to subscribers"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox"]
+timeout_secs = 120
+
+[[scenario]]
 id = "T2.7"
 title = "hyabundle install/list/info/uninstall"
 track = "P"
@@ -150,6 +174,30 @@ title = "hyabundle spawn package agent"
 track = "P"
 path = "crates/hya-e2e/tests/p11_hyabundle.rs"
 tags = ["pr", "hyabundle"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.9"
+title = "swarm channels lists membership and message counts"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.10"
+title = "swarm join changes channel recipients"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.11"
+title = "swarm leave stops channel mail (negative + controls)"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox"]
 timeout_secs = 120
 
 [[scenario]]

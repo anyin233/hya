@@ -54,6 +54,40 @@ Inspect recorded bodies with `env.fake.requests()`. For tool **results**, assert
 on the **follow-up** request (index ≥ 1), not the turn that emitted the tool
 call — call args alone do not prove execution.
 
+### Multi-agent scripting (routes)
+
+One shared queue cannot drive two live agents: whichever asks first pops the
+step. `E2eEnvBuilder::route(marker, steps)` pins a queue to the agent whose
+**system prompt** contains `marker`, and records only that agent's requests.
+
+```rust
+let env = E2eEnvBuilder::new()
+    .scripts(root_steps)                         // unrouted requests, as before
+    .route("SYS_MARKER_A", vec![text_step("A1")])
+    .build().await?;
+env.wait_route_requests("SYS_MARKER_A", 1, timeout).await?;  // agent is running
+env.wait_route_contains("SYS_MARKER_A", "needle", timeout).await?;
+let dump = env.route_dump("SYS_MARKER_A")?;
+```
+
+Rules:
+
+- Attribution reads **`system`-role content only**. A marker elsewhere in the
+  transcript (tool-call arguments, mail bodies) is echoed into the *caller's*
+  history too, so whole-body matching lets a caller steal its callee's queue.
+  Give each teammate a unique system prompt via `task`'s `inline_agent.prompt`.
+- An **exhausted route does not fall back** to the shared queue; the agent stops
+  cleanly instead of eating another agent's steps.
+- With no routes registered, dispatch is byte-identical to the shared queue.
+- `route_remaining(marker)` must reach `0`. A route that never drains means the
+  marker matched the wrong agent, or none.
+
+Mailbox delivery only reaches **resident** teammates (`task` with
+`resident: true`): `hya-core::resident` injects a handle's unread inbox into its
+next turn as `[mail from <handle>] <body>` user prompts. There is no mailbox HTTP
+route, so the recipient's own next request is the only delivery oracle — see
+`crates/hya-e2e/tests/p16_swarm_mailbox.rs`.
+
 Helpers:
 
 - `fake_requests_from(&requests, 1)` — dump later turns as one string
@@ -94,6 +128,9 @@ Helpers:
 | Compact / summarize | Context contains summary marker after compact; follow-up turn still works |
 | Todo | `/session/{id}/todo` lists items written via `todowrite` |
 | Edit | Disk file content after `edit` tool |
+| Mailbox `send` | The **recipient's** next FakeLlm request contains `[mail from …] <body>` — never the sender's success string or call args |
+| Mailbox `roster` / `channels` | Follow-up request carries state the caller never supplied (teammate session id, channel membership) |
+| Mailbox `leave` | Negative claim needs both controls: a still-subscribed member that *did* receive the post, and a later direct ping the departed member *did* receive |
 
 Avoid asserting only FakeLlm request counts or substring matches that appear in
 tool-call arguments without results.
