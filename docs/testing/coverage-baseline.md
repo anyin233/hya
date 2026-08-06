@@ -62,8 +62,8 @@ even when a test fails.
 
 - **`hya-client` at 0% is an artifact of this measurement, not a real gap.**
   It is consumed by `crates/hya-e2e`, which this run excludes. It is exercised
-  in reality — by Track P, whose contribution this run cannot see. That single
-  row is the clearest argument for measuring Track P separately.
+  in reality — by Track P, whose contribution this run cannot see. The Track P
+  measurement below puts it at **98.3%**, which settles it.
 - **`hya-backend` at 51.8%** is the lowest genuine figure. It is the CLI/binary
   crate, where argument parsing and process wiring are exercised by running the
   real binary — again, mostly Track P territory.
@@ -75,102 +75,123 @@ even when a test fails.
 - These are **not** a quality target. This is a baseline. Nothing in this task
   adds tests to move it.
 
-## Track P's contribution — measured, and why the number is not publishable
+## Track P's contribution — measured
 
-**Attempted, and the answer is that it cannot be measured as the harness stands.**
-This section records the evidence instead of a misleading figure.
+Track P (`crates/hya-e2e`: 18 binaries, 27 scenarios) is excluded from the
+workspace run above, so it is measured separately here. It is the only suite
+that drives the **real** `hya-backend` binary over HTTP, so it is the only one
+that can cover the process/serving path end to end.
 
-### What was tried
+| | |
+| --- | --- |
+| Date | 2026-08-06 |
+| Commit | `3f18e6e5` (+ the graceful-shutdown change) |
+| Tool | `cargo-llvm-cov 0.8.7` |
+| Toolchain | `rustc 1.91.1 (ed61e7d7e 2025-11-07)` |
 
-No source change was needed. `cargo llvm-cov show-env --sh` exports the
-instrumentation environment; building with the **default** target dir then puts
-an instrumented `hya-backend` at `target/debug/hya-backend`, which is exactly
-where `default_backend_bin()` looks. The spawned child inherits
-`LLVM_PROFILE_FILE`, so in principle it emits its own profile data.
+### Why this needed a code change first
+
+The earlier attempt produced `hya-server` and `hya-core` at **0.0%** — impossible
+for a suite that serves 25 real sessions. Root cause: the harness stopped each
+backend with `std::process::Child::kill()`, which is **SIGKILL** on Unix. LLVM
+writes `.profraw` from an atexit handler, and a SIGKILL'd process never runs one.
+
+Sending SIGTERM instead was necessary but *not* sufficient: `hya-backend serve`
+installed no signal handler, and the default SIGTERM disposition also skips
+atexit handlers. Two changes were needed, and both are now in place:
+
+- `crates/hya-backend/src/serve.rs` installs SIGTERM/SIGINT/SIGHUP handlers
+  **before** printing the listen line and passes them to
+  `axum::serve(...).with_graceful_shutdown(...)`. Previously `axum::serve` never
+  returned, which also made the existing `built.shutdown()` teardown unreachable.
+- `crates/hya-e2e/src/backend.rs` spawns the backend as its own process-group
+  leader and stops it with SIGTERM → bounded poll for exit (≤1s, returns as soon
+  as the child is reaped) → **unconditional** SIGKILL of the group.
+
+The discriminator is the exit status, not "it stopped": a backend that returned
+from `main` reports `status.code() == Some(0)`; one killed by a signal reports
+`None`. Measured against the pre-change binary the harness sees `None`; against
+the current one, `Some(0)` in ~15 ms. That assertion is now a regression test,
+`backend::tests::shutdown_stops_the_backend_cleanly_with_exit_status_zero`.
+
+### Regenerate
+
+`HYA_E2E_BACKEND_BIN` points the harness at any build, so a coverage run no
+longer has to overwrite `target/debug/hya-backend` (which breaks concurrent work).
 
 ```sh
+# Instrumented build goes to its own target dir; target/debug is left alone.
+export CARGO_TARGET_DIR=/path/to/cov-target
 cargo llvm-cov clean --workspace
 eval "$(cargo llvm-cov show-env --sh)"
-cargo build --bin hya-backend          # instrumented, into target/debug
-cargo test -p hya-e2e -- --test-threads=1
+cargo build --bin hya-backend
+HYA_E2E_BACKEND_BIN="$CARGO_TARGET_DIR/debug/hya-backend" \
+  cargo test -p hya-e2e -- --test-threads=1
 cargo llvm-cov report --summary-only
 ```
 
-All 18 Track P test binaries passed, and 6 `.profraw` files were produced.
+### Result
 
-### The result, and why it is wrong
+All 18 Track P binaries passed (27 scenarios). The run produced **77** `.profraw`
+files, against **6** before the change.
 
-| Crate | Line coverage |
-| ---: | --- |
-| hya-backend | 23.9% |
-| hya-store | 8.8% |
-| hya-app | 0.2% |
-| **hya-server** | **0.0%** |
-| **hya-core** | **0.0%** |
-| hya-plugin | 0.0% |
+| Coverage | Lines | Missed | Crate |
+| ---: | ---: | ---: | --- |
+| 2.8% | 1,309 | 1,273 | hya-plugin |
+| 21.6% | 11,792 | 9,248 | hya-server |
+| 27.1% | 2,054 | 1,498 | hya-provider |
+| 31.7% | 1,182 | 807 | hya-backend |
+| 37.8% | 7,037 | 4,376 | hya-app |
+| 47.6% | 4,636 | 2,431 | hya-tool |
+| 49.0% | 2,511 | 1,281 | hya-store |
+| 51.2% | 7,629 | 3,720 | hya-core |
+| 53.4% | 470 | 219 | hya-mcp |
+| 57.4% | 1,937 | 825 | hya-bundle |
+| 72.5% | 756 | 208 | hya-proto |
+| 84.3% | 1,302 | 204 | hya-e2e |
+| 98.3% | 60 | 1 | hya-client |
+| **38.9%** | **42,675** | **26,091** | **all (Track P only)** |
 
-`hya-server` and `hya-core` at 0.0% is self-contradictory: those crates *are*
-what serves every prompt, tool call, and session in a Track P run. A report
-claiming Track P contributes 1.64% of lines would be false.
+Totals: lines 38.86%, regions 36.71%, functions 35.18%.
 
-### Root cause
+### Reading these numbers honestly
 
-`crates/hya-e2e/src/backend.rs`:
+- **The pass signal is `hya-server` and `hya-core` moving off 0.0%** — to 21.6%
+  and 51.2%. Those two rows are the whole point; they are what a suite serving 25
+  real sessions must touch, and they were previously reporting nothing at all.
+- **`hya-client` 98.3% (was 0.0%)** closes the hole flagged in the workspace
+  table above. `hya-client` is used only by this harness, so the workspace run's
+  0.0% was always a measurement artifact, and this is the number that shows it.
+- **The line denominator here (42,675) is smaller than the workspace one
+  (63,386)** because only the crates reachable from `cargo test -p hya-e2e` get
+  built and instrumented. Do not read 38.9% as "Track P covers 38.9% of the
+  workspace" — the two percentages have different denominators and are not
+  additive. Use the per-crate rows, not the total.
+- **`hya-plugin` at 2.8%** is genuine: no Track P scenario loads a plugin.
 
-```rust
-impl Drop for BackendProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        …
-```
+### Cost
 
-`std::process::Child::kill()` sends **SIGKILL** on Unix. A SIGKILL'd process
-never runs atexit handlers, and LLVM writes `.profraw` from an atexit handler.
-So every `serve` process is destroyed before it can flush its coverage data.
+Track P wall clock, uninstrumented, `--test-threads=1`, no rebuild in the timed
+window (a run that also compiles reports ~7.5 s and measures the compiler):
 
-The 23.9% / 8.8% that *did* appear comes from the short-lived CLI invocations
-that exit normally — `hya-backend bundle install/list/info/uninstall` in
-`p11_hyabundle.rs`. Those are real; the serving path is simply absent.
+| | Tests | Wall clock | Sum of per-binary times |
+| --- | ---: | ---: | ---: |
+| Before (SIGKILL) | 27 | 3.49 s | 3.24 s |
+| After (SIGTERM + bounded poll) | 27 | 3.54 s | 3.30 s |
+| After, incl. the new shutdown regression test | 30 | 3.41–3.69 s | 3.19 s |
 
-### What would make it measurable
+About +50 ms across 25 backends, i.e. ~2 ms each — inside run-to-run noise. The
+grace period is a **poll** (5 ms interval, 1 s ceiling) that returns the moment
+the child is reaped, not a fixed sleep; a fixed 1 s sleep would have added ~25 s.
 
-The harness would have to stop the backend gracefully — SIGTERM plus a wait for
-normal exit, with the backend handling SIGTERM by returning from `main` — the
-way `crates/hya-sdk/src/server.rs` already does it (SIGTERM to the process
-group, ~1s grace, then SIGKILL). That is a harness change, out of scope for a
-measurement task, and it is a prerequisite for any future Track P coverage
-number.
+### No-orphan guarantee
 
-Until then: **the workspace figure above excludes Track P entirely, and Track P's
-contribution is unknown.** `hya-client`'s 0.0% in the table above is the visible
-symptom of that hole.
+The SIGKILL escalation is unconditional after the grace period, so a backend that
+ignored SIGTERM would still be destroyed, and the group signal reaps the
+backend's own children. Verified rather than reasoned about: `pgrep -af hya-e2e`
+returns nothing both after a clean full run and after a run with a deliberately
+panicking scenario (`Drop` runs during unwinding).
 
-## Earlier analysis (superseded by the measurement above)
-
-`cargo llvm-cov` builds instrumented binaries into `target/llvm-cov-target/debug/`,
-but the E2E harness spawns the backend from a hard-coded
-`target/debug/hya-backend` (`default_backend_bin()` in
-`crates/hya-e2e/src/backend.rs`). Running Track P under `cargo llvm-cov` as-is
-would therefore execute an **uninstrumented** backend: the child process emits
-no profile data, and the report would show Track P contributing almost nothing
-— silently, with no error.
-
-That undercount is exactly the failure mode this document must not publish.
-
-A workable approach that needs no source change: build the backend under
-instrumentation, place it where the harness looks, then run Track P with
-`--no-report` and generate the report afterwards. The harness sets many env vars
-on the child but does not clear `LLVM_PROFILE_FILE`, so an instrumented child
-does emit profraw data.
-
-Status: **not yet measured.** It requires exclusive use of
-`target/debug/hya-backend`, which was in use by concurrent work when this
-baseline was taken. Recorded as the next step rather than guessed at.
-
-A cleaner long-term fix is an env override in `default_backend_bin()` (e.g.
-`HYA_E2E_BACKEND_BIN`) so the harness can be pointed at any build without
-overwriting artifacts. That is a harness change, out of scope for a measurement
-task.
 
 ## Not done here
 
