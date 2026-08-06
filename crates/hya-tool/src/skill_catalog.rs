@@ -1,12 +1,18 @@
+//! Discovery and parsing of `SKILL.md` catalogs for the skill plane.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Skill fields extracted from a `SKILL.md` body + frontmatter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParsedSkill {
+    /// Skill name used by the `skill` tool.
     pub name: String,
+    /// One-line description for system-prompt listings.
     pub description: String,
+    /// Markdown body after frontmatter.
     pub content: String,
     /// Per-skill tool allowlist from `allowed-tools`. Empty = no restriction.
     pub allowed_tools: Vec<String>,
@@ -14,14 +20,22 @@ pub struct ParsedSkill {
     pub model: Option<String>,
 }
 
+/// On-disk skill entry with paths for sampling supporting files.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SkillCatalogEntry {
+    /// Skill name.
     pub name: String,
+    /// Short description.
     pub description: String,
+    /// Full skill markdown body.
     pub content: String,
+    /// Optional tool allowlist.
     pub allowed_tools: Vec<String>,
+    /// Optional model override.
     pub model: Option<String>,
+    /// Path to `SKILL.md`.
     pub path: PathBuf,
+    /// Skill base directory (parent of `SKILL.md`).
     pub dir: PathBuf,
 }
 
@@ -42,6 +56,7 @@ struct SkillFrontmatter {
     license: Option<String>,
 }
 
+/// Default skill search roots for a project workdir (project + user + compat paths).
 #[must_use]
 pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![workdir.join(".hya/skills")];
@@ -61,11 +76,13 @@ pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Discover skills under the default roots for `workdir`.
 #[must_use]
 pub fn discover_skills(workdir: &Path) -> Vec<SkillCatalogEntry> {
     discover_skills_from_dirs(&skill_dirs_for_workdir(workdir))
 }
 
+/// Discover unique skills from explicit directory roots (first name wins).
 #[must_use]
 pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
     let mut seen = HashSet::new();
@@ -113,6 +130,7 @@ pub fn discover_skills_from_dirs(dirs: &[PathBuf]) -> Vec<SkillCatalogEntry> {
     skills
 }
 
+/// Format an `available_skills` system-prompt section, or `None` when empty.
 #[must_use]
 pub fn skills_section(skills: &[SkillCatalogEntry]) -> Option<String> {
     if skills.is_empty() {

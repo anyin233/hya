@@ -35,55 +35,100 @@ use crate::webfetch::WebFetchTool;
 use crate::websearch::{WebSearchPlane, WebSearchTool};
 use crate::write::WriteTool;
 
+/// Failure returned from tool execution and mapped to wire `error.type` strings by the engine.
 #[derive(Error, Debug)]
 pub enum ToolError {
+    /// Caller-supplied arguments failed validation or schema checks.
     #[error("input: {0}")]
     Input(String),
+    /// Permission plane denied the call (or ask channel was unavailable).
     #[error(transparent)]
     Permission(#[from] PermissionError),
+    /// Filesystem or process I/O failure during the tool body.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// JSON parse/serialize failure for tool input or output.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    /// Cooperative cancellation via [`ToolCtx::cancel`].
     #[error("cancelled")]
     Cancelled,
+    /// Transient capacity pressure (for example spawn admission overloaded).
     #[error("overloaded: {0}")]
     Overloaded(String),
+    /// The same operation id is already in flight under a conflicting claim.
     #[error("OPERATION_ID_CONFLICT")]
     OperationIdConflict,
+    /// The operation id was already completed; a second handle is rejected.
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    /// Requested subagent type is not in the caller's authorized roster.
     #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
-    UnknownAgentId { agent_id: String },
+    UnknownAgentId {
+        /// Agent id that was requested.
+        agent_id: String,
+    },
+    /// Caller is not allowed to spawn the named agent (`can_spawn` / roster).
     #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
-    AgentSpawnNotAllowed { caller: String, agent_id: String },
+    AgentSpawnNotAllowed {
+        /// Calling agent id.
+        caller: String,
+        /// Target agent id that was refused.
+        agent_id: String,
+    },
+    /// Inline agent overlay used a field the runtime does not support.
     #[error("UNSUPPORTED_INLINE_AGENT_FIELD: `{field}`")]
-    UnsupportedInlineAgentField { field: &'static str },
+    UnsupportedInlineAgentField {
+        /// Unsupported field name.
+        field: &'static str,
+    },
+    /// Catch-all message mapped to wire type `unknown`.
     #[error("{0}")]
     Other(String),
 }
 
+/// Registry rejected a registration because the name (or alias) is already taken.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 #[error("duplicate tool name: {name}")]
 pub struct DuplicateName {
+    /// Conflicting tool or alias name.
     pub name: String,
 }
 
+/// Per-call runtime context passed to every [`Tool::execute`].
+///
+/// Planes are session-scoped services; tools assert permissions and call planes
+/// without holding the session engine itself.
 pub struct ToolCtx {
+    /// Call-scoped permission plane (after invocation authorization).
     pub permission: PermissionPlane,
+    /// Channel for human questions (`question` / `ask_user`).
     pub interaction: InteractionPlane,
+    /// Subagent spawn plane for the `task` tool.
     pub spawner: SpawnerPlane,
+    /// Persisted operation identity for this tool call.
     pub operation: ToolOperation,
+    /// Team mailbox plane (disconnected outside a running team).
     pub mailbox: MailboxPlane,
+    /// Active session id when the tool runs inside a session.
     pub session: Option<SessionId>,
+    /// Parent session id for nested/subagent turns, when applicable.
     pub parent_session: Option<SessionId>,
+    /// In-memory todo plane for `todowrite`.
     pub todo: TodoPlane,
+    /// Skill catalog plane for the `skill` tool.
     pub skills: SkillPlane,
+    /// Immutable caller-reachable agent roster for spawn authorization and listing.
     pub agents: Arc<[AgentDef]>,
+    /// Configured web-search plane.
     pub websearch: WebSearchPlane,
+    /// Language-server plane for `lsp` and post-edit diagnostics.
     pub lsp: LspPlane,
+    /// External formatter plane for write/edit/patch post-processing.
     pub formatter: FormatterPlane,
+    /// Session working directory used for path resolution.
     pub workdir: PathBuf,
+    /// Cancellation token for cooperative abort.
     pub cancel: CancellationToken,
 }
 
@@ -96,6 +141,7 @@ pub struct ToolOperation {
 }
 
 impl ToolOperation {
+    /// Derive operation identity from a provider tool-call id (no actor claim yet).
     #[must_use]
     pub fn from_tool_call(source_tool_call_id: ToolCallId) -> Self {
         Self {
@@ -105,22 +151,26 @@ impl ToolOperation {
         }
     }
 
+    /// Attach the optional actor claim used by resident/subagent fences.
     #[must_use]
     pub const fn with_actor_claim(mut self, actor_claim: Option<ActorClaim>) -> Self {
         self.actor_claim = actor_claim;
         self
     }
 
+    /// Provider-facing tool-call id that originated this operation.
     #[must_use]
     pub fn source_tool_call_id(self) -> ToolCallId {
         self.source_tool_call_id
     }
 
+    /// Stable operation id used for admission and conflict detection.
     #[must_use]
     pub fn operation_id(self) -> OperationId {
         self.operation_id
     }
 
+    /// Actor claim, when this call runs under a fenced resident or subagent.
     #[must_use]
     pub const fn actor_claim(self) -> Option<ActorClaim> {
         self.actor_claim
@@ -130,10 +180,18 @@ impl ToolOperation {
 const SEARCH_LIMIT: usize = 100;
 const BUILTIN_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.tool.builtin-dispatch/v1";
 
+/// Model-callable capability: stable name, advertised schema, and async execution.
+///
+/// Implementations must not assume a particular UI. They assert permissions on
+/// [`ToolCtx::permission`], use planes for side effects, and return JSON values
+/// the engine will optionally pass through [`crate::cap_tool_output`].
 #[async_trait]
 pub trait Tool: Send + Sync {
+    /// Canonical tool name as registered and advertised to the model.
     fn name(&self) -> &str;
+    /// JSON Schema describing required and optional arguments.
     fn schema(&self) -> ToolSchema;
+    /// Run the tool body with validated (or raw) `input` and the call context.
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
 
@@ -181,22 +239,39 @@ pub struct ToolRegistrySnapshot {
     inner: Arc<ToolRegistryInner>,
 }
 
+/// Invocation-level permission class attached at registration time.
+///
+/// Drives the default mode for [`ResolvedTool::invocation`]: read-only and task
+/// default to allow, general tools and MCP default to ask, and commands build a
+/// dual tool+command subject from the `command` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPermission {
+    /// Local discovery and read tools that default to allow under `default`.
     ReadOnly,
+    /// Subagent launch (`task`); defaults to allow at the invocation layer.
     Task,
+    /// Mutating or network tools that default to ask.
     Tool,
+    /// Shell tools that also subject-match the full command string.
     Command,
+    /// MCP-bridged tools; subject is the namespaced MCP name.
     Mcp,
 }
 
+/// A registered tool together with its invocation permission class.
 #[derive(Clone)]
 pub struct ResolvedTool {
+    /// Shared tool implementation.
     pub tool: Arc<dyn Tool>,
+    /// How the engine builds the pre-execution [`Invocation`].
     pub permission: ToolPermission,
 }
 
 impl ResolvedTool {
+    /// Build the invocation subject(s) used by [`PermissionPlane::authorize`].
+    ///
+    /// # Errors
+    /// Returns [`ToolError::Input`] when a command tool is missing a string `command`.
     pub fn invocation(&self, input: &Value) -> Result<Invocation, ToolError> {
         let name = self.tool.name();
         match self.permission {
@@ -233,6 +308,7 @@ impl ToolRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Install the full set of canonical builtins (and their hidden aliases).
     #[must_use]
     pub fn builtins() -> Self {
         let registry = Self::empty();
@@ -321,6 +397,10 @@ impl ToolRegistry {
         self.register_with_permission_and_aliases_and_identity(tool, permission, aliases, None)
     }
 
+    /// Register a tool with aliases and an explicit dispatch-identity digest.
+    ///
+    /// # Errors
+    /// Returns [`DuplicateName`] when the canonical name or any alias collides.
     pub fn register_with_permission_and_aliases_and_dispatch_identity(
         &self,
         tool: Arc<dyn Tool>,
@@ -371,11 +451,13 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// Look up the tool implementation by canonical name or hidden alias.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.resolve(name).map(|resolved| resolved.tool)
     }
 
+    /// Resolve name or alias to the full [`ResolvedTool`] (tool + permission class).
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
         let inner = self.read();
@@ -386,6 +468,7 @@ impl ToolRegistry {
             .cloned()
     }
 
+    /// Remove a canonical tool and every alias that pointed at it.
     pub fn remove(&self, name: &str) {
         let mut inner = self.write();
         if inner.tools.remove(name).is_some() {
@@ -396,6 +479,7 @@ impl ToolRegistry {
             .retain(|alias, resolved| alias != name && resolved.tool.name() != name);
     }
 
+    /// Collect advertised schemas for every **canonical** tool (aliases excluded).
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.read()
@@ -486,11 +570,13 @@ fn append_length_prefixed(bytes: &mut Vec<u8>, value: &[u8]) -> Option<()> {
 }
 
 impl ToolRegistrySnapshot {
+    /// Domain-separated dispatch identity for a canonical tool, when recorded.
     #[must_use]
     pub fn dispatch_identity_v1(&self, canonical: &str) -> Option<[u8; 32]> {
         self.inner.dispatch_identities.get(canonical).copied()
     }
 
+    /// Resolve a canonical name or hidden alias without locking.
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
         self.inner
@@ -500,6 +586,7 @@ impl ToolRegistrySnapshot {
             .cloned()
     }
 
+    /// Advertised schemas for canonical tools only (aliases are not listed).
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.inner
@@ -625,6 +712,7 @@ struct GlobInput {
     pattern: String,
     path: Option<String>,
 }
+/// Recursive path matcher with a 100-row cap (`SEARCH_LIMIT`).
 pub struct GlobTool;
 #[async_trait]
 impl Tool for GlobTool {
@@ -722,6 +810,7 @@ struct GrepInput {
     path: Option<String>,
     include: Option<String>,
 }
+/// In-process regex line search with a 100-match cap (does not shell out to ripgrep).
 pub struct GrepTool;
 #[async_trait]
 impl Tool for GrepTool {
@@ -858,6 +947,7 @@ impl Tool for GrepTool {
 struct LsInput {
     path: Option<String>,
 }
+/// Lists immediate directory entries (name, type, size) without recursion.
 pub struct LsTool;
 #[async_trait]
 impl Tool for LsTool {
@@ -916,6 +1006,7 @@ struct FindInput {
     pattern: String,
     path: Option<String>,
 }
+/// Compatibility path finder: recursive `*` matching with sizes and no result-row cap.
 pub struct FindTool;
 #[async_trait]
 impl Tool for FindTool {
@@ -964,6 +1055,7 @@ impl Tool for FindTool {
     }
 }
 
+/// Single free-text or select prompt via [`InteractionPlane`] (cancellation is soft).
 pub struct AskUserTool;
 
 #[derive(Deserialize)]

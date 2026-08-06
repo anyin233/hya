@@ -25,16 +25,22 @@ use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 /// many inboxes it reached (1 for a handle, the subscriber count for a channel).
 #[derive(Clone, Debug)]
 pub struct MailReceipt {
+    /// Resolved sender handle.
     pub from: String,
+    /// Normalized recipient endpoint.
     pub to: MailEndpoint,
+    /// Number of inboxes that received the mail.
     pub recipients: usize,
 }
 
 /// A channel plus its current membership, for the `channels` tool.
 #[derive(Clone, Debug)]
 pub struct ChannelInfo {
+    /// Channel name without requiring a leading `#`.
     pub name: String,
+    /// Current member handles.
     pub members: Vec<String>,
+    /// Message count on the channel.
     pub messages: usize,
 }
 
@@ -42,40 +48,66 @@ pub struct ChannelInfo {
 /// typed result or a human-readable rejection string (the service maps its typed
 /// errors to strings so this enum stays free of `hya-core` types).
 pub enum MailboxRequest {
+    /// Deliver mail to a handle or `#channel`.
     Send {
+        /// Sending session.
         from: SessionId,
+        /// Optional actor claim for the send.
         actor_claim: Option<ActorClaim>,
+        /// Recipient endpoint.
         to: MailEndpoint,
+        /// Message vs announcement.
         kind: MailKind,
+        /// Body text.
         body: String,
+        /// Host reply with receipt or rejection.
         reply: oneshot::Sender<Result<MailReceipt, String>>,
     },
+    /// Subscribe (creating the channel if needed).
     Join {
+        /// Acting session.
         session: SessionId,
+        /// Optional actor claim.
         actor_claim: Option<ActorClaim>,
+        /// Channel name.
         channel: String,
+        /// Host reply.
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Unsubscribe from a channel.
     Leave {
+        /// Acting session.
         session: SessionId,
+        /// Optional actor claim.
         actor_claim: Option<ActorClaim>,
+        /// Channel name.
         channel: String,
+        /// Host reply.
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// List live teammates for the team.
     Roster {
+        /// Acting session (team resolution).
         session: SessionId,
+        /// Host reply with roster rows.
         reply: oneshot::Sender<Result<Vec<RosterEntry>, String>>,
     },
+    /// List channels for the team.
     Channels {
+        /// Acting session.
         session: SessionId,
+        /// Host reply with channel info.
         reply: oneshot::Sender<Result<Vec<ChannelInfo>, String>>,
     },
 }
 
+/// Mailbox plane or service failure.
 #[derive(Debug, Error)]
 pub enum MailboxError {
+    /// Plane disconnected or no session bound.
     #[error("mailbox service unavailable")]
     Unavailable,
+    /// Service rejected the request with a message.
     #[error("{0}")]
     Rejected(String),
 }
@@ -119,6 +151,7 @@ impl MailboxPlane {
         self.for_session_with_actor(session, None)
     }
 
+    /// Bind session and optional actor claim used for fenced sends.
     #[must_use]
     pub fn for_session_with_actor(
         &self,

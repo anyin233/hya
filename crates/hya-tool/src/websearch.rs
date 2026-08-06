@@ -1,3 +1,5 @@
+//! Web-search plane and provider configuration for the `websearch` tool.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,17 +17,23 @@ const DEFAULT_TIMEOUT_SECS: u64 = 25;
 const EXA_URL: &str = "https://mcp.exa.ai/mcp";
 const PARALLEL_URL: &str = "https://search.parallel.ai/mcp";
 
+/// Holds shared web-search configuration for tools.
 #[derive(Clone)]
 pub struct WebSearchPlane {
     config: Arc<WebSearchConfig>,
 }
 
+/// User/config settings for the built-in web search tool.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct WebSearchConfig {
+    /// Search backend.
     pub provider: WebSearchProvider,
+    /// Optional endpoint override.
     pub endpoint: Option<String>,
+    /// API key (query param for Exa, bearer for Parallel).
     pub key: Option<String>,
+    /// When false, the tool should not be advertised.
     pub enabled: bool,
 }
 
@@ -47,6 +55,7 @@ impl Default for WebSearchPlane {
 }
 
 impl WebSearchPlane {
+    /// Convenience constructor with an explicit provider and endpoint URL.
     #[must_use]
     pub fn new(provider: WebSearchProvider, url: String) -> Self {
         Self::configured(WebSearchConfig {
@@ -56,6 +65,7 @@ impl WebSearchPlane {
         })
     }
 
+    /// Wrap an arbitrary config.
     #[must_use]
     pub fn configured(config: WebSearchConfig) -> Self {
         Self {
@@ -64,10 +74,13 @@ impl WebSearchPlane {
     }
 }
 
+/// Built-in search backends (MCP clients).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WebSearchProvider {
+    /// Exa MCP at `mcp.exa.ai`.
     Exa,
+    /// Parallel MCP at `search.parallel.ai`.
     Parallel,
 }
 

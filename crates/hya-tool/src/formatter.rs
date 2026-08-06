@@ -1,3 +1,5 @@
+//! External code-formatter plane used after write/edit/patch.
+
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -12,6 +14,7 @@ use crate::formatter_definition::definitions_for_config;
 
 pub use crate::formatter_definition::{FormatterConfig, FormatterEntry};
 
+/// Status row for one configured formatter (name, extensions, enabled).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FormatterStatus {
     name: String,
@@ -20,6 +23,7 @@ pub struct FormatterStatus {
 }
 
 impl FormatterStatus {
+    /// Build a status row for UI / diagnostics.
     #[must_use]
     pub fn new(name: impl Into<String>, extensions: Vec<String>, enabled: bool) -> Self {
         Self {
@@ -30,23 +34,29 @@ impl FormatterStatus {
     }
 }
 
+/// Formatter provider failure.
 #[derive(Error, Debug)]
 #[error("{0}")]
 pub struct FormatterError(pub String);
 
+/// Backend that can list formatters and format a file in place.
 #[async_trait]
 pub trait FormatterProvider: Send + Sync {
+    /// List configured formatters and whether each is currently runnable.
     async fn status(&self, workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError>;
+    /// Format `file` under `workdir`; returns whether any formatter ran.
     async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
         Ok(false)
     }
 }
 
+/// Default provider that runs builtin/custom command formatters from config.
 pub struct BuiltinFormatterProvider {
     config: FormatterConfig,
 }
 
 impl BuiltinFormatterProvider {
+    /// Create a provider for the given config.
     #[must_use]
     pub fn new(config: FormatterConfig) -> Self {
         Self { config }
@@ -91,12 +101,14 @@ impl FormatterProvider for BuiltinFormatterProvider {
     }
 }
 
+/// Optional formatter provider used by mutating file tools.
 #[derive(Clone, Default)]
 pub struct FormatterPlane {
     provider: Option<Arc<dyn FormatterProvider>>,
 }
 
 impl FormatterPlane {
+    /// Wrap a concrete provider.
     #[must_use]
     pub fn new(provider: Arc<dyn FormatterProvider>) -> Self {
         Self {
@@ -104,6 +116,10 @@ impl FormatterPlane {
         }
     }
 
+    /// Provider status rows, or empty when disconnected.
+    ///
+    /// # Errors
+    /// Propagates provider failures.
     pub async fn status(&self, workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
         match &self.provider {
             Some(provider) => provider.status(workdir).await,
@@ -111,6 +127,10 @@ impl FormatterPlane {
         }
     }
 
+    /// Format a file; returns `false` when no provider is configured.
+    ///
+    /// # Errors
+    /// Propagates provider failures.
     pub async fn format_file(&self, workdir: &Path, file: &Path) -> Result<bool, FormatterError> {
         match &self.provider {
             Some(provider) => provider.format_file(workdir, file).await,

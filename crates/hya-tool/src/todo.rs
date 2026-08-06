@@ -1,3 +1,5 @@
+//! In-memory per-session todo list plane for the `todowrite` tool.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -10,45 +12,56 @@ use tokio::sync::Mutex;
 use crate::permission::{Action, Resource};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
+/// One todo row stored for a session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TodoItem {
+    /// Human-readable task text.
     pub content: String,
+    /// Status string (for example `pending` / `completed`).
     pub status: TodoStatus,
+    /// Priority string (opaque to the plane).
     pub priority: TodoPriority,
 }
 
+/// Opaque status token carried on a [`TodoItem`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TodoStatus(String);
 
 impl TodoStatus {
+    /// Borrow the raw status string.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Opaque priority token carried on a [`TodoItem`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TodoPriority(String);
 
 impl TodoPriority {
+    /// Borrow the raw priority string.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Session-scoped todo store (not independently persisted outside the event log).
 #[derive(Clone, Default)]
 pub struct TodoPlane {
     todos: Arc<Mutex<HashMap<SessionId, Vec<TodoItem>>>>,
 }
 
 impl TodoPlane {
+    /// Replace the entire todo list for `session`.
     pub async fn update(&self, session: SessionId, todos: Vec<TodoItem>) {
         self.todos.lock().await.insert(session, todos);
     }
 
+    /// Return a clone of the current list (empty if never written).
     pub async fn get(&self, session: SessionId) -> Vec<TodoItem> {
         self.todos
             .lock()

@@ -1,4 +1,28 @@
-//! `hya-tool` — Tool trait + registry + the allow/ask/deny permission plane.
+//! Tool plane for the hya agent runtime.
+//!
+//! This crate owns everything the model calls as a **tool** and the **permission**
+//! checks that gate those calls:
+//!
+//! - **[`Tool`] trait and registry** — name, JSON schema, and async `execute`;
+//!   builtin registration, aliases, and an immutable snapshot for an admitted turn
+//!   ([`tool`]).
+//! - **Permission state machine** — invocation-level policies plus resource-level
+//!   allow/ask/deny rules, remembered grants, optional interceptors, and user-ask
+//!   channels ([`permission`]).
+//! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
+//!   interaction/questions, subagent spawning, todos, skills, web search, LSP,
+//!   mailbox, and formatters.
+//! - **Concrete builtins** — read/write/edit/patch, shell, glob/grep/find, task,
+//!   webfetch/websearch, and team mailbox tools.
+//!
+//! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
+//! reviewers should start with [`PermissionPlane`], [`Action`], and
+//! [`Resource`]. Downstream crates (`hya-core`, `hya-app`) wire planes and run
+//! tools; this crate stays free of the session engine.
+
+// This crate is fully documented; keep it that way. Remove once the workspace
+// lint table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
 
 mod agents;
 mod apply_patch;
@@ -9,14 +33,17 @@ mod formatter;
 mod formatter_catalog;
 mod formatter_command;
 mod formatter_definition;
+/// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
 mod invalid;
 mod lsp;
 mod lsp_path;
 mod lsp_plane;
 mod lsp_post_edit;
+/// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
 pub mod mailbox;
 mod output_cap;
+/// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
 mod plan;
 mod question;
@@ -26,9 +53,12 @@ mod read_text;
 mod shell;
 mod skill;
 mod skill_catalog;
+/// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 mod task;
+/// In-memory per-session todo list plane and the `todowrite` tool types.
 pub mod todo;
+/// Tool trait, registry, permission class metadata, and local search builtins.
 pub mod tool;
 mod utf8_bom;
 mod webfetch;

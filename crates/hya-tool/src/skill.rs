@@ -13,6 +13,7 @@ use crate::tool::{Tool, ToolCtx, ToolError};
 
 const FILE_SAMPLE_LIMIT: usize = 10;
 
+/// Session-scoped skill catalog access for the `skill` tool.
 #[derive(Clone)]
 pub struct SkillPlane {
     roots: SkillRoots,
@@ -34,6 +35,7 @@ impl Default for SkillPlane {
 }
 
 impl SkillPlane {
+    /// Resolve skills only from the given directory roots.
     #[must_use]
     pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self {
