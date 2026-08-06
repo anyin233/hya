@@ -1,3 +1,8 @@
+//! Per-plugin JSON-RPC client and child-process lifecycle.
+//!
+//! [`PluginClient`] speaks NDJSON requests/notifications over async stdio.
+//! [`ChildGuard`] owns the spawned process, stderr tail, and shutdown/terminate.
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
@@ -23,8 +28,11 @@ use crate::messages::{
 use crate::protocol::{Frame, JsonRpcNotification, JsonRpcRequest};
 use hya_proto::{SessionId, ToolCallId};
 
+/// Default timeout for ordinary host→plugin requests (30s).
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout for the `initialize` handshake (5s).
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout for the `shutdown` request before the child is terminated (1s).
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
 
@@ -60,6 +68,10 @@ fn lock_pending(pending: &Pending) -> std::sync::MutexGuard<'_, PendingEntries> 
     }
 }
 
+/// Cloneable JSON-RPC client bound to one plugin's stdin/stdout.
+///
+/// Multiplexes concurrent calls by request id, with optional timeouts and a
+/// closed-token for cancellation when the child dies.
 #[derive(Clone)]
 pub struct PluginClient {
     inner: Arc<ClientInner>,
@@ -74,6 +86,10 @@ struct ClientInner {
     timeout_taints_closed: bool,
 }
 
+/// Owns a spawned plugin process and its paired [`PluginClient`].
+///
+/// Dropping without [`ChildGuard::shutdown`] / [`ChildGuard::terminate`] leaves
+/// cleanup to the OS; prefer explicit shutdown for a clean `shutdown` RPC.
 pub struct ChildGuard {
     child: StdMutex<Option<Child>>,
     client: PluginClient,
@@ -99,6 +115,7 @@ struct ActivationInitializeParams {
 }
 
 impl ChildGuard {
+    /// OS process id of the child, if still held.
     #[must_use]
     pub fn pid(&self) -> Option<u32> {
         let guard = match self.child.lock() {
@@ -108,6 +125,7 @@ impl ChildGuard {
         guard.as_ref().and_then(Child::id)
     }
 
+    /// Snapshot of the rolling stderr capture (up to the configured tail size).
     #[must_use]
     pub fn stderr_tail(&self) -> Vec<u8> {
         let Some(tail) = &self.stderr_tail else {
@@ -280,6 +298,9 @@ async fn await_stderr_task(task: Option<StderrTask>) -> Result<(), PluginError> 
 }
 
 impl PluginClient {
+    /// Build a client over already-connected reader/writer halves (tests and custom pipes).
+    ///
+    /// Spawns a background reader task that completes pending request futures.
     pub fn new<R, W>(reader: R, writer: W) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
@@ -541,11 +562,13 @@ impl PluginClient {
             .map_err(|e| PluginError::Io(e.to_string()))
     }
 
+    /// Whether this client has been marked closed (EOF, crash, or explicit mark).
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::SeqCst)
     }
 
+    /// Cancellation token fired when the client is marked closed.
     #[must_use]
     pub fn closed_token(&self) -> CancellationToken {
         self.inner.closed_token.clone()

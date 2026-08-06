@@ -4,26 +4,37 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// JSON-RPC version string required on every frame (`"2.0"`).
 pub const JSONRPC_VERSION: &str = "2.0";
 
+/// Standard and app-defined JSON-RPC error codes used on the plugin wire.
 pub mod codes {
+    /// Method is not implemented by the plugin (`-32601`).
     pub const METHOD_NOT_FOUND: i64 = -32601;
+    /// Malformed params (`-32602`).
     pub const INVALID_PARAMS: i64 = -32602;
+    /// Plugin-side failure (`-32603`).
     pub const INTERNAL_ERROR: i64 = -32603;
     /// App-defined: a guard hook vetoed the action.
     pub const VETO: i64 = 1;
 }
 
+/// Host→plugin (or plugin→host) JSON-RPC request expecting a response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
+    /// Must be [`JSONRPC_VERSION`].
     pub jsonrpc: String,
+    /// Correlation id for the matching response.
     pub id: u64,
+    /// Method name (`initialize`, `tool/call`, `hook/…`, …).
     pub method: String,
+    /// Method params object (default empty JSON value).
     #[serde(default)]
     pub params: Value,
 }
 
 impl JsonRpcRequest {
+    /// Build a request with `jsonrpc` set to [`JSONRPC_VERSION`].
     #[must_use]
     pub fn new(id: u64, method: impl Into<String>, params: Value) -> Self {
         Self {
@@ -35,17 +46,23 @@ impl JsonRpcRequest {
     }
 }
 
+/// Reply to a [`JsonRpcRequest`]: success (`result`) or failure (`error`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
+    /// Must be [`JSONRPC_VERSION`].
     pub jsonrpc: String,
+    /// Same id as the request being answered.
     pub id: u64,
+    /// Success payload when the call succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    /// Error object when the call failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
 }
 
 impl JsonRpcResponse {
+    /// Successful response carrying `result`.
     #[must_use]
     pub fn ok(id: u64, result: Value) -> Self {
         Self {
@@ -56,6 +73,7 @@ impl JsonRpcResponse {
         }
     }
 
+    /// Error response with the given code and message (no `data`).
     #[must_use]
     pub fn err(id: u64, code: i64, message: impl Into<String>) -> Self {
         Self {
@@ -71,23 +89,32 @@ impl JsonRpcResponse {
     }
 }
 
+/// JSON-RPC error object inside a response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcError {
+    /// Numeric error code (see [`codes`]).
     pub code: i64,
+    /// Human-readable error message.
     pub message: String,
+    /// Optional structured error details.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
+/// One-way JSON-RPC notification (no `id`, no reply expected).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonRpcNotification {
+    /// Must be [`JSONRPC_VERSION`].
     pub jsonrpc: String,
+    /// Notification method (for example `event`).
     pub method: String,
+    /// Notification params.
     #[serde(default)]
     pub params: Value,
 }
 
 impl JsonRpcNotification {
+    /// Build a notification with `jsonrpc` set to [`JSONRPC_VERSION`].
     #[must_use]
     pub fn new(method: impl Into<String>, params: Value) -> Self {
         Self {
@@ -98,10 +125,14 @@ impl JsonRpcNotification {
     }
 }
 
+/// Classified NDJSON frame after [`Frame::parse`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
+    /// Request with both `method` and `id`.
     Request(JsonRpcRequest),
+    /// Response with `result` xor `error` and an `id`.
     Response(JsonRpcResponse),
+    /// Notification with `method` and no `id`.
     Notification(JsonRpcNotification),
 }
 

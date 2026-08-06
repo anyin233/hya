@@ -6,14 +6,17 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use crate::error::PluginError;
 use crate::protocol::Frame;
 
+/// Maximum accepted length of a single NDJSON line (1 MiB).
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 
+/// Async reader that yields one classified [`Frame`] per newline-delimited line.
 pub struct FrameReader<R> {
     inner: BufReader<R>,
     buf: Vec<u8>,
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
+    /// Wrap an async byte reader for NDJSON frame parsing.
     pub fn new(reader: R) -> Self {
         Self {
             inner: BufReader::new(reader),
@@ -74,11 +77,13 @@ where
     }
 }
 
+/// Async writer that serializes one JSON object per line (NDJSON).
 pub struct FrameWriter<W> {
     inner: W,
 }
 
 impl<W: AsyncWrite + Unpin> FrameWriter<W> {
+    /// Wrap an async byte writer for NDJSON frame emission.
     pub fn new(writer: W) -> Self {
         Self { inner: writer }
     }

@@ -22,19 +22,40 @@ pub enum PluginError {
     Json(String),
     /// The plugin replied with a JSON-RPC error object.
     #[error("rpc error {code}: {message}")]
-    Rpc { code: i64, message: String },
+    Rpc {
+        /// JSON-RPC error code from the plugin.
+        code: i64,
+        /// Human-readable error message from the plugin.
+        message: String,
+    },
     /// The plugin announced a protocol version the host does not speak.
     #[error("plugin protocol version {got} != host {expected}")]
-    ProtocolMismatch { expected: u32, got: u32 },
+    ProtocolMismatch {
+        /// Version the host required.
+        expected: u32,
+        /// Version the plugin declared.
+        got: u32,
+    },
     /// The child identity must match the stable configured source identity.
     #[error("plugin handshake id {got} != configured id {expected}")]
-    IdentityMismatch { expected: String, got: String },
+    IdentityMismatch {
+        /// Configured / expected plugin id.
+        expected: String,
+        /// Id announced in the initialize reply.
+        got: String,
+    },
     /// A respawned child changed its complete initialize declaration.
     #[error("plugin declaration drift for {plugin}")]
-    DeclarationDrift { plugin: String },
+    DeclarationDrift {
+        /// Plugin id whose declaration changed across respawn.
+        plugin: String,
+    },
     /// A request exceeded its per-call timeout.
     #[error("plugin call timed out: {method}")]
-    Timeout { method: String },
+    Timeout {
+        /// Method that timed out.
+        method: String,
+    },
     /// The plugin connection closed (EOF / crash) with requests in flight.
     #[error("plugin connection closed")]
     Closed,

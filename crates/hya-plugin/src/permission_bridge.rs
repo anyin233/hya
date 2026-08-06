@@ -17,11 +17,17 @@ use crate::messages::{
 const PERMISSION_BRIDGE_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
     b"hya.plugin.permission-bridge.semantic-identity/v1";
 
+/// `PermissionInterceptor` that asks each loaded plugin's `permission.ask` hook.
+///
+/// The first non-`defer` outcome decides; if every plugin defers (or none handle
+/// the hook), the interceptor returns `None` so the host can fall through to
+/// the normal user-ask path.
 pub struct PermissionBridge {
     host: Arc<PluginHost>,
 }
 
 impl PermissionBridge {
+    /// Create a bridge over a shared [`PluginHost`].
     #[must_use]
     pub fn new(host: Arc<PluginHost>) -> Self {
         Self { host }
@@ -78,6 +84,10 @@ impl PluginHost {
         Some(Sha256::digest(bytes).into())
     }
 
+    /// Walk plugins in load order and return the first non-defer permission decision.
+    ///
+    /// Plugins without a registered `permission.ask` hook are skipped. Serialize
+    /// or RPC failures are logged and treated as continue-to-next-plugin.
     pub async fn permission_ask(
         &self,
         session: Option<SessionId>,
