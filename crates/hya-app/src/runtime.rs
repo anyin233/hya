@@ -4360,7 +4360,49 @@ mod tests {
     use tokio::io::AsyncBufReadExt;
     use tokio_util::sync::CancellationToken;
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Guards the process-global environment that `EnvGuard` mutates.
+    ///
+    /// A `RwLock`, not a `Mutex`, because two different populations need it:
+    ///
+    /// - **Writers** (`EnvGuard::set`) repoint `HOME`, `XDG_*` and the process
+    ///   current directory while they run.
+    /// - **Readers** (`StableEnvGuard`) do not touch the environment, but their
+    ///   assertions depend on it holding still.
+    ///
+    /// The second population is not obvious, so it is worth stating why it
+    /// exists. `hya_tool::skill_dirs_for_workdir` builds the skill search path
+    /// from `HOME` (`crates/hya-tool/src/skill_catalog.rs:46-61`), the skill set
+    /// feeds `TurnBinding::semantic_fingerprint_v1`, and durable spawn admission
+    /// compares the fingerprint recorded in an intent against one recomputed
+    /// later. If `HOME` changes in between, the two disagree and resolution
+    /// fails closed as `SpawnError::Unavailable` — surfacing only as a resolved
+    /// launch count of 0. Any test that spans a fingerprint capture and a
+    /// fingerprint recomputation therefore needs `HOME` pinned for its duration.
+    ///
+    /// Readers still run concurrently with each other, so this costs
+    /// parallelism only against the handful of writers.
+    static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+    /// Read-side companion to [`EnvGuard`]: pins the process environment for the
+    /// lifetime of a test that must observe a stable `HOME`-derived runtime
+    /// fingerprint, without mutating anything itself.
+    ///
+    /// Poisoning is ignored deliberately — a panic in one environment test must
+    /// not cascade into spurious failures in every other test that takes this
+    /// guard. Same rationale as the `hya-sdk` `ENV_GUARD` added in `0acfc919`.
+    struct StableEnvGuard {
+        _lock: std::sync::RwLockReadGuard<'static, ()>,
+    }
+
+    impl StableEnvGuard {
+        fn acquire() -> Self {
+            Self {
+                _lock: ENV_LOCK
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            }
+        }
+    }
 
     struct CountingDevProvider {
         calls: Arc<AtomicUsize>,
@@ -5033,6 +5075,10 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_admission_prepares_canonical_intents_before_runtime_resolution() {
+        // Pins `HOME` for this test: it captures a runtime fingerprint and then
+        // asserts the one `prepare_spawn_admission` recomputes is equal to it.
+        // See `ENV_LOCK`.
+        let _env = StableEnvGuard::acquire();
         let workdir = tempdir().join("spawn-admission-workdir-sentinel");
         std::fs::create_dir_all(&workdir).unwrap();
         let engine =
@@ -5200,6 +5246,10 @@ mod tests {
 
     #[tokio::test]
     async fn accepted_admission_launches_resolve_without_touching_queued_members() {
+        // Pins `HOME` for this test: it claims an admission batch (recording a
+        // runtime fingerprint in each intent) and then resolves those launches,
+        // which recomputes the fingerprint and compares. See `ENV_LOCK`.
+        let _env = StableEnvGuard::acquire();
         let workdir = tempdir().join("accepted-admission-workdir-sentinel");
         std::fs::create_dir_all(&workdir).unwrap();
         let engine =
@@ -5471,6 +5521,9 @@ mod tests {
 
     #[tokio::test]
     async fn recovered_mismatch_aborts_once_and_resolves_promoted_match() {
+        // Pins `HOME` for this test: it captures a runtime fingerprint in an
+        // admission intent and recomputes it during resolution. See `ENV_LOCK`.
+        let _env = StableEnvGuard::acquire();
         let workdir = tempdir().join("recovered-admission-resolution-workdir");
         std::fs::create_dir_all(&workdir).unwrap();
         let engine =
@@ -5774,6 +5827,9 @@ mod tests {
 
     #[tokio::test]
     async fn recovered_promotions_reconstruct_each_parent_binding() {
+        // Pins `HOME` for this test: it captures a runtime fingerprint in an
+        // admission intent and recomputes it during resolution. See `ENV_LOCK`.
+        let _env = StableEnvGuard::acquire();
         let workdir_a = tempdir().join("recovered-promotion-parent-a");
         let workdir_b = tempdir().join("recovered-promotion-parent-b");
         std::fs::create_dir_all(&workdir_a).unwrap();
@@ -6069,6 +6125,9 @@ mod tests {
 
     #[tokio::test]
     async fn recovered_transient_launch_executes_only_after_started_barrier() {
+        // Pins `HOME` for this test: it captures a runtime fingerprint in an
+        // admission intent and recomputes it during resolution. See `ENV_LOCK`.
+        let _env = StableEnvGuard::acquire();
         let workdir = tempdir().join("recovered-transient-admission-workdir");
         std::fs::create_dir_all(&workdir).unwrap();
         struct IdentityFakeProvider {
@@ -9974,7 +10033,7 @@ for line in sys.stdin:
     }
 
     struct EnvGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _lock: std::sync::RwLockWriteGuard<'static, ()>,
         home: Option<std::ffi::OsString>,
         xdg_config_home: Option<std::ffi::OsString>,
         xdg_data_home: Option<std::ffi::OsString>,
@@ -9983,7 +10042,9 @@ for line in sys.stdin:
 
     impl EnvGuard {
         fn set(home: &Path, cwd: &Path) -> Self {
-            let lock = ENV_LOCK.lock().unwrap();
+            let lock = ENV_LOCK
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let guard = Self {
                 _lock: lock,
                 home: std::env::var_os("HOME"),
