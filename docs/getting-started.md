@@ -21,12 +21,53 @@ cargo build --workspace
 Building does not create `~/.config/hya`; the starter config is created on the
 first `hya` or `hya-backend` startup that needs runtime config.
 
+### Install from source (`./install.sh`)
+
 Build and install the complete frontend/runtime layout:
 
 ```sh
 ./install.sh --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+#### Options
+
+| Option | Meaning |
+| --- | --- |
+| `--prefix DIR` | Install into `DIR/bin` (default `/usr/local`). |
+| `--bin-dir DIR` | Install binaries directly into `DIR` (overrides `--prefix`). Relative paths resolve against the script directory. Runtime assets go under `DIR/../lib/hya/hya-tui-ts`. |
+| `--profile release\|dev\|debug` | Cargo build profile and matching target dir (honours `CARGO_TARGET_DIR`). Any other value exits 2. |
+| `--dry-run` | Print every action; skip building and installing; print verification commands instead of running them. |
+| `-h` / `--help` | Print usage and exit 0. |
+
+#### What the installer does
+
+Failures are easiest to diagnose if you know the order of operations
+([`install.sh`](../install.sh)):
+
+1. **Permission preflight.** Walks up to the nearest existing ancestor of the
+   target bin and lib directories. If that ancestor is not a writable directory,
+   prints remedies (`sudo ./install.sh` or
+   `./install.sh --bin-dir "$HOME/.local/bin"`) and exits 1.
+2. **Bun preflight.** `bun --version` must succeed or the install aborts.
+3. **Cargo build.** Builds locked binaries for `hya`, `hya-backend`, and
+   `hya-ts` for the selected profile.
+4. **Stage runtime.** Copies the TUI package into a temporary tree, runs
+   `bun install --frozen-lockfile --production`, then
+   `bun packages/hya-tui-ts/scripts/prune-sdk-server.ts` on that tree.
+5. **Atomic swap.** Stages into `.tmp.$$` paths, moves any existing install to
+   `.bak.$$`, then renames into place. An `ERR`/`INT`/`TERM` trap calls
+   `restore_install` so an interrupted install puts previous binaries and
+   runtime back and cleans leftovers — it should never leave a half-installed
+   `hya`.
+6. **Post-install verification** (skipped under `--dry-run`, which only
+   prints the checks):
+   - Runs the `hya` shim against a dead server with `--bun /bin/true`.
+   - Runs `hya --version`, `hya-backend --help`, `hya-ts --help`.
+   - Asserts runtime files (`src/main.tsx`, `bunfig.toml`, license files) and
+     `node_modules` exist under the installed `lib/hya/hya-tui-ts`.
+   - **Fails** if `command -v hya` does not resolve to the install path (usual
+     cause: an older `hya` earlier on `PATH`).
 
 The installer colocates `hya`, `hya-ts`, and `hya-backend` and prepares the Bun
 runtime under `lib/hya/hya-tui-ts`. Installing only the `hya` Cargo package is
@@ -44,15 +85,26 @@ local `hya-backend`, or attaches to an existing server when `--server <URL>` is
 provided. It streams assistant events into the chat view and prompts for
 permission when a tool requests a mutating action.
 
-Key controls:
+Key controls (defaults; leader is `Ctrl-X`):
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Send the current input when no turn is running. |
-| `Ctrl-P` | List available commands. |
-| `Ctrl-X` | Show leader-key actions. |
-| `Escape` | Interrupt the current session or dismiss a dialog. |
-| `Ctrl-C` / `Ctrl-D` | Exit. |
+| `Ctrl-P` | List available commands (command palette). |
+| `Ctrl-X` | Leader key — arms a timed chord for `<leader>…` bindings. |
+| `Escape` | Dismiss a dialog, hide autocomplete, clear a pending leader sequence, exit shell mode, return an observation pane to Main, or interrupt the running turn — press **twice** within 5 s (while the prompt is focused) to abort. |
+| `Ctrl-C` | Copy the selection if one is active (when explicit copy is required), clear the prompt if it has text, otherwise exit when the prompt is unfocused or empty. |
+| `Ctrl-D` | Exit when the prompt is empty and unfocused; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs. |
+| `<leader>l` | List sessions. |
+| `<leader>m` | List models. |
+| `<leader>a` | List agents. |
+| `<leader>o` | Open the subagent roster. |
+| `<leader>b` | Toggle the sidebar. |
+
+For the full keybinding tables and built-in slash commands (`/sessions`,
+`/models`, `/agents`, `/export`, `/compact`, and the rest), see
+[TUI Keybindings](tui-keybindings.md). Screens and dialogs are covered in
+[TUI Reference](tui-reference.md).
 
 ## Run One Headless Turn
 
@@ -166,7 +218,11 @@ hya                                    # TUI now runs against the live provider
 ```
 
 `hya-backend login <provider> <token>` stores an auth token that takes precedence over
-inline `api_key`. For a fully-commented sample config, the complete `HYA_*`
-environment-variable reference, and MCP/plugin setup, see
-[Configuration](configuration.md). For the full command and TUI slash-command
-reference, see the [CLI Reference](cli.md).
+inline `api_key`. For a fully-commented sample config, documented environment
+variables, and MCP/plugin setup, see [Configuration](configuration.md). Note that
+the configuration page lists selected `HYA_*` variables used by common workflows;
+additional process-local flags (for example TUI startup and automation hooks)
+appear in [Troubleshooting](troubleshooting.md) and
+[TUI Architecture](architecture/tui.md). For CLI commands, see the
+[CLI Reference](cli.md). For TUI slash commands and keybindings, see
+[TUI Keybindings](tui-keybindings.md).

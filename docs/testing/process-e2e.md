@@ -154,6 +154,17 @@ cargo clippy -p hya-e2e --all-targets -- -D warnings
 
 `--test-threads=1` avoids port/process contention across concurrent backends.
 
+## TUI automation hooks
+
+These environment variables are **test/automation-only**. They are not part of
+the supported user configuration surface. Source:
+[`packages/hya-tui-ts/src/upstream/app.tsx`](../../packages/hya-tui-ts/src/upstream/app.tsx).
+
+| Variable | Behaviour |
+| --- | --- |
+| `HYA_ROUTE` | JSON value parsed at TUI startup that overrides the initial route. Malformed JSON throws during boot — quote carefully in harnesses. |
+| `HYA_FAST_BOOT` | Any non-empty value (`Boolean(process.env.HYA_FAST_BOOT)`, so even `0` counts as on) skips the TUI's initial loading screen, which makes deterministic screen assertions possible. |
+
 ## Related
 
 - Scenario inventory: [agent-matrix.md](agent-matrix.md)
