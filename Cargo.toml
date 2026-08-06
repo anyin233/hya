@@ -60,6 +60,11 @@ sevenz-rust2 = { path = "vendor/sevenz-rust2-0.20.2", version = "=0.20.2", defau
 
 # Library crates deny panic-paths (parse-don't-validate; typed errors). Bins/tests
 # may relax locally with #![allow(...)]. (Per design.md N3 / implement.md gate.)
+[workspace.lints.rust]
+# Documentation coverage gate. Starts at `warn` so the build stays green while
+# crates are documented; each crate denies it locally once it reaches zero.
+missing_docs = "warn"
+
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
