@@ -3,7 +3,7 @@
   "name": "fix-known-flaky-tests",
   "title": "Fix the four known flaky tests",
   "description": "Diagnose or explicitly quarantine the four flaky tests surfaced by the new CI gate: recovered_promotions, frontend_cli ETXTBSY, bundle_cli process-id collisions, pty-smoke root-draft timeout.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
