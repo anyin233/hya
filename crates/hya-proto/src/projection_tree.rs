@@ -17,18 +17,25 @@ use crate::projection::{MemberProjection, RosterEntry, SessionProjection};
 /// (`member` is `None` for the root) and its child members.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunTreeNode {
+    /// Session this node observes; `None` for a pending member not yet bound to a child session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionId>,
+    /// Agent name from the session projection when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentName>,
+    /// Model ref from the session projection when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelRef>,
+    /// Session title when set (UI label).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Parent's member-lifecycle row that spawned this node; `None` for the tree root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<MemberProjection>,
+    /// Team-root roster entry for this session when the parent supplied a roster map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roster: Option<RosterEntry>,
+    /// Direct child members / nested sessions, depth-first from the parent log.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<RunTreeNode>,
 }

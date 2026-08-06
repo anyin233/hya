@@ -4,14 +4,27 @@
 //! a newtype per id. This crate is dependency-light (serde / uuid only) so the
 //! TUI can share types without pulling sqlx/tokio into its build graph.
 
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
+/// Native HTTP request/response DTOs for session create, prompt, shell, and event queries.
 pub mod api;
+/// Canonical streaming `Event` enum and ordered `Envelope` unit for the log and bus.
 pub mod event;
+/// Strong id newtypes (`SessionId`, message/part/tool ids, claim epochs, etc.).
 pub mod ids;
+/// Mail address and kind types for event-sourced team messaging (ADR-0001).
 pub mod mail;
+/// Model-facing `Message` / `Part` / finish and usage value types.
 pub mod message;
+/// Agent, model, and tool name newtypes plus the model-facing tool schema.
 pub mod model;
+/// Idempotent event-log reducer: `Projection` and session/team view structs.
 pub mod projection;
+/// Pure run-tree assembler over reduced session projections (no I/O).
 pub mod projection_tree;
+/// Compat workspace-adapter list entry.
 pub mod workspace;
 
 pub use event::{Envelope, Event};

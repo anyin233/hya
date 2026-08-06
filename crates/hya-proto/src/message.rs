@@ -6,21 +6,34 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{MessageId, PartId, ToolCallId};
 use crate::model::{AgentName, ModelRef, ToolName};
 
+/// Speaker role of a transcript message (wire: snake_case).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// Human or client-admitted user content.
     User,
+    /// Model output for a turn.
     Assistant,
+    /// Injected system/summary/compact content.
     System,
 }
 
+/// Why a message or provider step ended (wire: snake_case).
+///
+/// Terminal on both [`crate::event::Event::MessageFinished`] and
+/// [`crate::event::Event::StepFinished`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
+    /// Normal completion with no further tool calls.
     Stop,
+    /// Model requested tools; the turn continues with another round.
     ToolCalls,
+    /// Hit an output length limit.
     Length,
+    /// Cancel token, sidecar loss, or client abort.
     Cancelled,
+    /// Hard provider/tool failure after the assistant message started.
     Error,
 }
 
@@ -28,10 +41,15 @@ pub enum FinishReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberRunStatus {
+    /// Child session is being created / admitted.
     Spawning,
+    /// Child is actively running a turn.
     Running,
+    /// Child finished successfully (bounded summary available).
     Done,
+    /// Child failed or errored.
     Failed,
+    /// Child was cancelled (parent cancel, takeover, root cleanup).
     Cancelled,
 }
 
@@ -47,8 +65,10 @@ pub enum MemberRunStatus {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentMode {
+    /// Blocking one-shot subagent (default for older logs).
     #[default]
     Transient,
+    /// Long-lived mail-woken actor.
     Resident,
 }
 
@@ -90,26 +110,39 @@ pub enum RosterStatus {
     Failed,
 }
 
+/// Token counters on a finished message or stream round.
+///
+/// Decode accepts `prompt`/`completion` aliases for `input`/`output`.
+/// [`TokenUsage::merge`] takes the **max** per field (providers re-report
+/// cumulative totals); the turn loop **sums** rounds separately when building
+/// final `MessageFinished.tokens`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
+    /// Prompt / input tokens (serde alias `prompt`).
     #[serde(default, alias = "prompt")]
     pub input: u64,
+    /// Completion / output tokens (serde alias `completion`).
     #[serde(default, alias = "completion")]
     pub output: u64,
+    /// Reasoning tokens when the provider reports them.
     #[serde(default)]
     pub reasoning: u64,
+    /// Cache-read tokens when the provider reports them.
     #[serde(default)]
     pub cache_read: u64,
+    /// Cache-write tokens when the provider reports them.
     #[serde(default)]
     pub cache_write: u64,
 }
 
 impl TokenUsage {
+    /// True when every counter is zero.
     #[must_use]
     pub fn is_zero(self) -> bool {
         self == Self::default()
     }
 
+    /// Fold another sample by taking the maximum of each counter (not a sum).
     pub fn merge(&mut self, other: Self) {
         self.input = self.input.max(other.input);
         self.output = self.output.max(other.output);
@@ -119,9 +152,12 @@ impl TokenUsage {
     }
 }
 
+/// Per-message USD cost pair (schema companion for `message.cost_json`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostBreakdown {
+    /// Estimated input cost in USD.
     pub input_usd: f64,
+    /// Estimated output cost in USD.
     pub output_usd: f64,
 }
 
@@ -129,49 +165,82 @@ pub struct CostBreakdown {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum ToolPartState {
+    /// Arguments not yet fully known / tool not yet authorized.
     Pending {
+        /// Partial or null input JSON so far.
         input: serde_json::Value,
     },
+    /// Model issued a call; tool is executing or about to.
     Running {
+        /// Full input JSON for the call.
         input: serde_json::Value,
     },
+    /// Tool returned successfully.
     Completed {
+        /// Input that was executed.
         input: serde_json::Value,
+        /// Tool output JSON (may be capped for context size).
         output: serde_json::Value,
+        /// Wall time for the call in milliseconds.
         time_ms: u64,
     },
+    /// Tool failed, was denied, or was blocked.
     Error {
+        /// Input associated with the failed call.
         input: serde_json::Value,
+        /// Human/model-facing error message.
         message: String,
+        /// Optional structured payload (for example `{ "error": { "type", "message" } }`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<serde_json::Value>,
     },
 }
 
+/// One content part of a model-facing message (not the projected view type).
+///
+/// Wire tag is `type` (snake_case). Media exists here for provider requests but
+/// has no [`crate::projection::PartProjection`] counterpart.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
+    /// Plain text segment.
     Text {
+        /// Stable part id for streaming replace/end correlation.
         id: PartId,
+        /// Full text for this part.
         text: String,
     },
+    /// Provider reasoning / thinking text.
     Reasoning {
+        /// Stable part id.
         id: PartId,
+        /// Accumulated reasoning text.
         text: String,
+        /// Opaque provider state (for example encrypted thinking blocks) to round-trip.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_data: Option<serde_json::Value>,
     },
+    /// Media attachment for the model request path (not folded into projection).
     Media {
+        /// Stable part id.
         id: PartId,
+        /// MIME type (for example `image/png`).
         media_type: String,
+        /// Payload (URI or encoded data, depending on producer).
         data: String,
+        /// Optional original filename for display.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
+    /// Tool call with streaming state.
     Tool {
+        /// Stable part id.
         id: PartId,
+        /// Correlates with tool events and permission asks.
         call_id: ToolCallId,
+        /// Canonical tool name.
         name: ToolName,
+        /// Current phase and payloads.
         state: ToolPartState,
     },
 }
@@ -182,22 +251,35 @@ pub enum Part {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum Message {
+    /// User message assembled for the provider request.
     User {
+        /// Message id.
         id: MessageId,
+        /// Content parts (text, media, etc.).
         parts: Vec<Part>,
     },
+    /// Assistant message with agent/model metadata and optional finish/usage.
     Assistant {
+        /// Message id.
         id: MessageId,
+        /// Agent that produced this message.
         agent: AgentName,
+        /// Model route used for this message.
         model: ModelRef,
+        /// Content parts (text, reasoning, tools).
         parts: Vec<Part>,
+        /// Set when the assistant message is finished.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish: Option<FinishReason>,
+        /// Aggregated usage when known.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens: Option<TokenUsage>,
     },
+    /// System message (instructions, compact window, injected context).
     System {
+        /// Message id.
         id: MessageId,
+        /// Full system content string.
         content: String,
     },
 }

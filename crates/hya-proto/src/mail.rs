@@ -61,8 +61,10 @@ impl MailEndpoint {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MailKind {
+    /// Ordinary 1:1 or channel chatter (default when kind is omitted).
     #[default]
     Message,
+    /// Channel-wide notice; render/policy may treat it as higher priority than chatter.
     Announcement,
 }
 
