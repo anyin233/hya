@@ -1,3 +1,5 @@
+//! Deterministic scripted provider for tests and process E2E matrices.
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -9,18 +11,27 @@ use hya_proto::{
 
 use crate::{Capabilities, CompletionRequest, EventStream, Provider, ProviderError};
 
+/// One step in a scripted assistant turn materialised as canonical events.
 #[derive(Clone, Debug)]
 pub enum FakeStep {
+    /// Emit a complete text part with this body.
     Text(String),
+    /// Emit a complete reasoning part with this body.
     Reasoning(String),
+    /// Emit a tool-call request with the given name and JSON input.
     ToolCall {
+        /// Tool name.
         name: String,
+        /// Tool arguments object.
         input: serde_json::Value,
     },
+    /// Attach usage before finish (carried into `MessageFinished`).
     Usage(TokenUsage),
+    /// End the turn with this finish reason.
     Finish(FinishReason),
 }
 
+/// Provider that plays back one or more [`FakeStep`] scripts per `stream()` call.
 pub struct FakeProvider {
     id: String,
     scripts: Vec<Vec<FakeStep>>,
@@ -28,6 +39,7 @@ pub struct FakeProvider {
 }
 
 impl FakeProvider {
+    /// Single-turn script reused until turns are exhausted (then bare `Finish(Stop)`).
     #[must_use]
     pub fn scripted(script: Vec<FakeStep>) -> Self {
         Self::scripted_turns(vec![script])
@@ -45,6 +57,7 @@ impl FakeProvider {
         }
     }
 
+    /// Expand a script into the event sequence a live stream would emit for this turn.
     #[must_use]
     pub fn materialize(script: &[FakeStep], session: SessionId, message: MessageId) -> Vec<Event> {
         let mut out = Vec::new();

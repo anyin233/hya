@@ -11,10 +11,12 @@ use crate::{
     append_capabilities_identity, append_identity_bytes,
 };
 
+/// Offline provider: echoes the latest user text on every turn (never exhausts).
 #[derive(Default)]
 pub struct DevProvider;
 
 impl DevProvider {
+    /// Construct the default offline route (id `dev` / claims any model).
     #[must_use]
     pub fn new() -> Self {
         Self

@@ -25,9 +25,12 @@ pub enum ScriptStep {
     ToolCalls(Vec<ToolCallStep>),
 }
 
+/// One tool call emitted in a scripted model turn.
 #[derive(Clone, Debug)]
 pub struct ToolCallStep {
+    /// Tool name the model “calls”.
     pub name: String,
+    /// JSON arguments object for the call.
     pub arguments: Value,
 }
 
@@ -102,6 +105,7 @@ impl FakeLlm {
         })
     }
 
+    /// OpenAI-compatible base URL including the `/v1` suffix for config.
     #[must_use]
     pub fn base_url(&self) -> String {
         format!("http://{}/v1", self.addr)
@@ -116,6 +120,7 @@ impl FakeLlm {
         Ok(guard.requests.clone())
     }
 
+    /// Unconsumed steps left on the shared (unrouted) script queue.
     pub fn remaining_scripts(&self) -> Result<usize, E2eError> {
         let guard = self
             .shared
@@ -316,11 +321,12 @@ fn sse_response(frames: Vec<Value>) -> Response {
         })
 }
 
-/// Helper constructors.
+/// Build a text-only script step for FakeLlm.
 pub fn text_step(s: impl Into<String>) -> ScriptStep {
     ScriptStep::Text(s.into())
 }
 
+/// Build a single-tool-call script step (name + JSON arguments).
 pub fn tool_step(name: impl Into<String>, arguments: Value) -> ScriptStep {
     ScriptStep::ToolCalls(vec![ToolCallStep {
         name: name.into(),
@@ -328,6 +334,7 @@ pub fn tool_step(name: impl Into<String>, arguments: Value) -> ScriptStep {
     }])
 }
 
+/// Build a multi-tool-call script step from `(name, arguments)` pairs.
 pub fn tools_step(calls: Vec<(&str, Value)>) -> ScriptStep {
     ScriptStep::ToolCalls(
         calls

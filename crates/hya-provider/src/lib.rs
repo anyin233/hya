@@ -1,14 +1,33 @@
 //! `hya-provider` — Provider/Protocol/Route abstraction normalizing every LLM
 //! into the canonical `hya_proto::Event` stream (design.md §4, the keystone).
+//!
+//! # Adding a backend
+//!
+//! 1. Implement [`Protocol`] (`encode` + `decoder`) for the upstream JSON/SSE shape.
+//! 2. Implement [`Decoder`] as a stateful SSE frame consumer that emits batches of
+//!    `hya_proto::Event` (SSE framing itself is owned by [`HttpProvider`], not the decoder).
+//! 3. Implement [`Provider`] (`id`, `capabilities`, `stream`) — or wrap the protocol
+//!    in [`HttpProvider`] for HTTP+SSE routes.
+//! 4. Register the provider on a [`ProviderRouter`] with [`ProviderRouter::with`].
+//!
+//! Call order for a live turn: router [`ProviderRouter::resolve`] → [`preflight`] →
+//! [`Provider::stream`] → HTTP SSE → [`Decoder::push`] / [`Decoder::finish`].
 
 use std::collections::BTreeMap;
 
+/// Anthropic Messages protocol and stream decoder.
 pub mod anthropic;
+/// Offline echo provider for local/dev runs without API keys.
 pub mod dev;
+/// Scripted provider for tests and deterministic agent-loop fixtures.
 pub mod fake;
+/// Gemini generateContent protocol and decoder.
 pub mod google;
+/// Generic HTTP+SSE driver shared by OpenAI-compatible, Responses, Anthropic, Google, Grok.
 pub mod http;
+/// OpenAI Chat Completions and Responses protocols and decoders.
 pub mod openai;
+/// First-match model routing across configured providers.
 pub mod router;
 mod wire;
 
@@ -40,33 +59,53 @@ pub fn preflight(caps: &Capabilities, req: &CompletionRequest) -> Result<(), Pro
     Ok(())
 }
 
+/// Boxed stream of canonical events (or stream-level errors) from [`Provider::stream`].
 pub type EventStream = BoxStream<'static, Result<Event, ProviderError>>;
 
+/// Failures from encoding, HTTP, routing, decoding, or auth refresh.
 #[derive(Error, Debug)]
 pub enum ProviderError {
+    /// JSON body or frame (de)serialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    /// Non-2xx HTTP, stream HTTP error frame, bad header, or client build failure.
     #[error("http: {0}")]
     Http(String),
+    /// No registered route claimed the model ref via [`Provider::capabilities`].
     #[error("unknown provider for model: {0}")]
     UnknownModel(String),
+    /// Preflight or protocol cannot serve this request (tools, media, etc.).
     #[error("incompatible route: {0}")]
     Incompatible(String),
+    /// Malformed or truncated upstream stream / compact payload.
     #[error("decode: {0}")]
     Decode(String),
     /// OAuth (or other) credentials expired/revoked; user must re-authenticate.
     #[error("auth expired for provider '{provider}': {hint}")]
-    AuthExpired { provider: String, hint: String },
+    AuthExpired {
+        /// Configured provider id whose credentials failed.
+        provider: String,
+        /// Operator-facing recovery hint (e.g. re-login command).
+        hint: String,
+    },
 }
 
+/// Fixed capability flags and context budget advertised when a route claims a model.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Capabilities {
+    /// Route may stream tool-call assembly mid-turn.
     pub streaming_tool_calls: bool,
+    /// Multiple tool calls in one assistant turn are allowed.
     pub parallel_tool_calls: bool,
+    /// Stream may emit token usage on finish.
     pub usage_reporting: bool,
+    /// Structured JSON output mode (unused by current HTTP defaults).
     pub json_output: bool,
+    /// Provider streams separate reasoning parts as first-class events (HTTP default off).
     pub reasoning_stream: bool,
+    /// Route accepts a reasoning-effort parameter on the request.
     pub reasoning_request: bool,
+    /// Advertised context window in tokens.
     pub max_context: u32,
 }
 
@@ -113,26 +152,40 @@ pub(crate) fn append_capabilities_identity(
     Some(())
 }
 
+/// One model entry published into the aggregated catalog for UI / API listing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderModel {
+    /// Configured provider id (route id / auth stem).
     pub provider_id: String,
+    /// Upstream model id string.
     pub model_id: String,
+    /// Caps advertised for this catalog row.
     pub capabilities: Capabilities,
+    /// Effort labels this model supports (empty when reasoning is off).
     pub reasoning_variants: Vec<String>,
 }
 
+/// Reasoning / thinking effort requested on a completion (ordered for max-pick defaults).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReasoningEffort {
+    /// No reasoning parameter (alias wire `none` / `off`).
     Off,
+    /// Lowest non-off effort where supported.
     Minimal,
+    /// Low effort.
     Low,
+    /// Medium effort (alias wire `med`).
     Medium,
+    /// High effort.
     High,
+    /// Extra-high effort (OpenAI label collapses with Max).
     XHigh,
+    /// Maximum effort where the provider advertises it.
     Max,
 }
 
 impl ReasoningEffort {
+    /// Parse config/UI effort strings (case-insensitive); unknown values → `None`.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -147,6 +200,7 @@ impl ReasoningEffort {
         }
     }
 
+    /// Canonical lowercase wire name (`none` for [`Self::Off`]).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -160,6 +214,7 @@ impl ReasoningEffort {
         }
     }
 
+    /// OpenAI `reasoning_effort` label; `Off` omits; `Max` maps to `xhigh`.
     #[must_use]
     pub fn openai_label(self, _model_id: &str) -> Option<&'static str> {
         match self {
@@ -172,6 +227,7 @@ impl ReasoningEffort {
         }
     }
 
+    /// Anthropic extended-thinking token budget, if this effort enables thinking.
     #[must_use]
     pub fn anthropic_budget(self) -> Option<u32> {
         match self {
@@ -184,6 +240,7 @@ impl ReasoningEffort {
         }
     }
 
+    /// Google `thinkingBudget` when effort is high enough; `Max` scales by model id.
     #[must_use]
     pub fn google_budget(self, model_id: &str) -> Option<u32> {
         match self {
@@ -318,15 +375,24 @@ mod reasoning_effort_tests {
     }
 }
 
+/// Normalized completion request shared by every protocol encoder and provider.
 #[derive(Clone, Debug)]
 pub struct CompletionRequest {
+    /// Model ref (bare id, `provider/model`, optional `#variant`).
     pub model: ModelRef,
+    /// Optional top-level system prompt (also may appear as system messages).
     pub system: Option<String>,
+    /// Conversation messages in canonical `hya_proto` form.
     pub messages: Vec<Message>,
+    /// Tool schemas offered for this turn.
     pub tools: Vec<ToolSchema>,
+    /// Optional sampling temperature.
     pub temperature: Option<f32>,
+    /// Optional max generation tokens.
     pub max_output_tokens: Option<u32>,
+    /// Optional reasoning effort; stripped by the router when the route rejects it.
     pub reasoning: Option<ReasoningEffort>,
+    /// Extra HTTP headers merged over route auth (sensitive values).
     pub headers: BTreeMap<String, String>,
 }
 
@@ -337,9 +403,16 @@ pub struct CompactedWindow {
     pub items: Vec<serde_json::Value>,
 }
 
+/// A configured model route: claims models, streams completions, optional compaction.
+///
+/// Minimum implement surface: [`Provider::id`], [`Provider::capabilities`], and
+/// [`Provider::stream`]. Returning `Some` from `capabilities` **claims** the model
+/// for first-match routing.
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// Configured provider id (auth filename stem; `providerID` half of model refs).
     fn id(&self) -> &str;
+    /// `Some(caps)` claims `model` for this route; `None` leaves it for later routes.
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>;
 
     /// Return deterministic configured routing identity, excluding secrets and
@@ -348,9 +421,11 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Models this route publishes into the aggregated catalog (default empty).
     fn catalog(&self) -> Vec<ProviderModel> {
         Vec::new()
     }
+    /// Stream one completion as canonical events for `session` / `message` ids.
     async fn stream(
         &self,
         req: CompletionRequest,
@@ -371,12 +446,26 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// Encoder/decoder pair for one upstream API shape (HTTP body + stream grammar).
+///
+/// [`Protocol::encode`] builds the request JSON. [`Protocol::decoder`] returns a
+/// fresh stateful decoder; the transport (e.g. [`HttpProvider`]) owns SSE framing
+/// and feeds frame data into [`Decoder::push`].
 pub trait Protocol: Send + Sync {
+    /// Encode a normalized request into the upstream JSON body.
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
+    /// Construct a decoder bound to this turn's session and assistant message ids.
     fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder>;
 }
 
+/// Incremental converter from upstream stream fragments into canonical `Event`s.
+///
+/// Callers pass SSE **data** payloads (not full wire lines) into [`Decoder::push`].
+/// [`Decoder::finish`] flushes open parts when the stream ends. Either method may
+/// return an empty batch.
 pub trait Decoder: Send {
+    /// Consume one data fragment; return zero or more events.
     fn push(&mut self, data: &str) -> Result<Vec<Event>, ProviderError>;
+    /// End of stream: close open parts and emit finish/usage as required.
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError>;
 }

@@ -1,10 +1,16 @@
-//! `hya-ts` launcher CLI parsing and Bun TUI command construction.
+//! Launcher for the TypeScript TUI against a hya backend.
+//!
+//! Parses public CLI flags, resolves the Bun runtime tree and `hya-backend`
+//! binary, optionally spawns an owned local server, then builds the argv used
+//! to exec `packages/hya-tui-ts` (or an installed layout). Also forwards
+//! backend-owned subcommands (bundle, oauth, auth) to the sibling backend binary.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
+/// Public launcher flags for TUI attach/spawn and backend subcommands.
 #[derive(Debug, Parser)]
 #[command(name = invocation_name(), version, about = "hya TypeScript terminal frontend")]
 pub struct Cli {
@@ -12,14 +18,19 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Project directory passed to the TUI as `--project` (default: cwd).
     #[arg(value_name = "PROJECT")]
     pub project: Option<PathBuf>,
+    /// Attach to an existing backend instead of spawning one.
     #[arg(long, value_name = "URL", value_parser = parse_server_url)]
     pub server: Option<String>,
+    /// Override path to the `hya-backend` binary used for auto-serve and subcommands.
     #[arg(long, value_name = "PATH")]
     pub backend_bin: Option<PathBuf>,
+    /// Bun executable used to run the TypeScript frontend.
     #[arg(long, value_name = "PATH", default_value = "bun")]
     pub bun: PathBuf,
+    /// Import source for one-shot config import (`compat`).
     #[arg(long, value_name = "SOURCE")]
     pub import: Option<String>,
     /// Continue the most recently updated root session from the persisted store.
@@ -28,16 +39,21 @@ pub struct Cli {
     /// Resume an exact session id (`hysec_…` / `ses_…`).
     #[arg(short = 's', long, value_name = "ID")]
     pub session: Option<String>,
+    /// Fork the continued or named session after attach.
     #[arg(long)]
     pub fork: bool,
+    /// Seed prompt text for the first TUI turn.
     #[arg(long, value_name = "TEXT")]
     pub prompt: Option<String>,
+    /// Initial agent name for the TUI.
     #[arg(long, value_name = "NAME")]
     pub agent: Option<String>,
+    /// Initial model as `provider/model` for the TUI.
     #[arg(long, value_name = "PROVIDER/MODEL")]
     pub model: Option<String>,
 }
 
+/// Product branding for help/errors: `hya` when invoked as the public shim, else `hya-ts`.
 pub fn invocation_name() -> &'static str {
     match std::env::args_os()
         .next()
@@ -55,11 +71,13 @@ pub enum Command {
     /// Install, inspect, list, or uninstall agent bundles.
     Bundle {
         #[command(subcommand)]
+        /// The bundle subcommand to run.
         command: BundleCommand,
     },
     /// Interactive OAuth login / status for openai-codex and grok-build.
     Oauth {
         #[command(subcommand)]
+        /// The OAuth subcommand to run.
         command: OauthCommand,
     },
     /// Save an auth token for a provider id (used instead of an inline api_key).
@@ -73,6 +91,7 @@ pub enum Command {
     #[command(alias = "providers")]
     Auth {
         #[command(subcommand)]
+        /// The auth subcommand to run.
         command: AuthCommand,
     },
 }
@@ -81,15 +100,23 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum BundleCommand {
     /// Install a bundle package.
-    Install { package: PathBuf },
+    Install {
+        /// Path to the package file (`.hyabundle`).
+        package: PathBuf,
+    },
     /// List available bundles.
     List,
     /// Uninstall an installed bundle.
-    Uninstall { name: String },
+    Uninstall {
+        /// Installed bundle name.
+        name: String,
+    },
     /// Show bundle information by installed name or package file.
     Info {
+        /// Installed bundle name (mutually exclusive with `--file`).
         #[arg(required_unless_present = "file", conflicts_with = "file")]
         name: Option<String>,
+        /// Package file path (mutually exclusive with `name`).
         #[arg(
             short = 'f',
             long,
@@ -271,10 +298,14 @@ pub fn backend_command_args(command: &Command) -> Vec<OsString> {
     }
 }
 
+/// Resolved Bun process to exec for the TypeScript TUI.
 #[derive(Debug, PartialEq, Eq)]
 pub struct BunCommand {
+    /// Bun executable path.
     pub program: PathBuf,
+    /// Full argv including `src/main.tsx` and launcher flags.
     pub args: Vec<OsString>,
+    /// Working directory (TUI runtime tree root).
     pub current_dir: PathBuf,
 }
 

@@ -27,18 +27,25 @@ use crate::{
     append_identity_count, append_identity_optional_bytes,
 };
 
+/// Which upstream HTTP protocol shape an [`HttpProvider`] speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderKind {
+    /// OpenAI Chat Completions (`/chat/completions`).
     OpenAiCompatible,
+    /// OpenAI Responses API (`/responses`).
     OpenAiResponse,
     /// ChatGPT Codex subscription backend (`chatgpt.com/backend-api/codex`).
     OpenAiCodex,
+    /// Grok Build Responses route with encrypted reasoning content.
     GrokBuild,
+    /// Anthropic Messages API (`/messages`).
     Anthropic,
+    /// Google Gemini generateContent.
     Google,
 }
 
 impl ProviderKind {
+    /// Default reasoning-variant menu when a model has no per-model override.
     #[must_use]
     pub fn reasoning_variants(self) -> Vec<String> {
         let levels: &[&str] = match self {
@@ -77,6 +84,10 @@ enum AuthStyle {
     Google(SecretString),
 }
 
+/// One configured HTTP route: reqwest client + [`Protocol`] + SSE → [`EventStream`].
+///
+/// Owns SSE framing; the protocol decoder only sees data payloads. Redirects are
+/// disabled so auth headers are never followed cross-origin.
 pub struct HttpProvider {
     id: String,
     protocol: Box<dyn Protocol>,
@@ -106,6 +117,7 @@ fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
 }
 
 impl HttpProvider {
+    /// Build a route for `kind` at `base_url` with static `api_key` and served model ids.
     pub fn new(
         id: impl Into<String>,
         kind: ProviderKind,
@@ -231,6 +243,7 @@ impl HttpProvider {
         self
     }
 
+    /// Attach per-model reasoning variant lists (replaces kind defaults for those ids).
     #[must_use]
     pub fn with_model_reasoning_variants(
         mut self,

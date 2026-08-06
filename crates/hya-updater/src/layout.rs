@@ -11,11 +11,17 @@ use crate::error::UpdaterError;
 /// Paths that form the protected updater surface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdaterLayout {
+    /// Updater TCB root (trust, floor, journal, selector live here).
     pub root: PathBuf,
+    /// JSON file of trusted verifying keys (`trust_roots.json`).
     pub trust_roots: PathBuf,
+    /// Anti-rollback floor file (`accepted_floor`).
     pub accepted_floor: PathBuf,
+    /// Crash-recovery activation journal (`activation.journal`).
     pub journal: PathBuf,
+    /// Current generation selector file (`current`).
     pub selector: PathBuf,
+    /// Directory of immutable staged generations (`releases/`).
     pub releases: PathBuf,
 }
 

@@ -1,7 +1,7 @@
 //! Spawn and supervise a real backend `serve` subprocess (`compat` or `hya-backend`).
 //!
 //! Both backends print `<name> server listening on http://127.0.0.1:<port>` to their output,
-//! which we parse for the base URL (see [`parse_listen_url`]). `Drop` guarantees no orphaned
+//! which we parse for the base URL (see `parse_listen_url`). `Drop` guarantees no orphaned
 //! server even if the caller forgets to shut down (PLAN.md R1/S-8).
 
 use std::path::{Path, PathBuf};

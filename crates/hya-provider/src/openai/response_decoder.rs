@@ -48,6 +48,7 @@ impl ToolAsm {
     }
 }
 
+/// Stateful decoder for OpenAI Responses (and Grok typed-terminal) SSE events.
 pub struct OpenAiResponsesDecoder {
     session: SessionId,
     message: MessageId,
@@ -61,6 +62,7 @@ pub struct OpenAiResponsesDecoder {
 }
 
 impl OpenAiResponsesDecoder {
+    /// Bind a new decoder; stream may end without a typed terminal event.
     #[must_use]
     pub fn new(session: SessionId, message: MessageId) -> Self {
         Self {

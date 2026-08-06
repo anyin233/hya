@@ -13,6 +13,7 @@ pub const RESPONSES_COMPACT_ITEMS_MARKER: &str = "<<<RESPONSES_COMPACT_ITEMS>>>"
 /// Shared with `hya-core` compaction injects (`HYA_COMPACTED_CONTEXT`).
 pub const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
 
+/// OpenAI Responses API request encoder + stream decoder factory.
 pub struct OpenAiResponsesProtocol;
 
 pub(crate) struct GrokBuildProtocol;

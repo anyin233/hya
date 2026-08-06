@@ -335,5 +335,5 @@ impl Transport for NativeTransport {
     }
 }
 
-/// Native-transport [`Client`]: the same surface as `HttpClient`, backed by the stdio bridge.
+/// Native-transport `Client`: the same surface as `HttpClient`, backed by the stdio bridge.
 pub type NativeClient = ApiClient<NativeTransport>;

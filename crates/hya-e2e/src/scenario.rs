@@ -69,11 +69,13 @@ impl Default for E2eEnvBuilder {
 }
 
 impl E2eEnvBuilder {
+    /// Empty builder with YOLO on, `allow` permissions, and agent `build`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Shared (unrouted) FakeLlm script queue consumed in order by any agent.
     #[must_use]
     pub fn scripts(mut self, scripts: Vec<ScriptStep>) -> Self {
         self.scripts = scripts;
@@ -91,30 +93,35 @@ impl E2eEnvBuilder {
         self
     }
 
+    /// Pass `--yolo` to the backend so tools auto-approve without a permission UI.
     #[must_use]
     pub fn yolo(mut self, yolo: bool) -> Self {
         self.yolo = yolo;
         self
     }
 
+    /// Set `permission.model` in the temp config (`allow` | `default` | `strict`).
     #[must_use]
     pub fn permission_model(mut self, model: impl Into<String>) -> Self {
         self.permission_model = model.into();
         self
     }
 
+    /// Default agent name used when creating sessions through this env.
     #[must_use]
     pub fn agent(mut self, agent: impl Into<String>) -> Self {
         self.agent = agent.into();
         self
     }
 
+    /// Override path to the `hya-backend` binary (default: workspace/target lookup).
     #[must_use]
     pub fn binary(mut self, path: PathBuf) -> Self {
         self.binary = Some(path);
         self
     }
 
+    /// Install the fixture echo MCP server into project + config before boot.
     #[must_use]
     pub fn with_mcp_echo(mut self) -> Self {
         self.project_files.push((
@@ -128,24 +135,28 @@ impl E2eEnvBuilder {
         self
     }
 
+    /// Write a skill file under the temp project before the backend starts.
     #[must_use]
     pub fn skill_file(mut self, relative: impl Into<String>, body: impl Into<String>) -> Self {
         self.skill_files.push((relative.into(), body.into()));
         self
     }
 
+    /// Write an arbitrary project file (relative path + bytes) before boot.
     #[must_use]
     pub fn project_file(mut self, relative: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
         self.project_files.push((relative.into(), body.into()));
         self
     }
 
+    /// Install a hyabundle package into the isolated data home before serve.
     #[must_use]
     pub fn preinstall_bundle(mut self, package: PathBuf) -> Self {
         self.preinstall_bundles.push(package);
         self
     }
 
+    /// Start FakeLlm, spawn `hya-backend`, and return a ready [`E2eEnv`].
     pub async fn build(self) -> Result<E2eEnv, E2eError> {
         let fake = FakeLlm::start(self.scripts).await?;
         for (marker, steps) in self.routes {
@@ -179,19 +190,27 @@ impl E2eEnvBuilder {
 
 /// Ready environment for scenarios.
 pub struct E2eEnv {
+    /// Scripted OpenAI-compatible completions server backing the backend.
     pub fake: FakeLlm,
+    /// Live `hya-backend serve` process and isolation roots.
     pub backend: BackendProcess,
+    /// Typed native API client pointed at [`Self::backend`].
     pub client: Client,
+    /// Raw HTTP client for Compat paths not covered by [`Self::client`].
     pub http: reqwest::Client,
+    /// Default agent name for session create helpers.
     pub agent: String,
+    /// Model id string passed to create-session (`fake/model` by default).
     pub model: String,
 }
 
 impl E2eEnv {
+    /// Create a session with the env's default agent and model.
     pub async fn create_session(&self) -> Result<SessionId, E2eError> {
         self.create_session_with_agent(&self.agent).await
     }
 
+    /// Create a session with an explicit agent name (still uses env model/workdir).
     pub async fn create_session_with_agent(&self, agent: &str) -> Result<SessionId, E2eError> {
         let resp = self
             .client
@@ -205,6 +224,7 @@ impl E2eEnv {
         Ok(resp.session)
     }
 
+    /// Send a user prompt on the native API and return the admit response.
     pub async fn prompt(
         &self,
         session: SessionId,
@@ -216,6 +236,7 @@ impl E2eEnv {
             .await?)
     }
 
+    /// Fetch session event envelopes, optionally after `since_seq`.
     pub async fn events(
         &self,
         session: SessionId,
@@ -224,15 +245,18 @@ impl E2eEnv {
         Ok(self.client.events(session, since_seq).await?)
     }
 
+    /// Read a UTF-8 file relative to the temp project workdir.
     pub fn read_project_file(&self, relative: &str) -> Result<String, E2eError> {
         let path = self.backend.project.join(relative);
         Ok(std::fs::read_to_string(path)?)
     }
 
+    /// Absolute path of a file under the temp project workdir.
     pub fn project_path(&self, relative: &str) -> PathBuf {
         self.backend.project.join(relative)
     }
 
+    /// True if FakeLlm has recorded at least one chat-completions request.
     pub fn fake_saw_request(&self) -> Result<bool, E2eError> {
         Ok(!self.fake.requests()?.is_empty())
     }
@@ -249,6 +273,7 @@ impl E2eEnv {
         Ok(serde_json::from_str(&text)?)
     }
 
+    /// POST JSON to a backend path; empty bodies become `null`.
     pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value, E2eError> {
         let url = format!("{}{path}", self.backend.url);
         let resp = self.http.post(url).json(body).send().await?;
@@ -268,6 +293,7 @@ impl E2eEnv {
         self.get_json("/permission").await
     }
 
+    /// Reply to a pending permission request (`allow` / `deny` style string).
     pub async fn reply_permission(&self, request_id: &str, reply: &str) -> Result<(), E2eError> {
         let body = serde_json::json!({ "reply": reply });
         let _ = self
@@ -276,10 +302,12 @@ impl E2eEnv {
         Ok(())
     }
 
+    /// List pending interactive question requests (Compat).
     pub async fn list_questions(&self) -> Result<Value, E2eError> {
         self.get_json("/question").await
     }
 
+    /// Answer a pending question request with a JSON `answers` payload.
     pub async fn reply_question(&self, request_id: &str, answers: Value) -> Result<(), E2eError> {
         let body = serde_json::json!({ "answers": answers });
         let _ = self
@@ -288,14 +316,17 @@ impl E2eEnv {
         Ok(())
     }
 
+    /// List sessions via the Compat `/session` surface.
     pub async fn list_sessions_compat(&self) -> Result<Value, E2eError> {
         self.get_json("/session").await
     }
 
+    /// List configured agents via the native `/api/agent` surface.
     pub async fn list_agents(&self) -> Result<Value, E2eError> {
         self.get_json("/api/agent").await
     }
 
+    /// Fetch the session tree (parent/children) for multi-agent layouts.
     pub async fn session_tree(&self, session: &SessionId) -> Result<Value, E2eError> {
         self.get_json(&format!("/session/{session}/tree")).await
     }
@@ -415,6 +446,7 @@ impl E2eEnv {
             .ok_or_else(|| E2eError::Other(format!("permission id missing in {body}")))
     }
 
+    /// Wait until a question is pending; return its request id.
     pub async fn wait_question_id(&self, timeout: Duration) -> Result<String, E2eError> {
         wait_until("question request", timeout, || async {
             let body = self.list_questions().await?;

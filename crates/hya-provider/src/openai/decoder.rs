@@ -27,6 +27,7 @@ impl ToolAsm {
     }
 }
 
+/// Stateful decoder for OpenAI Chat Completions SSE chunks.
 pub struct OpenAiChatDecoder {
     session: SessionId,
     message: MessageId,
@@ -38,6 +39,7 @@ pub struct OpenAiChatDecoder {
 }
 
 impl OpenAiChatDecoder {
+    /// Bind a new decoder to the turn's session and assistant message ids.
     #[must_use]
     pub fn new(session: SessionId, message: MessageId) -> Self {
         Self {
