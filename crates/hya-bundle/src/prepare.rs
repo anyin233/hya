@@ -18,10 +18,25 @@ const SOURCE_KIND: &str = "AgentBundle";
 const PREPARED_FORMAT_VERSION: u32 = 1;
 
 /// Validate and deterministically prepare repo-native built-in Bundle sources.
+///
+/// Marks every resulting bundle `origin = Builtin` and `immutable = true`.
+/// Callers pass one [`BundleSource`] per built-in directory (or in-memory
+/// equivalent). Failures leave no on-disk state — prepare is pure over the
+/// source bytes.
 pub fn prepare_builtins(sources: Vec<BundleSource>) -> Result<PreparedCatalog, BundleError> {
     prepare_sources(sources, BundleOrigin::Builtin, true)
 }
 
+/// Validate and deterministically prepare one installable package source.
+///
+/// Marks the resulting bundle(s) `origin = Installed` and `immutable = false`.
+/// Used after a public `.hyabundle` has been expanded into a [`BundleSource`]
+/// (or for directory install paths). Like [`prepare_builtins`], this is pure
+/// over source bytes: a failed prepare does not leave staging directories behind
+/// (staging is owned by [`crate::stage_package`]).
+///
+/// Returns a [`PreparedCatalog`] with canonical JSON `bytes` and matching
+/// `digest` for durable registry storage.
 pub fn prepare_package(source: BundleSource) -> Result<PreparedCatalog, BundleError> {
     prepare_sources(vec![source], BundleOrigin::Installed, false)
 }

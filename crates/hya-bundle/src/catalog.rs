@@ -7,12 +7,18 @@ use crate::{
 
 const SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.bundle-catalog.semantic-identity/v1";
 
+/// Kind of resource export indexed in a [`BundleCatalog`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExportKind {
+    /// Bundle-local tool resource.
     Tool,
+    /// Bundle-local skill resource.
     Skill,
+    /// Bundle-local MCP declaration (catalog construction may still reject non-empty).
     Mcp,
+    /// Bundle-local hook resource.
     Hook,
+    /// JS/Rust extension entrypoint resource.
     Extension,
 }
 
@@ -40,6 +46,12 @@ pub struct BundleCatalog {
 }
 
 impl BundleCatalog {
+    /// Build a catalog by indexing already-prepared bundles.
+    ///
+    /// Rejects empty input, duplicate bundle/agent ids, namespace/alias collisions,
+    /// and non-empty `resources.mcp` (unsupported executable feature). Hook local
+    /// ids are validated. Does **not** set semantic-identity provenance; use
+    /// [`Self::from_verified_catalogs`] when digest-backed identity is required.
     pub fn from_prepared(bundles: &[PreparedBundle]) -> Result<Self, BundleError> {
         if bundles.is_empty() {
             return Err(BundleError::EmptyPreparedCatalog);
@@ -131,6 +143,11 @@ impl BundleCatalog {
         Ok(catalog)
     }
 
+    /// Build a catalog from one or more verified [`PreparedCatalog`]s and record
+    /// semantic-identity provenance from their digests/bytes.
+    ///
+    /// Flattens all bundles, then runs the same indexing rules as
+    /// [`Self::from_prepared`]. On success, `semantic_identity_v1()` is `Some`.
     pub fn from_verified_catalogs(catalogs: &[&PreparedCatalog]) -> Result<Self, BundleError> {
         let bundles = catalogs
             .iter()
@@ -143,6 +160,13 @@ impl BundleCatalog {
         Ok(catalog)
     }
 
+    /// Merge additional verified catalogs into this catalog, preserving prior
+    /// provenance records when this instance was built via
+    /// [`Self::from_verified_catalogs`].
+    ///
+    /// Fails with [`BundleError::PreparedEncode`] if `self` has no verified
+    /// provenance (plain [`Self::from_prepared`] catalogs cannot be extended
+    /// this way).
     pub fn with_verified_catalogs(
         &self,
         catalogs: &[&PreparedCatalog],
@@ -171,21 +195,25 @@ impl BundleCatalog {
         Ok(merged)
     }
 
+    /// Domain-separated semantic identity bytes when built from verified catalogs.
     #[must_use]
     pub fn semantic_identity_v1(&self) -> Option<&[u8]> {
         self.semantic_identity_v1.as_deref()
     }
 
+    /// All prepared bundles held by this catalog.
     #[must_use]
     pub fn bundles(&self) -> &[PreparedBundle] {
         &self.bundles
     }
 
+    /// Resolve an agent by stable id or `bundle:{id}/agent/{local}` reference.
     #[must_use]
     pub fn resolve_agent(&self, reference: &str) -> Option<&PreparedAgent> {
         self.resolve_agent_entry(reference).map(|(_, agent)| agent)
     }
 
+    /// Like [`Self::resolve_agent`], also returning the owning bundle id.
     #[must_use]
     pub fn resolve_agent_entry(&self, reference: &str) -> Option<(&str, &PreparedAgent)> {
         let (bundle, agent) = *self.agents.get(reference)?;
@@ -193,6 +221,7 @@ impl BundleCatalog {
         Some((bundle.identity.id.as_str(), bundle.agents.get(agent)?))
     }
 
+    /// All prepared resources of `kind` for `bundle_id`, if that bundle exists.
     #[must_use]
     pub fn bundle_resources(
         &self,
@@ -236,6 +265,10 @@ impl BundleCatalog {
         Ok(requested_agent)
     }
 
+    /// List agents in `caller`'s `can_spawn` graph, resolving each stable id.
+    ///
+    /// Returns [`BundleError::UnknownAgentId`] if the caller or any listed target
+    /// is missing from the catalog.
     pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<&PreparedAgent>, BundleError> {
         let caller_agent =
             self.resolve_agent(caller)
@@ -254,6 +287,7 @@ impl BundleCatalog {
             .collect()
     }
 
+    /// Resolve a resource by local id, alias, or qualified `bundle:…` name.
     pub fn resolve_resource(
         &self,
         bundle_id: &str,
@@ -264,6 +298,7 @@ impl BundleCatalog {
             .map(|(_, resource)| resource)
     }
 
+    /// Like [`Self::resolve_resource`], also returning the owning bundle id string.
     pub fn resolve_resource_entry(
         &self,
         bundle_id: &str,
