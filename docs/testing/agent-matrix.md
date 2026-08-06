@@ -115,6 +115,34 @@ replace these.
 | I.compact_api | Compat compact | `crates/hya-server/tests/compat_session_v2_compact_api.rs` |
 | I.compact_engine | Engine compact_context | `crates/hya-core/tests/compact_context.rs` |
 
+## The registry is enforced
+
+`crates/hya-e2e/matrix.toml` is validated by `cargo xtask matrix-check`, which
+runs as a CI gate step. It fails on:
+
+- a registered `path` that does not exist;
+- a duplicate or malformed id;
+- a Track P file that is registered but holds no test function;
+- a Track P test file that **no** entry references (reverse drift — an
+  unregistered scenario is as much a registry failure as a phantom row);
+- a numbering hole in a `T<major>` series that is neither used nor retired.
+
+Bidirectional drift is enforced for Track P only. Track T is TypeScript, and
+Track I rows are index pointers into other crates that are deliberately not
+one-to-one with registry rows; checking those would generate false failures.
+
+Correspondence is **file-level**: `p01` carries two ids in one function, `p02`
+carries three, `p03` has one id and two functions.
+
+### ID allocation rule
+
+- A new scenario takes the next free number in its series.
+- Retiring an id requires a `[[retired]]` entry with a real reason — not
+  "unused". If the original intent is unrecoverable, say that.
+- Both rules are enforced by `matrix-check`, so a gap cannot reappear silently.
+  `T1.1` and `T1.6` are retired on exactly those grounds: nothing in this
+  repository's history records what they were meant to cover.
+
 ## Adding a scenario
 
 1. Prefer extending Track I if the regression is pure engine/API shape.

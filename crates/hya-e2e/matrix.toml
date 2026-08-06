@@ -288,3 +288,15 @@ track = "I"
 path = "crates/hya-core/tests/compact_context.rs"
 tags = ["index-only", "context", "compact"]
 timeout_secs = 0
+
+# Retired ids. Every number in a T-series range must be either used above or
+# retired here, so a numbering hole can never again go untracked.
+# `cargo xtask matrix-check` enforces this.
+
+[[retired]]
+id = "T1.1"
+reason = "never defined — no scenario, PRD, or doc in this repository's history ever states what T1.1 was meant to cover; retired rather than invent a rationale"
+
+[[retired]]
+id = "T1.6"
+reason = "never defined — same as T1.1; the tier list it came from was not committed, so the intent is unrecoverable"
