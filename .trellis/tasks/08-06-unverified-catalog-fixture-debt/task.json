@@ -3,7 +3,7 @@
   "name": "unverified-catalog-fixture-debt",
   "title": "Retire unverified catalog test fixtures",
   "description": "Survey the 99 BundleCatalog::from_prepared sites, migrate the ones that can reach durable admission, and dedupe the verified-runtime helper that caused the original drift.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
