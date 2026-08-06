@@ -94,7 +94,7 @@ stdout is protocol-only; bare or malformed stdout is a protocol failure. stderr 
 - `role: subagent` is hidden from direct TUI selection.
 - `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
 - `spawn_lifecycle` is orthogonal to `role`.
-- Explicit unknown or denied targets fail closed; there is no silent `general` fallback.
+- Explicit unknown or denied targets fail closed: catalog lookup does not rewrite an unknown `subagent_type` to `general`. Empty or omitted `subagent_type` on the `task` tool still normalizes to `general` before authorization.
 
 ## Resources and permissions
 
