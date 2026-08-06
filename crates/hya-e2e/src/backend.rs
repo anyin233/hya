@@ -1,10 +1,20 @@
 //! Spawn and tear down a real `hya-backend serve` process.
 
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::error::E2eError;
+
+/// How long a backend gets to exit on its own after SIGTERM before the group is SIGKILLed.
+///
+/// Polled, not slept: a healthy backend is reaped in a few milliseconds, so the whole track
+/// pays almost nothing. Only a backend that ignores SIGTERM reaches the full budget.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(1_000);
+
+/// Interval between `try_wait` polls while waiting out `SHUTDOWN_GRACE`.
+const SHUTDOWN_POLL: Duration = Duration::from_millis(5);
 
 /// Optional stdio MCP server registration for the temp config.
 #[derive(Clone, Debug)]
@@ -66,6 +76,9 @@ pub struct BackendProcess {
     pub binary: PathBuf,
     child: Child,
     root: PathBuf,
+    /// Set once the child has been signalled and reaped, so `Drop` does not signal a pid
+    /// that the OS may already have handed to an unrelated process.
+    stopped: bool,
 }
 
 impl BackendProcess {
@@ -182,6 +195,10 @@ permission:
             .env("XDG_STATE_HOME", &xdg_state)
             .env("XDG_CACHE_HOME", &xdg_cache)
             .env_remove("HYA_MODEL")
+            // Lead its own process group so teardown can signal the whole tree (the backend
+            // spawns MCP/plugin children). A group signal without this would hit the test
+            // runner itself; a single-pid signal would orphan the grandchildren.
+            .process_group(0)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // MCP connect is deferred by default; for process E2E we need tools in
@@ -208,7 +225,9 @@ permission:
                     buf
                 })
                 .unwrap_or_default();
-            let _ = child.kill();
+            // Same graceful teardown as `Drop`: this child is a process-group leader and may
+            // already have spawned MCP children, so a single-pid SIGKILL would orphan them.
+            terminate_process_group(&mut child);
             E2eError::Backend(format!("{e}; stderr={stderr}"))
         })?;
 
@@ -221,7 +240,21 @@ permission:
             binary: spec.binary.clone(),
             child,
             root,
+            stopped: false,
         })
+    }
+
+    /// Stop the backend gracefully and return its exit status.
+    ///
+    /// `Drop` calls this too; it is public so a test can assert the status directly. A
+    /// backend that returned from `main` reports `Some(0)`; one that died by signal reports
+    /// `None` from `code()`, which is the discriminator for "atexit handlers did not run".
+    pub fn shutdown(&mut self) -> Option<std::process::ExitStatus> {
+        if self.stopped {
+            return None;
+        }
+        self.stopped = true;
+        terminate_process_group(&mut self.child)
     }
 
     #[must_use]
@@ -244,10 +277,44 @@ permission:
 
 impl Drop for BackendProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.shutdown();
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// Stop a backend: SIGTERM the group, poll for exit up to [`SHUTDOWN_GRACE`], then SIGKILL
+/// the group unconditionally and reap. Returns the observed exit status.
+///
+/// The graceful first step exists so the child runs its atexit handlers — that is what
+/// flushes LLVM `.profraw` data, and a SIGKILL'd backend contributes no coverage at all.
+/// The SIGKILL escalation is deliberately **unconditional**: it is what preserves the
+/// no-orphan guarantee for a backend that ignores SIGTERM, and it also reaps anything the
+/// backend itself left behind in the group. This runs during panic unwinding too, so a
+/// failing scenario still tears its backend down.
+fn terminate_process_group(child: &mut Child) -> Option<std::process::ExitStatus> {
+    // Signal the NEGATIVE pid to reach the whole group; the child was spawned with
+    // `process_group(0)`, so this cannot reach the test runner.
+    let pid = child.id() as libc::pid_t;
+    unsafe {
+        libc::kill(-pid, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + SHUTDOWN_GRACE;
+    let mut status = None;
+    loop {
+        match child.try_wait() {
+            // Reaped: return immediately rather than sleeping out the grace period.
+            Ok(Some(exit)) => {
+                status = Some(exit);
+                break;
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(SHUTDOWN_POLL),
+            _ => break,
+        }
+    }
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+    status.or_else(|| child.wait().ok())
 }
 
 fn render_mcp(mcp: &[McpFixture]) -> String {
@@ -349,8 +416,24 @@ fn parse_listen_url(text: &str) -> Option<String> {
     None
 }
 
-/// Resolve default debug binary relative to workspace (from this crate).
+/// Resolve the backend binary: `HYA_E2E_BACKEND_BIN` if set, else the workspace
+/// `target/debug/hya-backend`.
+///
+/// The override exists so a coverage run can point the harness at an instrumented build
+/// without overwriting the normal debug binary that concurrent work is using.
 pub fn default_backend_bin() -> PathBuf {
+    resolve_backend_bin(std::env::var_os("HYA_E2E_BACKEND_BIN"))
+}
+
+/// Pure resolution behind [`default_backend_bin`], so the override is testable without
+/// mutating the process environment (which races other tests in the same binary).
+fn resolve_backend_bin(override_bin: Option<std::ffi::OsString>) -> PathBuf {
+    if let Some(bin) = override_bin {
+        let bin = PathBuf::from(bin);
+        if !bin.as_os_str().is_empty() {
+            return bin.canonicalize().unwrap_or(bin);
+        }
+    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug/hya-backend")
         .canonicalize()
@@ -432,4 +515,56 @@ pub fn materialize_public_bundle(dest_dir: &Path) -> Result<PathBuf, E2eError> {
 /// Absolute path helper kept for callers that only need the source archive.
 pub fn public_bundle_fixture() -> PathBuf {
     public_bundle_source()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_bin_override_wins_over_the_workspace_debug_path() {
+        let resolved = resolve_backend_bin(Some("/nonexistent/instrumented/hya-backend".into()));
+
+        assert_eq!(
+            resolved,
+            PathBuf::from("/nonexistent/instrumented/hya-backend"),
+            "HYA_E2E_BACKEND_BIN must point the harness at an arbitrary build"
+        );
+    }
+
+    #[test]
+    fn empty_backend_bin_override_falls_back_to_the_workspace_debug_path() {
+        let resolved = resolve_backend_bin(Some("".into()));
+
+        assert_eq!(resolved, resolve_backend_bin(None));
+    }
+
+    /// The discriminator for the whole graceful-shutdown change: a backend that returned
+    /// from `main` exits with status code 0, so its atexit handlers ran (which is what
+    /// flushes LLVM `.profraw`). A backend killed by a signal has `code() == None`.
+    ///
+    /// This also covers the readiness race: SIGTERM is sent immediately after the listen
+    /// line, so the signal handler must already be installed when that line is printed.
+    #[test]
+    fn shutdown_stops_the_backend_cleanly_with_exit_status_zero() {
+        let binary = default_backend_bin();
+        assert!(
+            binary.is_file(),
+            "build the backend first: cargo build -p hya-backend --bin hya-backend (looked at {})",
+            binary.display()
+        );
+        // The fake provider is never contacted: this scenario only boots and stops.
+        let spec = BackendSpec::new(binary, "http://127.0.0.1:1/v1");
+        let mut backend = BackendProcess::start(&spec).expect("backend starts");
+
+        let status = backend.shutdown().expect("backend reports an exit status");
+
+        assert_eq!(
+            status.code(),
+            Some(0),
+            "backend must return from main on SIGTERM, not die by signal; \
+             a signal death means atexit handlers (and the coverage flush) were skipped"
+        );
+    }
 }
