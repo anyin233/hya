@@ -1,3 +1,8 @@
+//! In-memory AgentBundle source trees and directory loaders.
+//!
+//! Runtime code should embed/decode [`crate::PreparedCatalog`] bytes instead of
+//! calling [`BundleSource::read_directory`] at process start.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +14,7 @@ use crate::model::{
     AgentRole, BundleIdentity, HarnessAccess, ModelPolicy, ResourceView, SpawnLifecycle,
 };
 
+/// One logical file in a bundle source: relative path plus raw bytes.
 #[derive(Clone, Debug)]
 pub struct SourceFile {
     path: String,
@@ -16,6 +22,7 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
+    /// Build a source file from a logical path (`/`-separated) and its contents.
     #[must_use]
     pub fn new(path: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -29,6 +36,9 @@ impl SourceFile {
     }
 }
 
+/// Named collection of source files that prepare into one or more bundles.
+///
+/// The `name` is diagnostic only (directory display path or package label).
 #[derive(Clone, Debug)]
 pub struct BundleSource {
     name: String,
@@ -36,6 +46,7 @@ pub struct BundleSource {
 }
 
 impl BundleSource {
+    /// Wrap an in-memory file set under a diagnostic source name.
     #[must_use]
     pub fn new(name: impl Into<String>, files: Vec<SourceFile>) -> Self {
         Self {

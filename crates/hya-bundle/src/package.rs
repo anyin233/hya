@@ -42,51 +42,85 @@ const STAGED_PACKAGE_FILE_NAME: &str = "package";
 
 static NEXT_STAGED_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+/// Detected on-disk package format for a `.hyabundle` (or staged) byte stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PackageFormat {
+    /// Public 7z archive (`PUBLIC_MAGIC`); expands to a prepareable source closure.
     PublicV1,
+    /// Private envelope (`HYABNDL\0`); ciphertext not decryptable in this crate path.
     PrivateV1,
 }
 
+/// Authentication state for a private package header inspection.
+///
+/// This prepare path never verifies a signature; only structural/digest checks run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivatePackageAuthentication {
+    /// Header parsed and ciphertext digest matched; no cryptographic auth performed.
     Unverified,
 }
 
+/// Payload shape for a private package (opaque ciphertext blob).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrivatePackagePayload {
+    /// Encrypted payload; not expanded by public prepare.
     Opaque,
 }
 
+/// Result of inspecting a private package without decrypting it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrivatePackageInspection {
+    /// Target environment string from the private header.
     pub target: String,
+    /// Minimum protocol version the package claims to need.
     pub protocol_minimum: u16,
+    /// Maximum protocol version the package claims to support.
     pub protocol_maximum: u16,
+    /// Auth state (always unverified on this path).
     pub authentication: PrivatePackageAuthentication,
+    /// Payload kind (opaque ciphertext).
     pub payload: PrivatePackagePayload,
+    /// Ciphertext byte length from the header.
     pub ciphertext_length: u64,
+    /// SHA-256 of the ciphertext region (must match the embedded digest field).
     pub ciphertext_digest: [u8; 32],
 }
 
+/// Result of expanding and preparing a public package archive.
 #[derive(Debug)]
 pub struct PublicPackageInspection {
+    /// Catalog produced by prepare over the archive's declared closure.
     pub prepared: PreparedCatalog,
+    /// SHA-256 of the raw package bytes before expansion.
     pub source_digest: [u8; 32],
 }
 
+/// Outcome of [`StagedPackage::inspect`] / format-specific inspect helpers.
 #[derive(Debug)]
 pub enum PackageInspection {
+    /// Public archive prepared into a catalog.
     Public(PublicPackageInspection),
+    /// Private envelope header/digest only (no prepare).
     Private(PrivatePackageInspection),
 }
 
+/// Exclusive, locked copy of a package under a staging root for safe inspection.
+///
+/// On drop, the staged file and directory are removed. Callers that fail mid-copy
+/// or mid-inspect still clean up via `Drop` unless another process holds the lock
+/// (see [`cleanup_orphaned_staging`]).
 pub struct StagedPackage {
     directory: PathBuf,
     file_path: PathBuf,
     file: Option<File>,
 }
 
+/// Remove abandoned `hya-bundle-stage-*` directories under `staging_root`.
+///
+/// Only directories that contain a lone staged `package` file **and** whose
+/// package file can be exclusively locked are deleted. Live staging held by
+/// another process (`WouldBlock`) is left alone. Missing `staging_root` is a
+/// no-op success.
 pub fn cleanup_orphaned_staging(staging_root: &Path) -> Result<(), BundleError> {
     let entries = match fs::read_dir(staging_root) {
         Ok(entries) => entries,
@@ -130,6 +164,18 @@ pub fn cleanup_orphaned_staging(staging_root: &Path) -> Result<(), BundleError> 
     Ok(())
 }
 
+/// Copy `source_path` into an exclusive staging directory under `staging_root`.
+///
+/// Steps: create `staging_root` if needed → create a unique building directory →
+/// create a mode-`0o600` `package` file → lock it → rename building dir to the
+/// final stage name → stream-copy source bytes (enforcing the public archive
+/// size cap) → return the locked [`StagedPackage`].
+///
+/// **On failure:** partial building directories are removed when file create fails;
+/// a returned `StagedPackage` still owns cleanup on drop. A crash mid-copy can
+/// leave a locked or unlocked stage directory; call
+/// [`cleanup_orphaned_staging`] at process start to reclaim unlocked orphans.
+/// Does not mutate the original `source_path`.
 pub fn stage_package(
     source_path: &Path,
     staging_root: &Path,
@@ -171,6 +217,10 @@ pub fn stage_package(
 }
 
 impl StagedPackage {
+    /// Read staged bytes, detect format, and prepare (public) or parse header (private).
+    ///
+    /// Consumes `self` so the stage is dropped (and deleted) after inspection
+    /// whether the call succeeds or fails.
     pub fn inspect(mut self) -> Result<PackageInspection, BundleError> {
         let (bytes, source_digest) = self.read_staged_bytes()?;
         match detect_package_format(&bytes)? {
@@ -281,6 +331,11 @@ impl Drop for StagedPackage {
     }
 }
 
+/// Classify package bytes by magic: public 7z vs private `HYABNDL` envelope.
+///
+/// Returns [`BundleError::InvalidPackageFormat`] when neither magic matches, or
+/// [`BundleError::UnsupportedPackageVersion`] for a private header with a
+/// non-supported version field.
 pub fn detect_package_format(bytes: &[u8]) -> Result<PackageFormat, BundleError> {
     if bytes.get(..PUBLIC_MAGIC.len()) == Some(PUBLIC_MAGIC.as_slice()) {
         return Ok(PackageFormat::PublicV1);
@@ -304,6 +359,10 @@ pub fn detect_package_format(bytes: &[u8]) -> Result<PackageFormat, BundleError>
     Ok(PackageFormat::PrivateV1)
 }
 
+/// Parse and integrity-check a private package header without decrypting.
+///
+/// Verifies version, field lengths, envelope bounds, and that the ciphertext
+/// SHA-256 matches the header digest. Does not produce a [`PreparedCatalog`].
 pub fn inspect_private_package(bytes: &[u8]) -> Result<PrivatePackageInspection, BundleError> {
     if !matches!(detect_package_format(bytes)?, PackageFormat::PrivateV1) {
         return Err(BundleError::InvalidPackageFormat);
@@ -368,6 +427,11 @@ pub fn inspect_private_package(bytes: &[u8]) -> Result<PrivatePackageInspection,
 }
 
 /// Strictly validates, decodes, and prepares an untrusted public package.
+///
+/// Enforces archive size (128 MiB), per-entry (64 MiB), total expanded (256 MiB),
+/// expansion ratio (1000:1, streaming), path length (1024), and path depth (32).
+/// Undeclared archive members and unsafe entry types fail closed. On success,
+/// returns the same [`PreparedCatalog`] shape as [`crate::prepare_package`].
 pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleError> {
     if bytes.len() > PUBLIC_PACKAGE_MAX_BYTES {
         return Err(BundleError::PackageLimitExceeded {

@@ -3,6 +3,10 @@
 //! Source parsing and filesystem access stop at this crate. Runtime callers
 //! consume only the immutable prepared data returned by [`prepare_builtins`].
 
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
 mod catalog;
 mod error;
 mod model;
