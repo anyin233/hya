@@ -13,34 +13,75 @@ after permission checks pass.
   formatter planes, session ids, workdir, cancellation token.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-The builtin registry includes:
+`ToolRegistry::builtins()` installs **26** canonical schema names before model
+filtering
+([`tool.rs:237-271`](../../crates/hya-tool/src/tool.rs#L237-L271)). The table
+below is the complete inventory. Advertised field names are the model-facing
+JSON schema `required`/`properties` keys. Runtime serde aliases (for example
+`path` for `filePath`) accept short spellings during direct execution, but
+provider-side schema validation requires the advertised names.
 
-| Tool | Input | Output |
+| Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
-| `read` | `{ "path": string }` | File text/media or directory listing. |
-| `write` | `{ "path": string, "content": string }` | Write result plus formatter/LSP diagnostics when available. |
-| `edit` | `{ "path": string, "old": string, "new": string }` | Replacement result plus diff/formatter/LSP data. |
-| `apply_patch` (`patch`) | patch text | Aggregate diff and per-file metadata. |
+| `read` | `{ "filePath": string, "offset"?: number, "limit"?: number }` (`path` is a runtime-only alias) | File text/media or directory listing. |
+| `write` | `{ "filePath": string, "content": string }` (`path` is a runtime-only alias) | Write result plus formatter/LSP diagnostics when available. |
+| `edit` | `{ "filePath": string, "oldString": string, "newString": string, "replaceAll"?: bool }` (short spellings `path`/`old`/`new`/`replace_all` are runtime-only aliases) | Replacement result plus diff/formatter/LSP data. |
+| `apply_patch` (`patch`) | `{ "patchText": string }` (alias `patch`) | Aggregate diff and per-file metadata. |
 | `ls` | `{ "path"?: string }` | Immediate directory entries. |
-| `glob`, `find` | pattern/path inputs | Path matches and counts. |
-| `grep` | `{ "pattern": string, "path"?: string, "include"?: string }` | Regex matches and counts. |
-| `shell`, `bash` | `{ "command": string }` | Command title, stdout/stderr, exit status. |
-| `webfetch` (`fetch`) | URL input | Fetched web content via the web-fetch tool. |
-| `websearch` (`search`) | query input | Search results from the configured `WebSearchPlane`. |
-| `question`, `ask_user` | prompt/options input | Human answer or cancellation. |
-| `lsp` | operation input | LSP provider response. |
-| `skill` | skill path/name input | Skill content. |
-| `task` | member prompts | Foreground/background subagent outcomes. |
-| `todowrite` (`todo`) | todo items | Latest todo snapshot for the session. |
+| `glob` | `{ "pattern": string, "path"?: string }` | Path matches and counts (cap 100). |
+| `find` | `{ "pattern": string, "path"?: string }` | `{path, size}` matches (no row cap). |
+| `grep` | `{ "pattern": string, "path"?: string, "include"?: string }` | Regex matches and counts (cap 100). |
+| `shell`, `bash` | `{ "command": string, "timeout"?: number, "workdir"?: string, "env"?: object }` | Command title, stdout/stderr, exit status. |
+| `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. |
+| `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
+| `question` | `{ "questions": [{ "question", "header", "options", "multiple"?, "custom"? }] }` | Chosen option labels (unanswered → `Unanswered`). |
+| `ask_user` | `{ "question": string, "kind"?: "text"\|"select", "options"?, "allow_custom"?, "default"? }` | Answer object; cancellation returns `{ "answer": "", "cancelled": true }`. |
+| `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |
+| `skill` | `{ "name": string }` (name only; a path is not accepted) | `<skill_content>` envelope with body, `file://` base dir, and sampled files (cap 10). See also [`docs/skills.md`](../skills.md). |
+| `list_agents` | (none) | Agent definitions usable by `task`. |
+| `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "task_id"?, "command"?, "background"?, "resident"?, "inline_agent"?, "members"?: [...] }` | Foreground/background subagent outcomes. |
+| `todowrite` (`todo`) | `{ "todos": [{ "content", "status", "priority" }] }` | Latest todo snapshot for the session (replace, not append). |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
+| `send` | `{ "to": string, "body": string, "kind"?: "message"\|"announcement" }` | Mail delivery receipt. |
+| `roster` | (none) | Live teammates with handle, type, status, task. |
+| `channels` | (none) | Team channels with members and message counts. |
+| `join` | `{ "channel": string }` | Subscribe (creates channel if missing). |
+| `leave` | `{ "channel": string }` | Unsubscribe from a channel. |
+
+Hidden aliases resolve at execution but are not advertised: `fetch`→`webfetch`,
+`search`→`websearch`, `todo`→`todowrite`, `patch`→`apply_patch`, `plan`→`plan_exit`.
 
 ## Output Limits
 
-Large string outputs are truncated at 16 KiB and include a truncation marker.
-Search-style tools cap returned entries while preserving counts and truncation
-metadata. These limits keep provider context from being flooded by accidental
-large outputs.
+Two stacked caps apply. Per-tool caps run inside the tool; a global cap runs
+afterward on every successful result.
+
+### Per-tool caps
+
+- **`shell` / `bash`**: combined stdout+stderr is capped at **16 KiB**
+  (`MAX_OUTPUT_BYTES = 16 * 1024`). Oversized output is truncated for the model
+  and the full text is spilled under `.hya/tool-output/` in the session workdir
+  ([`shell.rs`](../../crates/hya-tool/src/shell.rs)).
+- **`glob` / `grep`**: returned rows are capped at **`SEARCH_LIMIT = 100`**
+  ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). Counts and truncation
+  metadata remain on the result. `find` has no row cap.
+
+### Global cap (`cap_tool_output`)
+
+After a successful builtin, MCP, or plugin call, the engine passes the result
+through `hya_tool::cap_tool_output` before emitting `Event::ToolResult`
+([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)). The constant is
+`MAX_TOOL_OUTPUT_CHARS = 5000` characters
+([`output_cap.rs`](../../crates/hya-tool/src/output_cap.rs)):
+
+- Under the limit, the original JSON `Value` shape is preserved.
+- Over the limit, the value becomes a **plain string** prefixed with
+  `[tool output truncated: original N chars; showing last 5000 chars]`, followed
+  by only the **last** 5000 characters of the display text.
+
+Downstream consumers (projection, TUI, next model round) must tolerate that a
+structured JSON tool result can collapse to a string after the global cap.
 
 ## Permission Models
 
@@ -50,12 +91,59 @@ large outputs.
 | --- | --- |
 | `InvocationPolicy` | Compiled ordered regex rules and the active invocation model. |
 | `Invocation` | Canonical tool, MCP, and post-hook command subjects for one call. |
-| `Action` | Resource operation category such as `Read`, `Edit`, `Grep`, or `Bash`. |
-| `Resource` | Path, glob, command, subagent, or any resource. |
+| `Action` | Resource operation category (fourteen values; see below). |
+| `Resource` | Permission object (nine shapes; see below). |
 | `Mode` | `Allow`, `Ask`, or `Deny`. |
 | `Rule` | Action + resource pattern + mode. |
-| `Decision` | User response: allow once, allow always, or reject with optional feedback. |
-| `PermissionPlane` | Invocation policy, resource rules, remembered grants, and ask channel. |
+| `Decision` | User or interceptor response: allow once, allow always, or reject with optional feedback. |
+| `PermissionPlane` | Invocation policy, resource rules, remembered grants, optional interceptor, and ask channel. |
+| `PermissionInterceptor` | Optional async hook consulted after remembered grants and before the user ask. |
+
+### Action (fourteen values)
+
+`Action` serializes lowercase in saved-permission rows and rules
+(`#[serde(rename_all = "lowercase")]`):
+
+| Wire value | Variant | Typical raisers |
+| --- | --- | --- |
+| `tool` | `Tool` | Invocation-level native tool subjects (`PermissionTarget::Tool`). |
+| `read` | `Read` | `read`, `ls`. |
+| `edit` | `Edit` | `write`, `edit`, `apply_patch`. |
+| `glob` | `Glob` | `glob`, `find`. |
+| `grep` | `Grep` | `grep`. |
+| `bash` | `Bash` | `shell`, `bash` (and invocation command subjects). |
+| `task` | `Task` | `task` (per member / subagent type). |
+| `mcp` | `Mcp` | MCP bridge tools (`mcp__…`). |
+| `webfetch` | `WebFetch` | `webfetch`. |
+| `websearch` | `WebSearch` | `websearch`. |
+| `todowrite` | `TodoWrite` | `todowrite`. |
+| `skill` | `Skill` | `skill`. |
+| `lsp` | `Lsp` | `lsp`. |
+| `external_directory` | `ExternalDirectory` | Any tool whose resolved path (or shell `workdir`) lies outside the session workdir. |
+
+### Resource (nine shapes)
+
+| Shape | Payload | Notes |
+| --- | --- | --- |
+| `Tool(name)` | Tool name | Invocation-level tool subject. |
+| `Path(resolved path)` | Absolute or display path | File/directory resource checks. |
+| `Glob(pattern)` | Glob or grep pattern string | Used by `glob`/`find`/`grep` resource asserts. |
+| `Command(text)` | Shell command text, **or** the namespaced MCP tool name | Shared by bash and MCP subjects. |
+| `Subagent(agent id)` | Subagent type / agent id | `task` members. |
+| `Url(url)` | Fetched URL | `webfetch`. |
+| `WebSearch(query)` | Search query | `websearch`. |
+| `Skill(name)` | Skill name | `skill`. |
+| `Any` | — | Matches everything at the resource layer. |
+
+Every resource flattens to a single match-pattern string via `Resource::pattern()`.
+`Any` flattens to `"*"`. That is why a resource-level **allow always** grant
+stores `Rule(action, "*", Allow)` and then allows the entire action
+([`apply_decision`](../../crates/hya-tool/src/permission.rs)).
+
+The plugin wire form of the same union is `WireResource`: tagged variants
+`tool`, `path`, `glob`, `command`, `subagent`, `url`, `web_search`, `skill`,
+and `any`
+([`messages.rs`](../../crates/hya-plugin/src/messages.rs)).
 
 Invocation rules are Rust regular expressions over explicitly registered
 metadata. Normal built-ins and plugins expose their canonical `tool` name, MCP
@@ -80,19 +168,122 @@ explicit resource deny remains authoritative after invocation approval.
 When an action evaluates to `Ask`:
 
 1. `PermissionPlane` checks the applicable invocation or resource rules and
-   remembered grant.
-2. If not, it sends an `AskRequest` containing action, resource, and a reply
-   channel.
-3. The caller answers with a `Decision`.
-4. `AllowOnce` permits only the current call.
-5. Native invocation `AllowAlways` remembers only the selected exact target and
-   value. Legacy resource `AllowAlways` continues to allow the whole action.
-6. `Reject` returns a permission error, optionally carrying user feedback.
+   remembered grant (snapshot Allow/Deny first; then persistent allow-always
+   rules; call-scoped grants do **not** satisfy `ExternalDirectory`).
+2. **Interceptor stage**: if a `PermissionInterceptor` is installed via
+   `PermissionPlane::with_interceptor`, it runs **after** remembered grants and
+   **before** the user ask channel, at both the invocation gate
+   (`authorize`) and the resource gate (`assert`). Returning `Some(Decision)`
+   short-circuits the prompt; returning `None` defers to the normal ask channel.
+   The interceptor contributes its own identity to `semantic_identity_v1`, so
+   swapping interceptors changes the policy fingerprint. The only shipped
+   implementation is the plugin `PermissionBridge`.
+3. If still unresolved, it sends an `AskRequest` containing action, resource,
+   and a reply channel.
+4. The caller answers with a `Decision`.
+5. `AllowOnce` permits only the current call.
+6. Native invocation `AllowAlways` remembers only the selected exact target and
+   value. Legacy resource `AllowAlways` continues to allow the whole action
+   (`Rule(action, "*", Allow)`).
+7. `Reject` returns a permission error, optionally carrying user feedback.
 
 Pending asks coalesce using the same remember scope: native asks group only an
 identical subject, while legacy asks retain action-wide grouping. The CLI TUI
 and server receive ask requests through their existing surfaces. Headless
 `exec`, RPC, and goal flows answer residual asks with `Reject`.
+
+### Plugin permission bridge
+
+`PermissionBridge` implements `PermissionInterceptor` over connected plugins
+([`permission_bridge.rs`](../../crates/hya-plugin/src/permission_bridge.rs)):
+
+1. **Resolution**: `permission.ask` is polled across plugins in load order. The
+   **first** plugin that returns `allow_once`, `allow_always`, or `reject` wins.
+   If every plugin defers (or every plugin errors), the host falls through to
+   its normal interactive user prompt (`None` from the interceptor).
+2. **Cache invalidation**: remembered plugin-mediated decisions are keyed by a
+   domain-separated **SHA-256** digest over the literal domain string
+   `b"hya.plugin.permission-bridge.semantic-identity/v1"` plus, per participating
+   plugin, its id, its canonical initialize declaration, and its effective
+   `permission.ask` posture. Adding, removing, or changing any permission plugin
+   automatically invalidates previously cached decisions.
+3. **Wire resource**: `permission.ask` carries a tagged `WireResource` union with
+   the nine variants listed above.
+
+## External directory boundary
+
+Paths use lexical workdir resolution: the workdir is absolutized and normalized
+by removing `.` and textually popping `..`. Symlinks are **not** canonicalized,
+so a symlink inside the workdir is not classified as external based on its
+target.
+
+For any resolved path **outside** the session workdir, tools run an
+`Action::ExternalDirectory` assert on the containing directory's `<dir>/*`
+pattern **before** the normal Read/Edit/Lsp/… check. Call-level invocation
+grants never satisfy `ExternalDirectory`, so it prompts separately even inside
+an already-approved tool call.
+
+### Enforcement points
+
+| Tool | What is gated |
+| --- | --- |
+| `read` | Resolved file or directory path. |
+| `write` | Resolved file path (`<parent>/*` when outside). |
+| `edit` | Resolved file path (`<parent>/*` when outside). |
+| `apply_patch` | Paths must be relative and must not escape the workdir (absolute or `..` components are **input errors**); each surviving path is then checked as `Action::Edit`. ExternalDirectory is not raised because escape is rejected first. |
+| `lsp` | Resolved file path (`<parent>/*` when outside). |
+| `glob` | Search root directory when outside the workdir. |
+| `grep` | Search root (file or directory) when outside the workdir. |
+| `shell` / `bash` | Optional `workdir` argument when it resolves outside the session workdir (`cwd/*`). |
+| `find` | **Does not** perform the external-directory check (deliberate compatibility gap). |
+
+### Per-turn external directories
+
+`SessionEngine::run_turn_with_external_dirs` (and the guidance/claim variants)
+layers temporary allow rules onto the session permission snapshot for that turn
+only
+([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)):
+
+```text
+Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
+```
+
+for each directory in `external_dirs`. Directories the caller explicitly
+attached therefore never prompt for that turn. The overlay is **not** persisted
+as a `SessionPermissionSet` and does not survive the turn. The HTTP/Compat
+prompt path derives the list from the session's reference directories
+([`session_prompt.rs`](../../crates/hya-server/src/compat/session_prompt.rs)).
+
+## Tool errors
+
+Failed tools become `Event::ToolError` with a structured value:
+
+```json
+{ "error": { "type": "<kind>", "message": "<text>" } }
+```
+
+Mapping from `ToolError` to the wire `type` string
+([`tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs)):
+
+| Variant | Wire `type` |
+| --- | --- |
+| `Input` | `input` |
+| `Permission` | `permission` |
+| `Io` | `io` |
+| `Json` | `json` |
+| `Cancelled` | `cancelled` |
+| `Overloaded` | `overloaded` |
+| `OperationIdConflict` | `operation_id_conflict` |
+| `OperationAlreadyHandled` | `operation_already_handled` |
+| `UnknownAgentId` | `unknown_agent_id` |
+| `AgentSpawnNotAllowed` | `agent_spawn_not_allowed` |
+| `UnsupportedInlineAgentField` | `unsupported_inline_agent_field` |
+| `Other` | `unknown` |
+
+Clients that switch on this string should treat all twelve values as first-class.
+`permission` errors are protected from rewriting by `tool.execute.after` hooks;
+other outcomes may be rewritten by those hooks
+([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)).
 
 ## CLI Defaults
 
@@ -108,7 +299,7 @@ covered by their existing checks. `--yolo` changes the invocation model to
 Provider decoders only request tool calls. `SessionEngine` runs before-hooks,
 looks up the registered tool, validates its invocation metadata, authorizes it,
 builds a `ToolCtx` with the call-scoped permission plane, executes it, runs
-after-hooks, and appends either:
+after-hooks, applies `cap_tool_output` on success, and appends either:
 
 - `Event::ToolResult`
 - `Event::ToolError`

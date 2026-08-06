@@ -1,8 +1,8 @@
 # Agent Tool Surface
 
 This document describes the tools that hya exposes to agents, with detailed
-coverage of READ, EDIT, and local file search. It distinguishes three related
-but different surfaces:
+coverage of file access, local search, interaction, network, and mailbox tools.
+It distinguishes three related but different surfaces:
 
 1. **Registered**: a name resolves in `ToolRegistry`.
 2. **Advertised**: a canonical schema is included in a model request or Compat
@@ -15,14 +15,15 @@ model filters hide some registered schemas, and several always-
 registered builtins delegate to runtime planes that can be disconnected or
 empty. The registry stores canonical tools and aliases separately, and only
 canonical tools contribute schemas.
-([crates/hya-tool/src/tool.rs:107-125](../../crates/hya-tool/src/tool.rs#L107-L125),
-[crates/hya-tool/src/tool.rs:203-222](../../crates/hya-tool/src/tool.rs#L203-L222))
+([crates/hya-tool/src/tool.rs:167-182](../../crates/hya-tool/src/tool.rs#L167-L182),
+[crates/hya-tool/src/tool.rs:400-406](../../crates/hya-tool/src/tool.rs#L400-L406),
+[crates/hya-tool/src/tool.rs:504-510](../../crates/hya-tool/src/tool.rs#L504-L510))
 
 ## Builtin inventory
 
 `ToolRegistry::builtins()` installs 26 canonical schema names before model
 filtering. The inventory below is complete for that constructor.
-([crates/hya-tool/src/tool.rs:145-183](../../crates/hya-tool/src/tool.rs#L145-L183))
+([crates/hya-tool/src/tool.rs:237-271](../../crates/hya-tool/src/tool.rs#L237-L271))
 
 | Area | Canonical schema names | Role |
 | --- | --- | --- |
@@ -33,31 +34,165 @@ filtering. The inventory below is complete for that constructor.
 | Agents and teams | `skill`, `list_agents`, `task`, `send`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, and use team mail/channels. |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
-The less obvious entries are confirmed by their schemas: `question` accepts a
-batch of structured questions, while `ask_user` is a single free-text/select
-interaction; `list_agents` enumerates definitions usable by `task`; and the
-mailbox tools expose direct/channel send, roster, channel listing, join, and
-leave operations.
-([crates/hya-tool/src/question.rs:36-78](../../crates/hya-tool/src/question.rs#L36-L78),
-[crates/hya-tool/src/tool.rs:693-725](../../crates/hya-tool/src/tool.rs#L693-L725),
-[crates/hya-tool/src/agents.rs:70-104](../../crates/hya-tool/src/agents.rs#L70-L104),
-[crates/hya-tool/src/mailbox.rs:197-280](../../crates/hya-tool/src/mailbox.rs#L197-L280),
-[crates/hya-tool/src/mailbox.rs:340-450](../../crates/hya-tool/src/mailbox.rs#L340-L450))
+### Question and ask_user
 
-`task` supports one subagent, a multi-member hya extension, model/category
-overrides, session resumption, background execution, resident agents, and
-inline ephemeral agent definitions. Execution requires a session and checks
-`Action::Task` for every member.
-([crates/hya-tool/src/task.rs:103-192](../../crates/hya-tool/src/task.rs#L103-L192),
-[crates/hya-tool/src/task.rs:194-277](../../crates/hya-tool/src/task.rs#L194-L277))
+`question` accepts a batch of structured questions under a top-level `questions`
+array. Each item requires `question`, `header`, and `options` (each option is
+`{label, description}`). Optional fields are `multiple` (allow several
+selections) and `custom` (allow a free-text answer outside the option list;
+defaults to true when omitted). The tool routes through the InteractionPlane and
+returns chosen option labels; a question the user did not answer renders as
+`Unanswered` rather than failing the call.
+([crates/hya-tool/src/question.rs:37-131](../../crates/hya-tool/src/question.rs#L37-L131))
+
+`ask_user` is a single free-text/select interaction. Parameters:
+
+| Field | Role |
+| --- | --- |
+| `question` | Required prompt text. |
+| `kind` | `"text"` (default path) or `"select"`. |
+| `options` | Required non-empty list when `kind` is `"select"`. |
+| `allow_custom` | With select, allow an answer outside the options. |
+| `default` | Optional default for free-text. |
+
+A cancelled or failed ask does **not** produce a tool error — it returns
+`{"answer": "", "cancelled": true}`. Callers must inspect `cancelled` rather
+than relying on an error. Contrast this with `question`, which renders
+unanswered entries as `Unanswered`.
+([crates/hya-tool/src/tool.rs:983-1037](../../crates/hya-tool/src/tool.rs#L983-L1037))
+
+### Task
+
+`task` launches one subagent or a multi-member team extension. Nested `task`
+calls are allowed; recursion depth and total fan-out are bounded by
+`SubagentGovernor` (see [`docs/configuration.md`](../configuration.md#subagent-limits)).
+Execution requires a session and checks `Action::Task` for every member; the
+spawner also enforces the caller's `can_spawn` roster (unknown or disallowed
+agents surface as `unknown_agent_id` / `agent_spawn_not_allowed`). An empty or
+omitted `subagent_type` normalizes to `"general"`; a non-empty unknown id does
+not fall back to `general`.
+
+| Parameter | Role |
+| --- | --- |
+| `description` | Short label (required with single-member form). |
+| `prompt` | Work for the agent (required). |
+| `subagent_type` | Agent id; empty/omitted normalizes to `"general"`. |
+| `category` | Logical model-category override. |
+| `model` | Concrete provider/model override (wins over category). |
+| `task_id` | Resume an existing subagent session. Sentinels `new`, `null`, `none`, and `undefined` (case-insensitive), plus empty/whitespace, all mean "start fresh". |
+| `command` | Optional command that triggered the task. |
+| `background` | Bool; non-blocking single-member spawn. Multi-member background is rejected. |
+| `resident` | Long-lived actor (non-blocking spawn) rather than a one-shot turn. |
+| `inline_agent` | Request-scoped agent overlay (`name`, `prompt`, `description`, `category`, `model`, `resident`). Unsupported fields fail with `unsupported_inline_agent_field`. |
+| `members[]` | hya extension: fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
+
+([crates/hya-tool/src/task.rs:105-376](../../crates/hya-tool/src/task.rs#L105-L376))
+
+### Skill
+
+The only parameter is `name`. It must be a skill name from the
+`available_skills` list injected into the system prompt (not a path). The tool
+asserts `Action::Skill` on `Resource::Skill(name)`, then returns a
+`<skill_content>` envelope containing the SKILL.md body, the skill's absolute
+base directory as a `file://` URL (relative paths inside the skill resolve
+against it), and a sampled `<skill_files>` listing capped at
+`FILE_SAMPLE_LIMIT = 10` entries (recursive, sorted, excluding `SKILL.md`
+itself). The output states that the file list is sampled, so a skill with more
+than 10 supporting files shows an incomplete list. See also
+[`docs/skills.md`](../skills.md).
+([crates/hya-tool/src/skill.rs:14](../../crates/hya-tool/src/skill.rs#L14),
+[crates/hya-tool/src/skill.rs:93-148](../../crates/hya-tool/src/skill.rs#L93-L148))
+
+### Todowrite
+
+Input is a `todos` array of `{content, status, priority}` objects. The call
+**replaces** the session's whole todo list rather than appending. The list lives
+in the in-memory `TodoPlane` (not persisted independently of the event log). The
+result echoes the list back with a title carrying the count of still-open items
+(status other than `"completed"`). Alias: `todo`.
+([crates/hya-tool/src/todo.rs:70-123](../../crates/hya-tool/src/todo.rs#L70-L123))
+
+### Mailbox tools
+
+All mailbox tools report that they are available only inside a running team when
+the mailbox plane is disconnected
+([crates/hya-tool/src/mailbox.rs:208-215](../../crates/hya-tool/src/mailbox.rs#L208-L215)).
+
+**`send`**: required `to` (teammate handle such as `reviewer-3`, or a channel with
+a leading `#` such as `#build`) and `body`; optional `kind` =
+`message` (default) | `announcement`. An empty/whitespace body is an input error.
+Channel mail reaches every current subscriber. Result metadata returns the
+resolved sender handle (`from`), the normalized recipient address (`to`), and the
+`recipients` count.
+([crates/hya-tool/src/mailbox.rs:228-279](../../crates/hya-tool/src/mailbox.rs#L228-L279))
+
+**`roster`**: no parameters; returns one row per live teammate with `handle`,
+agent type, session id, scheduling mode, `status` (`idle` | `busy` | `done` |
+`failed`, folded in from `AgentActivityChanged` by the resident supervisor), and
+`current_task`. Registered `ToolPermission::ReadOnly`, so it allows without
+prompting under `default`.
+([crates/hya-tool/src/mailbox.rs:284-358](../../crates/hya-tool/src/mailbox.rs#L284-L358))
+
+**`channels`**: no parameters; lists every mail channel of the acting agent's team
+with its member list and message count. Registered `ToolPermission::ReadOnly`.
+([crates/hya-tool/src/mailbox.rs:363-404](../../crates/hya-tool/src/mailbox.rs#L363-L404))
+
+**`join`**: takes a channel name; the leading `#` is optional (`#build` and
+`build` are the same channel). It subscribes the acting agent and **creates** the
+channel if it does not exist — there is no separate create-channel tool.
+Registered `ToolPermission::Tool`, so it asks under `default`.
+([crates/hya-tool/src/mailbox.rs:414-440](../../crates/hya-tool/src/mailbox.rs#L414-L440))
+
+**`leave`**: takes a channel name (leading `#` optional) and unsubscribes the
+acting agent. After leaving, channel posts no longer reach the agent but direct
+handle mail still does. Registered `ToolPermission::Tool`.
+([crates/hya-tool/src/mailbox.rs:445-471](../../crates/hya-tool/src/mailbox.rs#L445-L471))
+
+`list_agents` enumerates definitions usable by `task`.
+([crates/hya-tool/src/agents.rs:21-104](../../crates/hya-tool/src/agents.rs#L21-L104))
+
+### Shell
 
 `shell` and `bash` have distinct advertised names but wrap the same `ShellTool`.
 The schema accepts a command, timeout, working directory, and environment; the
-implementation uses `sh -c`, defaults to 120 seconds, and caps returned command
-output at 16 KiB while saving the full output to a file.
-([crates/hya-tool/src/tool.rs:175-178](../../crates/hya-tool/src/tool.rs#L175-L178),
+implementation uses `sh -c`, defaults to 120 seconds (`DEFAULT_TIMEOUT_MS =
+120_000`), and caps returned command output at 16 KiB while saving the full
+output under `.hya/tool-output/`. An optional `workdir` outside the session
+workdir raises `Action::ExternalDirectory` on `<cwd>/*`.
+([crates/hya-tool/src/tool.rs:262-264](../../crates/hya-tool/src/tool.rs#L262-L264),
 [crates/hya-tool/src/shell.rs:17-65](../../crates/hya-tool/src/shell.rs#L17-L65),
-[crates/hya-tool/src/shell.rs:67-179](../../crates/hya-tool/src/shell.rs#L67-L179))
+[crates/hya-tool/src/shell.rs:67-180](../../crates/hya-tool/src/shell.rs#L67-L180),
+[crates/hya-tool/src/shell.rs:250-261](../../crates/hya-tool/src/shell.rs#L250-L261))
+
+### Webfetch
+
+Parameters: `url` (http/https only), `format` = `text` | `markdown` (default) |
+`html`, and `timeout` in seconds — default 30 s, clamped to a maximum of 120 s.
+Responses larger than 5 MB are rejected. Responses whose content type is
+jpeg/png/gif/webp are returned as base64 data-URI attachments instead of text.
+The tool asserts `Action::WebFetch` on `Resource::Url(url)` and carries
+`ToolPermission::Tool`, so under `permission.model: default` it asks before every
+fetch.
+([crates/hya-tool/src/webfetch/mod.rs:14-164](../../crates/hya-tool/src/webfetch/mod.rs#L14-L164))
+
+### Websearch
+
+Call parameters (in addition to the provider discussion below):
+
+| Parameter | Default / values |
+| --- | --- |
+| `query` | Required. |
+| `numResults` | Default **8** (Exa path). |
+| `livecrawl` | `fallback` (default) \| `preferred`. |
+| `type` | `auto` (default) \| `fast` \| `deep`. |
+| `contextMaxCharacters` | Schema text advertises 10000; the Exa client forwards the field only when the caller supplies it. |
+
+The tool is itself an MCP client: Exa is called at `https://mcp.exa.ai/mcp` with
+the key appended as an `?exaApiKey` query parameter; Parallel at
+`https://search.parallel.ai/mcp` with a bearer token. It asserts
+`Action::WebSearch` on `Resource::WebSearch(query)`.
+([crates/hya-tool/src/websearch.rs:14-16](../../crates/hya-tool/src/websearch.rs#L14-L16),
+[crates/hya-tool/src/websearch.rs:119-234](../../crates/hya-tool/src/websearch.rs#L119-L234))
 
 ### Hidden aliases
 
@@ -74,15 +209,15 @@ Five legacy aliases resolve during execution but do not appear in
 
 This behavior is explicit in registration and covered by a test that requires
 the canonical names to be visible and the aliases to remain hidden.
-([crates/hya-tool/src/tool.rs:178-182](../../crates/hya-tool/src/tool.rs#L178-L182),
+([crates/hya-tool/src/tool.rs:265-269](../../crates/hya-tool/src/tool.rs#L265-L269),
+[crates/hya-tool/src/tool.rs:440-461](../../crates/hya-tool/src/tool.rs#L440-L461),
 [crates/hya-tool/tests/tool.rs:111-146](../../crates/hya-tool/tests/tool.rs#L111-L146))
 
 There is therefore no advertised local-file tool named `search`. The hidden
 name `search` resolves to **web search**, not GREP. Local discovery is exposed
 as `glob`, `find`, and `grep`; provider-backed internet search is advertised as
 `websearch` when enabled.
-([crates/hya-tool/src/tool.rs:158-160](../../crates/hya-tool/src/tool.rs#L158-L160),
-[crates/hya-tool/src/tool.rs:180-181](../../crates/hya-tool/src/tool.rs#L180-L181))
+([crates/hya-tool/src/tool.rs:267-268](../../crates/hya-tool/src/tool.rs#L267-L268))
 
 ## Advertisement and naming
 
@@ -97,8 +232,9 @@ applies an advertisement-only filter:
 - Every other canonical schema passes through.
 
 The tools remain registered even when their schemas are filtered from the
-request.
-([crates/hya-core/src/engine/turn/messages.rs:38-82](../../crates/hya-core/src/engine/turn/messages.rs#L38-L82))
+request. In particular, `apply_patch` is the **only** file-mutation tool
+advertised to gpt-* models under that filter (edit/write are hidden there).
+([crates/hya-core/src/engine/turn/messages.rs:60-76](../../crates/hya-core/src/engine/turn/messages.rs#L60-L76))
 
 ### Why WEBSEARCH was provider-filtered
 
@@ -267,6 +403,32 @@ only `File not found`. The behavior is covered by a focused suggestion test.
 ([crates/hya-tool/src/read.rs:162-199](../../crates/hya-tool/src/read.rs#L162-L199),
 [crates/hya-tool/tests/read_missing.rs:56-77](../../crates/hya-tool/tests/read_missing.rs#L56-L77))
 
+## WRITE
+
+### Schema and validation
+
+The advertised WRITE schema requires `filePath` and `content`; it also lists
+`path` for compatibility. Runtime deserialization stores the path in one optional
+field and accepts `filePath` as an alias (`path` is runtime-only). Provider-side
+schema validation can require `filePath`.
+([crates/hya-tool/src/write.rs:14-44](../../crates/hya-tool/src/write.rs#L14-L44))
+
+Paths use the same lexical workdir resolution as READ. An outside path requires
+`Action::ExternalDirectory` on its parent wildcard (`<parent>/*`) before
+`Action::Edit` on the resolved file
+([crates/hya-tool/src/write.rs:53-59](../../crates/hya-tool/src/write.rs#L53-L59),
+[crates/hya-tool/src/write.rs:98-112](../../crates/hya-tool/src/write.rs#L98-L112)).
+
+### Create, BOM, and post-write processing
+
+Parent directories are created as needed. An existing file's UTF-8 BOM is
+preserved; a BOM present in the incoming content is also propagated (desired BOM
+is source-or-incoming). After the write, the configured formatter runs; if the
+formatter rewrites the file, the BOM is re-synced. The LSP plane is touched and
+diagnostics are appended to the human-readable output and returned under
+`metadata.diagnostics`.
+([crates/hya-tool/src/write.rs:60-95](../../crates/hya-tool/src/write.rs#L60-L95))
+
 ## EDIT
 
 ### Schema and validation
@@ -336,6 +498,48 @@ does not apply a local size cap to the diff or output.
 ([crates/hya-tool/src/edit.rs:126-156](../../crates/hya-tool/src/edit.rs#L126-L156),
 [crates/hya-tool/tests/edit.rs:202-238](../../crates/hya-tool/tests/edit.rs#L202-L238))
 
+## APPLY_PATCH
+
+The parameter is `patchText` (runtime alias `patch`) carrying a Codex/Compat-style
+patch envelope. Supported hunk kinds are **add**, **update**, **delete**, and
+**move**.
+([crates/hya-tool/src/apply_patch/mod.rs:18-47](../../crates/hya-tool/src/apply_patch/mod.rs#L18-L47),
+[crates/hya-tool/src/apply_patch/apply.rs:9-30](../../crates/hya-tool/src/apply_patch/apply.rs#L9-L30))
+
+Every path in the envelope must be relative and must not escape the session
+workdir: an absolute path or a `..` component is an **input error**. Every
+touched path (and move destination) is permission-checked as `Action::Edit`
+**before** any file is written, so a denial leaves the whole patch unapplied.
+([crates/hya-tool/src/apply_patch/mod.rs:57-68](../../crates/hya-tool/src/apply_patch/mod.rs#L57-L68),
+[crates/hya-tool/src/apply_patch/mod.rs:153-183](../../crates/hya-tool/src/apply_patch/mod.rs#L153-L183))
+
+The result is a Compat-style title plus an aggregate diff and per-file metadata.
+After application, the same post-edit formatter + BOM re-sync + LSP-diagnostics
+step as write/edit runs for non-delete paths.
+([crates/hya-tool/src/apply_patch/mod.rs:70-150](../../crates/hya-tool/src/apply_patch/mod.rs#L70-L150))
+
+As noted under advertisement, `apply_patch` is the only file-mutation tool
+advertised to gpt-* models under the `use_patch` filter.
+
+## LSP
+
+Operations (exact `operation` enum values):
+
+`goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`,
+`goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`.
+
+The call takes a file path (`filePath`) plus 1-based `line` and `character`
+(converted to LSP 0-based internally), plus an optional `query` used only by
+`workspaceSymbol`. The tool is `ToolPermission::ReadOnly`. It performs an
+`Action::ExternalDirectory` check for files outside the workdir, then
+`Action::Lsp` on the resolved path. When no language server is registered for the
+file type, the tool returns a tool error whose message is
+`No LSP server available for this file type.`
+([crates/hya-tool/src/lsp.rs:29-125](../../crates/hya-tool/src/lsp.rs#L29-L125),
+[crates/hya-tool/src/lsp.rs:127-144](../../crates/hya-tool/src/lsp.rs#L127-L144),
+[crates/hya-tool/src/lsp_plane.rs:12-40](../../crates/hya-tool/src/lsp_plane.rs#L12-L40),
+[crates/hya-tool/src/tool.rs:539-547](../../crates/hya-tool/src/tool.rs#L539-L547))
+
 ## Local search: GLOB, FIND, and GREP
 
 ### Shared implementation
@@ -344,41 +548,40 @@ GLOB and GREP are in-process Rust implementations; they do not invoke
 `ripgrep`. Their recursive walker uses `std::fs::read_dir`, descends into
 directories, returns files only, and silently skips directories it cannot
 read. Both cap returned rows at `SEARCH_LIMIT == 100`.
-([crates/hya-tool/src/tool.rs:76-76](../../crates/hya-tool/src/tool.rs#L76-L76),
-[crates/hya-tool/src/tool.rs:289-300](../../crates/hya-tool/src/tool.rs#L289-L300))
+([crates/hya-tool/src/tool.rs:130-130](../../crates/hya-tool/src/tool.rs#L130-L130),
+[crates/hya-tool/src/tool.rs:563-574](../../crates/hya-tool/src/tool.rs#L563-L574))
 
 Path/include matching uses the same custom matcher as permission patterns. Its
 only metacharacter is `*`; `?`, character classes, and path-aware `**`
 semantics are not implemented. A pattern is tested against both the relative
 path and basename.
-([crates/hya-tool/src/permission.rs:335-362](../../crates/hya-tool/src/permission.rs#L335-L362),
-[crates/hya-tool/src/tool.rs:312-323](../../crates/hya-tool/src/tool.rs#L312-L323))
+([crates/hya-tool/src/permission.rs:339-362](../../crates/hya-tool/src/permission.rs#L339-L362),
+[crates/hya-tool/src/tool.rs:586-597](../../crates/hya-tool/src/tool.rs#L586-L597))
 
 Both tools resolve a relative `path` against the workdir, require an
 action-specific permission on the pattern, and separately require
 `ExternalDirectory` permission when the search root is outside the workdir.
-([crates/hya-tool/src/tool.rs:325-347](../../crates/hya-tool/src/tool.rs#L325-L347),
-[crates/hya-tool/src/tool.rs:371-390](../../crates/hya-tool/src/tool.rs#L371-L390),
-[crates/hya-tool/src/tool.rs:469-489](../../crates/hya-tool/src/tool.rs#L469-L489))
+([crates/hya-tool/src/tool.rs:599-621](../../crates/hya-tool/src/tool.rs#L599-L621),
+[crates/hya-tool/src/tool.rs:649-664](../../crates/hya-tool/src/tool.rs#L649-L664),
+[crates/hya-tool/src/tool.rs:755-763](../../crates/hya-tool/src/tool.rs#L755-L763))
 
 ### GLOB
 
 GLOB requires `pattern` and optionally accepts a directory `path`, defaulting
 to the workdir. Passing an existing file as `path` is an input error. It walks
 recursively, matches files, sorts full paths lexically, and returns at most 100.
-([crates/hya-tool/src/tool.rs:349-370](../../crates/hya-tool/src/tool.rs#L349-L370),
-[crates/hya-tool/src/tool.rs:371-408](../../crates/hya-tool/src/tool.rs#L371-L408))
+([crates/hya-tool/src/tool.rs:629-717](../../crates/hya-tool/src/tool.rs#L629-L717))
 
 The result contains a relative `title`, count/truncation metadata,
 human-readable absolute-path `output`, workdir-relative legacy `paths`, and the
 pre-truncation `total`. No matches returns `No files found`.
-([crates/hya-tool/src/tool.rs:409-441](../../crates/hya-tool/src/tool.rs#L409-L441),
+([crates/hya-tool/src/tool.rs:706-716](../../crates/hya-tool/src/tool.rs#L706-L716),
 [crates/hya-tool/tests/glob_grep.rs:83-129](../../crates/hya-tool/tests/glob_grep.rs#L83-L129))
 
 `metadata.truncated` is computed as `total >= 100`, so it is true when there are
 exactly 100 matches as well as when additional matches exist. It means the cap
 was reached, not necessarily that a 101st result was found.
-([crates/hya-tool/src/tool.rs:405-408](../../crates/hya-tool/src/tool.rs#L405-L408))
+([crates/hya-tool/src/tool.rs:680-682](../../crates/hya-tool/src/tool.rs#L680-L682))
 
 ### FIND
 
@@ -388,34 +591,34 @@ returns sorted `{path, size}` records. Unlike GLOB, this implementation has no
 100-result cap and does not perform the shared external-directory check. A
 supplied relative `path` is converted directly to `PathBuf`; it is not resolved
 against `ToolCtx.workdir` as GLOB/GREP paths are.
-([crates/hya-tool/src/tool.rs:640-690](../../crates/hya-tool/src/tool.rs#L640-L690))
+([crates/hya-tool/src/tool.rs:920-965](../../crates/hya-tool/src/tool.rs#L920-L965))
 
 ### GREP
 
 GREP requires a non-empty Rust regular expression `pattern`, optionally accepts
 `path`, and optionally filters files with the custom `*`-only `include`
 matcher. Invalid regex syntax is an input error.
-([crates/hya-tool/src/tool.rs:445-475](../../crates/hya-tool/src/tool.rs#L445-L475))
+([crates/hya-tool/src/tool.rs:726-755](../../crates/hya-tool/src/tool.rs#L726-L755))
 
 If `path` identifies a file, GREP intentionally searches that file's **parent
 directory**, not only the named file. The Compat behavior is explicit in code
 and covered by a test where passing `src/main.rs` also returns a match from
 `src/lib.rs`.
-([crates/hya-tool/src/tool.rs:476-500](../../crates/hya-tool/src/tool.rs#L476-L500),
+([crates/hya-tool/src/tool.rs:765-769](../../crates/hya-tool/src/tool.rs#L765-L769),
 [crates/hya-tool/tests/glob_grep.rs:164-187](../../crates/hya-tool/tests/glob_grep.rs#L164-L187))
 
 Files are sorted lexically, decoded with `tokio::fs::read_to_string`, and
 searched line by line. Files that cannot be decoded/read are silently skipped.
 Collection stops immediately at 100 matches, so GREP does not calculate the
 actual total beyond the cap.
-([crates/hya-tool/src/tool.rs:496-523](../../crates/hya-tool/src/tool.rs#L496-L523))
+([crates/hya-tool/src/tool.rs:776-798](../../crates/hya-tool/src/tool.rs#L776-L798))
 
 The result contains the regex as `title`, match-count/truncation metadata,
 grouped human-readable output, structured `{file, line, text}` matches, and a
 `total` equal to the number returned. No matches returns `No files found`.
 As with GLOB, `truncated` becomes true at exactly 100 rows, which signals only
 that collection reached the cap.
-([crates/hya-tool/src/tool.rs:524-579](../../crates/hya-tool/src/tool.rs#L524-L579),
+([crates/hya-tool/src/tool.rs:798-854](../../crates/hya-tool/src/tool.rs#L798-L854),
 [crates/hya-tool/tests/glob_grep.rs:131-162](../../crates/hya-tool/tests/glob_grep.rs#L131-L162))
 
 ## Permissions and execution
@@ -426,8 +629,8 @@ are `ReadOnly`; TASK is `Task`; SHELL and BASH are `Command`; other builtins are
 general `Tool` calls. Read-only/task invocations default to allow, general tool
 invocations default to ask, command invocations extract the command string,
 and MCP invocations use an MCP subject.
-([crates/hya-tool/src/tool.rs:127-141](../../crates/hya-tool/src/tool.rs#L127-L141),
-[crates/hya-tool/src/tool.rs:265-272](../../crates/hya-tool/src/tool.rs#L265-L272),
+([crates/hya-tool/src/tool.rs:184-215](../../crates/hya-tool/src/tool.rs#L184-L215),
+[crates/hya-tool/src/tool.rs:539-547](../../crates/hya-tool/src/tool.rs#L539-L547),
 [crates/hya-tool/tests/tool.rs:148-188](../../crates/hya-tool/tests/tool.rs#L148-L188))
 
 At normal app startup, the action-level snapshot explicitly allows READ, GLOB,
@@ -438,23 +641,37 @@ which remains independently enforceable under `default`/`strict`. Under
 auto-approve unless a snapshot rule explicitly denies them; `danger` bypasses
 checks entirely (including Deny).
 ([crates/hya-app/src/runtime.rs:475-481](../../crates/hya-app/src/runtime.rs#L475-L481),
-[crates/hya-tool/src/permission.rs:496-532](../../crates/hya-tool/src/permission.rs#L496-L532),
-[crates/hya-tool/src/permission.rs:534-570](../../crates/hya-tool/src/permission.rs#L534-L570))
+[crates/hya-tool/src/permission.rs:569-608](../../crates/hya-tool/src/permission.rs#L569-L608))
 
 The engine processes each model tool call by running plugin before-hooks,
 resolving canonical names or aliases, authorizing the invocation, constructing
 `ToolCtx`, executing the tool, and running after-hooks. Permission errors cannot
-be rewritten by an after-hook. Success becomes `Event::ToolResult`; failure
-becomes `Event::ToolError` with a structured error value and display message.
-([crates/hya-core/src/engine.rs:37-50](../../crates/hya-core/src/engine.rs#L37-L50),
-[crates/hya-core/src/engine/turn.rs:199-265](../../crates/hya-core/src/engine/turn.rs#L199-L265),
-[crates/hya-core/src/engine/turn.rs:266-317](../../crates/hya-core/src/engine/turn.rs#L266-L317))
+be rewritten by an after-hook. Success becomes `Event::ToolResult` (after
+`cap_tool_output`); failure becomes `Event::ToolError` with a structured error
+value and display message.
+([crates/hya-core/src/engine/turn.rs:810-865](../../crates/hya-core/src/engine/turn.rs#L810-L865))
 
-Tool errors are categorized as `input`, `permission`, `io`, `json`,
-`cancelled`, or `unknown` and serialized as
-`{"error":{"type":...,"message":...}}` in error events.
-([crates/hya-tool/src/tool.rs:37-51](../../crates/hya-tool/src/tool.rs#L37-L51),
-[crates/hya-core/src/engine/tool_error.rs:4-25](../../crates/hya-core/src/engine/tool_error.rs#L4-L25))
+Tool errors are serialized as `{"error":{"type":...,"message":...}}` with these
+wire `type` strings
+([crates/hya-tool/src/tool.rs:38-64](../../crates/hya-tool/src/tool.rs#L38-L64),
+[crates/hya-core/src/engine/tool_error.rs:17-32](../../crates/hya-core/src/engine/tool_error.rs#L17-L32)):
+
+| Variant | Wire `type` |
+| --- | --- |
+| `Input` | `input` |
+| `Permission` | `permission` |
+| `Io` | `io` |
+| `Json` | `json` |
+| `Cancelled` | `cancelled` |
+| `Overloaded` | `overloaded` |
+| `OperationIdConflict` | `operation_id_conflict` |
+| `OperationAlreadyHandled` | `operation_already_handled` |
+| `UnknownAgentId` | `unknown_agent_id` |
+| `AgentSpawnNotAllowed` | `agent_spawn_not_allowed` |
+| `UnsupportedInlineAgentField` | `unsupported_inline_agent_field` |
+| `Other` | `unknown` |
+
+Only `permission` is protected from rewriting by `tool.execute.after` hooks.
 
 ## Runtime planes and extensions
 
@@ -465,7 +682,7 @@ plus an immutable caller-reachable `AgentDef` roster derived from the bound
 agent's `can_spawn` reachability (not a mutable agent catalog plane). The
 single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
 application wiring does not replace an agent catalog authority.
-([crates/hya-tool/src/tool.rs:71-88](../../crates/hya-tool/src/tool.rs#L71-L88),
+([crates/hya-tool/src/tool.rs:72-89](../../crates/hya-tool/src/tool.rs#L72-L89),
 [crates/hya-tool/src/agents.rs:1-19](../../crates/hya-tool/src/agents.rs#L1-L19),
 [crates/hya-core/src/runtime_registry.rs:18-20](../../crates/hya-core/src/runtime_registry.rs#L18-L20),
 [crates/hya-core/src/runtime_registry.rs:95-96](../../crates/hya-core/src/runtime_registry.rs#L95-L96),
@@ -484,8 +701,8 @@ reports when no server supports a file type.
 ([crates/hya-core/src/engine.rs:68-127](../../crates/hya-core/src/engine.rs#L68-L127),
 [crates/hya-app/src/runtime.rs:489-522](../../crates/hya-app/src/runtime.rs#L489-L522),
 [crates/hya-app/src/runtime.rs:539-542](../../crates/hya-app/src/runtime.rs#L539-L542),
-[crates/hya-tool/src/mailbox.rs:190-194](../../crates/hya-tool/src/mailbox.rs#L190-L194),
-[crates/hya-tool/src/lsp.rs:79-87](../../crates/hya-tool/src/lsp.rs#L79-L87))
+[crates/hya-tool/src/mailbox.rs:208-215](../../crates/hya-tool/src/mailbox.rs#L208-L215),
+[crates/hya-tool/src/lsp.rs:79-88](../../crates/hya-tool/src/lsp.rs#L79-L88))
 
 ### MCP tools
 
@@ -524,7 +741,7 @@ candidate before generation allocation; the previous effective snapshot stays
 active. There is no insertion-order overwrite.
 MCP namespacing reduces MCP collisions, while unnamespaced plugin declarations
 can collide directly with a builtin or another plugin.
-([crates/hya-tool/src/tool.rs:186-200](../../crates/hya-tool/src/tool.rs#L186-L200),
+([crates/hya-tool/src/tool.rs:313-372](../../crates/hya-tool/src/tool.rs#L313-L372),
 [crates/hya-app/src/runtime.rs:463-473](../../crates/hya-app/src/runtime.rs#L463-L473))
 
 ## Verified boundaries
