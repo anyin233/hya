@@ -13,8 +13,10 @@ use serde_json::{Map, Value};
 /// and retain everything else verbatim.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
+    /// Active UI theme name when present.
     #[serde(default)]
     pub theme: Option<String>,
+    /// Remaining config keys retained verbatim.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -22,23 +24,29 @@ pub struct Config {
 /// Envelope delivered over `GET /global/event` (SSE). VERIFIED wire shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalEvent {
+    /// Optional directory scope for the event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
+    /// Optional project payload from the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<Value>,
+    /// Optional workspace payload from the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<Value>,
+    /// Typed event body (`type` + `properties`).
     pub payload: EventPayload,
 }
 
 /// The inner payload of a `GlobalEvent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventPayload {
+    /// Server-assigned event id when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// The discriminant, e.g. `server.connected`, `session.created`, `session.next.text.delta`.
     #[serde(rename = "type")]
     pub kind: String,
+    /// Event-specific JSON properties object.
     #[serde(default)]
     pub properties: Value,
 }
@@ -60,18 +68,24 @@ impl GlobalEvent {
 /// A session (v1 cache shape). Contract shell for W0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
+    /// Session id.
     pub id: String,
+    /// Display title when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Parent session for subagents.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "parentID")]
     pub parent_id: Option<String>,
+    /// Working directory for the session when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
+    /// Remaining session fields retained verbatim.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
 
 impl Session {
+    /// Message id that begins a revert range, if the session is in revert state.
     #[must_use]
     pub fn revert_message_id(&self) -> Option<&str> {
         self.rest.get("revert")?.get("messageID")?.as_str()
@@ -82,14 +96,18 @@ impl Session {
 /// typed fields (store keying + idle/working status); everything else stays in `rest`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    /// Message id.
     pub id: String,
     /// `user` | `assistant` (loose for W0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    /// Owning session id.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "sessionID")]
     pub session_id: Option<String>,
+    /// Created/completed timestamps.
     #[serde(default)]
     pub time: MessageTime,
+    /// Remaining message fields retained verbatim.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -98,8 +116,10 @@ pub struct Message {
 /// (parity: drives idle/working status in the session view).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MessageTime {
+    /// Creation time (unix millis) when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<i64>,
+    /// Completion time (unix millis) when the assistant turn finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed: Option<i64>,
 }
@@ -108,9 +128,12 @@ pub struct MessageTime {
 /// are excluded from default selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
+    /// Agent name / id.
     pub name: String,
+    /// When true, exclude from default picker selection.
     #[serde(default, deserialize_with = "bool_or_null")]
     pub hidden: bool,
+    /// Remaining agent fields (including model) retained verbatim.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
@@ -129,40 +152,59 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Part {
+    /// Visible assistant/user text.
     Text {
+        /// Text body (may stream in via deltas).
         #[serde(default)]
         text: String,
+        /// Remaining part fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Model reasoning/thinking text.
     Reasoning {
+        /// Reasoning body.
         #[serde(default)]
         text: String,
+        /// Remaining part fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// File/media attachment part.
     File {
+        /// Attachment metadata retained verbatim.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Tool invocation part.
     Tool(ToolPart),
+    /// Step boundary start marker.
     StepStart {
+        /// Remaining fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Step boundary finish marker.
     StepFinish {
+        /// Remaining fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Snapshot part.
     Snapshot {
+        /// Remaining fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Patch part.
     Patch {
+        /// Remaining fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Agent-related part.
     Agent {
+        /// Remaining fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
@@ -171,58 +213,79 @@ pub enum Part {
     Unknown,
 }
 
-/// A tool invocation part. The per-tool rendering (14 renderers) is W6; here we
-/// freeze the shape (tool name + lenient state/metadata).
+/// A tool invocation part (tool name + lenient state/metadata).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPart {
+    /// Tool name when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Tool state JSON (pending/running/completed/error shapes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<Value>,
+    /// Remaining tool part fields.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
 
 /// Projected v2 timeline entry produced by the reducer (the `data` cache).
 /// Variants mirror data.tsx: agent-switched, model-switched, user, system,
-/// synthetic, shell, assistant, compaction. Field detail is W2/W6.
+/// synthetic, shell, assistant, compaction.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "variant", rename_all = "kebab-case")]
 pub enum SessionMessage {
+    /// Agent switch marker row.
     AgentSwitched {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Model switch marker row.
     ModelSwitched {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Visible user message row.
     User {
+        /// Local/projected row id.
         id: String,
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// System message row.
     System {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Synthetic/system-generated row.
     Synthetic {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Shell-command row.
     Shell {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Assistant turn row with streamed parts.
     Assistant {
+        /// Local/projected row id.
         id: String,
+        /// Ordered parts on this assistant row.
         #[serde(default)]
         parts: Vec<Part>,
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
+    /// Compaction marker row.
     Compaction {
+        /// Remaining row fields.
         #[serde(flatten)]
         rest: Map<String, Value>,
     },
@@ -293,7 +356,10 @@ mod tests {
 
     #[test]
     fn agents_fixture_yields_a_non_hidden_default() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/agents.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/agents.json"
+        );
         let raw = std::fs::read_to_string(path).expect("fixtures/agents.json missing");
         let agents: Vec<Agent> = serde_json::from_str(&raw).expect("deser agents array");
         assert!(

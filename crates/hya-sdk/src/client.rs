@@ -13,8 +13,14 @@ use crate::types::{Agent, Config, Message, Session};
 /// high-level [`Client`] logic is written ONCE and shared by the HTTP and native backends.
 #[async_trait]
 pub trait Transport: Send + Sync {
+    /// Server origin, e.g. `http://127.0.0.1:4096`.
     fn base_url(&self) -> &str;
+    /// Working directory scoped on every request via [`crate::DIRECTORY_HEADER`].
     fn directory(&self) -> &str;
+    /// Perform one HTTP-style request and return the decoded JSON body (or null).
+    ///
+    /// # Errors
+    /// Implementations map non-2xx and transport failures to [`SdkError`].
     async fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value>;
 }
 
@@ -43,8 +49,10 @@ pub trait Client: Send + Sync {
     /// parts → [`StoredPart`]s). Hydrates the store when switching to a session not streamed live.
     async fn session_messages(&self, session_id: &str) -> Result<Vec<(Message, Vec<StoredPart>)>>;
 
+    /// `GET /session/{id}/todo` — current todo list for the session.
     async fn session_todo(&self, session_id: &str) -> Result<Vec<serde_json::Value>>;
 
+    /// `GET /session/{id}/diff` — file diffs associated with the session.
     async fn session_diff(&self, session_id: &str) -> Result<Vec<serde_json::Value>>;
 
     /// `GET /agent` — list configured agents (default selection + agent switch dialog).
@@ -65,6 +73,7 @@ pub trait Client: Send + Sync {
     /// none). Fetched in the background like [`Client::commands`].
     async fn models(&self) -> Result<Vec<(String, String, String, i64, Vec<String>)>>;
 
+    /// `GET /mcp` — MCP servers as `(name, status)` tuples.
     async fn mcp_status(&self) -> Result<Vec<(String, String)>>;
 
     /// `GET /lsp` — configured language servers as `(id, root, status)` tuples. Status is
@@ -157,6 +166,7 @@ pub struct ApiClient<T: Transport> {
 }
 
 impl<T: Transport> ApiClient<T> {
+    /// Wrap an arbitrary transport as a high-level client.
     pub fn with_transport(transport: T) -> Self {
         Self { transport }
     }
@@ -225,11 +235,13 @@ impl Transport for HttpTransport {
 pub type HttpClient = ApiClient<HttpTransport>;
 
 impl HttpClient {
+    /// Client with a default `reqwest` stack for `base_url` and directory scope.
     #[must_use]
     pub fn new(base_url: impl Into<String>, directory: impl Into<String>) -> Self {
         Self::with_http(reqwest::Client::new(), base_url, directory)
     }
 
+    /// Client using a caller-provided `reqwest::Client` (timeouts, proxies, etc.).
     #[must_use]
     pub fn with_http(
         http: reqwest::Client,

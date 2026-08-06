@@ -18,12 +18,16 @@ const MESSAGE_CAP: usize = 100;
 /// so `binary_search` never pays a map lookup per compare).
 #[derive(Debug, Clone)]
 pub struct StoredPart {
+    /// Part id from the wire.
     pub id: String,
+    /// Owning message id (`messageID` on the wire).
     pub message_id: String,
+    /// Decoded part payload.
     pub inner: Part,
 }
 
 impl StoredPart {
+    /// Decode a part JSON object that carries `id` and `messageID`.
     #[must_use]
     pub fn from_value(value: &Value) -> Option<Self> {
         let id = value.get("id")?.as_str()?.to_string();
@@ -60,13 +64,20 @@ pub struct MemberProjection {
 /// id-sorted. Backend IDs are ULID-like (time-prefixed), so lexical order is chronological.
 #[derive(Debug, Default)]
 pub struct MessageStore {
+    /// Session id → id-sorted messages.
     pub messages: HashMap<String, Vec<Message>>,
+    /// Message id → id-sorted parts.
     pub parts: HashMap<String, Vec<StoredPart>>,
+    /// Session id → latest session info.
     pub sessions: HashMap<String, Session>,
     session_working: HashMap<String, bool>,
+    /// Session id → todo JSON rows.
     pub todos: HashMap<String, Vec<Value>>,
+    /// Session id → diff JSON rows.
     pub diffs: HashMap<String, Vec<Value>>,
+    /// Session id → pending permission request JSON.
     pub permissions: HashMap<String, Vec<Value>>,
+    /// Session id → pending question request JSON.
     pub questions: HashMap<String, Vec<Value>>,
     /// Subagents spawned by parent session, folded from member lifecycle events.
     pub members: HashMap<String, Vec<MemberProjection>>,
@@ -355,16 +366,19 @@ impl MessageStore {
         &mut list[last]
     }
 
+    /// Todo list for `session_id`, or empty slice.
     #[must_use]
     pub fn todos(&self, session_id: &str) -> &[Value] {
         self.todos.get(session_id).map_or(&[][..], Vec::as_slice)
     }
 
+    /// Diff list for `session_id`, or empty slice.
     #[must_use]
     pub fn diffs(&self, session_id: &str) -> &[Value] {
         self.diffs.get(session_id).map_or(&[][..], Vec::as_slice)
     }
 
+    /// Pending permission requests for `session_id`, or empty slice.
     #[must_use]
     pub fn permissions(&self, session_id: &str) -> &[Value] {
         self.permissions
@@ -372,6 +386,7 @@ impl MessageStore {
             .map_or(&[][..], Vec::as_slice)
     }
 
+    /// Pending question requests for `session_id`, or empty slice.
     #[must_use]
     pub fn questions(&self, session_id: &str) -> &[Value] {
         self.questions
@@ -423,11 +438,13 @@ impl MessageStore {
         }
     }
 
+    /// Latest session info for `session_id`, if known.
     #[must_use]
     pub fn session(&self, session_id: &str) -> Option<&Session> {
         self.sessions.get(session_id)
     }
 
+    /// Child sessions whose `parent_id` is `parent_id`, sorted by id.
     #[must_use]
     pub fn child_sessions(&self, parent_id: &str) -> Vec<&Session> {
         let mut children: Vec<&Session> = self
@@ -439,6 +456,7 @@ impl MessageStore {
         children
     }
 
+    /// Whether the session is treated as busy (explicit flag or incomplete last message).
     #[must_use]
     pub fn is_working(&self, session_id: &str) -> bool {
         if let Some(working) = self.session_working.get(session_id) {
@@ -454,6 +472,7 @@ impl MessageStore {
         }
     }
 
+    /// Insert or replace a message, keeping the session list id-sorted and capped.
     pub fn upsert_message(&mut self, message: Message) {
         let Some(session_id) = message.session_id.clone() else {
             return;
@@ -466,6 +485,7 @@ impl MessageStore {
         self.enforce_cap(&session_id);
     }
 
+    /// Insert or replace a part under its message id, id-sorted.
     pub fn upsert_part(&mut self, part: StoredPart) {
         let list = self.parts.entry(part.message_id.clone()).or_default();
         match list.binary_search_by(|p| p.id.as_str().cmp(&part.id)) {
@@ -916,7 +936,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/live_session_turn.jsonl"
         );
-        let raw = std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
+        let raw =
+            std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
         let mut store = MessageStore::default();
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
             let event: GlobalEvent = serde_json::from_str(line).expect("parse fixture line");
