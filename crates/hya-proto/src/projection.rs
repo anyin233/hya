@@ -19,18 +19,30 @@ use crate::message::{
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 
+/// Folded view of one session's transcript and metadata (not the team mailbox).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionProjection {
+    /// Session id once `SessionCreated` has been applied.
     pub id: Option<SessionId>,
+    /// Parent session for subagent lineage (toward team root).
     pub parent: Option<SessionId>,
+    /// Current agent binding.
     pub agent: Option<AgentName>,
+    /// Current model binding.
     pub model: Option<ModelRef>,
+    /// Absolute workdir for tools.
     pub workdir: Option<String>,
+    /// Display title when set.
     pub title: Option<String>,
+    /// Opaque session metadata object.
     pub metadata: Option<serde_json::Value>,
+    /// Full permission rule list (last `SessionPermissionSet` wins).
     pub permission: Option<Vec<serde_json::Value>>,
+    /// Archive stamp when archived.
     pub archived: Option<serde_json::Number>,
+    /// Share URL when shared; `None` after clear.
     pub share: Option<String>,
+    /// Ordered transcript messages.
     pub messages: Vec<MessageProjection>,
     /// Subagents spawned by this session, folded from member lifecycle events.
     /// Empty for sessions that never spawned subagents.
@@ -43,55 +55,85 @@ pub struct SessionProjection {
 /// can be assembled cheaply by joining `child` links across sessions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MemberProjection {
+    /// Member id on the parent log.
     pub member: MemberId,
+    /// Child session when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child: Option<SessionId>,
+    /// Subagent type / agent name for the spawn.
     pub subagent_type: AgentName,
+    /// Short task description from spawn.
     pub description: String,
+    /// Depth in the subagent tree.
     pub depth: u32,
+    /// Latest lifecycle status.
     pub status: MemberRunStatus,
+    /// Bounded finish summary (never the full child transcript).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
 }
 
+/// One message row in a folded session transcript.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageProjection {
+    /// Message id.
     pub id: MessageId,
+    /// Speaker role.
     pub role: Role,
+    /// Runtime snapshot generation from `TurnBindingRecorded` (assistant turns).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_generation: Option<ConfigGeneration>,
+    /// Finish reason when the message is closed.
     pub finish: Option<FinishReason>,
+    /// Usage recorded on `MessageFinished`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsage>,
+    /// Prompt file attachments from `UserPromptContextRecorded`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<serde_json::Value>,
+    /// Prompt agent mentions from `UserPromptContextRecorded`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<serde_json::Value>,
+    /// Ordered content parts (text / reasoning / tool only — no media).
     pub parts: Vec<PartProjection>,
 }
 
+/// Projected content part (wire tag `kind`). No media variant — media does not survive fold.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PartProjection {
+    /// Accumulated plain text.
     Text {
+        /// Part id.
         id: PartId,
+        /// Full text so far.
         text: String,
     },
+    /// Accumulated reasoning plus optional provider blob.
     Reasoning {
+        /// Part id.
         id: PartId,
+        /// Full reasoning text so far.
         text: String,
+        /// Opaque provider state to round-trip on the next request.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_data: Option<serde_json::Value>,
     },
+    /// Tool call with streaming state.
     Tool {
+        /// Part id.
         id: PartId,
+        /// Tool call id.
         call: ToolCallId,
+        /// Canonical tool name.
         name: ToolName,
+        /// Current tool phase and payloads.
         state: ToolPartState,
     },
 }
 
 impl PartProjection {
+    /// Stable part id shared by all variants.
     #[must_use]
     pub fn id(&self) -> PartId {
         match self {
@@ -129,8 +171,10 @@ pub struct TeamProjection {
 /// to it (independent of who was subscribed when).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelProjection {
+    /// Current subscriber handles (no leading `#`).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub members: BTreeSet<String>,
+    /// Full ordered log of posts to this channel.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log: Vec<MailMessage>,
 }
@@ -138,10 +182,14 @@ pub struct ChannelProjection {
 /// A single delivered message as folded into an inbox / channel log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MailMessage {
+    /// Sender handle.
     pub from: String,
+    /// Original address (handle or channel).
     pub to: MailEndpoint,
+    /// Chatter vs announcement.
     #[serde(default)]
     pub kind: MailKind,
+    /// Message body.
     pub body: String,
 }
 
@@ -153,8 +201,11 @@ pub struct MailMessage {
 /// Phase 4 replay as transient, idle, and task-less.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
+    /// Stable team-scoped handle (mail address and UI label).
     pub handle: String,
+    /// Agent's own session id.
     pub session: SessionId,
+    /// Declared agent type for display.
     #[serde(default)]
     pub agent_type: AgentName,
     /// Transient vs resident scheduling (from `AgentRegistered`).
@@ -175,9 +226,12 @@ pub struct RosterEntry {
     pub resident_work: Option<ResidentWorkProjection>,
 }
 
+/// In-flight resident turn boundary folded from `ResidentWorkStarted`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResidentWorkProjection {
+    /// Actor epoch that started this work.
     pub epoch: ActorEpoch,
+    /// Inbox length covered by the coalesced turn (cursor advances on terminal/idle).
     pub inbox_through: u64,
 }
 
@@ -185,13 +239,16 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+/// Full folded view: one session transcript plus optional team mailbox/roster state.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
+    /// Session transcript and metadata.
     pub session: SessionProjection,
     /// Team-scoped mailbox/channel/roster state. Empty on sessions that are not a
     /// team root / carry no mail events.
     #[serde(default, skip_serializing_if = "team_is_empty")]
     pub team: TeamProjection,
+    /// Highest durable `EventSeq` applied; live `seq == 0` does not advance this.
     pub last_seq: u64,
 }
 
@@ -200,6 +257,7 @@ fn team_is_empty(team: &TeamProjection) -> bool {
 }
 
 impl Projection {
+    /// Fold a slice of envelopes in order into a fresh projection.
     #[must_use]
     pub fn from_events(envs: &[Envelope]) -> Self {
         let mut p = Self::default();
@@ -209,6 +267,8 @@ impl Projection {
         p
     }
 
+    /// Apply one envelope: `seq == 0` is live-only (no `last_seq` advance);
+    /// `seq <= last_seq` is a durable no-op; otherwise fold and advance `last_seq`.
     pub fn apply(&mut self, env: &Envelope) {
         if env.seq.0 == 0 {
             self.apply_event(&env.event);

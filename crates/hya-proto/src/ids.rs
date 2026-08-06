@@ -5,12 +5,16 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 macro_rules! uuid_id {
-    ($name:ident, $prefix:literal) => {
+    ($name:ident, $prefix:literal, $doc:expr) => {
+        #[doc = $doc]
         #[derive(
             Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
         )]
         #[serde(transparent)]
-        pub struct $name(pub Uuid);
+        pub struct $name(
+            /// Underlying UUIDv7 (or rehydrated UUID) for this id.
+            pub Uuid,
+        );
 
         impl $name {
             /// Mint a fresh, time-ordered (v7) id.
@@ -18,10 +22,12 @@ macro_rules! uuid_id {
             pub fn new() -> Self {
                 Self(Uuid::now_v7())
             }
+            /// Wrap an existing UUID (tests, storage rehydration).
             #[must_use]
             pub fn from_uuid(u: Uuid) -> Self {
                 Self(u)
             }
+            /// Borrow the underlying UUID.
             #[must_use]
             pub fn as_uuid(&self) -> Uuid {
                 self.0
@@ -67,7 +73,9 @@ enum SessionIdRepr {
     Uuid(Uuid),
 }
 
+/// Display/storage prefix for new session ids (`hysec_` + 20 alphanumeric chars).
 pub const HYSEC_PREFIX: &str = "hysec_";
+/// Length of the random suffix after [`HYSEC_PREFIX`].
 pub const HYSEC_SUFFIX_LEN: usize = 20;
 const HYSEC_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -227,23 +235,29 @@ fn fill_os_random(dest: &mut [u8]) {
     OsRng.unwrap_err().fill_bytes(dest);
 }
 
-uuid_id!(MessageId, "msg");
-uuid_id!(PartId, "part");
-uuid_id!(ToolCallId, "tc");
+uuid_id!(MessageId, "msg", "Transcript message id (`msg_` + UUIDv7).");
+uuid_id!(PartId, "part", "Content part id within a message (`part_` + UUIDv7).");
+uuid_id!(ToolCallId, "tc", "Tool-call correlation id (`tc_` + UUIDv7).");
 
 /// Monotonic identity of one immutable runtime configuration snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ConfigGeneration(u64);
+pub struct ConfigGeneration(
+    /// Monotonic generation counter starting at [`ConfigGeneration::INITIAL`].
+    u64,
+);
 
 impl ConfigGeneration {
+    /// First generation value after process start / empty registry (`1`).
     pub const INITIAL: Self = Self(1);
 
+    /// Raw generation counter.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
+    /// Next generation, or `None` on overflow.
     #[must_use]
     pub const fn checked_next(self) -> Option<Self> {
         match self.0.checked_add(1) {
@@ -260,16 +274,22 @@ impl ConfigGeneration {
 /// turn's retained runtime snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ActorEpoch(u64);
+pub struct ActorEpoch(
+    /// Monotonic incarnation counter starting at [`ActorEpoch::INITIAL`].
+    u64,
+);
 
 impl ActorEpoch {
+    /// First epoch for a newly claimed resident (`1`).
     pub const INITIAL: Self = Self(1);
 
+    /// Raw epoch counter.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
+    /// Next epoch, or `None` on overflow.
     #[must_use]
     pub const fn checked_next(self) -> Option<Self> {
         match self.0.checked_add(1) {
@@ -278,6 +298,7 @@ impl ActorEpoch {
         }
     }
 
+    /// Rehydrate an epoch previously written to SQLite.
     #[must_use]
     pub const fn from_storage(value: u64) -> Self {
         Self(value)
@@ -289,19 +310,25 @@ impl ActorEpoch {
 /// This type is intentionally not serializable: it is an internal execution
 /// capability component, not part of the public event or API wire protocol.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct OwnerRunId(Uuid);
+pub struct OwnerRunId(
+    /// Random per-process owner UUID.
+    Uuid,
+);
 
 impl OwnerRunId {
+    /// Mint a random per-process owner identity for a claim.
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 
+    /// Rehydrate an owner id from durable claim storage.
     #[must_use]
     pub const fn from_storage(value: Uuid) -> Self {
         Self(value)
     }
 
+    /// Underlying UUID for storage and comparison.
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
         self.0
@@ -317,8 +344,11 @@ impl Default for OwnerRunId {
 /// Internal, non-wire capability for one resident actor incarnation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActorClaim {
+    /// Stable resident session identity.
     pub actor_id: SessionId,
+    /// Current incarnation; stale when the stored epoch advanced.
     pub epoch: ActorEpoch,
+    /// Process that currently owns the active claim.
     pub owner_run_id: OwnerRunId,
 }
 
@@ -328,11 +358,15 @@ pub struct ActorClaim {
 /// domain. There is exactly one operation identity for a given tool call; it
 /// is never minted independently.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct OperationId(Uuid);
+pub struct OperationId(
+    /// Namespace-derived UUID for this tool-call operation.
+    Uuid,
+);
 
 const OPERATION_ID_NAMESPACE: Uuid = Uuid::from_u128(0x8b2f_3e1c_ec18_5a5f_8d8d_95f3_d6e3_c1b7);
 
 impl OperationId {
+    /// Derive the single durable operation id for a tool call (v5 namespace).
     #[must_use]
     pub fn from_tool_call(source: ToolCallId) -> Self {
         Self(Uuid::new_v5(
@@ -341,6 +375,7 @@ impl OperationId {
         ))
     }
 
+    /// Underlying UUID written to the admission journal.
     #[must_use]
     pub fn as_uuid(&self) -> Uuid {
         self.0
@@ -360,12 +395,12 @@ impl std::fmt::Display for OperationId {
     }
 }
 
-uuid_id!(TeamRunId, "team");
-uuid_id!(MemberId, "mbr");
-uuid_id!(GoalId, "goal");
-uuid_id!(LoopRunId, "loop");
-uuid_id!(PermissionRequestId, "perm");
-uuid_id!(QuestionRequestId, "q");
+uuid_id!(TeamRunId, "team", "Team-run identity (`team_` + UUIDv7).");
+uuid_id!(MemberId, "mbr", "Subagent member id on a parent log (`mbr_` + UUIDv7).");
+uuid_id!(GoalId, "goal", "Goal-mode run id (`goal_` + UUIDv7).");
+uuid_id!(LoopRunId, "loop", "Loop-mode run id (`loop_` + UUIDv7).");
+uuid_id!(PermissionRequestId, "perm", "Pending permission request id (`perm_` + UUIDv7).");
+uuid_id!(QuestionRequestId, "q", "Pending user-question request id (`q_` + UUIDv7).");
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -454,7 +489,13 @@ mod tests {
     }
 }
 
-/// Monotonic per-session event sequence (the `event_log.seq` rowid).
+/// Globally monotonic `event_log` AUTOINCREMENT rowid (not per-session).
+///
+/// Gaps within one session are normal. `0` is reserved for live-only publishes
+/// that are never persisted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct EventSeq(pub u64);
+pub struct EventSeq(
+    /// Raw sequence number (`0` = live-only sentinel).
+    pub u64,
+);
