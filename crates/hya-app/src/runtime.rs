@@ -3413,6 +3413,18 @@ fn spawn_team_supervisor_with_environment(
                 // handlers; a closed intake must drain already-admitted work to
                 // completion, or its reply oneshot is dropped and the caller sees
                 // a spurious `SpawnError::Unavailable`.
+                //
+                // The drain below deliberately does not watch `stop_child`. That is
+                // safe only because of the spawn-intake liveness invariant recorded
+                // at the `with_spawn_sender` call site: in production the engine
+                // owns the sender and this task owns an `Arc<SessionEngine>`, so a
+                // closed intake is unreachable and this branch is entered only via
+                // cancellation, which has already aborted the handlers. The closed
+                // -intake path is exercised only by the `spawn_team_supervisor`
+                // test helper. Were intake ever able to close with handlers in
+                // flight, a later `shutdown()` would block here rather than abort --
+                // `fail_after_claim` can park on `std::future::pending::<()>()` --
+                // so that invariant must be rechecked before changing this.
                 if stop_child.is_cancelled() {
                     foreground_handlers.abort_all();
                 }
@@ -3981,6 +3993,25 @@ async fn build_session_engine_with_mcp_defer(
         .with_formatter(formatter_config::load_plane())
         .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
+        // INVARIANT (spawn-intake liveness): the engine *owns* this sender for its
+        // whole life -- `SessionEngine::spawner` is a plain field, only ever set by
+        // this builder, never taken back out -- and the team supervisor spawned
+        // below holds an `Arc<SessionEngine>` for as long as it runs. Therefore the
+        // supervisor's `rx.recv()` can never observe a closed intake: the last
+        // sender cannot drop while a receiver-owning task is still alive.
+        //
+        // That invariant is load-bearing. The supervisor's drain branch (see
+        // `spawn_team_supervisor_with_environment`) waits for in-flight foreground
+        // handlers without watching `stop_child`, which is only safe because a
+        // `None` from `rx.recv()` is unreachable in production; today it is reached
+        // only from the `spawn_team_supervisor` test helper, which hands the
+        // receiver to a supervisor that does not own the sender. A handler stuck in
+        // `fail_after_claim`'s `std::future::pending::<()>()` would otherwise make
+        // `shutdown()` hang forever instead of aborting.
+        //
+        // If this ownership ever changes -- engine holding a `Weak`, the sender
+        // moving out of the engine, or the supervisor stopping holding the engine
+        // -- the drain branch must be made stop-aware in the same change.
         .with_spawn_sender(spawn_sender)
         .with_mailbox(mailbox)
         .with_governor(governor);
