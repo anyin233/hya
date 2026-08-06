@@ -1,3 +1,5 @@
+//! Subagent spawn plane: request transport used by the `task` tool.
+
 use std::sync::Arc;
 
 use hya_proto::SessionId;
@@ -8,11 +10,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{AgentDef, tool::ToolOperation};
 
+/// One member of a `task` spawn request.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SpawnMember {
+    /// Short label for UI and mail.
     pub description: String,
+    /// Work prompt for the child agent.
     pub prompt: String,
+    /// Agent id / subagent type to spawn.
     pub subagent_type: String,
+    /// Optional existing subagent session to resume.
     pub task_id: Option<String>,
     /// Spawn-time explicit model override (highest precedence). `None`/empty
     /// defers down the Bundle definition / request-overlay model chain.
@@ -50,50 +57,86 @@ pub struct InlineAgent {
     pub resident: Option<bool>,
 }
 
+/// Result for one spawned member after the host finishes (or admits) the spawn.
 #[derive(Clone, Debug)]
 pub struct MemberOutcome {
+    /// Member label echoed from the request.
     pub member: String,
+    /// Child session id as a string.
     pub session: String,
+    /// Lifecycle status string (`done`, `failed`, …).
     pub status: String,
+    /// Short summary text for the parent tool result.
     pub summary: String,
 }
 
+/// Host-bound request carrying parent context and a reply channel.
 pub struct SpawnRequest {
+    /// Parent session that owns the spawn.
     pub parent: SessionId,
+    /// Authorized agent roster for `can_spawn` checks.
     pub agents: Arc<[AgentDef]>,
     /// Immutable triggering-turn guidance captured by the parent turn.
     /// Request-scoped Arc clone only; never discovered on the child workdir.
     pub guidance: Option<Arc<str>>,
+    /// Operation identity of the triggering tool call.
     pub operation: ToolOperation,
+    /// Members to spawn.
     pub members: Vec<SpawnMember>,
+    /// Cancellation for the spawn work.
     pub cancel: CancellationToken,
+    /// When true, host should not block the tool on completion.
     pub background: bool,
+    /// Reply with per-member outcomes or a spawn error.
     pub reply: oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>,
 }
 
+/// Failure admitting or running a spawn request.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum SpawnError {
+    /// Plane has no session or the sink is gone.
     #[error("spawner channel unavailable")]
     Unavailable,
+    /// Admission queue is full.
     #[error("spawn admission overloaded")]
     Overloaded,
+    /// Operation id conflicts with an in-flight claim.
     #[error("OPERATION_ID_CONFLICT")]
     OperationIdConflict,
+    /// Operation id was already completed.
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    /// Cancelled before the child activated.
     #[error("spawn cancelled before activation")]
     Cancelled,
+    /// Unknown agent type relative to the roster.
     #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
-    UnknownAgentId { agent_id: String },
+    UnknownAgentId {
+        /// Requested agent id.
+        agent_id: String,
+    },
+    /// Roster forbids this caller/target pair.
     #[error("AGENT_SPAWN_NOT_ALLOWED: `{caller}` cannot spawn `{agent_id}`")]
-    AgentSpawnNotAllowed { caller: String, agent_id: String },
+    AgentSpawnNotAllowed {
+        /// Calling agent id.
+        caller: String,
+        /// Target agent id.
+        agent_id: String,
+    },
+    /// Inline overlay field not supported by the host.
     #[error("UNSUPPORTED_INLINE_AGENT_FIELD: `{field}`")]
-    UnsupportedInlineAgentField { field: &'static str },
+    UnsupportedInlineAgentField {
+        /// Unsupported field name.
+        field: &'static str,
+    },
 }
 
+/// Non-blocking sink error when enqueueing a [`SpawnRequest`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpawnRequestSendError {
+    /// Bounded queue is full.
     Full,
+    /// Receiver dropped.
     Closed,
 }
 
@@ -103,6 +146,12 @@ pub enum SpawnRequestSendError {
 /// Tokio channel. Runtime owners can supply a typed sink that enriches the
 /// request without introducing a dependency from `hya-tool` back to them.
 pub trait SpawnRequestSink: Send + Sync {
+    /// Hand `request` to the runtime without blocking.
+    ///
+    /// Returns [`SpawnRequestSendError::Full`] when the sink is at capacity and
+    /// [`SpawnRequestSendError::Closed`] once the receiving runtime is gone. Both
+    /// are non-fatal to the caller: the `task` tool surfaces them as a tool error
+    /// rather than tearing down the session.
     fn try_send(&self, request: SpawnRequest) -> Result<(), SpawnRequestSendError>;
 }
 
@@ -119,6 +168,7 @@ impl SpawnRequestSink for ChannelSpawnRequestSink {
     }
 }
 
+/// Session-scoped facade tools use to request subagent spawns.
 #[derive(Clone)]
 pub struct SpawnerPlane {
     sink: Arc<dyn SpawnRequestSink>,
@@ -138,6 +188,7 @@ impl SpawnerPlane {
         Self::with_capacity(1)
     }
 
+    /// Create a channel-backed plane with the given admission capacity.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> (Self, mpsc::Receiver<SpawnRequest>) {
         let capacity = capacity.clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
@@ -157,6 +208,7 @@ impl SpawnerPlane {
         }
     }
 
+    /// Scope spawns to a parent session (roster empty until set).
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
         let mut plane = self.clone();
@@ -189,6 +241,10 @@ impl SpawnerPlane {
         plane
     }
 
+    /// Spawn members and wait for host outcomes (foreground).
+    ///
+    /// # Errors
+    /// Returns [`SpawnError`] when admission fails or the host reports an error.
     pub async fn spawn(
         &self,
         operation: ToolOperation,
@@ -198,6 +254,10 @@ impl SpawnerPlane {
         self.spawn_inner(operation, members, cancel, false).await
     }
 
+    /// Spawn members with `background = true` (host may return early).
+    ///
+    /// # Errors
+    /// Returns [`SpawnError`] when admission fails or the host reports an error.
     pub async fn spawn_background(
         &self,
         operation: ToolOperation,

@@ -1,21 +1,32 @@
+//! User-facing formatter configuration shapes.
+
 use std::collections::BTreeMap;
 
 use crate::formatter_catalog::{BuiltinSpec, CheckKind, builtins};
 use crate::formatter_command::builtin_environment;
 
+/// How the formatter plane chooses which formatters to run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum FormatterConfig {
+    /// No formatters run.
     #[default]
     Disabled,
+    /// Built-in language formatters only.
     Builtins,
+    /// Merge custom entries over the builtin set.
     Custom(BTreeMap<String, FormatterEntry>),
 }
 
+/// One named formatter override in a custom config map.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FormatterEntry {
+    /// When true, remove this formatter from the active set.
     pub disabled: bool,
+    /// Explicit argv; when set, runs instead of the builtin probe.
     pub command: Option<Vec<String>>,
+    /// Extra environment variables for the command.
     pub environment: BTreeMap<String, String>,
+    /// File extensions this formatter owns (with leading dots).
     pub extensions: Option<Vec<String>>,
 }
 

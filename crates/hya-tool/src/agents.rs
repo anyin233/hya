@@ -11,6 +11,7 @@ use crate::tool::{Tool, ToolCtx, ToolError};
 pub struct AgentDef {
     /// The `subagent_type` value to pass to the `task` tool.
     pub name: String,
+    /// Optional human-readable description for the model listing.
     pub description: Option<String>,
     /// Logical model category from the bound Bundle definition, if any.
     pub category: Option<String>,

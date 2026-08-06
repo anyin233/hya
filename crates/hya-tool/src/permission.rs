@@ -1,3 +1,14 @@
+//! Allow/ask/deny authorization for tool invocations and resource access.
+//!
+//! Two layers cooperate:
+//! 1. **Invocation policy** — regex rules over tool / MCP / shell command subjects
+//!    evaluated once before execution ([`InvocationPolicy`]).
+//! 2. **Resource rules** — action + wildcard pattern last-match-wins rules used
+//!    by tools mid-execution ([`PermissionRules`] / [`PermissionPlane::assert`]).
+//!
+//! Call-scoped grants from a successful invocation authorize later resource
+//! checks **except** [`Action::ExternalDirectory`], which always re-evaluates.
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -9,39 +20,69 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+/// Resource operation category used by legacy rules and user-facing asks.
+///
+/// Serialized lowercase in saved-permission rows (`read`, `edit`, …).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
+    /// Invocation-level native tool subject (generic tool call).
     Tool,
+    /// Read file/directory contents (`read`, `ls`).
     Read,
+    /// Mutate file contents (`write`, `edit`, `apply_patch`).
     Edit,
+    /// Path pattern search (`glob`, `find`).
     Glob,
+    /// Content regex search (`grep`).
     Grep,
+    /// Shell command execution (`shell`, `bash`).
     Bash,
+    /// Subagent spawn (`task`).
     Task,
+    /// MCP tool call (`mcp__…`).
     Mcp,
+    /// HTTP(S) fetch (`webfetch`).
     WebFetch,
+    /// Provider-backed web search (`websearch`).
     WebSearch,
+    /// Session todo list replace (`todowrite`).
     TodoWrite,
+    /// Load a skill by name (`skill`).
     Skill,
+    /// Language-server query (`lsp`).
     Lsp,
+    /// Path outside the session workdir trust boundary (never covered by call grant).
     ExternalDirectory,
 }
 
+/// Object of a resource-level permission check.
+///
+/// Flattened via [`Resource::pattern`] for `*` wildcard matching.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Resource {
+    /// Tool name for invocation-level tool subjects.
     Tool(String),
+    /// Resolved filesystem path (display form).
     Path(String),
+    /// Glob or grep pattern string.
     Glob(String),
+    /// Shell command text, or namespaced MCP tool name.
     Command(String),
+    /// Subagent / agent type id.
     Subagent(String),
+    /// Fetched URL.
     Url(String),
+    /// Web-search query string.
     WebSearch(String),
+    /// Skill name.
     Skill(String),
+    /// Matches every pattern (`pattern()` → `"*"`); used for whole-action grants.
     Any,
 }
 
 impl Resource {
+    /// Single string used by the `*` wildcard rule matcher.
     #[must_use]
     pub fn pattern(&self) -> String {
         match self {
@@ -58,39 +99,57 @@ impl Resource {
     }
 }
 
+/// Outcome of evaluating a permission rule for a subject or resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// Proceed without prompting.
     Allow,
+    /// Prompt the user (or interceptor) unless a remembered grant applies.
     Ask,
+    /// Hard reject; authoritative even after invocation approval when explicit.
     Deny,
 }
 
+/// Invocation-layer global model controlling how unmapped tools behave.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionModel {
+    /// Auto-approve remaining resource checks (explicit deny still wins).
     Allow,
+    /// Use last matching rule and tool-class fallback (read-only allow, else ask).
     #[default]
     Default,
+    /// Ask unless deny or an exact remembered grant exists.
     Strict,
+    /// Bypass invocation and resource checks entirely (including deny).
     Danger,
 }
 
+/// Domain of an invocation subject matched by regex rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionTarget {
+    /// Canonical or plugin tool name.
     Tool,
+    /// Namespaced MCP tool name.
     Mcp,
+    /// Full shell command string after before-hooks.
     Command,
 }
 
+/// One ordered invocation regex rule before compilation into [`InvocationPolicy`].
 #[derive(Clone, Debug)]
 pub struct InvocationRule {
+    /// Which subject domain this selector applies to.
     pub target: PermissionTarget,
+    /// Rust regular expression over the subject value.
     pub selector: String,
+    /// Mode when this rule is the last match.
     pub permission: Mode,
 }
 
 impl InvocationRule {
+    /// Construct an uncompiled rule.
     #[must_use]
     pub fn new(target: PermissionTarget, selector: impl Into<String>, permission: Mode) -> Self {
         Self {
@@ -101,13 +160,17 @@ impl InvocationRule {
     }
 }
 
+/// Exact invocation subject used for native "allow always" grants.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExactSubject {
+    /// Domain of the subject.
     pub target: PermissionTarget,
+    /// Concrete name or command string.
     pub value: String,
 }
 
 impl ExactSubject {
+    /// Build an exact subject for grant storage and ask coalescing.
     #[must_use]
     pub fn new(target: PermissionTarget, value: impl Into<String>) -> Self {
         Self {
@@ -125,6 +188,7 @@ impl ExactSubject {
     }
 }
 
+/// Subjects presented to the invocation evaluator for one tool call.
 #[derive(Clone, Debug)]
 pub struct Invocation {
     subjects: Vec<ExactSubject>,
@@ -133,6 +197,7 @@ pub struct Invocation {
 }
 
 impl Invocation {
+    /// Single tool subject with the given classification fallback mode.
     #[must_use]
     pub fn tool(name: impl Into<String>, fallback: Mode) -> Self {
         let primary = ExactSubject::new(PermissionTarget::Tool, name);
@@ -143,6 +208,7 @@ impl Invocation {
         }
     }
 
+    /// MCP tool subject; fallback is always ask.
     #[must_use]
     pub fn mcp(name: impl Into<String>) -> Self {
         let primary = ExactSubject::new(PermissionTarget::Mcp, name);
@@ -153,6 +219,7 @@ impl Invocation {
         }
     }
 
+    /// Shell invocation: matches both tool name and full command string.
     #[must_use]
     pub fn command(tool: impl Into<String>, command: impl Into<String>) -> Self {
         let primary = ExactSubject::new(PermissionTarget::Command, command);
@@ -167,9 +234,12 @@ impl Invocation {
     }
 }
 
+/// Result of evaluating an [`Invocation`] under an [`InvocationPolicy`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationDecision {
+    /// Allow, ask, or deny for this call.
     pub mode: Mode,
+    /// Subject that determined the decision (for exact grants).
     pub subject: ExactSubject,
 }
 
@@ -180,6 +250,7 @@ struct CompiledInvocationRule {
     permission: Mode,
 }
 
+/// Compiled invocation rules plus the active [`PermissionModel`].
 #[derive(Clone, Debug)]
 pub struct InvocationPolicy {
     model: PermissionModel,
@@ -196,6 +267,8 @@ impl Default for InvocationPolicy {
 }
 
 impl InvocationPolicy {
+    /// Compile selector strings into regexes for evaluation.
+    ///
     /// # Errors
     /// Returns an error when a configured selector is not a valid regular expression.
     pub fn compile(
@@ -215,17 +288,20 @@ impl InvocationPolicy {
         Ok(Self { model, rules })
     }
 
+    /// Active global model for unmapped subjects.
     #[must_use]
     pub fn model(&self) -> PermissionModel {
         self.model
     }
 
+    /// Replace the global model without recompiling rules.
     #[must_use]
     pub fn with_model(mut self, model: PermissionModel) -> Self {
         self.model = model;
         self
     }
 
+    /// Evaluate ordered regex rules under the configured model.
     #[must_use]
     pub fn evaluate(&self, invocation: &Invocation) -> InvocationDecision {
         let mut matches = self.rules.iter().filter_map(|rule| {
@@ -277,21 +353,33 @@ impl InvocationPolicy {
     }
 }
 
+/// User or interceptor answer to an ask.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
+    /// Permit only this call.
     AllowOnce,
+    /// Permit and remember according to [`RememberScope`].
     AllowAlways,
-    Reject { feedback: Option<String> },
+    /// Deny, optionally recording human feedback for the model.
+    Reject {
+        /// Optional free-text reason shown to the agent.
+        feedback: Option<String>,
+    },
 }
 
+/// One resource-level allow/ask/deny entry (last match wins per action).
 #[derive(Clone, Debug)]
 pub struct Rule {
+    /// Action this rule applies to.
     pub action: Action,
+    /// `*` wildcard pattern compared to [`Resource::pattern`].
     pub resource_pattern: String,
+    /// Mode when this rule is the last matching entry.
     pub mode: Mode,
 }
 
 impl Rule {
+    /// Build a resource rule.
     #[must_use]
     pub fn new(action: Action, resource_pattern: impl Into<String>, mode: Mode) -> Self {
         Self {
@@ -302,17 +390,21 @@ impl Rule {
     }
 }
 
+/// Ordered list of resource rules used by snapshot and persistent planes.
 #[derive(Clone, Debug, Default)]
 pub struct PermissionRules {
+    /// Rules evaluated last-match-wins for a given action.
     pub rules: Vec<Rule>,
 }
 
 impl PermissionRules {
+    /// Wrap an ordered rule list.
     #[must_use]
     pub fn new(rules: Vec<Rule>) -> Self {
         Self { rules }
     }
 
+    /// Evaluate all matching rules for `action`/`resource`; default is ask.
     #[must_use]
     pub fn evaluate(&self, action: Action, resource: &Resource) -> Mode {
         let target = resource.pattern();
@@ -325,6 +417,7 @@ impl PermissionRules {
         mode
     }
 
+    /// Clone rules and append `extra` for a turn-scoped overlay.
     #[must_use]
     pub fn derive_child(&self, extra: Vec<Rule>) -> PermissionRules {
         let mut rules = self.rules.clone();
@@ -362,36 +455,55 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// Denial or infrastructure failure from the permission plane.
 #[derive(Error, Debug)]
 pub enum PermissionError {
+    /// Explicit deny or user reject.
     #[error("permission denied: {action:?} on {resource:?}{}", .feedback.as_deref().map_or(String::new(), |f| format!(" — user says: {f}")))]
     Denied {
+        /// Action that was refused.
         action: Action,
+        /// Resource that was refused.
         resource: Resource,
+        /// Optional human feedback from a reject decision.
         feedback: Option<String>,
     },
+    /// Ask channel closed or dropped before a reply arrived.
     #[error("permission channel unavailable")]
     Unavailable,
 }
 
+/// Outstanding ask delivered to the TUI/CLI for a user decision.
 pub struct AskRequest {
+    /// Correlation id for this permission prompt.
     pub id: PermissionRequestId,
+    /// Session that triggered the ask, when known.
     pub session: Option<SessionId>,
+    /// Message id of the tool-bearing assistant turn, when known.
     pub message_id: Option<MessageId>,
+    /// Tool-call id correlation, when known.
     pub call_id: Option<ToolCallId>,
+    /// Action under review.
     pub action: Action,
+    /// Resource under review.
     pub resource: Resource,
+    /// How an allow-always reply will be remembered.
     pub remember: RememberScope,
+    /// Oneshot for the caller's decision.
     pub reply: oneshot::Sender<Decision>,
 }
 
+/// How an allow-always decision is stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RememberScope {
+    /// Legacy resource grant: store `Rule(action, "*", Allow)` for the whole action.
     LegacyAction,
+    /// Native invocation grant: remember only the exact subject.
     Exact(ExactSubject),
 }
 
 impl RememberScope {
+    /// Pattern string for diagnostics (`"*"` or the exact subject value).
     #[must_use]
     pub fn pattern(&self) -> &str {
         match self {
@@ -401,13 +513,19 @@ impl RememberScope {
     }
 }
 
+/// Optional async hook consulted after remembered grants and before the user ask.
+///
+/// Used by the plugin permission bridge. Returning `Some` short-circuits the
+/// interactive prompt; `None` defers to the host ask channel.
 #[async_trait::async_trait]
 pub trait PermissionInterceptor: Send + Sync {
+    /// Optional digest mixed into [`PermissionPlane::semantic_identity_v1`].
     #[must_use]
     fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
         None
     }
 
+    /// Decide for this action/resource, or defer with `None`.
     async fn intercept(
         &self,
         session: Option<SessionId>,
@@ -416,6 +534,7 @@ pub trait PermissionInterceptor: Send + Sync {
     ) -> Option<Decision>;
 }
 
+/// Session-scoped permission state: rules, grants, policy, interceptor, and ask channel.
 #[derive(Clone)]
 pub struct PermissionPlane {
     snapshot: Arc<PermissionRules>,
@@ -431,11 +550,13 @@ pub struct PermissionPlane {
 }
 
 impl PermissionPlane {
+    /// Create a plane with resource rules only (no invocation policy).
     #[must_use]
     pub fn new(rules: PermissionRules) -> (Self, mpsc::UnboundedReceiver<AskRequest>) {
         Self::new_inner(rules, None)
     }
 
+    /// Create a plane with resource rules and a compiled invocation policy.
     #[must_use]
     pub fn new_with_policy(
         rules: PermissionRules,
@@ -464,12 +585,13 @@ impl PermissionPlane {
         (plane, rx)
     }
 
+    /// Clone of the immutable snapshot rules for this plane.
     #[must_use]
     pub fn snapshot_rules(&self) -> PermissionRules {
         self.snapshot.as_ref().clone()
     }
 
-    /// Returns a stable identity for the immutable permission policy semantics.
+    /// Stable identity for immutable permission policy semantics (rules + policy + interceptor).
     #[must_use]
     pub fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
         let mut bytes = Vec::new();
@@ -498,12 +620,14 @@ impl PermissionPlane {
         Some(Sha256::digest(bytes).into())
     }
 
+    /// Install an interceptor (for example the plugin permission bridge).
     #[must_use]
     pub fn with_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
         self.interceptor = Some(interceptor);
         self
     }
 
+    /// Scope asks and grants to a session id.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
         let mut plane = self.clone();
@@ -511,6 +635,7 @@ impl PermissionPlane {
         plane
     }
 
+    /// Attach message/tool-call correlation for native asks.
     #[must_use]
     pub fn for_tool_call(&self, message_id: MessageId, call_id: ToolCallId) -> Self {
         let mut plane = self.clone();
@@ -519,6 +644,7 @@ impl PermissionPlane {
         plane
     }
 
+    /// Layer temporary snapshot rules (for example per-turn external directories).
     #[must_use]
     pub fn with_snapshot_rules(&self, extra: Vec<Rule>) -> Self {
         let mut plane = self.clone();
@@ -528,6 +654,10 @@ impl PermissionPlane {
         plane
     }
 
+    /// Evaluate invocation policy; on success returns a call-scoped plane with grant set.
+    ///
+    /// # Errors
+    /// Returns [`PermissionError::Denied`] or [`PermissionError::Unavailable`].
     pub async fn authorize(&self, invocation: &Invocation) -> Result<Self, PermissionError> {
         let Some(policy) = &self.invocation_policy else {
             return Ok(self.clone());
@@ -566,6 +696,12 @@ impl PermissionPlane {
         plane
     }
 
+    /// Resource-level check used by tools mid-execution.
+    ///
+    /// Call grants satisfy later asserts except [`Action::ExternalDirectory`].
+    ///
+    /// # Errors
+    /// Returns [`PermissionError::Denied`] or [`PermissionError::Unavailable`].
     pub async fn assert(&self, action: Action, resource: Resource) -> Result<(), PermissionError> {
         let model = self.invocation_policy.as_ref().map(|policy| policy.model);
         // `danger` bypasses every resource check, including explicit Deny rules.
