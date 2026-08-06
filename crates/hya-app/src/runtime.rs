@@ -1,3 +1,9 @@
+//! Backend runtime bootstrap: config → store → session engine → optional HTTP router.
+//!
+//! Call [`resolve_runtime`] (or build a [`RuntimeConfig`] offline), open a store with
+//! [`open_store`], assemble a [`BuiltSessionEngine`] via [`build_session_engine`], or
+//! use [`HyaRuntime::start`] for the full server-ready process path.
+
 // allow: SIZE_OK — reviewed Phase 1 keeps backend bootstrap glue in this public API module.
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -92,6 +98,7 @@ pub fn builtin_catalog() -> anyhow::Result<Arc<BundleCatalog>> {
     }
 }
 
+/// Host identity sent to plugins during `initialize` (`name` + crate version).
 pub fn host_info() -> HostInfo {
     HostInfo {
         name: "hya".to_string(),
@@ -99,6 +106,10 @@ pub fn host_info() -> HostInfo {
     }
 }
 
+/// Dev/offline provider router and model id when no live config is usable.
+///
+/// Returns a router containing only `DevProvider` and either `model_override`
+/// or the literal model id `offline`.
 pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
     let router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
     (
@@ -112,6 +123,7 @@ fn process_owner_run_id() -> OwnerRunId {
     *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
 }
 
+/// Compaction thresholds from env (`HYA_COMPACTION_*`) or [`CompactionConfig`] defaults.
 pub fn compaction_config() -> CompactionConfig {
     let default = CompactionConfig::default();
     let token_threshold = std::env::var("HYA_COMPACTION_THRESHOLD")
@@ -1215,24 +1227,35 @@ impl OfflineNotice {
     }
 }
 
+/// Resolved provider/MCP/plugin/permission inputs ready to build a session engine.
 pub struct RuntimeConfig {
+    /// Live model routes (or offline dev provider).
     pub router: ProviderRouter,
+    /// Active default model id for new sessions.
     pub model: String,
+    /// Default reasoning effort for the active model, when configured.
     pub reasoning: Option<ReasoningEffort>,
+    /// Catalog models from config (empty when offline).
     pub models: Vec<config::ModelEntry>,
+    /// MCP server configs to connect at engine build.
     pub mcp: BTreeMap<String, McpServerConfig>,
+    /// Plugin specs already merged from config + manifests.
     pub plugins: Vec<PluginSpec>,
+    /// Preferred primary agent when workdir does not select one.
     pub default_agent: Option<String>,
     /// Logical model categories the runtime resolves at subagent spawn time.
     pub categories: CategoryRegistry,
     /// Set when no usable config was found and the offline provider was chosen.
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
+    /// Tool permission policy for the engine.
     pub permission: InvocationPolicy,
+    /// Web-search plane configuration.
     pub websearch: WebSearchConfig,
 }
 
 impl RuntimeConfig {
+    /// When `yolo` is true, force [`PermissionModel::Danger`] (auto-approve all tools).
     #[must_use]
     pub fn with_yolo(mut self, yolo: bool) -> Self {
         if yolo {
@@ -1318,6 +1341,7 @@ pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
     }
 }
 
+/// Open a SQLite session store at `db`, or an in-memory store when `db` is empty.
 pub async fn open_store(db: &str) -> anyhow::Result<SessionStore> {
     if db.is_empty() {
         SessionStore::connect_memory()
@@ -3315,6 +3339,9 @@ where
     }
 }
 
+/// Spawn the background task that admits multi-agent team/member spawn requests.
+///
+/// Consumes `rx` for the lifetime of the process (or until the channel closes).
 pub fn spawn_team_supervisor(
     rx: tokio::sync::mpsc::Receiver<BoundSpawnRequest>,
     engine: Arc<SessionEngine>,
@@ -3882,6 +3909,11 @@ struct EngineBuildOptions {
     defer_mcp: bool,
 }
 
+/// Build a fully wired [`SessionEngine`] plus plugin host, MCP, and ask/question channels.
+///
+/// MCP connect deferral follows process policy (`defer_sideplanes`). Callers must
+/// eventually shut down the returned [`BuiltSessionEngine`] (or use
+/// [`with_built_session_engine`]).
 pub async fn build_session_engine(
     store: SessionStore,
     router: ProviderRouter,
@@ -4256,14 +4288,24 @@ async fn prepare_mcp_results(
     Ok(results)
 }
 
+/// Inputs for [`HyaRuntime::start`] (store path, model, and safety flags).
 pub struct RuntimeOptions {
+    /// Override default model; `None` uses config / offline default.
     pub model: Option<String>,
+    /// SQLite path, or empty string for an in-memory store.
     pub db: String,
+    /// When true, auto-approve every tool action (Danger permission model).
     pub yolo: bool,
+    /// Override the preferred primary agent id for new sessions.
     pub default_agent: Option<String>,
+    /// When true, skip live config and always use the offline dev provider.
     pub force_offline: bool,
 }
 
+/// Process entry point: session engine + axum router ready to serve or embed.
+///
+/// Holds the plugin host and built engine for the process lifetime so side
+/// planes stay connected until the runtime is dropped.
 pub struct HyaRuntime {
     router: axum::Router,
     engine: Arc<SessionEngine>,
@@ -4273,6 +4315,12 @@ pub struct HyaRuntime {
 }
 
 impl HyaRuntime {
+    /// Open the store, resolve providers, build the engine, and install the HTTP router.
+    ///
+    /// When `force_offline` is set, uses only [`offline_router`]. Otherwise loads
+    /// config via [`resolve_runtime`]. `yolo` forces Danger permissions and logs
+    /// a stderr warning. Returns a runtime whose [`HyaRuntime::router`] can be
+    /// served with axum (or inspected by embedders).
     pub async fn start(opts: RuntimeOptions) -> anyhow::Result<Self> {
         let store = open_store(&opts.db).await?;
         let runtime = if opts.force_offline {
@@ -4339,15 +4387,18 @@ impl HyaRuntime {
         })
     }
 
+    /// Axum router with native and Compat routes (from [`hya_server::router`]).
     pub fn router(&self) -> &axum::Router {
         &self.router
     }
 
+    /// Shared session engine for in-process callers (same instance the router uses).
     #[must_use]
     pub fn engine(&self) -> Arc<SessionEngine> {
         self.engine.clone()
     }
 
+    /// Clone of the HTTP [`AppState`] wrapped by the router.
     #[must_use]
     pub fn app_state(&self) -> hya_server::AppState {
         self.app_state.clone()

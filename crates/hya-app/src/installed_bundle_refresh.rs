@@ -7,6 +7,10 @@ use hya_core::{CoreError, RuntimeCatalogRefresh, RuntimeRegistry};
 use hya_store::BundleRegistry;
 use tokio::sync::{Mutex, OnceCell};
 
+/// Default path of the installed Bundle registry SQLite file.
+///
+/// Uses `$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, else
+/// `$HOME/.local/share/hya/bundles/registry.sqlite3`, else a cwd-relative fallback.
 #[must_use]
 pub fn bundle_registry_path() -> PathBuf {
     if let Some(data_home) = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
@@ -27,6 +31,7 @@ pub struct InstalledBundleRefresh {
 }
 
 impl InstalledBundleRefresh {
+    /// Track installed-catalog generations for `registry_path` against `builtins`.
     #[must_use]
     pub fn new(registry_path: PathBuf, builtins: Arc<BundleCatalog>) -> Self {
         Self {
@@ -37,6 +42,10 @@ impl InstalledBundleRefresh {
         }
     }
 
+    /// Publish a new installed catalog generation when the registry advanced.
+    ///
+    /// Returns `Ok(true)` if the runtime registry was updated, `Ok(false)` when
+    /// the path is missing or the generation is unchanged.
     pub async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
         if self.registry.get().is_none()
             && !self.registry_path.try_exists().map_err(|error| {

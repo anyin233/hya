@@ -1,3 +1,5 @@
+//! Load optional formatter configuration into a [`FormatterPlane`].
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,6 +65,9 @@ impl From<RawFormatterEntry> for FormatterEntry {
     }
 }
 
+/// Build the process formatter plane from optional formatter config on disk.
+///
+/// Missing or invalid config yields a disabled plane (status still queryable).
 pub fn load_plane() -> FormatterPlane {
     FormatterPlane::new(Arc::new(BuiltinFormatterProvider::new(load_config())))
 }

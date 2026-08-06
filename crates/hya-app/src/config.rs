@@ -27,30 +27,47 @@ use hya_tool::{
 use serde::Deserialize;
 use serde_norway::{Mapping, Value};
 
+/// Fully loaded hya config: live provider router plus derived runtime knobs.
 pub struct ResolvedConfig {
+    /// Ordered HTTP (and offline) provider routes built from `providers:`.
     pub router: ProviderRouter,
+    /// Default model id (`provider/model` or bare id) when CLI/env omit one.
     pub default_model: String,
+    /// Flat catalog of configured models across all providers.
     pub models: Vec<ModelEntry>,
+    /// True when at least one provider block was present in config.
     pub has_providers: bool,
+    /// Named MCP server configs from `mcp:`.
     pub mcp: BTreeMap<String, McpServerConfig>,
+    /// Named plugin entries from `plugins:` (before manifest merge).
     pub plugins: BTreeMap<String, PluginEntry>,
+    /// Preferred primary agent id when workdir does not select one.
     pub default_agent: Option<String>,
+    /// Subagent concurrency and spawn limits from config.
     pub subagents: SubagentLimits,
     /// Logical model categories → ordered concrete `provider/model` candidates.
     pub categories: CategoryRegistry,
+    /// Compiled tool permission policy (`permission:` block).
     pub permission: InvocationPolicy,
+    /// Web-search plane configuration.
     pub websearch: WebSearchConfig,
 }
 
+/// One model from config, used for catalog listing and runtime resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelEntry {
+    /// Model id as configured under the provider (not always provider-prefixed).
     pub id: String,
+    /// Provider id that owns this model.
     pub provider: String,
+    /// Allowed reasoning-effort labels for this model, if any.
     pub reasoning_variants: Vec<String>,
+    /// Default reasoning effort when the user does not pick a variant.
     pub reasoning_default: Option<ReasoningEffort>,
 }
 
 impl ModelEntry {
+    /// Format as `provider/id`, or bare `id` when `provider` is empty.
     #[must_use]
     pub fn model_ref(&self) -> String {
         if self.provider.is_empty() {
@@ -60,6 +77,7 @@ impl ModelEntry {
         }
     }
 
+    /// True when `model` is this entry's bare id or full `provider/id` ref.
     #[must_use]
     pub fn matches_model_ref(&self, model: &str) -> bool {
         if self.id == model {
@@ -315,18 +333,27 @@ fn resolve_provider_credential_with(
 
 const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
 
+/// Result of creating a brand-new default `config.yaml` on first run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedConfig {
+    /// Absolute (or resolved) path of the file that was written.
     pub path: PathBuf,
 }
 
+/// Counts from importing Compat/OpenCode config into hya's `config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompatImportSummary {
+    /// Source Compat config path that was read.
     pub compat_path: PathBuf,
+    /// Destination hya config path that was written or updated.
     pub config_path: PathBuf,
+    /// Number of provider blocks imported.
     pub providers: usize,
+    /// Number of model entries imported across providers.
     pub models: usize,
+    /// Local MCP servers successfully imported.
     pub mcp_servers: usize,
+    /// MCP servers skipped (unsupported transport, missing fields, …).
     pub mcp_skipped: usize,
 }
 
@@ -363,8 +390,11 @@ pub fn expected_config_path() -> PathBuf {
 /// Model entry written under `providers.<id>.models` after OAuth login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthConfigModel {
+    /// Model id string written under the provider's `models` list.
     pub id: String,
+    /// Optional default reasoning effort label for this model.
     pub reasoning_default: Option<String>,
+    /// Allowed reasoning variant labels for this model.
     pub reasoning_variants: Vec<String>,
 }
 
@@ -530,6 +560,9 @@ pub fn ensure_config_file() -> anyhow::Result<Option<CreatedConfig>> {
     ensure_config_file_at(&path).map(|created| created.then_some(CreatedConfig { path }))
 }
 
+/// Write the default config YAML at `path` when it does not already exist.
+///
+/// Returns `Ok(true)` if the file was created, `Ok(false)` if it already existed.
 pub fn ensure_config_file_at(path: &Path) -> anyhow::Result<bool> {
     if path.exists() {
         return Ok(false);
@@ -545,6 +578,10 @@ pub fn ensure_config_file_at(path: &Path) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Ensure a default config exists; when `interactive`, print first-run notices.
+///
+/// Non-interactive callers only create the file silently. Interactive startup
+/// may also offer Compat config import when a candidate path is found.
 pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     let Some(created) = ensure_config_file().context("create default hya config")? else {
         return Ok(());
@@ -596,6 +633,9 @@ fn prompt_yes_no(prompt: &str) -> anyhow::Result<bool> {
     ))
 }
 
+/// First existing Compat/OpenCode config path among the usual candidates, if any.
+///
+/// Checks `COMPAT_CONFIG`, then XDG/home OpenCode config locations.
 #[must_use]
 pub fn default_compat_config_path() -> Option<PathBuf> {
     compat_config_candidates()
@@ -733,6 +773,11 @@ struct ImportedMcpServers {
     skipped: usize,
 }
 
+/// Import provider models and local MCP servers from a Compat config into hya.
+///
+/// Reads `compat_config_path`, merges importable providers/MCP into
+/// `hya_config_path` (creating parents as needed), and returns a summary of
+/// what was imported or skipped. Errors if nothing importable is found.
 pub fn import_compat_models_into_config(
     compat_config_path: &Path,
     hya_config_path: &Path,

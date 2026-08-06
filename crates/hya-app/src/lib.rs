@@ -1,16 +1,29 @@
-//! `hya-app` — backend bootstrap library extracted from the `hya-backend` binary.
+//! `hya-app` — backend bootstrap library shared by `hya-backend` and other hosts.
 //!
-//! Holds the engine/`AppState` assembly (config, providers, MCP, plugins, agent, store) so both
-//! `hya-backend` (server + headless commands) and `hya-native` (in-process native transport) can build
-//! the backend without the binary. Public surface filled in during Phase 1.
+//! Assembles the live runtime from config, auth, providers, MCP, plugins, agent
+//! base, and the session store: [`resolve_runtime`], [`build_session_engine`],
+//! and [`HyaRuntime::start`] are the main entry points. Headless CLI commands
+//! and the HTTP server both call into this crate so they share one composition
+//! path without duplicating bootstrap glue in each binary.
 
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
+/// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
+/// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
+/// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
 mod installed_bundle_refresh;
+/// Interactive OAuth login and access-token refresh.
 pub mod oauth;
+/// Headless permission auto-reject responder for non-interactive runs.
 pub mod permission;
+/// Resolve plugin specs from config and `.hya/plugins` manifests.
 pub mod plugins;
+/// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_reconcile;
 mod spawn_intent;

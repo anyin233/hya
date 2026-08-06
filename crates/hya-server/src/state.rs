@@ -1,3 +1,5 @@
+//! Shared HTTP application state for native and Compat routes.
+
 use std::sync::Arc;
 
 use hya_core::{AgentSpec, SessionEngine};
@@ -8,9 +10,17 @@ use tokio::sync::mpsc;
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::{compat, pending, runs};
 
+/// Public app state builders pass into [`crate::router`].
+///
+/// Holds the session engine, process agent base, permission/question queues,
+/// MCP control handle, workspace adapters, and formatter status. The router
+/// wraps this into internal `ServerState` (run registry + Compat process-local
+/// state).
 #[derive(Clone)]
 pub struct AppState {
+    /// Shared session engine for all routes.
     pub engine: Arc<SessionEngine>,
+    /// Process-level agent base used by native turns.
     pub agent: Arc<AgentSpec>,
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
@@ -21,6 +31,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Create state with empty pending queues and a no-op MCP control handle.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let permission_requests = pending::PermissionRequests::new(engine.store().clone());
@@ -43,6 +54,7 @@ impl AppState {
         self
     }
 
+    /// Attach the permission-ask receiver and start the pending-request bridge.
     #[must_use]
     pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
         self.permission_requests =
@@ -50,24 +62,28 @@ impl AppState {
         self
     }
 
+    /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
         self.question_requests = pending::QuestionRequests::spawn(rx);
         self
     }
 
+    /// Install the app-owned MCP control handle for Compat MCP routes.
     #[must_use]
     pub fn with_mcp_control(mut self, control: Arc<dyn McpControl>) -> Self {
         self.mcp_control = control;
         self
     }
 
+    /// Register plugin workspace adapters for experimental workspace routes.
     #[must_use]
     pub fn with_workspace_adapters(mut self, adapters: Vec<WorkspaceAdapterInfo>) -> Self {
         self.workspace_adapters = adapters;
         self
     }
 
+    /// Publish formatter status rows for Compat formatter endpoints.
     #[must_use]
     pub fn with_formatter_status(mut self, status: Vec<FormatterStatus>) -> Self {
         self.formatter_status = status;
