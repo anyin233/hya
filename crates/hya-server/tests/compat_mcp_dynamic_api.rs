@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat mcp dynamic api.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "support/mcp.rs"]

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: runtime turn binding.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;

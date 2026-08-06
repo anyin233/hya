@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: runtime sources.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;

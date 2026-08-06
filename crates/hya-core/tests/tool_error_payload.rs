@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: tool error payload.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;

@@ -1,3 +1,5 @@
+//! `read` error shape for missing files.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-ts`: process.
+
 #![allow(clippy::unwrap_used)]
 
 use std::net::TcpStream;

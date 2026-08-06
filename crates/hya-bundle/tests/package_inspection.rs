@@ -1,3 +1,5 @@
+//! Package inspection: public copy archives and private v1 envelope detection.
+
 use std::fs;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};

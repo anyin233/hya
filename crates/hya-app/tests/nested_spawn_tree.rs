@@ -1,3 +1,5 @@
+//! Integration tests for `hya-app`: nested spawn tree.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat question batch api.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;

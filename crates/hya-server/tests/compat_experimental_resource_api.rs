@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat experimental resource api.
+
 #![allow(clippy::unwrap_used)]
 
 #[path = "support/mcp.rs"]

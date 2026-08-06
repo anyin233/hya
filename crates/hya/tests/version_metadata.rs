@@ -1,3 +1,5 @@
+//! Integration tests for `hya`: version metadata.
+
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

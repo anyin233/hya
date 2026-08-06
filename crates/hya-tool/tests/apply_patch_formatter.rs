@@ -1,3 +1,5 @@
+//! Integration tests for `hya-tool`: apply patch formatter.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};

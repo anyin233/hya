@@ -1,3 +1,5 @@
+//! `sync-compat prune` removes only managed state.
+
 #![allow(clippy::expect_used)]
 
 mod common;

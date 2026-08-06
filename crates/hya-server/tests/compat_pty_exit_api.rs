@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat pty exit api.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

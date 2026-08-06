@@ -1,3 +1,5 @@
+//! Integration tests for `hya-provider`: structured tool error.
+
 #![allow(clippy::unwrap_used)]
 
 use hya_proto::{AgentName, Message, ModelRef, Part, PartId, ToolCallId, ToolName, ToolPartState};

@@ -1,3 +1,5 @@
+//! Spawn-admission claim, refund, and terminal-state transitions.
+
 #![allow(clippy::unwrap_used)]
 
 use hya_proto::{OperationId, OwnerRunId, SessionId, ToolCallId};

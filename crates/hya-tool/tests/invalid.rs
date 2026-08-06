@@ -1,3 +1,5 @@
+//! Unknown-tool invocation reports an argument error in the expected shape.
+
 #![allow(clippy::unwrap_used)]
 
 use hya_tool::ToolRegistry;

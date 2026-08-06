@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: agent resource view.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod support;

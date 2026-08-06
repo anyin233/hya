@@ -1,3 +1,5 @@
+//! `apply_patch` permission gating and workdir boundaries.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;

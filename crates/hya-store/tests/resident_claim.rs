@@ -1,3 +1,5 @@
+//! Resident actor claim lifecycle against the store.
+
 #![allow(clippy::unwrap_used)]
 
 use hya_proto::{

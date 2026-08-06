@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: tool filtering.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

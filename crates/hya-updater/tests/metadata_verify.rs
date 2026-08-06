@@ -1,3 +1,5 @@
+//! Signed update metadata verification.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use ed25519_dalek::{Signer, SigningKey};
 use hya_updater::{

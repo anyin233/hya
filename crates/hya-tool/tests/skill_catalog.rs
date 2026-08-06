@@ -1,3 +1,5 @@
+//! Integration tests for `hya-tool`: skill catalog.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::ffi::OsString;

@@ -1,3 +1,5 @@
+//! Integration tests for `hya-ts`: launcher.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::ffi::{OsStr, OsString};

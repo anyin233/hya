@@ -1,3 +1,5 @@
+//! Integration tests for `hya-plugin`: respawn declaration drift.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeMap;

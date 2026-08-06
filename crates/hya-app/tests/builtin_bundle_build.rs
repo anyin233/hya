@@ -1,3 +1,5 @@
+//! Integration tests for `hya-app`: builtin bundle build.
+
 use sha2::{Digest, Sha256};
 
 const PREPARED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-bundles.json"));

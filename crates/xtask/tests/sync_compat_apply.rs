@@ -1,3 +1,5 @@
+//! `sync-compat apply`: symlink/lockfile creation, idempotency, and unmanaged-entry preservation.
+
 #![allow(clippy::expect_used)]
 
 mod common;

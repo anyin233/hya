@@ -1,3 +1,5 @@
+//! Integration tests for `hya-store`: persistence.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;

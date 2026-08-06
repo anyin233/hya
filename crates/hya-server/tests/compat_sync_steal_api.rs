@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat sync steal api.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

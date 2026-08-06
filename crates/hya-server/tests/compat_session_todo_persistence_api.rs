@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat session todo persistence api.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;

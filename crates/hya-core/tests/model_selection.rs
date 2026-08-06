@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: model selection.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

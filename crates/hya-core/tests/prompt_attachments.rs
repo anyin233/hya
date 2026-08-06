@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: prompt attachments.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

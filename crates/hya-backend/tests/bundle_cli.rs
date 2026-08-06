@@ -1,3 +1,5 @@
+//! Integration tests for `hya-backend`: bundle cli.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

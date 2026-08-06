@@ -1,3 +1,5 @@
+//! Integration tests for `hya`: frontend cli.
+
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;

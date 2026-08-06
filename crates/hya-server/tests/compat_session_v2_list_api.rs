@@ -1,3 +1,5 @@
+//! Integration tests for `hya-server`: compat session v2 list api.
+
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;

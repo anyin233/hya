@@ -1,3 +1,5 @@
+//! `write` permission gating and file creation.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};

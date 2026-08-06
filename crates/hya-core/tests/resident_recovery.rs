@@ -1,3 +1,5 @@
+//! Integration tests for `hya-core`: resident recovery.
+
 #![allow(clippy::unwrap_used)]
 
 mod support;

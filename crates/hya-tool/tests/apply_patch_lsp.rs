@@ -1,3 +1,5 @@
+//! `apply_patch` interaction with the LSP plane after an edit.
+
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
