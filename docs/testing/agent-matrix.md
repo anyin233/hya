@@ -44,8 +44,39 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `general`, distinct child session |
 | T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, explore+plan, ≥ 3 session ids |
 | T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `/api/agent` lists build + spawnable roles |
+| T2.4 | Swarm `roster` + `list_agents` | `tests/p16_swarm_mailbox.rs` | Caller's follow-up carries the teammate's handle, type, status and **real session id** |
+| T2.5 | Swarm `send` (direct) | `tests/p16_swarm_mailbox.rs` | **Recipient's** next request contains `[mail from general-2] …` |
+| T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt `recipients:1` matches real membership |
 | T2.7 | Hyabundle CLI lifecycle | `tests/p11_hyabundle.rs` | install/list/info/uninstall stdout |
 | T2.8 | Hyabundle spawn agent | `tests/p11_hyabundle.rs` | Roster has package agent; events have scripted text |
+| T2.9 | Swarm `channels` | `tests/p16_swarm_mailbox.rs` | Result reports `members:["general-1"]` and `messages:1` the caller never supplied |
+| T2.10 | Swarm `join` | `tests/p16_swarm_mailbox.rs` | Post-join message reaches the joiner; pre-join post never does |
+| T2.11 | Swarm `leave` | `tests/p16_swarm_mailbox.rs` | Negative: departed member never sees the post, bounded by a still-subscribed member **and** a later direct ping it did see |
+
+### Built-in tool coverage
+
+`ToolRegistry::builtins()` registers **25** primary tool names. Track P now
+exercises **14**:
+
+| Covered (14) | Not covered (11) |
+| --- | --- |
+| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid` |
+
+### Multi-agent scenarios need per-agent FakeLlm routing
+
+`FakeLlm` holds one shared `VecDeque<ScriptStep>`, which is nondeterministic the
+moment two agents are live: either can pop the other's step. `FakeLlm::route`
+pins a queue to the agent whose **system prompt** contains a marker, and records
+only that agent's request bodies. Attribution deliberately looks at `system`-role
+content alone — a marker anywhere else in the transcript (tool-call arguments,
+mail bodies) is echoed back into the *caller's* history too. With no routes
+registered, dispatch is unchanged, so single-agent scenarios are unaffected.
+
+Mail delivery has no HTTP surface, and only **resident** agents receive it
+(`hya-core::resident` injects a handle's unread inbox as `[mail from …]` user
+prompts). The recipient's own next model request is therefore the only honest
+delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
+ordering rules that keep those scenarios deterministic.
 
 ## Track T scenarios (implemented)
 
