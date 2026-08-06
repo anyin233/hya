@@ -1,3 +1,15 @@
+//! The `hya` launcher trampoline.
+//!
+//! This binary exists only to `exec()` the real frontend, `hya-ts`, found next to
+//! it on disk. It preserves `argv[0]` across the replacement so the frontend sees
+//! the name the user typed, which is what makes `hya` the canonical entrypoint
+//! while the actual TUI ships as a separate executable. Because it `exec()`s
+//! rather than spawning, no extra process remains in the tree.
+
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
+
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitCode};
 

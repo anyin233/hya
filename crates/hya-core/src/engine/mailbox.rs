@@ -1,15 +1,14 @@
 //! Engine-side mailbox delivery + roster/channel queries (ADR-0001).
 //!
-//! These methods are the substance behind the [`MailboxPlane`] tools. Every team
-//! comms event is appended to the TEAM-ROOT session's log (the root of the
-//! sender's lineage), so one replay of that log reconstructs the whole team's
-//! inboxes/channels/roster and the live [`EventBus`](crate::bus::EventBus) carries
-//! them to the TUI for free.
+//! These methods implement the host behind the [`hya_tool::MailboxPlane`] tools.
+//! Every team-comms event is appended to the **team-root** session log (top of
+//! the sender's parent lineage), so one replay reconstructs inboxes, channels,
+//! and roster. Live observers receive the same envelopes through
+//! [`crate::EventBus`].
 //!
-//! Delivery here means "the event is appended and folded into recipient inboxes
-//! by the shared reducer" — idle sessions are NOT woken (that is Phase 4, which
-//! subscribes to `MailSent` on the bus). The bus publish already happens inside
-//! [`SessionEngine::emit`], so the wake hook has its seam without further change.
+//! **Delivery** means the event is appended and folded by the shared projection
+//! reducer. Resident supervisors (and other bus subscribers) wake idle actors on
+//! mail; this module itself only persists and publishes.
 
 use hya_proto::{
     AgentName, Event, MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, SubagentMode,

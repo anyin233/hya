@@ -37,10 +37,15 @@ const RESERVED_STREAM_PERMITS: usize = 28;
 ///   the team is killed instead of spending forever.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubagentLimits {
+    /// Max recursion depth (lead = 0).
     pub max_depth: u32,
+    /// Concurrent general streaming slots (clamped 1..=100).
     pub max_concurrency: usize,
+    /// Max members spawnable under one top-level run.
     pub per_run_budget: u64,
+    /// Max resident turns per team root.
     pub per_team_turn_budget: u64,
+    /// Max MailSent events per team root.
     pub per_team_message_budget: u64,
 }
 
@@ -67,11 +72,16 @@ pub enum TeamBudget {
     Exceeded,
 }
 
+/// Result of reserving a spawn against the per-run budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationReservation {
+    /// New units charged for this operation.
     Acquired,
+    /// Operation already reserved; reuse existing debit.
     Existing,
+    /// Operation id conflicts with a different root/debit.
     Conflict,
+    /// Run budget exhausted.
     Overloaded,
 }
 
@@ -114,6 +124,7 @@ pub struct SubagentGovernor {
 
 impl SubagentGovernor {
     #[must_use]
+    /// Create a governor enforcing `limits` (concurrency clamped to 1..=100).
     pub fn new(limits: SubagentLimits) -> Self {
         let mut limits = limits;
         limits.max_concurrency = limits.max_concurrency.clamp(1, MAX_GENERAL_STREAM_PERMITS);
@@ -128,11 +139,13 @@ impl SubagentGovernor {
     }
 
     #[must_use]
+    /// Return the configured limits.
     pub fn limits(&self) -> SubagentLimits {
         self.limits
     }
 
     #[must_use]
+    /// Maximum subagent recursion depth.
     pub fn max_depth(&self) -> u32 {
         self.limits.max_depth
     }
@@ -267,6 +280,7 @@ impl SubagentGovernor {
     }
 
     #[must_use]
+    /// Remaining per-run spawn budget for `root`, if tracked.
     pub fn remaining_budget(&self, root: SessionId) -> u64 {
         self.lock_budgets()
             .remaining

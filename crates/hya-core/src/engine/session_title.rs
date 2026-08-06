@@ -12,6 +12,7 @@ use crate::error::CoreError;
 use crate::title;
 
 impl SessionEngine {
+    /// Generate and set an automatic title for a new session.
     pub async fn auto_title_session(
         &self,
         session: SessionId,

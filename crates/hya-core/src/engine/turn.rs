@@ -153,6 +153,7 @@ async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result
 }
 
 impl SessionEngine {
+    /// Run one model/tool turn for `session` until stop or cancel.
     pub async fn run_turn(
         &self,
         session: SessionId,
@@ -170,6 +171,7 @@ impl SessionEngine {
         .await
     }
 
+    /// Run a turn with temporary ExternalDirectory allow rules for `external_dirs`.
     pub async fn run_turn_with_external_dirs(
         &self,
         session: SessionId,

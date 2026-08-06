@@ -10,6 +10,7 @@ const TITLE_FORMAT: &[time::format_description::FormatItem<'_>] =
     format_description!("[year]-[month]-[day]-[hour]-[minute]");
 
 #[must_use]
+/// Build a time-based fallback title string.
 pub fn fallback_title(activity_millis: i64) -> String {
     let seconds = activity_millis.div_euclid(1000);
     let Ok(time) = OffsetDateTime::from_unix_timestamp(seconds) else {
@@ -22,6 +23,7 @@ pub fn fallback_title(activity_millis: i64) -> String {
 }
 
 #[must_use]
+/// Whether `title` looks like a default/fallback auto title.
 pub fn is_default_or_fallback_title(title: &str) -> bool {
     is_hya_fallback_title(title)
         || has_compat_timestamp_prefix(title, COMPAT_ROOT_PREFIX)
@@ -29,6 +31,7 @@ pub fn is_default_or_fallback_title(title: &str) -> bool {
 }
 
 #[must_use]
+/// Sanitize model title output; `None` if empty/invalid.
 pub fn clean_title_output(output: &str) -> Option<String> {
     strip_think_blocks(output)
         .lines()
@@ -38,6 +41,7 @@ pub fn clean_title_output(output: &str) -> Option<String> {
 }
 
 #[must_use]
+/// Whether the projection is an empty unnamed session.
 pub fn is_empty_unnamed_session(projection: &Projection) -> bool {
     projection.session.id.is_some()
         && projection.session.title.is_none()

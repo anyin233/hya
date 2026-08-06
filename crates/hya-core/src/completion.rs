@@ -1,3 +1,5 @@
+//! Goal-mode iteration: independent evaluator, safety caps, and lead-turn executor.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,10 +15,14 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
 
+/// Hard stops for goal/loop iteration drivers.
 #[derive(Clone, Copy, Debug)]
 pub struct SafetyCaps {
+    /// Maximum worker iterations before `Capped`.
     pub max_iterations: u32,
+    /// Wall-clock budget for the whole run.
     pub max_wall_clock: Duration,
+    /// Reserved token budget field (driver may use for future preflight).
     pub max_tokens: u64,
 }
 
@@ -30,31 +36,64 @@ impl Default for SafetyCaps {
     }
 }
 
+/// Terminal status of a goal/loop run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunOutcome {
+    /// Gate reported stop (goal met or loop satisfied).
     Achieved {
+        /// Iterations completed including the final one.
         iterations: u32,
+        /// Gate reason string.
         reason: String,
     },
+    /// Hit a safety cap before success.
     Capped {
+        /// Iterations completed.
         iterations: u32,
+        /// Which cap fired (`max_iterations`, `max_wall_clock`, …).
         which: &'static str,
     },
+    /// Cancellation token tripped.
     Cancelled,
 }
 
+/// Decision from an [`IterationGate`] after one transcript.
 pub enum GateOutcome {
-    Stop { reason: String },
-    Continue { directive: String },
+    /// Stop the driver successfully.
+    Stop {
+        /// Reason recorded on [`RunOutcome::Achieved`].
+        reason: String,
+    },
+    /// Run another worker iteration with this directive.
+    Continue {
+        /// Next prompt/directive for the executor.
+        directive: String,
+    },
 }
 
+/// Independent stop authority for iterative runs (goal or loop).
+///
+/// **Contract:** Called after each executor iteration with the rendered
+/// transcript. Must not mutate session state. Errors abort the whole run.
 #[async_trait]
 pub trait IterationGate: Send + Sync {
+    /// Judge whether to stop or continue.
+    ///
+    /// # Errors
+    /// Return [`CoreError`] to fail the run.
     async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError>;
 }
 
+/// Runs one agent iteration given a directive string.
+///
+/// **Contract:** Implementors admit work and return a transcript string for the
+/// gate. Must honour `cancel`. Errors abort the driver.
 #[async_trait]
 pub trait IterationExecutor: Send + Sync {
+    /// Execute one iteration and return a transcript for judging.
+    ///
+    /// # Errors
+    /// Propagate turn/store failures.
     async fn run_iteration(
         &self,
         directive: &str,
@@ -62,16 +101,23 @@ pub trait IterationExecutor: Send + Sync {
     ) -> Result<String, CoreError>;
 }
 
+/// Drives executor/gate pairs under [`SafetyCaps`].
 pub struct IterationDriver {
+    /// Caps applied each loop.
     pub caps: SafetyCaps,
 }
 
 impl IterationDriver {
+    /// Create a driver with the given caps.
     #[must_use]
     pub fn new(caps: SafetyCaps) -> Self {
         Self { caps }
     }
 
+    /// Run until the gate stops, a cap trips, or cancel fires.
+    ///
+    /// # Errors
+    /// Propagates executor/gate errors.
     pub async fn run(
         &self,
         executor: &dyn IterationExecutor,
@@ -110,17 +156,30 @@ impl IterationDriver {
     }
 }
 
+/// Result of an independent goal evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
+    /// Whether the goal condition is satisfied by the transcript.
     pub met: bool,
+    /// Short reason for the model and logs.
     pub reason: String,
 }
 
+/// Independent goal judge (must not be the worker that claims success).
+///
+/// **Contract:** Evaluate only the provided condition + transcript. No tools.
+/// Malformed model output should map to `met = false`, not a hard error, when
+/// using [`ModelGoalEvaluator`].
 #[async_trait]
 pub trait GoalEvaluator: Send + Sync {
+    /// Return whether the goal is met.
+    ///
+    /// # Errors
+    /// Propagate provider/runtime failures.
     async fn evaluate(&self, condition: &str, transcript: &str) -> Result<Verdict, CoreError>;
 }
 
+/// [`IterationGate`] that wraps a [`GoalEvaluator`].
 pub struct GoalGate {
     condition: String,
     evaluator: Arc<dyn GoalEvaluator>,
@@ -145,6 +204,7 @@ impl IterationGate for GoalGate {
     }
 }
 
+/// [`IterationExecutor`] that admits a user prompt and runs one lead turn.
 pub struct LeadTurnExecutor {
     engine: Arc<SessionEngine>,
     session: SessionId,
@@ -169,6 +229,7 @@ impl IterationExecutor for LeadTurnExecutor {
     }
 }
 
+/// Render a simple role-tagged transcript string from a session projection.
 #[must_use]
 pub fn render_transcript(projection: &Projection) -> String {
     let mut s = String::new();
@@ -218,6 +279,7 @@ pub struct ModelGoalEvaluator {
 }
 
 impl ModelGoalEvaluator {
+    /// Build an evaluator that routes to `model` through `providers`.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
         Self { providers, model }

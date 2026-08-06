@@ -32,6 +32,7 @@ pub struct WorktreeManager {
 
 impl WorktreeManager {
     #[must_use]
+    /// Construct a manager for the given root/session context.
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         Self {
             repo_root: repo_root.into(),
@@ -39,6 +40,7 @@ impl WorktreeManager {
         }
     }
 
+    /// Allocate an isolated worktree path for a team member.
     pub async fn allocate(
         &self,
         team: TeamRunId,
@@ -65,12 +67,14 @@ impl WorktreeManager {
         Ok(dir)
     }
 
+    /// Whether the worktree has uncommitted changes.
     pub async fn dirty(&self, dir: &Path) -> Result<bool, CoreError> {
         let out = run_git(dir, &["status", "--porcelain"]).await?;
         Ok(!out.trim().is_empty())
     }
 
     #[must_use]
+    /// Paths owned by `team` for cleanup.
     pub fn owned_paths(&self, team: TeamRunId) -> Vec<PathBuf> {
         self.owned
             .lock()
@@ -80,6 +84,7 @@ impl WorktreeManager {
             .unwrap_or_default()
     }
 
+    /// Release all worktrees for `team`.
     pub async fn release_all(&self, team: TeamRunId) -> Result<(), CoreError> {
         let dirs = self
             .owned
@@ -108,12 +113,14 @@ pub struct TmuxPaneManager {
 
 impl TmuxPaneManager {
     #[must_use]
+    /// Construct a manager for the given root/session context.
     pub fn new(session: impl Into<String>) -> Self {
         Self {
             session: session.into(),
         }
     }
 
+    /// Whether tmux is available on this host.
     pub async fn available() -> bool {
         Command::new("tmux")
             .arg("-V")
@@ -123,6 +130,7 @@ impl TmuxPaneManager {
             .unwrap_or(false)
     }
 
+    /// Open a tmux pane running `tail_command` in `cwd`.
     pub async fn open(&self, cwd: &Path, tail_command: &str) -> Result<String, CoreError> {
         if !Self::available().await {
             return Err(CoreError::Invalid("tmux is not available".to_string()));

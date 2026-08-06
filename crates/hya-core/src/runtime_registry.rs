@@ -46,22 +46,31 @@ pub struct RuntimeCandidate {
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
 }
 
+/// Kind of external runtime contribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeSourceKind {
+    /// MCP server tools.
     Mcp,
+    /// Plugin-declared tools.
     Plugin,
 }
 
+/// Stable identity of a configured MCP/plugin source.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeSourceId {
     kind: RuntimeSourceKind,
     configured_id: String,
 }
 
+/// Marker for process-owned source handles retained by the registry.
+///
+/// **Contract:** Implementors keep clients/processes alive while the
+/// [`RuntimeSource`] is published. No methods — ownership is the contract.
 pub trait RuntimeSourceOwner: Send + Sync {}
 
 impl<T: Send + Sync> RuntimeSourceOwner for T {}
 
+/// One tool export from a runtime source (canonical name + aliases).
 #[derive(Clone)]
 pub struct RuntimeSourceExport {
     declared_id: String,
@@ -71,6 +80,7 @@ pub struct RuntimeSourceExport {
     permission: ToolPermission,
 }
 
+/// Published MCP/plugin source with tools and opaque resources.
 #[derive(Clone)]
 pub struct RuntimeSource {
     id: RuntimeSourceId,
@@ -80,17 +90,25 @@ pub struct RuntimeSource {
     resources: Arc<BTreeMap<String, Value>>,
 }
 
+/// Serialisable summary of a source for diagnostics/UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeSourceManifest {
+    /// Source identity.
     pub id: RuntimeSourceId,
+    /// Digest of the source declaration.
     pub declaration_digest: [u8; 32],
+    /// Canonical export names.
     pub exports: Vec<String>,
+    /// Opaque resource map from the source.
     pub resources: Arc<BTreeMap<String, Value>>,
 }
 
+/// Generation-tagged view of all effective sources.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeEffectiveManifest {
+    /// Config generation of the active snapshot.
     pub generation: ConfigGeneration,
+    /// Sources keyed by id.
     pub sources: BTreeMap<RuntimeSourceId, RuntimeSourceManifest>,
 }
 
@@ -113,11 +131,13 @@ pub struct AgentResourcePolicy {
 }
 
 impl AgentResourcePolicy {
+    /// Bundle-local tool ids selected for this agent view.
     #[must_use]
     pub fn selected_bundle_tool_ids(&self) -> &[String] {
         self.selected_bundle_tool_ids.as_ref()
     }
 
+    /// Canonical hook ids activated for this agent view.
     #[must_use]
     pub fn canonical_hook_ids(&self) -> &[String] {
         self.canonical_hook_ids.as_ref()
@@ -137,22 +157,28 @@ pub(crate) struct CompiledResourceView {
     skill_facade_selected: bool,
 }
 
+/// Failure publishing a new runtime candidate.
 #[derive(Clone, Debug, Error)]
 pub enum RuntimeRefreshError {
+    /// Tool or alias name collision.
     #[error(transparent)]
     DuplicateTool(#[from] DuplicateName),
+    /// Config generation counter overflowed.
     #[error("configuration generation exhausted")]
     GenerationExhausted,
+    /// Candidate failed structural validation.
     #[error("invalid runtime candidate: {0}")]
     InvalidCandidate(String),
 }
 
 impl RuntimeRegistry {
+    /// Start a registry from a builder tools map and bundle catalog.
     #[must_use]
     pub fn new(tools: ToolRegistry, catalog: Arc<BundleCatalog>) -> Self {
         Self::from_snapshot(tools.snapshot(), catalog)
     }
 
+    /// Start a registry from a frozen tool snapshot.
     #[must_use]
     pub fn from_snapshot(tools: ToolRegistrySnapshot, catalog: Arc<BundleCatalog>) -> Self {
         Self {
@@ -250,11 +276,13 @@ impl RuntimeRegistry {
     }
 
     #[must_use]
+    /// Model-facing tool schemas from this snapshot or view.
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.active().tools.schemas()
     }
 
     #[must_use]
+    /// Generation-tagged source manifests for diagnostics.
     pub fn effective_manifest(&self) -> RuntimeEffectiveManifest {
         let active = self.active();
         RuntimeEffectiveManifest {
@@ -324,10 +352,12 @@ impl RuntimeCandidate {
         }
     }
 
+    /// Register a tool with default `Tool` permission on this candidate.
     pub fn register_tool(&mut self, tool: Arc<dyn Tool>) -> Result<(), RuntimeRefreshError> {
         self.register_tool_with_permission(tool, ToolPermission::Tool)
     }
 
+    /// Register a tool with an explicit permission class on this candidate.
     pub fn register_tool_with_permission(
         &mut self,
         tool: Arc<dyn Tool>,
@@ -337,16 +367,19 @@ impl RuntimeCandidate {
         Ok(())
     }
 
+    /// Remove a tool and its aliases from this candidate.
     pub fn remove_tool(&mut self, name: &str) {
         if self.tools.resolve(name).is_some() {
             self.tools.remove(name);
         }
     }
 
+    /// Rediscover skills for `workdir` into this candidate.
     pub fn refresh_skills(&mut self, workdir: &Path) {
         self.replace_skills(workdir, discover_skills(workdir));
     }
 
+    /// Insert or replace MCP/plugin sources on this candidate.
     pub fn upsert_sources(
         &mut self,
         sources: Vec<RuntimeSource>,
@@ -399,6 +432,7 @@ impl RuntimeCandidate {
         Ok(())
     }
 
+    /// Remove sources by id from this candidate.
     pub fn remove_sources(&mut self, removed: &BTreeSet<RuntimeSourceId>) {
         for id in removed {
             if let Some(source) = self.sources.remove(id) {
@@ -433,6 +467,7 @@ impl RuntimeCandidate {
 
 impl RuntimeSourceId {
     #[must_use]
+    /// Build a source id from kind and configured identifier.
     pub fn new(kind: RuntimeSourceKind, configured_id: impl Into<String>) -> Self {
         Self {
             kind,
@@ -441,21 +476,25 @@ impl RuntimeSourceId {
     }
 
     #[must_use]
+    /// Construct an MCP [`RuntimeSourceId`].
     pub fn mcp(configured_id: impl Into<String>) -> Self {
         Self::new(RuntimeSourceKind::Mcp, configured_id)
     }
 
     #[must_use]
+    /// Construct a plugin [`RuntimeSourceId`].
     pub fn plugin(configured_id: impl Into<String>) -> Self {
         Self::new(RuntimeSourceKind::Plugin, configured_id)
     }
 
     #[must_use]
+    /// Return the source kind.
     pub fn kind(&self) -> RuntimeSourceKind {
         self.kind
     }
 
     #[must_use]
+    /// Return the configured id string.
     pub fn configured_id(&self) -> &str {
         &self.configured_id
     }
@@ -473,6 +512,7 @@ impl std::fmt::Display for RuntimeSourceId {
 
 impl RuntimeSourceExport {
     #[must_use]
+    /// Build one export describing a tool and its aliases.
     pub fn tool(
         declared_id: impl Into<String>,
         canonical_name: impl Into<String>,
@@ -491,6 +531,7 @@ impl RuntimeSourceExport {
 }
 
 impl RuntimeSource {
+    /// Build a published source with exports and an empty resource map.
     #[must_use]
     pub fn new(
         id: RuntimeSourceId,
@@ -508,12 +549,14 @@ impl RuntimeSource {
     }
 
     #[must_use]
+    /// Attach opaque JSON resources to the source.
     pub fn with_resources(mut self, resources: BTreeMap<String, Value>) -> Self {
         self.resources = Arc::new(resources);
         self
     }
 
     #[must_use]
+    /// Borrow the source identifier.
     pub fn id(&self) -> &RuntimeSourceId {
         &self.id
     }
@@ -550,6 +593,7 @@ impl TurnBinding {
     /// runtime view. Views with unidentifiable sources are intentionally
     /// unavailable until their semantic sections have a canonical encoding.
     #[must_use]
+    /// Domain-separated fingerprint of tools, sources, and permissions for this binding.
     pub fn semantic_fingerprint_v1(&self, permission: &PermissionPlane) -> Option<[u8; 32]> {
         let catalog_identity = self.snapshot.catalog.semantic_identity_v1()?;
         let permission_identity = permission.semantic_identity_v1()?;
@@ -591,25 +635,30 @@ impl TurnBinding {
     }
 
     #[must_use]
+    /// Config generation of the retained snapshot.
     pub fn generation(&self) -> ConfigGeneration {
         self.snapshot.generation
     }
 
     #[must_use]
+    /// Working directory this turn was bound to.
     pub fn workdir(&self) -> &Path {
         &self.workdir
     }
 
     #[must_use]
+    /// Bundle catalog retained by this binding.
     pub fn agent_catalog(&self) -> &BundleCatalog {
         &self.snapshot.catalog
     }
 
     #[must_use]
+    /// Look up a prepared agent by stable catalog id.
     pub fn resolve_agent(&self, stable_id: &str) -> Option<&PreparedAgent> {
         self.snapshot.catalog.resolve_agent(stable_id)
     }
 
+    /// Resolve a user/model agent request against the catalog.
     pub fn resolve_requested_agent(
         &self,
         requested: Option<&str>,
@@ -621,6 +670,7 @@ impl TurnBinding {
             })
     }
 
+    /// Resolve whether `caller` may spawn `target`.
     pub fn resolve_spawn(
         &self,
         caller: &str,
@@ -629,10 +679,12 @@ impl TurnBinding {
         self.snapshot.catalog.resolve_spawn(caller, requested)
     }
 
+    /// Agents the caller may spawn per can_spawn rules.
     pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<&PreparedAgent>, BundleError> {
         self.snapshot.catalog.spawnable_agents(caller)
     }
 
+    /// Compile the agent resource/tool policy for `stable_id`.
     pub fn agent_resource_policy(
         &self,
         stable_id: &str,
@@ -1000,16 +1052,19 @@ impl TurnBinding {
     }
 
     #[must_use]
+    /// Model-facing tool schemas from this snapshot or view.
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.snapshot.tools.schemas()
     }
 
     #[must_use]
+    /// Resolve a tool name or alias in this compiled view.
     pub fn resolve_tool(&self, name: &str) -> Option<ResolvedTool> {
         self.snapshot.tools.resolve(name)
     }
 
     #[must_use]
+    /// Skill entries visible to this resource view.
     pub fn skills(&self) -> &[SkillCatalogEntry] {
         self.snapshot
             .skills
@@ -1018,6 +1073,7 @@ impl TurnBinding {
     }
 
     #[must_use]
+    /// Build a skill plane over this view's skill snapshot.
     pub fn skill_plane(&self) -> SkillPlane {
         let skills = self
             .snapshot

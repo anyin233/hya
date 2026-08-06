@@ -6,6 +6,7 @@ use hya_tool::TodoItem;
 use super::SessionEngine;
 
 impl SessionEngine {
+    /// Return the in-memory todo list for `session`.
     pub async fn todos(&self, session: SessionId) -> Vec<TodoItem> {
         let mut latest = None;
         let mut todo_calls = HashSet::new();

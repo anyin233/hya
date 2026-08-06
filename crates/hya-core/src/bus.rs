@@ -7,6 +7,11 @@ use tokio::sync::broadcast;
 /// trivial. The production runtime can override this from config/env.
 pub const DEFAULT_BUS_CAPACITY: usize = 8192;
 
+/// In-process fan-out of persisted (or live) event envelopes.
+///
+/// Publishers call [`EventBus::publish`]; observers hold a
+/// [`broadcast::Receiver`] from [`EventBus::subscribe`]. Slow subscribers lag
+/// after `capacity` buffered envelopes (SSE then resyncs from the store).
 #[derive(Clone)]
 pub struct EventBus {
     tx: broadcast::Sender<Envelope>,
@@ -14,6 +19,7 @@ pub struct EventBus {
 }
 
 impl EventBus {
+    /// Create a bus with the given buffer capacity (clamped to at least 1).
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         // A zero capacity would panic in `broadcast::channel`; clamp to at least 1.
@@ -29,10 +35,12 @@ impl EventBus {
         self.capacity
     }
 
+    /// Broadcast `envelope` to all current subscribers (errors if none are listening are ignored).
     pub fn publish(&self, envelope: Envelope) {
         let _ = self.tx.send(envelope);
     }
 
+    /// Subscribe for subsequent envelopes (does not replay history).
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {
         self.tx.subscribe()

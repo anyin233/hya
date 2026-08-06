@@ -14,14 +14,20 @@ use crate::error::CoreError;
 /// system/reasoning unset rather than inventing hardcoded prompts.
 #[derive(Clone, Debug, Default)]
 pub struct SummarizeOptions {
+    /// Optional system prompt override for the summarizer call.
     pub system: Option<String>,
+    /// Optional model override; defaults to the summarizer's constructed model.
     pub model: Option<ModelRef>,
+    /// Optional reasoning effort for capable models.
     pub reasoning: Option<ReasoningEffort>,
 }
 
+/// Thresholds for when and how aggressively to compact a transcript.
 #[derive(Clone, Copy, Debug)]
 pub struct CompactionConfig {
+    /// Approximate token threshold (chars/4) that triggers compaction.
     pub token_threshold: usize,
+    /// Number of recent messages retained unsummarized.
     pub keep_recent: usize,
 }
 
@@ -92,19 +98,29 @@ fn value_text_len(value: &serde_json::Value) -> usize {
     }
 }
 
+/// Rough token estimate: total part character length / 4.
 #[must_use]
 pub fn estimate_tokens(messages: &[Message]) -> usize {
     let chars: usize = messages.iter().map(message_text_len).sum();
     chars / 4
 }
 
+/// Whether `messages` exceeds keep_recent and the token threshold.
 #[must_use]
 pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
     messages.len() > cfg.keep_recent && estimate_tokens(messages) > cfg.token_threshold
 }
 
+/// Produces a summary string for older transcript segments.
+///
+/// **Contract:** Called only with the messages being folded. Must not write the
+/// session store. Errors abort compaction and leave the transcript unchanged.
 #[async_trait]
 pub trait Summarizer: Send + Sync {
+    /// Summarize `messages` into a single string for a system summary message.
+    ///
+    /// # Errors
+    /// Propagate provider failures as [`CoreError`].
     async fn summarize(
         &self,
         messages: &[Message],
@@ -112,6 +128,10 @@ pub trait Summarizer: Send + Sync {
     ) -> Result<String, CoreError>;
 }
 
+/// Compact `messages` when thresholds are exceeded; otherwise return them unchanged.
+///
+/// # Errors
+/// Propagates summarizer failures.
 pub async fn compact_with(
     mut messages: Vec<Message>,
     cfg: &CompactionConfig,
@@ -157,12 +177,14 @@ fn render_for_summary(messages: &[Message]) -> String {
     s
 }
 
+/// [`Summarizer`] that calls a provider model with no tools.
 pub struct ModelSummarizer {
     providers: Arc<ProviderRouter>,
     model: ModelRef,
 }
 
 impl ModelSummarizer {
+    /// Route summaries through `model` via `providers`.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
         Self { providers, model }
