@@ -7,8 +7,11 @@ use super::{OAuthError, json_str};
 /// One model entry suitable for writing into `config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogModel {
+    /// Model id as returned by the provider catalog API.
     pub id: String,
+    /// Provider-suggested default reasoning effort, when present.
     pub reasoning_default: Option<String>,
+    /// Supported reasoning effort labels for this model.
     pub reasoning_variants: Vec<String>,
 }
 

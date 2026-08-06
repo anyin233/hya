@@ -1,3 +1,9 @@
+//! Build script for `hya-app`.
+//!
+//! Stages the built-in agent bundles into `OUT_DIR` at compile time so the
+//! runtime can load them without reading the source tree, which is what lets a
+//! single installed binary ship its default agents.
+
 use std::error::Error;
 use std::path::PathBuf;
 

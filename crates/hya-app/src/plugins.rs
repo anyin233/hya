@@ -1,3 +1,5 @@
+//! Resolve native and Compat plugin specs for the plugin host.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -5,11 +7,16 @@ use hya_plugin::config::{PluginEntry, PluginSpec};
 use hya_plugin::manifest::Manifest;
 use hya_plugin::messages::PluginKindWire;
 
+/// Project-local plugin directory: `$CWD/.hya/plugins`, when cwd is available.
 pub fn plugins_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     Some(cwd.join(".hya/plugins"))
 }
 
+/// Merge config plugin entries with optional on-disk manifests into host specs.
+///
+/// Compat entries without a command are rewritten to the bundled Bun adapter
+/// when Bun is on `PATH` (or `BUN`); otherwise they are skipped with a notice.
 pub fn resolve(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
     resolve_with_bun(config, dir, find_bun)
 }

@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OAuthType {
+    /// ChatGPT Codex subscription OAuth (`openai-codex` / `codex`).
     OpenaiCodex,
+    /// Grok Build / xAI CLI OAuth (`grok-build` / `grok` / `xai-oauth`).
     GrokBuild,
 }
 
@@ -71,13 +73,18 @@ impl std::fmt::Display for OAuthType {
 /// Full OAuth credential bundle stored on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCredential {
+    /// Which OAuth implementation produced this bundle.
     pub oauth_type: OAuthType,
+    /// Short-lived bearer access token for API calls.
     pub access_token: String,
+    /// Long-lived refresh token used to mint new access tokens.
     pub refresh_token: String,
     /// RFC3339 UTC timestamp when the access token expires.
     pub expires_at: String,
+    /// Optional ChatGPT/Grok account id from token claims when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    /// Optional OpenID id_token (not used as the API bearer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
 }
@@ -86,7 +93,10 @@ pub struct OAuthCredential {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthCredential {
     /// Static API key / pasted bearer token.
-    Api { token: String },
+    Api {
+        /// Raw token string written under `token:` in the auth YAML.
+        token: String,
+    },
     /// OAuth subscription credential with refresh support.
     OAuth(OAuthCredential),
 }

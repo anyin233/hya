@@ -1,7 +1,13 @@
+//! Headless permission helpers for non-interactive backend modes.
+
 use hya_tool::{AskRequest, Decision};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+/// Drain permission asks and reject each with no feedback (headless default).
+///
+/// Used when no TUI or user is present to answer; every ask becomes
+/// [`Decision::Reject`]. Returns the spawned task handle.
 pub fn spawn_reject_responder(mut asks: mpsc::UnboundedReceiver<AskRequest>) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(req) = asks.recv().await {

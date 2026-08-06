@@ -25,26 +25,41 @@ pub use openai_codex::{login_openai_codex, login_openai_codex_device};
 /// Errors from OAuth login, refresh, or credential loading.
 #[derive(Debug, Error)]
 pub enum OAuthError {
+    /// Stored credentials are missing, expired, or revoked; user must re-login.
     #[error(
         "OAuth credentials for provider '{provider}' require re-login ({reason}). Run: hya-backend oauth login --provider {provider} --type {oauth_type}"
     )]
     NeedsLogin {
+        /// Config/auth provider id.
         provider: String,
+        /// Canonical OAuth type string for the re-login command line.
         oauth_type: String,
+        /// Short reason shown in the error message.
         reason: String,
     },
+    /// Token is valid but the subscription cannot call the API.
     #[error(
         "provider '{provider}' OAuth grant is valid but not entitled for API access ({detail}). Re-login will not help; use an API key path or upgrade the subscription."
     )]
-    Entitlement { provider: String, detail: String },
+    Entitlement {
+        /// Provider id that failed entitlement checks.
+        provider: String,
+        /// Upstream detail describing the entitlement failure.
+        detail: String,
+    },
+    /// HTTP/transport failure talking to the OAuth or catalog endpoint.
     #[error("OAuth network error: {0}")]
     Network(String),
+    /// Unexpected OAuth protocol response or missing fields.
     #[error("OAuth protocol error: {0}")]
     Protocol(String),
+    /// Interactive flow or network wait exceeded the configured timeout.
     #[error("OAuth timed out: {0}")]
     Timeout(String),
+    /// Local filesystem failure while reading/writing auth or config.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// Config path or YAML update failure (non-network).
     #[error("config error: {0}")]
     Config(String),
 }
@@ -67,7 +82,9 @@ impl OAuthError {
 /// Options for `oauth login`.
 #[derive(Debug, Clone)]
 pub struct OAuthLoginOptions {
+    /// Provider id written under `providers.<id>` and `auth/<id>.yaml`.
     pub provider: String,
+    /// Which OAuth implementation to run.
     pub oauth_type: OAuthType,
     /// Prefer device-code (default for openai-codex and grok-build).
     ///
@@ -79,12 +96,15 @@ pub struct OAuthLoginOptions {
     /// Do not attempt to open a system browser (print URL only).
     /// Default for openai-codex device login is true (Codex-style no-browser).
     pub no_browser: bool,
+    /// Optional model id to register on the provider after login.
     pub model: Option<String>,
+    /// Optional inference base URL override for the provider route.
     pub base_url: Option<String>,
     /// Override auth directory (tests).
     pub auth_dir: Option<PathBuf>,
     /// Override config path (tests).
     pub config_path: Option<PathBuf>,
+    /// Overall interactive flow deadline (default 600s).
     pub timeout: Duration,
 }
 
@@ -108,11 +128,17 @@ impl Default for OAuthLoginOptions {
 /// Result of a successful OAuth login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthLoginResult {
+    /// Provider id that was written.
     pub provider: String,
+    /// OAuth implementation that completed successfully.
     pub oauth_type: OAuthType,
+    /// Path of the saved auth credential file.
     pub auth_path: PathBuf,
+    /// Path of the updated `config.yaml`.
     pub config_path: PathBuf,
+    /// Inference base URL registered for the provider.
     pub base_url: String,
+    /// Primary model id registered (first or default).
     pub model: String,
     /// Models written into `config.yaml` (catalog fetch or single default).
     pub models: Vec<String>,

@@ -1,4 +1,19 @@
-//! `hya-server` — axum HTTP + SSE over `hya-core` (design.md §11).
+//! `hya-server` — Axum HTTP and SSE surface over `hya-core`.
+//!
+//! Serves:
+//!
+//! - **Native routes** — `POST /sessions`, `POST /sessions/:id/{prompt,command,shell}`,
+//!   `GET /sessions/:id/events`, `GET /sessions/:id/stream`
+//! - **Compat route groups** (via `compat::router`) — sessions, events, files/search,
+//!   catalogs/metadata, provider/auth, permissions/questions, MCP, PTY, VCS/project,
+//!   worktree, TUI/global/sync/experimental surfaces
+//!
+//! CORS mirrors the request origin and headers and allows any method. See
+//! `docs/architecture/server-client.md` for request bodies and status codes.
+
+// Fully documented; keep it that way. Removed when the workspace lint
+// table is promoted from `warn` to `deny`.
+#![deny(missing_docs)]
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -30,6 +45,18 @@ pub use mcp_control::McpControl;
 pub use state::AppState;
 pub(crate) use state::ServerState;
 
+/// Build the full HTTP app: Compat routes + native session routes + CORS.
+///
+/// Native paths:
+/// - `POST /sessions` — create session
+/// - `POST /sessions/:id/prompt` — admit user prompt and run one turn
+/// - `POST /sessions/:id/command` — admit command prompt and run one turn
+/// - `POST /sessions/:id/shell` — run shell tool turn
+/// - `GET /sessions/:id/events` — replay envelopes (`?since_seq=`)
+/// - `GET /sessions/:id/stream` — SSE of live envelopes (emits `resync` on lag)
+///
+/// Merges `compat::router()` for Compat-compatible surfaces. CORS:
+/// `AllowOrigin::mirror_request()`, `AllowHeaders::mirror_request()`, methods `Any`.
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     Router::new()
@@ -51,6 +78,10 @@ fn cors() -> CorsLayer {
         .allow_methods(Any)
 }
 
+/// HTTP error returned by native and many Compat handlers as `(status, message)`.
+///
+/// Constructed via private helpers (`bad_request`, `not_found`, `conflict`,
+/// `service_unavailable`, `internal`). `CoreError` / `StoreError` map to 500.
 pub struct ApiError {
     status: StatusCode,
     message: String,
