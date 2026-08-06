@@ -7,13 +7,17 @@ use uuid::Uuid;
 use crate::admission::decode_record;
 use crate::{AdmissionRecord, SessionStore, StoreError, decode_session_key};
 
+/// Result of recovering (taking over) a resident actor claim after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoveredActorClaim {
+    /// New active claim after bumping the epoch for this owner run.
     pub claim: ActorClaim,
+    /// Epoch that was active before takeover (for aborting prior admissions).
     pub previous_epoch: ActorEpoch,
 }
 
 impl SessionStore {
+    /// Session ids of resident actors currently in the `active` claim state.
     pub async fn active_actor_ids(&self) -> Result<Vec<SessionId>, StoreError> {
         let rows = sqlx::query(
             "SELECT actor_id FROM resident_actor_claim WHERE state = 'active' ORDER BY actor_id",

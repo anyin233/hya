@@ -81,6 +81,7 @@ impl SessionStore {
         Ok(envelope)
     }
 
+    /// Append one channel-targeted mail under the writer lock; returns the envelope and recipient count.
     pub async fn append_channel_mail(
         &self,
         root: SessionId,
@@ -222,6 +223,7 @@ impl SessionStore {
         })
     }
 
+    /// Graceful resident stop: terminalize in-flight work with reason `resident stopped` and release the claim.
     pub async fn finalize_resident_stop(
         &self,
         claim: &ActorClaim,

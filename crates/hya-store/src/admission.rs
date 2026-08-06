@@ -1,3 +1,7 @@
+//! Durable spawn admission journal: claim, start, finalize, promote, recover.
+//!
+//! Capacity caps and lifecycle match `docs/architecture/admission-and-governor.md`.
+
 use hya_proto::{ActorEpoch, OperationId, SessionId, ToolCallId, now_millis};
 use sqlx::Row;
 
@@ -12,14 +16,22 @@ const ADMISSION_COUNTS_SQL: &str = "SELECT \
     COUNT(CASE WHEN state IN ('queued', 'accepted', 'started', 'waiting') THEN 1 END) AS total \
  FROM admission_journal";
 
+/// Lifecycle of one admission_journal member row (wire strings match SQL CHECK).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionState {
+    /// Parked for FIFO promotion into an active slot.
     Queued,
+    /// Durably claimed; governor may debit before start.
     Accepted,
+    /// In flight; first terminalize sets `logical_released` for exactly-once refund.
     Started,
+    /// Parent suspended while children run; not counted as active.
     Waiting,
+    /// Successful terminal state.
     Completed,
+    /// Cancelled terminal state.
     Cancelled,
+    /// Aborted terminal state (error / recovery).
     Aborted,
 }
 
@@ -51,89 +63,140 @@ impl AdmissionState {
         }
     }
 
+    /// Whether this state is terminal (`Completed` / `Cancelled` / `Aborted`).
     #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Cancelled | Self::Aborted)
     }
 }
 
+/// Snapshot of journal occupancy against capacity caps.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmissionCounts {
+    /// Rows in `accepted` + `started` (cap 100).
     pub active: u32,
+    /// Rows in `queued` + `waiting` (cap 156).
     pub non_active: u32,
+    /// Sum of nonterminal occupancy counts used for diagnostics.
     pub total: u32,
 }
 
+/// Input for a durable admission claim (single or batch head).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionClaim {
+    /// Stable operation id (idempotency key with fingerprint).
     pub operation_id: OperationId,
+    /// Tool call that sourced this spawn.
     pub source_tool_call_id: ToolCallId,
+    /// Team-root session whose spawn budget is charged.
     pub root_session: SessionId,
+    /// 32-byte fingerprint of the immutable request payload.
     pub request_fingerprint: [u8; 32],
+    /// Budget units reserved (must be > 0).
     pub admission_units: u32,
+    /// Optional resident actor binding for the claim.
     pub actor_claim: Option<ActorClaim>,
 }
 
+/// Bound spawn payload stored all-or-nothing with the journal row.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionIntent {
+    /// Version of the runtime fingerprint schema.
     pub runtime_fingerprint_version: u32,
+    /// Hash of the runtime binding at claim time.
     pub runtime_fingerprint: [u8; 32],
+    /// Version of the admission-binding fingerprint schema.
     pub admission_binding_fingerprint_version: u32,
+    /// Hash of admission-specific binding material.
     pub admission_binding_fingerprint: [u8; 32],
+    /// Opaque spawn intent blob (1..=[`MAX_ADMISSION_INTENT_BYTES`] bytes).
     pub spawn_intent: Vec<u8>,
 }
 
+/// An accepted member row paired with the intent needed to launch it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionLaunch {
+    /// Journal row after claim/promotion.
     pub record: AdmissionRecord,
+    /// Binding/intent material for the engine.
     pub intent: AdmissionIntent,
 }
 
+/// Actor id + epoch stored on an admission row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmissionActorBinding {
+    /// Resident actor session id.
     pub actor_id: SessionId,
+    /// Claim epoch that must match for fenced updates.
     pub actor_epoch: ActorEpoch,
 }
 
+/// One composite-PK member of the admission journal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionRecord {
+    /// Operation this member belongs to.
     pub operation_id: OperationId,
+    /// Source tool call id.
     pub source_tool_call_id: ToolCallId,
+    /// Root session for budget accounting.
     pub root_session: SessionId,
+    /// Request fingerprint for conflict detection.
     pub request_fingerprint: [u8; 32],
+    /// Index within the batch (`0..batch_size`).
     pub member_ordinal: u32,
+    /// Total members in the batch.
     pub batch_size: u32,
+    /// Current lifecycle state.
     pub state: AdmissionState,
+    /// Units charged for this member/operation.
     pub admission_units: u32,
+    /// Optional actor binding.
     pub actor: Option<AdmissionActorBinding>,
+    /// Set when a started row is first terminalized (exactly-once refund flag).
     pub logical_released: bool,
+    /// Optional terminal reason string.
     pub terminal_reason: Option<String>,
+    /// Row creation time (unix millis).
     pub created_at: i64,
+    /// Last update time (unix millis).
     pub updated_at: i64,
 }
 
+/// Outcome of [`SessionStore::claim_admission`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmissionClaimOutcome {
+    /// New row inserted as `accepted`.
     Claimed(AdmissionRecord),
+    /// Matching row already existed (idempotent reclaim).
     Existing(AdmissionRecord),
 }
 
+/// Outcome of batch claim APIs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmissionBatchClaimOutcome {
+    /// Newly claimed members with intents (accepted launches only).
     Claimed(Vec<AdmissionLaunch>),
+    /// Operation already present; no new members claimed.
     Existing,
 }
 
+/// Outcome of start (`accepted` → `started`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmissionStartOutcome {
+    /// Transition applied.
     Started(AdmissionRecord),
+    /// Row already past accepted (idempotent).
     Existing(AdmissionRecord),
 }
 
+/// Terminal classification written by finalize APIs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionTerminal {
+    /// Map to [`AdmissionState::Completed`].
     Completed,
+    /// Map to [`AdmissionState::Cancelled`].
     Cancelled,
+    /// Map to [`AdmissionState::Aborted`].
     Aborted,
 }
 
@@ -147,20 +210,29 @@ impl AdmissionTerminal {
     }
 }
 
+/// One member after finalize; `release_required` drives governor refund exactly once.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionFinalizeOutcome {
+    /// Terminalized journal row.
     pub record: AdmissionRecord,
     /// True only for the process that terminalized a started/debited operation.
     pub release_required: bool,
 }
 
+/// Batch finalize result: terminalized members plus any FIFO promotions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmissionReleaseOutcome {
+    /// Members that reached a terminal state in this call.
     pub finalized: Vec<AdmissionFinalizeOutcome>,
+    /// Queued rows promoted into active slots after capacity freed.
     pub promoted: Vec<AdmissionLaunch>,
 }
 
 impl SessionStore {
+    /// Insert a single-member row as `accepted` (`member_ordinal=0`, `batch_size=1`).
+    ///
+    /// Idempotent: same fingerprint returns [`AdmissionClaimOutcome::Existing`];
+    /// conflicting fingerprint → [`StoreError::OperationIdConflict`].
     pub async fn claim_admission(
         &self,
         claim: &AdmissionClaim,
@@ -236,6 +308,7 @@ impl SessionStore {
         }
     }
 
+    /// Claim a multi-member batch with binding intents (capacity-checked).
     pub async fn claim_admission_batch(
         &self,
         claim: &AdmissionClaim,
@@ -244,6 +317,7 @@ impl SessionStore {
         self.claim_admission_batch_impl(claim, intents, None).await
     }
 
+    /// Move a parent member to `waiting`, then claim a child batch in one transaction.
     pub async fn suspend_parent_and_claim_admission_batch(
         &self,
         parent_operation_id: OperationId,
@@ -626,6 +700,7 @@ impl SessionStore {
         Ok(AdmissionBatchClaimOutcome::Claimed(launches))
     }
 
+    /// Transition a `waiting` member to `queued` for later FIFO promotion (idempotent if already queued).
     pub async fn queue_waiting_admission_member(
         &self,
         operation_id: OperationId,
@@ -702,6 +777,7 @@ impl SessionStore {
         Err(error)
     }
 
+    /// Load the single-member primary record (`member_ordinal=0`, `batch_size=1`), if present.
     pub async fn admission(
         &self,
         operation_id: OperationId,
@@ -719,6 +795,7 @@ impl SessionStore {
         row.map(decode_record).transpose()
     }
 
+    /// Load every member row for an operation id (batch members).
     pub async fn admissions(
         &self,
         operation_id: OperationId,
@@ -737,6 +814,7 @@ impl SessionStore {
         rows.into_iter().map(decode_record).collect()
     }
 
+    /// Count active (`accepted`+`started`) and non-active (`queued`+`waiting`) rows.
     pub async fn admission_counts(&self) -> Result<AdmissionCounts, StoreError> {
         let row = sqlx::query(ADMISSION_COUNTS_SQL)
             .fetch_one(&self.pool)
@@ -744,6 +822,7 @@ impl SessionStore {
         decode_admission_counts(&row)
     }
 
+    /// FIFO-promote up to `limit` queued rows into active slots using fairness indexes.
     pub async fn promote_queued_admissions(
         &self,
         limit: u32,
@@ -858,6 +937,7 @@ impl SessionStore {
         Ok(launches)
     }
 
+    /// Move a single-member claim from `accepted` to `started`.
     pub async fn start_admission(
         &self,
         operation_id: OperationId,
@@ -867,6 +947,7 @@ impl SessionStore {
             .await
     }
 
+    /// Move one batch member from `accepted` to `started` by ordinal.
     pub async fn start_admission_member(
         &self,
         operation_id: OperationId,
@@ -942,6 +1023,7 @@ impl SessionStore {
         Ok(AdmissionStartOutcome::Existing(record))
     }
 
+    /// Terminalize a single-member operation; sets `logical_released` when previous state was `started`.
     pub async fn finalize_admission(
         &self,
         operation_id: OperationId,
@@ -1025,6 +1107,7 @@ impl SessionStore {
         Err(error)
     }
 
+    /// Terminalize multiple members and promote queued admissions into freed active slots.
     pub async fn finalize_admission_members(
         &self,
         members: &[(OperationId, u32)],
@@ -1228,6 +1311,7 @@ impl SessionStore {
         Ok(records)
     }
 
+    /// Non-actor rows still `accepted` or `started` for a root session (root-turn cleanup).
     pub async fn nonterminal_admissions_for_root(
         &self,
         root_session: SessionId,

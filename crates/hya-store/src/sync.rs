@@ -1,3 +1,5 @@
+//! Compat/sync event history helpers for multi-client catch-up.
+
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -6,6 +8,7 @@ use sqlx::Row;
 use crate::{SessionStore, StoreError};
 
 impl SessionStore {
+    /// Persist sync events by `(aggregate_id, seq)`; returns only newly inserted events.
     pub async fn replay_sync_events(&self, events: &[Value]) -> Result<Vec<Value>, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut inserted = Vec::new();
@@ -33,6 +36,7 @@ impl SessionStore {
         Ok(inserted)
     }
 
+    /// Events the client has not yet seen: for each aggregate, rows with `seq` greater than `known`.
     pub async fn sync_history(
         &self,
         known: &BTreeMap<String, u64>,

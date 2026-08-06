@@ -1,3 +1,5 @@
+//! Durable installed-bundle registry (separate SQLite DB from the session store).
+
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -7,25 +9,37 @@ use sqlx::{Row, Sqlite, Transaction};
 
 use crate::StoreError;
 
+/// SQLite registry of installed AgentBundles and generation counter.
 #[derive(Clone, Debug)]
 pub struct BundleRegistry {
     pool: sqlx::SqlitePool,
 }
 
+/// Point-in-time view of generation + all installed rows.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleRegistrySnapshot {
+    /// Monotonic registry generation after last install/uninstall.
     pub generation: u64,
+    /// Installed mutable bundles (builtins are passed separately by callers).
     pub bundles: Vec<BundleRegistryRecord>,
 }
 
+/// One installed bundle row: identity, digests, and prepared catalog bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleRegistryRecord {
+    /// Bundle identity id (`publisher/name`).
     pub bundle_id: String,
+    /// Installed version string.
     pub version: String,
+    /// Publisher field from the prepared bundle.
     pub publisher: String,
+    /// Digest of the source package contents.
     pub source_digest: [u8; 32],
+    /// Hex digest of `prepared_bytes`.
     pub prepared_digest: String,
+    /// Canonical prepared-catalog JSON for this bundle alone.
     pub prepared_bytes: Vec<u8>,
+    /// Install timestamp (unix millis).
     pub installed_at: i64,
 }
 
@@ -54,27 +68,51 @@ impl LoadedBundleRegistrySnapshot {
     }
 }
 
+/// Payload required to install or replace a public package in the registry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleInstallCandidate {
+    /// Digest of the source package (identity of content).
     pub source_digest: [u8; 32],
+    /// Expected digest of `prepared_bytes` for decode verification.
     pub prepared_digest: String,
+    /// Single-bundle prepared catalog encoding.
     pub prepared_bytes: Vec<u8>,
+    /// Timestamp written to the row.
     pub installed_at: i64,
 }
 
+/// Result of an install attempt after catalog merge validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BundleInstallOutcome {
-    Installed { generation: u64 },
-    Replaced { generation: u64 },
-    Unchanged { generation: u64 },
+    /// New `bundle_id` inserted; registry generation advanced.
+    Installed {
+        /// Generation after insert.
+        generation: u64,
+    },
+    /// Existing id replaced with a new version/content; generation advanced.
+    Replaced {
+        /// Generation after replace.
+        generation: u64,
+    },
+    /// Same `source_digest` already present; generation unchanged.
+    Unchanged {
+        /// Current generation.
+        generation: u64,
+    },
 }
 
+/// Successful uninstall advances the registry generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BundleUninstallOutcome {
-    Removed { generation: u64 },
+    /// Bundle row removed; generation advanced.
+    Removed {
+        /// Generation after removal.
+        generation: u64,
+    },
 }
 
 impl BundleRegistry {
+    /// Open or create the registry database at `path` and run migrations (synchronous=Full).
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
@@ -90,6 +128,7 @@ impl BundleRegistry {
         Ok(Self { pool })
     }
 
+    /// Read the current registry generation singleton.
     pub async fn generation(&self) -> Result<u64, StoreError> {
         let row =
             sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
@@ -99,6 +138,7 @@ impl BundleRegistry {
         decode_generation(generation)
     }
 
+    /// Transactional snapshot of generation + all installed bundle rows.
     pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, StoreError> {
         let mut transaction = self.pool.begin().await?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
@@ -106,6 +146,7 @@ impl BundleRegistry {
         Ok(snapshot.into_public_snapshot())
     }
 
+    /// Install from a package inspection: public packages go through [`Self::install`]; private is rejected.
     pub async fn install_inspection(
         &self,
         builtins: &[hya_bundle::PreparedBundle],
@@ -131,6 +172,7 @@ impl BundleRegistry {
         }
     }
 
+    /// Validate candidate against builtins+installed catalog, then insert or replace under an immediate lock.
     pub async fn install(
         &self,
         builtins: &[hya_bundle::PreparedBundle],
@@ -245,6 +287,7 @@ impl BundleRegistry {
         Ok(BundleInstallOutcome::Installed { generation })
     }
 
+    /// Remove an installed bundle after re-validating the remaining catalog with `builtins`.
     pub async fn uninstall(
         &self,
         builtins: &[hya_bundle::PreparedBundle],
