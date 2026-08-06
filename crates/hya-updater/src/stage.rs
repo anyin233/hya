@@ -10,11 +10,14 @@ use crate::verify::verify_artifact_bytes;
 /// Immutable staged candidate under `root/releases/<sequence>/`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StagedRelease {
+    /// Sequence number of the staged generation.
     pub sequence: u64,
+    /// Updater root that owns the `releases/` tree.
     pub root: PathBuf,
 }
 
 impl StagedRelease {
+    /// Absolute path of this generation: `root/releases/<sequence>/`.
     pub fn directory(&self) -> PathBuf {
         release_directory(&self.root, self.sequence)
     }

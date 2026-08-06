@@ -1,3 +1,8 @@
+//! Bridge from MCP tool descriptors to the Harness [`hya_tool::Tool`] trait.
+//!
+//! Registers only tools whose `inputSchema.type` is `"object"`, under the
+//! namespaced model name produced by `namespaced_tool_name`.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +16,7 @@ use crate::protocol::{ToolCallResult, ToolInfo};
 
 const MAX_RESOURCE_BLOB_BYTES: usize = 10 * 1024 * 1024;
 
+/// Harness tool backed by a single MCP `tools/call` on a shared [`McpClient`].
 pub struct McpTool {
     client: McpClient,
     tool: String,
@@ -19,6 +25,11 @@ pub struct McpTool {
 }
 
 impl McpTool {
+    /// Build a tool if `info.input_schema` is a JSON Schema object type.
+    ///
+    /// Returns `None` when the schema is not `type: "object"` so non-object tools
+    /// never enter the model registry. `server` is the config key used for
+    /// namespacing; `timeout` bounds each `tools/call`.
     pub fn try_new(
         server: &str,
         info: ToolInfo,
@@ -43,6 +54,7 @@ impl McpTool {
     }
 }
 
+/// Model-facing tool name: `mcp__{server}__{tool}` (server is the config id).
 #[must_use]
 pub fn namespaced_tool_name(server: &str, tool: &str) -> String {
     format!("mcp__{server}__{tool}")

@@ -1,3 +1,5 @@
+//! Ordered list of [`Provider`] routes with first-match model resolution.
+
 use std::sync::Arc;
 
 use hya_proto::{Message, MessageId, ModelRef, SessionId};
@@ -6,22 +8,26 @@ use crate::{
     CompactedWindow, CompletionRequest, EventStream, Provider, ProviderError, ProviderModel,
 };
 
+/// Multiplexes multiple providers; the first route that claims a model wins.
 #[derive(Default, Clone)]
 pub struct ProviderRouter {
     providers: Vec<Arc<dyn Provider>>,
 }
 
 impl ProviderRouter {
+    /// Empty router (no routes claim any model).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Whether no providers are registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }
 
+    /// One configured-identity blob per route, or `None` if any route fails closed.
     #[must_use]
     pub fn configured_identities_v1(&self) -> Option<Vec<Vec<u8>>> {
         let mut identities = Vec::with_capacity(self.providers.len());
@@ -35,12 +41,14 @@ impl ProviderRouter {
         Some(identities)
     }
 
+    /// Append a provider route (registration order = resolve priority).
     #[must_use]
     pub fn with(mut self, provider: Arc<dyn Provider>) -> Self {
         self.providers.push(provider);
         self
     }
 
+    /// First provider whose `capabilities(model)` is `Some`.
     #[must_use]
     pub fn resolve(&self, model: &ModelRef) -> Option<Arc<dyn Provider>> {
         self.providers
@@ -49,6 +57,7 @@ impl ProviderRouter {
             .cloned()
     }
 
+    /// Merged catalog rows from all routes, sorted and deduped by provider+model id.
     #[must_use]
     pub fn catalog(&self) -> Vec<ProviderModel> {
         let mut models: Vec<_> = self.providers.iter().flat_map(|p| p.catalog()).collect();
@@ -61,6 +70,7 @@ impl ProviderRouter {
         models
     }
 
+    /// Resolve `req.model`, run [`crate::preflight`], clear unsupported reasoning, then stream.
     pub async fn stream(
         &self,
         mut req: CompletionRequest,

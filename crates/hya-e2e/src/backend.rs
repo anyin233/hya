@@ -19,7 +19,9 @@ const SHUTDOWN_POLL: Duration = Duration::from_millis(5);
 /// Optional stdio MCP server registration for the temp config.
 #[derive(Clone, Debug)]
 pub struct McpFixture {
+    /// Config key / MCP server name.
     pub name: String,
+    /// Argv for the stdio MCP process (`command` + args).
     pub command: Vec<String>,
 }
 
@@ -49,6 +51,7 @@ pub struct BackendSpec {
 }
 
 impl BackendSpec {
+    /// Spec with YOLO on, allow permissions, and FakeLlm defaults for model/provider.
     pub fn new(binary: impl Into<PathBuf>, fake_base_url: impl Into<String>) -> Self {
         Self {
             binary: binary.into(),
@@ -67,12 +70,17 @@ impl BackendSpec {
 
 /// Running backend + isolation roots.
 pub struct BackendProcess {
+    /// Base URL of the listening server (no trailing path).
     pub url: String,
+    /// Temp project workdir used as the session workdir.
     pub project: PathBuf,
+    /// SQLite session db path for this process.
     pub db: PathBuf,
+    /// Isolated `XDG_CONFIG_HOME` root.
     pub xdg_config_home: PathBuf,
     /// Same root used for XDG_DATA_HOME (bundle registry).
     pub xdg_data_home: PathBuf,
+    /// Path to the `hya-backend` binary that was spawned.
     pub binary: PathBuf,
     child: Child,
     root: PathBuf,
@@ -257,6 +265,7 @@ permission:
         terminate_process_group(&mut self.child)
     }
 
+    /// Project workdir as a string for API `workdir` fields.
     #[must_use]
     pub fn workdir_str(&self) -> String {
         self.project.display().to_string()

@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
 
+/// Gemini generateContent request encoder + stream decoder factory.
 pub struct GoogleProtocol;
 
 const MEDIA_MIMES: &[&str] = &[
@@ -197,6 +198,7 @@ impl Protocol for GoogleProtocol {
     }
 }
 
+/// Stateful decoder for Gemini stream generateContent JSON fragments.
 pub struct GoogleDecoder {
     session: SessionId,
     message: MessageId,
@@ -207,6 +209,7 @@ pub struct GoogleDecoder {
 }
 
 impl GoogleDecoder {
+    /// Bind a new decoder to the turn's session and assistant message ids.
     #[must_use]
     pub fn new(session: SessionId, message: MessageId) -> Self {
         Self {

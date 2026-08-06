@@ -1,7 +1,7 @@
 //! The v2 projected-timeline cache (`data`) and its turn-stream reducer.
 //!
 //! [`V2Event`] covers the `session.next.*` turn-stream events used by the TUI
-//! timeline. [`apply`] folds those events into a per-session newest-first
+//! timeline. `apply` folds those events into a per-session newest-first
 //! [`Data`] cache (assistant/user/shell/compaction rows and part deltas).
 //! `prompt.admitted` is intentionally silent (durable inbox only); the visible
 //! user message appears on `prompt.promoted`. Unknown kinds become

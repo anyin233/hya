@@ -13,7 +13,9 @@ use crate::metadata::VerifiedRelease;
 /// One artifact payload loaded from a local package directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FetchedArtifact {
+    /// Relative path of the artifact inside the package (as named in metadata).
     pub name: String,
+    /// Raw file contents read from the package directory.
     pub bytes: Vec<u8>,
 }
 

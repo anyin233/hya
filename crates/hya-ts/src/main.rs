@@ -1,3 +1,9 @@
+//! Process entry for the TypeScript TUI launcher.
+//!
+//! Parses [`hya_ts::Cli`], runs backend subcommands or import, otherwise starts
+//! an owned `hya-backend` (unless `--server`), hands off the terminal process
+//! group to Bun, and restores terminal state on exit.
+
 use std::error::Error;
 use std::io;
 use std::mem::MaybeUninit;

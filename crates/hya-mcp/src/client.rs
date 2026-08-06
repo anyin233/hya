@@ -1,3 +1,8 @@
+//! Stdio JSON-RPC MCP client: spawn a server process, initialize, call methods.
+//!
+//! Transport is one JSON object per line on the child stdin/stdout. Responses are
+//! demultiplexed by request `id`. A held `ChildGuard` owns process lifetime.
+
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,32 +17,52 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 
+/// Default timeout for ordinary MCP method calls (`tools/list`, `tools/call`, …).
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Shorter timeout used only for the `initialize` handshake.
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>;
 
+/// Failures from spawning, framing, timing out, or decoding MCP traffic.
 #[derive(Error, Debug, Clone)]
 pub enum McpError {
+    /// Configured command vector was empty (no program to spawn).
     #[error("mcp command is empty")]
     EmptyCommand,
+    /// Child process did not provide the required stdio pipe.
     #[error("mcp stdio unavailable: {0}")]
     MissingPipe(&'static str),
+    /// Read/write/spawn OS error detail.
     #[error("io: {0}")]
     Io(String),
+    /// Request or response JSON failed to (de)serialize.
     #[error("json: {0}")]
     Json(String),
+    /// Server returned a JSON-RPC error object.
     #[error("rpc error {code}: {message}")]
-    Rpc { code: i64, message: String },
+    Rpc {
+        /// JSON-RPC error code.
+        code: i64,
+        /// Server error message.
+        message: String,
+    },
+    /// No response within the call timeout.
     #[error("mcp call timed out: {method}")]
-    Timeout { method: String },
+    Timeout {
+        /// Method that timed out.
+        method: String,
+    },
+    /// Stdout closed or pending map was cancelled.
     #[error("mcp connection closed")]
     Closed,
+    /// A single stdout line exceeded the 1 MiB hard limit.
     #[error("mcp line exceeded 1048576 bytes")]
     OversizedLine,
 }
 
+/// Cloneable JSON-RPC client over an async reader/writer pair (usually child stdio).
 #[derive(Clone)]
 pub struct McpClient {
     inner: Arc<ClientInner>,
@@ -49,6 +74,10 @@ struct ClientInner {
     pending: Pending,
 }
 
+/// Owns a spawned MCP child process; on drop, SIGTERM (Unix) then kill and wait.
+///
+/// Keep this guard alive for as long as the paired [`McpClient`] should talk to
+/// the process. Dropping it tears down the server even if client clones remain.
 pub struct ChildGuard {
     child: StdMutex<Option<Child>>,
 }
@@ -89,6 +118,9 @@ async fn terminate_child(child: &mut Child) {
 }
 
 impl McpClient {
+    /// Build a client from existing async pipes and start the stdout demux task.
+    ///
+    /// Used by tests and by [`Self::spawn`] after taking the child stdio handles.
     pub fn new<R, W>(reader: R, writer: W) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
@@ -105,6 +137,11 @@ impl McpClient {
         }
     }
 
+    /// Spawn `command[0]` with `command[1..]` as args, optional env, piped stdio.
+    ///
+    /// Returns the client plus a `ChildGuard` that must be retained for the
+    /// process lifetime. Stderr is discarded. Fails with [`McpError::EmptyCommand`]
+    /// when `command` is empty.
     pub fn spawn(
         command: &[String],
         env: Option<&std::collections::BTreeMap<String, String>>,
@@ -130,6 +167,7 @@ impl McpClient {
         ))
     }
 
+    /// Send MCP `initialize` with hya client info; uses [`INITIALIZE_TIMEOUT`].
     pub async fn initialize(&self) -> Result<Value, McpError> {
         self.call(
             "initialize",
@@ -165,6 +203,9 @@ impl McpClient {
         Ok(())
     }
 
+    /// Send a JSON-RPC request and await the matching response within `timeout`.
+    ///
+    /// On timeout the pending entry is removed; late responses for that id are dropped.
     pub async fn call(
         &self,
         method: &str,

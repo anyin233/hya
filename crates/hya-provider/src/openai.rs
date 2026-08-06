@@ -16,6 +16,7 @@ pub use responses::{
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
 
+/// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {

@@ -1,3 +1,5 @@
+//! Multi-server MCP lifecycle: config, prepare, status map, and tool aggregation.
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -10,30 +12,43 @@ use crate::client::{ChildGuard, DEFAULT_CALL_TIMEOUT, McpClient, McpError};
 use crate::protocol::ToolsListResult;
 use crate::resource::{ResourceMap, load as load_resources};
 
+/// User/config entry for one named MCP server (from `mcp:` in hya config).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    /// Argv to spawn (`command[0]` is the program); empty is invalid at connect.
     #[serde(default)]
     pub command: Vec<String>,
+    /// Extra environment variables for the child process.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// When `Some(false)`, the server is marked disabled and never spawned.
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Per-call timeout in milliseconds; defaults to [`crate::client::DEFAULT_CALL_TIMEOUT`].
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
+/// Connection state for one configured server name (HTTP/TUI status surface).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum McpStatus {
     /// Handshake not finished yet (listen-before-connect path).
     Connecting,
+    /// Initialize + tools/list succeeded; tools are registered.
     Connected,
+    /// Config has `enabled: false`; no process started.
     Disabled,
+    /// Spawn or handshake failed.
     Failed {
+        /// Error text for operators/UI.
         error: String,
     },
+    /// Reserved for OAuth-style servers that need user auth (not used by stdio prepare today).
     NeedsAuth,
+    /// Reserved for registration-required servers.
     NeedsClientRegistration {
+        /// Error text explaining the registration failure.
         error: String,
     },
 }
@@ -51,6 +66,9 @@ struct McpInner {
     status: BTreeMap<String, McpStatus>,
 }
 
+/// One connected MCP server: live child, namespaced tools, and best-effort resources.
+///
+/// Holds the `ChildGuard` so the process stays up while tools are in use.
 pub struct PreparedMcpServer {
     name: String,
     _client: McpClient,
@@ -60,22 +78,29 @@ pub struct PreparedMcpServer {
 }
 
 impl PreparedMcpServer {
+    /// Config key / display name for this server.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Namespaced tools registered from this server's `tools/list`.
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.tools.clone()
     }
 
+    /// Best-effort `resources/list` map keyed `sanitized_server:sanitized_name`.
     #[must_use]
     pub fn resources(&self) -> ResourceMap {
         self.resources.clone()
     }
 }
 
+/// Spawn, initialize, list tools/resources, and return a ready [`PreparedMcpServer`].
+///
+/// `name` is the config id used in tool namespaces. Equivalent to the path used
+/// inside [`McpManager::connect_all_into`] for a single server.
 pub async fn prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError> {
     connect_server(name, config).await
 }
@@ -151,6 +176,7 @@ impl McpManager {
         }
     }
 
+    /// Flatten all connected servers' tools for registry publication.
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.read()
@@ -160,11 +186,13 @@ impl McpManager {
             .collect()
     }
 
+    /// Snapshot of per-server connection status (including failed/disabled).
     #[must_use]
     pub fn status(&self) -> BTreeMap<String, McpStatus> {
         self.read().status.clone()
     }
 
+    /// Flatten all connected servers' resource maps.
     #[must_use]
     pub fn resources(&self) -> ResourceMap {
         self.read()

@@ -8,6 +8,7 @@ mod decoder;
 
 pub use decoder::AnthropicDecoder;
 
+/// Anthropic Messages API request encoder + stream decoder factory.
 pub struct AnthropicMessagesProtocol;
 
 impl Protocol for AnthropicMessagesProtocol {

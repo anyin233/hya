@@ -7,10 +7,6 @@
 //! turn-stream timeline reducer — not the native `/sessions` micro-client in
 //! `hya-client`.
 
-// Fully documented; keep it that way. Removed when the workspace lint
-// table is promoted from `warn` to `deny`.
-#![deny(missing_docs)]
-
 /// HTTP header that scopes each request to a working directory. This is the single wire-protocol
 /// string coupled to the current backend; change it here (or translate it in the native bridge)
 /// when porting to a different backend.

@@ -22,25 +22,34 @@ use crate::verify::verify_release_metadata;
 /// Result of a staged (and optionally activated) apply.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplyResult {
+    /// Release intent that passed signature and policy checks.
     pub verified: VerifiedRelease,
+    /// Immutable staged generation under `releases/<sequence>/`.
     pub staged: StagedRelease,
+    /// New selector after owner-authorized activation; `None` if only staged.
     pub activated: Option<ActivationSelector>,
+    /// Selector state after crash recovery, before this apply mutated anything.
     pub recovered_before: ActivationSelector,
 }
 
 /// Apply options for the independent updater pipeline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplyOptions<'a> {
+    /// Updater TCB root that owns trust roots, floor, journal, and releases.
     pub updater_root: &'a Path,
+    /// Signed release metadata to verify and apply.
     pub metadata: &'a ReleaseMetadata,
     /// Local package directory or `file://` path holding artifacts.
     pub package_source: &'a str,
+    /// Explicit trust roots; when `None`, load `updater_root/trust_roots.json`.
     pub trust_roots: Option<&'a [TrustRoot]>,
-    /// When None, load `updater_root/trust_roots.json`.
+    /// Host platform string compared to metadata `platform`.
     pub host_platform: &'a str,
+    /// Unix seconds used for not_before / not_after checks.
     pub now_unix: i64,
     /// Relative smoke command under the staged release, if any.
     pub smoke_command: Option<&'a str>,
+    /// Arguments passed to the smoke command after the program path.
     pub smoke_args: &'a [&'a str],
     /// Must be true to journal prepare + commit selector/floor.
     pub owner_authorized: bool,

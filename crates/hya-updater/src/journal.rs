@@ -12,7 +12,9 @@ use crate::metadata::AcceptedFloor;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivationPhase {
+    /// Activation started; selector/floor not yet known to be committed.
     Prepare,
+    /// Selector and accepted floor both point at a complete generation.
     Committed,
     /// Interrupted prepare discarded; previous complete generation retained.
     Aborted,
@@ -21,15 +23,20 @@ pub enum ActivationPhase {
 /// One journal record written under the independent updater root.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActivationJournalRecord {
+    /// Crash-recovery phase for this journal line.
     pub phase: ActivationPhase,
+    /// Candidate (or committed) release sequence for this record.
     pub sequence: u64,
+    /// Sequence active before this prepare/commit attempt.
     pub previous_sequence: u64,
 }
 
 /// Active generation selector and accepted floor under `root/`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActivationSelector {
+    /// Generation currently selected by `current` (may lag floor during recovery).
     pub current_sequence: u64,
+    /// Monotonic anti-rollback floor; releases must strictly exceed this.
     pub accepted_floor: u64,
 }
 
@@ -190,6 +197,15 @@ pub fn read_selector(root: &Path) -> Result<ActivationSelector, UpdaterError> {
     })
 }
 
+/// Read the accepted anti-rollback floor from `root/accepted_floor`.
+///
+/// The floor is the highest release sequence the host has already accepted.
+/// Verification and activation require every new sequence to strictly exceed
+/// this value (`NonIncreasingSequence` otherwise). A **too-low** floor (for
+/// example after tampering or a bad recovery write) re-admits previously
+/// accepted or superseded sequences and weakens rollback protection. A
+/// **too-high** floor blocks legitimate newer releases until a signed recovery
+/// path advances past it. Missing file defaults to sequence `0`.
 pub fn read_floor(root: &Path) -> Result<AcceptedFloor, UpdaterError> {
     match fs::read_to_string(floor_path(root)) {
         Ok(text) => {

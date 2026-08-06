@@ -21,6 +21,7 @@ struct Block {
     args: String,
 }
 
+/// Stateful decoder for Anthropic Messages SSE events into canonical `Event`s.
 pub struct AnthropicDecoder {
     session: SessionId,
     message: MessageId,
@@ -31,6 +32,7 @@ pub struct AnthropicDecoder {
 }
 
 impl AnthropicDecoder {
+    /// Bind a new decoder to the turn's session and assistant message ids.
     #[must_use]
     pub fn new(session: SessionId, message: MessageId) -> Self {
         Self {
