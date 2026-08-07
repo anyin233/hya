@@ -28,10 +28,13 @@ three write/publish seams:
    number, **then** publishes an `Envelope` with that seq. A live observer
    never sees a non-durable event on this path.
 2. **`publish_live`** — publishes an `Envelope` at `seq: 0` with **no** store
-   write. Used for high-frequency streaming text/reasoning deltas. At round
-   end those parts are re-emitted durably as a
-   `TextStart` / `TextReplace` / `TextEnd` triple (or the corresponding
-   reasoning events).
+   write. Used only for high-frequency **text** streaming
+   (`TextStart` / `TextDelta` / `TextEnd`, and live `TextReplace` from the
+   `text_complete` hook). At round end those text parts are re-emitted
+   **durably** as a `TextStart` / `TextReplace` / `TextEnd` triple. Reasoning
+   and other non-text stream events are **not** live-only: they go straight to
+   `emit_for_actor` and are durable on first emit (no reasoning re-emission
+   loop).
 3. **`emit_for_actor`** — the fencing seam for resident work: when given
    `Some(&ActorClaim)` it routes through `commit_resident_mutation` (fenced
    SQLite commit, publish only after commit); when `None` it falls through to
@@ -164,8 +167,9 @@ Each round runs **in this order** (see `run_turn_rounds` in
 6. Run the `chat_params` hook (may rewrite the `CompletionRequest`).
 7. Acquire a governor stream permit (reserved or general by depth).
 8. Emit `StepStarted`.
-9. Stream the provider round (`collect_stream_round`) — live text/reasoning
-   via `publish_live`, durable tool-call events via `emit_for_actor`.
+9. Stream the provider round (`collect_stream_round`) — live **text** via
+   `publish_live` (then durable text triple at round end); reasoning, tool
+   calls, and other events via durable `emit_for_actor` immediately.
 10. Emit `StepFinished`.
 11. **Drop the stream permit** before any tool work.
 12. If the round produced no tool calls, emit `MessageFinished` and end the turn.
@@ -488,13 +492,19 @@ When the window is over threshold, the turn:
    then `<<<RESPONSES_COMPACT_ITEMS>>>`, then the JSON array. Subsequent
    `/responses` requests re-inject those items verbatim into `input`.
 3. **Tier 2 (fallback):** on `Ok(None)` (no compact endpoint) or **any** error,
-   the turn falls back to the local `ModelSummarizer` via `compact_with`, which
-   writes a system message carrying the `HYA_COMPACTED_CONTEXT` marker as a
-   plain local summary (no Responses item array).
+   the turn falls back to the local `ModelSummarizer` via `compact_with`. That
+   helper returns an **in-memory** `Vec<Message>` for the current round only:
+   older messages are replaced by a system message of the form
+   `Summary of {n} earlier messages:\n{summary}` — **no**
+   `HYA_COMPACTED_CONTEXT` marker, and **no** store write. The turn assigns
+   `messages = compacted` for the next provider request; the fallback is
+   recomputed from scratch whenever thresholds still require it.
 
-Every subsequent round drops all history **before** the latest system message
-whose text starts with `HYA_COMPACTED_CONTEXT` when building the provider
-request (`compacted_messages` in the turn message builder).
+The `HYA_COMPACTED_CONTEXT` marker (and the history drop in
+`compacted_messages` that selects on that prefix) is written only by durable
+paths: **Tier 1** native Responses compact inject, and the explicit
+`SessionEngine::compact_context` / `/compact` path
+(`engine/summary.rs`), not by Tier 2 `compact_with`.
 
 The CLI exposes local compact via `/compact`; legacy Compat summarize routes
 persist the same native summary shape.

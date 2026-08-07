@@ -38,9 +38,15 @@ Mail is written under the SQLite writer lock in `hya-store` (`append_direct_mail
 4. **Reject** with `StoreError::MailboxRejected` when:
    - the target handle is **unknown** (not in the roster)
    - the target is a **transient non-root** member (`session != root` and `mode == Transient`)
-   - the target is a **stopped/terminal resident** (see eligibility below)
+   - the target is a **non-root** resident that fails eligibility
+     (`session != root` and `mode == Resident` and not
+     `resident_member_is_eligible` — stopped/terminal or no active claim)
 5. Append `Event::MailSent { to: Handle(...) }`
 6. Commit and return the envelope
+
+**Root-session handle:** when the roster entry's `session == root`, neither the
+transient reject nor the resident eligibility check runs. Mail to the team-root
+handle is accepted regardless of that entry's `RosterStatus` or claim row.
 
 ### `append_channel_mail`
 
@@ -55,14 +61,18 @@ Same writer-lock discipline and optional claim fence, then:
 
 ### Eligibility (`resident_member_is_eligible`)
 
-Used by both direct rejection and channel recipient counting:
+Used for **non-root** resident direct-mail rejection and for channel recipient counting:
 
 | Member | Counts as eligible? |
 | --- | --- |
 | Not on the roster / not resident | Yes for channel counting (non-resident always counts); direct mail still requires a roster entry |
-| Resident with `RosterStatus::Done` or `Failed` | **No** |
+| Resident with `RosterStatus::Done` or `Failed` | **No** (when this check is applied) |
 | Resident otherwise | **Yes only if** `resident_actor_claim` has an **`active`** row for that actor session — the durable liveness check behind mail rejection |
 
+Direct mail applies this only when `entry.session != root` and
+`mode == Resident`. A roster entry whose session **is** the team root is never
+passed through `resident_member_is_eligible` on the direct path.
+
 The reducer's channel fan-out (above) uses the roster status skip only; the store's active-claim
-check is the writer-side gate that prevents delivering *new* mail into a resident that no longer
-holds a live claim.
+check is the writer-side gate that prevents delivering *new* mail into a non-root resident that
+no longer holds a live claim.
