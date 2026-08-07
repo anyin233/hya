@@ -253,15 +253,20 @@ Map of every accepted config key to the command (or role) it drives:
 
 ## Binding collisions
 
-Two defaults share the same chord:
+Many default chords are shared across commands. The binding layer that is active
+decides which action wins (dialog open, prompt focused, autocomplete visible,
+and so on). Prefer rebinding one of the conflicting commands if you hit
+collisions. Examples (not exhaustive):
 
-| Chord | Commands |
+| Chord | Example commands that share it |
 | --- | --- |
-| `<leader>q` | `session.queued_prompts` and the `<leader>q` alternative of `app.exit` |
-| `<leader>h` | `session.toggle.conceal` and `tips.toggle` |
-
-Which action wins depends on which binding layer is active. Prefer rebinding one
-of the pair if you hit conflicts.
+| `<leader>q` | `session.queued_prompts`; `<leader>q` alternative of `app.exit` |
+| `<leader>h` | `session.toggle.conceal`; `tips.toggle` |
+| `ctrl+d` | `app.exit`; `session.delete`; `stash.delete`; `input.delete`; `dialog.move_session.delete` |
+| `ctrl+f` | `session.pin.toggle`; `model.dialog.favorite`; `permission.prompt.fullscreen`; `input.move.right` |
+| `ctrl+p` | `command.palette.show`; `dialog.select.prev`; `prompt.autocomplete.prev` |
+| `escape` | `session.interrupt`; `diff.close`; `prompt.autocomplete.hide` (and shell-mode exit when shell mode is active) |
+| `tab` | `agent.cycle`; `diff.switch_focus`; `prompt.autocomplete.complete` |
 
 ---
 
@@ -416,12 +421,12 @@ These bindings apply while a managed prompt textarea has focus.
 
 | Command | Default binding | Slash name | Meaning |
 | --- | --- | --- | --- |
-| `session.page.up` | `pageup`, `ctrl+alt+b` | — | Scroll up by half a page (implementation uses half viewport height). |
-| `session.page.down` | `pagedown`, `ctrl+alt+f` | — | Scroll down by half a page. |
+| `session.page.up` | `pageup`, `ctrl+alt+b` | — | Scroll up by half the viewport height (`scrollBy(-height / 2)`). |
+| `session.page.down` | `pagedown`, `ctrl+alt+f` | — | Scroll down by half the viewport height (`scrollBy(height / 2)`). |
 | `session.line.up` | `ctrl+alt+y` | — | Scroll up one line. |
 | `session.line.down` | `ctrl+alt+e` | — | Scroll down one line. |
-| `session.half.page.up` | `ctrl+alt+u` | — | Scroll up half a page. |
-| `session.half.page.down` | `ctrl+alt+d` | — | Scroll down half a page. |
+| `session.half.page.up` | `ctrl+alt+u` | — | Scroll up by a quarter of the viewport (`scrollBy(-height / 4)`); half of what page-up moves. |
+| `session.half.page.down` | `ctrl+alt+d` | — | Scroll down by a quarter of the viewport (`scrollBy(height / 4)`); half of what page-down moves. |
 | `session.first` | `ctrl+g`, `home` | — | Jump to the first message. |
 | `session.last` | `ctrl+alt+g`, `end` | — | Jump to the last message. |
 | `session.message.next` | unbound | — | Navigate to the next message. |

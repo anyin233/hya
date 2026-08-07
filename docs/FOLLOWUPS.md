@@ -5,13 +5,7 @@ Reference for work intentionally left for a future pass. The pi-parity waves
 
 ## Deferred (not yet implemented)
 
-- **OAuth interactive login (device code / PKCE browser flow).** The auth
-  substrate exists: a token store + `hya-backend login <provider> <token>` + router
-  preference for stored tokens. The remaining piece is the full interactive flow —
-  device-authorization request, opening the browser, polling the token endpoint,
-  PKCE code exchange, and refresh-token handling — per provider (Anthropic,
-  OpenAI-class, Google). Keep it as its own task (it is large on its own). Until
-  then, paste a token via `hya-backend login`.
+- _(none currently tracked here — interactive OAuth login shipped; see Implemented.)_
 
 ## Implemented (merged)
 
@@ -29,6 +23,11 @@ Reference for work intentionally left for a future pass. The pi-parity waves
 - Hardening — path-containment resolves symlinks on existing ancestors.
 - TUI typed-deny feedback — the permission overlay captures optional rejection
   text and sends it through `Decision::Reject { feedback }`.
+- **OAuth interactive login** — full Rust flow in `crates/hya-app/src/oauth/`
+  (device-code and loopback/PKCE for `openai-codex`, Grok Build, browser open,
+  poll/refresh). CLI: `hya oauth login --provider … --type openai-codex|grok-build`
+  with `--device` / `--loopback` / `--browser` flags; see `docs/cli.md` and
+  `docs/configuration.md`.
 
 ## Notes
 

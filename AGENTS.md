@@ -121,8 +121,11 @@ For Rust changes, run:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude hya-e2e
 ```
+
+Exclude `hya-e2e` from the default workspace suite (matches CI): Track P spawns
+real backend processes and must not run multi-threaded under the default suite.
 
 For process agent E2E (`crates/hya-e2e`) or agent-surface features that must not
 regress the PR matrix (permissions, skills, MCP, subagents, hyabundle), also:
