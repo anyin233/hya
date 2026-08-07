@@ -156,7 +156,7 @@ tools:
 # name used by `hya-backend login <id>` and shown as the provider in model refs.
 providers:
   anthropic:
-    kind: anthropic                      # openai-completion | openai-response | grok-build | anthropic | google
+    kind: anthropic                      # openai-completion | openai-response | openai-codex | grok-build | anthropic | google
     base_url: https://api.anthropic.com/v1
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
     # A token saved via `hya-backend login anthropic <token>` takes precedence.
@@ -173,8 +173,9 @@ mcp:
     timeout_ms: 1000                     # milliseconds; omit for 30s default
     # enabled: false                     # set to skip this server
 
-# Plugins. Also discovered from <workdir>/.hya/plugins/<name>/plugin.toml
-# (one directory deep — not recursive).
+# Plugins. Also discovered from $CWD/.hya/plugins/<name>/plugin.toml
+# (backend process working directory at startup — not the session workdir;
+# one directory deep — not recursive).
 plugins:
   memory:
     command: [python3, memory.py]        # stdio JSON-RPC process
@@ -706,7 +707,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH` | `crates/hya-backend/src/serve.rs` |
 | `HYA_BACKEND_BIN` | Path to the `hya-backend` binary the `hya` / `hya-ts` launcher spawns. After CLI `--backend-bin`, before sibling and `target/{release,debug}` fallbacks. | sibling / workspace target | `crates/hya-ts/src/lib.rs` |
 | `HYA_TUI_TS_DIR` | Highest-priority override for the TypeScript TUI runtime directory. Order: (1) this env, (2) `<exe_dir>/../lib/hya/hya-tui-ts`, (3) `<workspace>/packages/hya-tui-ts`. | installed or workspace path | `crates/hya-ts/src/lib.rs` |
-| `HYA_DB` | Session SQLite path for the backend. Empty string forces in-memory. | `$XDG_STATE_HOME/hya/sessions.db` (see `docs/cli.md`) | `crates/hya-sdk/src/server.rs` |
+| `HYA_DB` | Used only when the `hya` / `hya-ts` launcher spawns an **owned** `hya-backend serve` (`hya_sdk::default_session_db_path`): non-empty value becomes the `--db` path on that child; empty string omits `--db` (in-memory). **Not** read by a directly invoked `hya-backend` (use CLI `--db` / `resolve_interactive_db`). | unset → `$XDG_STATE_HOME/hya/sessions.db` (see `docs/cli.md`) | `crates/hya-sdk/src/server.rs` |
 | `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), emit newline-delimited JSON startup marks to stderr. Rust emitters (`hya-ts`, `hya-backend`): `{"hya_startup":true,"mark":"<mark>","wall_ms":…,"detail":…}` (`detail` omitted when none). TUI emitter (`startup-trace.ts`) **always** also includes `mono_ms` (monotonic ms from `performance.now()`). Marks include `hya_ts_start`, `backend_spawn`, `backend_listen`, plus backend and TUI marks. | off | `crates/hya-ts/src/main.rs`, `crates/hya-backend/src/serve.rs`, `packages/hya-tui-ts/src/hya/startup-trace.ts` |
 
 ### TUI environment variables
@@ -748,7 +749,7 @@ Read by the bundled Compat plugin adapter
 | Variable | Effect | Source |
 | --- | --- | --- |
 | `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
-| `EDITOR` / `VISUAL` | External editor for the TUI `/editor` slash command (`<leader>e`). `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
+| `EDITOR` / `VISUAL` | External editor for the TUI (`openEditor`): `/editor` (`<leader>e`) **and** session export (`/export`, `<leader>x`). On the saving export path the editor output is written back over the exported `.md`. `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
 | `SHELL` | Shell program for PTY sessions on Compat PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/compat/pty_payload.rs`, `pty_shell.rs` |
 | `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/compat/reference_repository.rs` |
 | `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/compat/pty_state.rs` |
@@ -986,8 +987,12 @@ skills.
 ## Plugins
 
 Plugins may be declared directly in config or discovered from
-`<workdir>/.hya/plugins/<name>/plugin.toml` (**one directory deep** — nested
-`plugin.toml` files are never found):
+**`$CWD/.hya/plugins/<name>/plugin.toml`** — the backend process working
+directory at startup (`plugins::plugins_dir()`), **not** the per-session
+workdir (**one directory deep** — nested `plugin.toml` files are never found).
+The two coincide when the launcher starts the backend with
+`.current_dir(project)`; a bare `hya-backend serve` from another directory only
+scans that process CWD:
 
 ```yaml
 plugins:
@@ -1012,12 +1017,12 @@ Config entries support:
 
 ### Directory manifests
 
-Layout: `<workdir>/.hya/plugins/<name>/plugin.toml` scanned from each
-**immediate** subdirectory of `.hya/plugins` only
+Layout: `$CWD/.hya/plugins/<name>/plugin.toml` (process CWD at compose time —
+see above) scanned from each **immediate** subdirectory of `.hya/plugins` only
 ([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)
-`scan_manifests`). Missing or **unreadable** `plugin.toml` is skipped
-**silently** (`read_to_string` failure → `continue` with no log). Only an
-**unparseable** file prints
+`plugins_dir` / `scan_manifests`). Missing or **unreadable** `plugin.toml` is
+skipped **silently** (`read_to_string` failure → `continue` with no log). Only
+an **unparseable** file prints
 `hya: skipping plugin manifest <path> (<error>)` on stderr. Neither case fails
 startup.
 
@@ -1157,8 +1162,13 @@ known builtin name, a non-disabled map entry **merges** into that builtin
 (override extensions/command/env); an unknown name is **appended** as a new
 formatter (requires `command` / `extensions` as needed).
 
-**Python pair:** `disabled: true` on **either** `ruff` **or** `uv` removes
-**both** from the active set (they share `.py` / `.pyi`).
+**Python pair:** the bulk dual-disable uses
+`entries.get("ruff").or_else(|| entries.get("uv")).is_some_and(|e| e.disabled)`
+— i.e. it inspects **`ruff` if that key is present**, otherwise **`uv`**. When
+that chosen entry has `disabled: true`, **both** `ruff` and `uv` are removed
+from the active set. If `ruff` is present and **not** disabled, a separate
+`uv: { disabled: true }` only removes `uv` (ruff keeps formatting `.py` /
+`.pyi`).
 
 The formatter block is parsed **independently** of the rest of `config.yaml`. A
 parse error there disables only formatting and prints on stderr:
@@ -1494,12 +1504,23 @@ Example object (when a host loads it):
 
 ### Where the TUI stores state
 
+Paths come from `HyaPaths` (`packages/hya-tui-ts/src/hya/platform.ts`): each is
+`…/hya` under the XDG base (or home-relative fallback).
+
 | XDG base | Directory | Contents |
 | --- | --- | --- |
-| `XDG_DATA_HOME` | `…/hya` (fallback `~/.local/share/hya`) | Data root; plus `/worktree` for the TUI worktree root |
+| `XDG_DATA_HOME` | `…/hya` (fallback `~/.local/share/hya`) | Data root; TUI worktree root is **`$XDG_DATA_HOME/hya/worktree`** (`HyaPaths.data + "/worktree"`) |
 | `XDG_CACHE_HOME` | `…/hya` (fallback `~/.cache/hya`) | Cache |
-| `XDG_CONFIG_HOME` | `…/hya` (fallback `~/.config/hya`) | Config dir (shared naming with backend) |
-| `XDG_STATE_HOME` | `…/hya` (fallback `~/.local/state/hya`) | `model.json` (recent + favorite models), session pin list for nine quick-switch slots, other KV |
+| `XDG_CONFIG_HOME` | `…/hya` (fallback `~/.config/hya`) | Config dir (shared naming with backend; launcher does not load a separate TUI config file from here) |
+| `XDG_STATE_HOME` | `…/hya` (fallback `~/.local/state/hya`) | See files below |
+
+**State files under `$XDG_STATE_HOME/hya/`:**
+
+| File | Role |
+| --- | --- |
+| `model.json` | Recent + favorite models (`context/local.tsx`) |
+| `session.json` | Session pin list for nine quick-switch slots (`pinned: string[]`) |
+| `kv.json` | All other TUI KV flags (`context/kv.tsx`) — e.g. `thinking_mode`, `tips_hidden`, `diff_wrap_mode`, `terminal_title_enabled`, `paste_summary_enabled`, `sidebar`, `timestamps`, `scrollbar_visible`, `tool_details_visibility`, `generic_tool_output_visibility`, `which_key_layout`, `which_key_pending_preview`, `diff_viewer_show_file_tree`, `diff_viewer_single_patch`, `diff_viewer_view`, `attention_sound_pack` |
 
 Invalid or unreadable `model.json` content is discarded on load (no startup
 toast). Warnings appear only when a **selected** model is not served by any

@@ -100,13 +100,16 @@ dialog instead.
 chips (`main` plus each observation’s roster handle / `subagent_type` / truncated
 session id). The focused chip is inverted to the accent color.
 
-**Observation pane.** Read-only sticky-bottom transcript. Header line joins:
+**Observation pane.** Read-only sticky-bottom transcript. A single header
+string (one word-wrapped `<text>`, optional Working spinner beside it) is built
+by joining non-empty parts with ` - `:
 
 ```text
-handle - agent_type - Working|Finished|Failed|Cancelled|Idle - task - placement - focused|open - read-only
+handle - agent_type - Working|Finished|Failed|Cancelled|Idle - task - placement - focused|open - read-only [- <nav hint>]
 ```
 
-A spinner shows while Working. When focused, a hint line prints:
+The trailing nav hint is **not** a second line. It is appended only when the
+pane is focused:
 
 ```text
 ctrl+x ←/→ panes · 1-9 · esc main · ctrl+x w close
@@ -276,37 +279,54 @@ an OpenAI-style `**Title**` header from the body.
 
 ### Tool rendering
 
-Dedicated renderers exist for: `bash` (Shell UI), `glob`, `read`, `grep`,
+Dedicated renderers (via `toolDisplay()`): `bash`, `glob`, `read`, `grep`,
 `webfetch`, `websearch`, `write`, `edit`, `task`, `apply_patch`, `todowrite`,
-`question`, `skill`. Everything else falls back to **GenericTool** via
-`toolDisplay()`.
+`question`, `skill`. Everything else is **GenericTool**.
 
-**Shell block:**
+Layout is either **BlockTool** (`# …` title + body) or **InlineTool** (icon +
+pending/complete text). Not every tool is an inline row.
+
+| Tool | Form | Icon / title cues | Pending label (when running) |
+| --- | --- | --- | --- |
+| `bash` | Block when completed output exists; else inline `$` | Block: `# <title>` / `$ <command>` | `Writing command...` |
+| `glob` | Inline | `✱` + pattern / path / match count | `Finding files...` |
+| `read` | Inline (+ optional `↳ Loaded <path>` sublines) | `→` + path | `Reading file...` |
+| `grep` | Inline | `✱` + pattern / path / matches | `Searching content...` |
+| `webfetch` | Inline | `%` + URL | `Fetching from the web...` |
+| `websearch` | Inline | `◈` + query / result count | `Searching web...` |
+| `write` | **Block** after diagnostics metadata; else inline | Block: `# Wrote <path>`; inline `←` | `Preparing write...` |
+| `edit` | **Block** when diff metadata present; else inline | Block: `← Edit <path>` + syntax diff | (inline pending until diff) |
+| `apply_patch` | Block/inline like edit (file titles `# Deleted` / `# Created` / …) | Diff-style | (same family as edit) |
+| `task` | Per-member **TaskMemberRow** (or inline `│` while delegating) | `✓` / `✗` / `│`; click opens observation | `Delegating...` / `Working...` |
+| `todowrite` | **Block** `# Todos` when todos present; else inline `⚙` | Shared `TodoItem` list | `Updating todos...` |
+| `question` | **Block** `# Questions` when answers present; else inline `→` | Q&A pairs | `Asking questions...` |
+| `skill` | Inline | `→` + skill name | `Loading skill...` |
+| generic | Inline or block | `⚙` / `# <tool> [k=v,…]` | tool name |
+
+**Shell block** (completed `bash` with output):
 
 ```text
 # <title>[ in <workdir>]
 $ <command>
 ```
 
-The title is `input.description` when present, otherwise the literal `Shell`.
-hya's `shell`/`bash` tool schema is `{command, timeout, workdir, env}` only — no
-model-authored `description` — so native shell rows render as `# Shell` (plus
-` in <workdir>` when `workdir` is set and not `.`). ANSI is stripped from
-output; output is collapsed to 10 lines with click-to-expand and a running
-spinner while active.
+Title is `input.description` when present, otherwise `Shell`. Native
+`shell`/`bash` schema is `{command, timeout, workdir, env}` only — no
+model-authored `description` — so rows are usually `# Shell` (plus
+` in <workdir>` when set and not `.`). ANSI stripped; output collapsed to 10
+lines with click-to-expand and a spinner while running.
 
-**Generic tool:** when `session.toggle.generic_tool_output` is on, prints
-`# <tool> [k=v,…]` with output collapsed to 3 lines; otherwise a single
-`⚙ <tool> [k=v,…]` inline row.
+**Generic tool:** with `session.toggle.generic_tool_output` on: `# <tool> [k=v,…]`
+and output collapsed to 3 lines; otherwise a single `⚙ <tool> [k=v,…]` inline
+row.
 
-**Inline row states:** pending summary, icon + summary after completion,
-strike-through when denied or rejected, error coloring on failure, click to
-expand raw error text.
+**InlineTool states** (tools that use InlineTool): pending summary, icon +
+summary after completion, strike-through when denied/rejected, error coloring
+on failure, click to expand raw error text. BlockTool tools do not use that
+row chrome for their completed bodies.
 
-**Diagnostics:** up to three severity-1 diagnostics render as
-`Error [line:col] message` under the written/edited path (host-normalized paths).
-
-**Todo** rows use the shared `TodoItem` component also used by the sidebar.
+**Diagnostics:** up to three severity-1 diagnostics as
+`Error [line:col] message` under written/edited paths.
 
 ### Inline diff rendering
 
@@ -370,7 +390,7 @@ mirrors the static defaults.
 | **Timeline** | `session.timeline`, `<leader>g`, `/timeline` | Picker of user messages; scrolls the transcript on move; can seed the prompt |
 | **Fork session** | `session.fork`, `/fork` | Full session plus each user message as a fork point; scrolls on move |
 | **Message Actions** | Click a user message | Revert, Copy, Fork |
-| **Export options** | `session.export`, `<leader>x`, `/export` | Filename default `session-<id8>.md`; Space-toggled switches for thinking, tool details, assistant metadata, open-without-saving; Tab between fields |
+| **Export options** | `session.export`, `<leader>x`, `/export` | Filename default `session-<id8>.md`; Space-toggled switches for thinking, tool details, assistant metadata, **open without saving**; Tab between fields. Always calls `$VISUAL`/`$EDITOR` when set (see [External editor](#external-editor)). |
 | **File picker** | Autocomplete / DialogTag | File attach picker |
 | **Confirm / Alert / Prompt** | Various | Reusable `DialogConfirm`, `DialogAlert` (retry-error text), `DialogPrompt` |
 
@@ -454,14 +474,33 @@ hides. Prompt history is disabled while autocomplete is open.
 ### Automatic agent switching
 
 - Switching to a session adopts the agent and model of its last user message when that agent is primary, unless `--agent` was passed on the CLI.
-- A completed `plan_enter` tool call switches the local agent to `plan`; `plan_exit` switches to `build`. Switches are deduped by part id.
+- A completed **`plan_exit`** tool part (status `completed`) switches the local
+  agent to `build`. Switches are deduped by part id.
+- The TUI also contains a dead branch for a **`plan_enter`** tool name that would
+  switch to `plan`. **No `plan_enter` tool is registered** in `hya-tool` (only
+  `plan_exit` / alias `plan` exist), so that branch never runs for a real model
+  tool call.
 
 ### External editor
 
-`prompt.editor` (`<leader>e`, `/editor`) suspends the TUI and opens `$VISUAL` or
-`$EDITOR` in the project worktree/directory, then re-imports the edited text and
-re-anchors file/agent extmarks, dropping parts whose virtual text was deleted. A
-non-zero exit surfaces `Editor exited with code/signal …`.
+Shared helper: `openEditor` suspends the TUI, opens `$VISUAL` or `$EDITOR` on a
+temp `.md` file (or export content), and resumes the renderer. No editor set →
+no-op. Non-zero exit → `Editor exited with code/signal …`.
+
+**`prompt.editor`** (`<leader>e`, `/editor`): edits the current prompt buffer in
+the project worktree/directory, then re-imports the edited text and re-anchors
+file/agent extmarks, dropping parts whose virtual text was deleted.
+
+**`session.export`** (`<leader>x`, `/export`): after building the transcript
+markdown, **always** opens the same editor when `$VISUAL`/`$EDITOR` is set:
+
+| Dialog option | Behaviour |
+| --- | --- |
+| **Open without saving** | Opens the transcript in the editor only; no export file is written. |
+| **Save to file** (default) | Writes `session-<id8>.md` (or the chosen name), opens the editor on that content, then **overwrites the file with the editor’s returned text** if the editor exits successfully. A success toast reports the filename. |
+
+Users who only want a file on disk without an interactive editor session need an
+environment without `$VISUAL`/`$EDITOR`, or should expect the editor to open.
 
 ---
 

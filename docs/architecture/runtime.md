@@ -266,14 +266,31 @@ when configured (inside tool execution, not as a separate round step).
 
 ### Root-turn admission cleanup
 
-A completed depth-0 turn calls `finalize_root_spawn_admissions(root)`, which:
+A completed depth-0 turn on a **governor-backed** engine calls
+`finalize_root_spawn_admissions(root)`. The call site is guarded
+([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)):
+
+```text
+if self.governor.is_some()
+    && let Ok((root, 0)) = self.session_lineage(session).await
+{
+    self.finalize_root_spawn_admissions(root).await?;
+}
+```
+
+So cleanup runs only when a `SubagentGovernor` is installed **and** the finishing
+session is depth-0. When the governor is `None`, this cleanup is **skipped
+entirely**, even though durable admission rows may still have been written
+(`claim_admission` / `start_admission` still run without a governor).
+
+When it does run, `finalize_root_spawn_admissions(root)`:
 
 - cancels every live governor operation for that root
 - cancel-finalizes every nonterminal admission journal row
 - releases the root's per-run subagent budget entry
 
-Without this, a long-lived root session leaks budget and never recovers spawn
-capacity.
+Without this cleanup on a governor-backed engine, a long-lived root session
+leaks budget and never recovers spawn capacity.
 
 ### Runtime registry publication
 

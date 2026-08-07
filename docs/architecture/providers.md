@@ -439,7 +439,8 @@ TurnBinding's provider config changed. Providers without a complete identity
 
 ### HTTP fingerprint contents
 
-For `HttpProvider` the identity bytes include:
+For `HttpProvider` the identity bytes include
+([`http.rs`](../../crates/hya-provider/src/http.rs) `configured_identity_bytes_v1`):
 
 - tag `hya.provider.http.configured.v1`
 - crate version (`CARGO_PKG_VERSION`)
@@ -453,6 +454,10 @@ For `HttpProvider` the identity bytes include:
 - per-model reasoning variants
 - full `Capabilities` bits
 - auth **shape** (style tag + non-secret fields)
+- **bearer-resolver slot:** literal `bearer-resolver-slot`, then a presence byte
+  (`0` if no resolver; `1` plus the provider id when a bearer resolver is
+  installed). Wiring OAuth bearer resolution onto a route therefore changes the
+  HTTP configured identity (and any TurnBinding fingerprint that includes it).
 
 **Deliberately excluded:** the token/API key itself. Auth contributes only:
 

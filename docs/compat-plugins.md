@@ -58,8 +58,9 @@ Anything else returns JSON-RPC **`METHOD_NOT_FOUND`** (`-32601`).
 ## OpenCode → hya hook translation
 
 Mapping is **many-to-one** and therefore lossy. After mapping, **duplicate hya
-names collapse to one registration** (first match wins in adapter registration
-order).
+names collapse to one registration** (first match wins while walking
+`HOOK_MAPPINGS` in the array order below — that is the real registration order
+emitted into `hooks[]`).
 
 | OpenCode hook | hya wire name |
 | --- | --- |
@@ -71,14 +72,18 @@ order).
 | `chat.headers` | `chat.params` |
 | `experimental.chat.messages.transform` | `chat.params` |
 | `experimental.chat.system.transform` | `chat.params` |
-| `tool.definition` | `chat.params` |
 | `permission.ask` | `permission.ask` |
 | `shell.env` | `tool.execute.before` |
 | `tool.execute.before` | `tool.execute.before` |
 | `tool.execute.after` | `tool.execute.after` |
+| `tool.definition` | `chat.params` |
 
-Five OpenCode surfaces collapse onto a single hya `chat.params` registration.
-Both `shell.env` and `tool.execute.before` share hya `tool.execute.before`.
+Five OpenCode surfaces collapse onto a single hya `chat.params` registration
+(`chat.params`, `chat.headers`, both experimental chat transforms, and
+`tool.definition` last). Both `shell.env` and `tool.execute.before` share hya
+`tool.execute.before`. Because `tool.definition` is last in `HOOK_MAPPINGS`, a
+plugin that exports only `tool.definition` and `permission.ask` registers
+`permission.ask` first and `chat.params` second.
 
 ---
 
@@ -110,9 +115,13 @@ spec list in this order
    cwd: each ancestor’s `opencode.json` and `opencode.jsonc` (unless
    `COMPAT_DISABLE_PROJECT_CONFIG` is set).
 4. **Compat config dirs** (after global is peeled off for step 1) — for each of
-   project `.opencode` dirs (cwd → worktree), `~/.opencode`, and optional
+   project `.opencode` dirs (cwd → worktree; **also skipped** when
+   `COMPAT_DISABLE_PROJECT_CONFIG` is set), `~/.opencode`, and optional
    `$COMPAT_CONFIG_DIR`: their `opencode.json` / `opencode.jsonc` plus every
-   `.js`/`.ts` under `plugin/` and `plugins/`.
+   `.js`/`.ts` under `plugin/` and `plugins/`. Setting
+   `COMPAT_DISABLE_PROJECT_CONFIG=1` therefore removes both step-3 ancestor
+   config files **and** every project `.opencode` directory from this step
+   (including `<project>/.opencode/plugin/` and `/plugins/`).
 5. **`$COMPAT_CONFIG_CONTENT`** — inline JSON config.
 
 **Precedence:** later duplicates **win**, via reverse dedup on package identity
@@ -123,7 +132,7 @@ spec list in this order
 | Kind | Path |
 | --- | --- |
 | Global | `$XDG_CONFIG_HOME/compat`, else `~/.config/compat` |
-| Project | `<ancestor>/.opencode` for every directory from cwd up to the worktree boundary |
+| Project | `<ancestor>/.opencode` for every directory from cwd up to the worktree boundary — **omitted** when `COMPAT_DISABLE_PROJECT_CONFIG` is set |
 | Home | `~/.opencode` |
 | Extra | `$COMPAT_CONFIG_DIR` when set |
 
@@ -173,9 +182,16 @@ each becomes a server plugin entry. Non-function exports that are not
 ### Local path resolution
 
 `file://`, `./relative`, and absolute specs resolve against the **config file’s
-directory** (not cwd). A directory resolves to itself if it contains
-`package.json`, otherwise to `index.ts` / `index.tsx` / `index.js` /
-`index.mjs` / `index.cjs`, otherwise `PluginPathResolutionError`.
+directory** (not cwd). For a directory path, resolution prefers the directory
+itself when it contains `package.json`, else the first present index file among
+`index.ts` / `index.tsx` / `index.js` / `index.mjs` / `index.cjs`.
+
+If none of those exist, `resolvePathPluginTarget` throws
+`PluginPathResolutionError` internally — but the only caller,
+`resolveLocalPluginSpec`, **catches every `Error`** and falls back to the raw
+directory `file://` URL. Authors therefore **never** see
+`PluginPathResolutionError`; a later import failure is printed as
+`compat plugin <spec>: <message>` on stderr while the adapter keeps running.
 
 ### npm resolution
 

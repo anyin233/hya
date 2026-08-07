@@ -83,7 +83,7 @@ not fall back to `general`.
 | `command` | Optional command that triggered the task. |
 | `background` | Bool; non-blocking single-member spawn. Multi-member background is rejected. |
 | `resident` | Long-lived actor (non-blocking spawn) rather than a one-shot turn. |
-| `inline_agent` | Request-scoped agent overlay (`name`, `prompt`, `description`, `category`, `model`, `resident`). Unsupported fields fail with `unsupported_inline_agent_field`. |
+| `inline_agent` | Request-scoped agent overlay. Supported fields: `name`, `prompt`, `category`, `model`, `resident`. The schema may list `description`, but any non-null `inline_agent.description` is **rejected** with wire type `unsupported_inline_agent_field` (`validate_unsupported_inline_agent_fields` in `hya-app`). |
 | `members[]` | hya extension: fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
 
 ([crates/hya-tool/src/task.rs:10-28](../../crates/hya-tool/src/task.rs#L10-L28))

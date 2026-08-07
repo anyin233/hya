@@ -15,10 +15,20 @@ and persists canonical events in SQLite.
 - up to eight pooled connections
 
 `SessionStore::connect_memory()` opens an in-memory SQLite database with one
-connection. The CLI uses in-memory stores for goal mode and `rpc`; `exec`,
-`run`, the TUI, `serve`, `tail-session`, and `sessions` use file-backed SQLite
-when `--db <PATH>` is supplied, otherwise they use in-memory stores where the
-command supports an empty database path.
+connection.
+
+CLI session-store selection
+([`main.rs`](../../crates/hya-backend/src/main.rs),
+[`open_store`](../../crates/hya-app/src/runtime.rs)):
+
+| Surface | Empty / default `--db` | Explicit `--db <PATH>` |
+| --- | --- | --- |
+| Goal mode (`-p` / `--prompt`), `rpc` | Always in-memory (`connect_memory`) | N/A (no file path used) |
+| `exec`, `run`, `serve` | In-memory via `open_store("")` | File-backed at that path |
+| Interactive TUI (bare `hya-backend` / launcher), `sessions`, `tail-session` | **Not** in-memory: `resolve_interactive_db` remaps empty to `$XDG_STATE_HOME/hya/sessions.db` (fallback `$HOME/.local/state/hya/sessions.db`, then `./.local/state/hya/sessions.db`) and creates the directory | File-backed at the given path |
+
+So default interactive resume (`hya --continue` / `-s`) uses the durable XDG
+state database, not a fresh memory store.
 
 File-backed stores are plain SQLite. They are not encrypted and file permissions
 come from the process umask, so callers should place `--db` paths in private
