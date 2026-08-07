@@ -297,6 +297,14 @@ impl SpawnIntentV1 {
         self.parent
     }
 
+    /// Tool call that produced this spawn intent.
+    ///
+    /// Recorded on `MemberSpawned` so an offline call graph can anchor the spawn
+    /// edge to the exact `task` call in the parent's trajectory.
+    pub(crate) fn source_tool_call_id(&self) -> ToolCallId {
+        self.source_tool_call_id
+    }
+
     pub(crate) fn stable_target(&self) -> &AgentName {
         &self.stable_target
     }

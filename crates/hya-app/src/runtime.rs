@@ -1750,6 +1750,7 @@ fn transient_admission_work_future(
     let operation_id = launch.record.operation_id;
     let member_ordinal = launch.record.member_ordinal;
     let parent = intent.parent();
+    let source_tool_call = intent.source_tool_call_id();
     let spec = MemberSpec {
         id: MemberId::new(),
         agent,
@@ -1764,6 +1765,7 @@ fn transient_admission_work_future(
             .as_deref()
             .and_then(|task_id| task_id.parse::<SessionId>().ok()),
         sidecar_factory,
+        tool_call: Some(source_tool_call),
     };
     async move {
         let evidence = match actor_claim {
@@ -3573,6 +3575,9 @@ fn spawn_team_supervisor_with_environment(
             let admission_units = u32::try_from(req.members.len()).unwrap_or(u32::MAX);
             let operation_id = req.operation.operation_id();
             let actor_claim = req.operation.actor_claim();
+            // Anchors every spawn edge to the `task` call that produced it, so an
+            // offline call graph does not have to infer it from event ordering.
+            let source_tool_call = req.operation.source_tool_call_id();
             let admission = engine
                 .begin_spawn_admission(
                     req.parent,
@@ -3779,6 +3784,7 @@ fn spawn_team_supervisor_with_environment(
                             description: member.description,
                             session: Some(session),
                             sidecar_factory,
+                            tool_call: Some(source_tool_call),
                         });
                     }
                     if let Some(reply) = reply.take() {
@@ -3815,6 +3821,7 @@ fn spawn_team_supervisor_with_environment(
                                     .as_deref()
                                     .and_then(|task_id| task_id.parse::<SessionId>().ok()),
                                 sidecar_factory,
+                                tool_call: Some(source_tool_call),
                             }
                         })
                         .collect()
@@ -12573,6 +12580,7 @@ export default {
             description: request.description,
             session: None,
             sidecar_factory,
+            tool_call: None,
         };
 
         let evidence = run_team(engine.clone(), lead, vec![spec], Default::default()).await;

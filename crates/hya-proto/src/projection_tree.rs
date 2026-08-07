@@ -138,6 +138,8 @@ mod tests {
             depth: 1,
             status: MemberRunStatus::Done,
             summary: "s".to_string(),
+            directive: String::new(),
+            tool_call: None,
         }
     }
 

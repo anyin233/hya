@@ -19,6 +19,7 @@ impl SessionEngine {
         subagent_type: AgentName,
         description: String,
         depth: u32,
+        directive: String,
     ) -> Result<(), CoreError> {
         self.emit(
             parent,
@@ -29,6 +30,9 @@ impl SessionEngine {
                 subagent_type,
                 description,
                 depth,
+                directive,
+                // Resident members are started by the supervisor, not by a tool call.
+                tool_call: None,
             },
         )
         .await

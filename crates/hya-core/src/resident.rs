@@ -1706,6 +1706,9 @@ impl ResidentSupervisor {
                             subagent_type: agent.name.clone(),
                             description,
                             depth: parent_depth.saturating_add(1),
+                            directive: directive.clone(),
+                            // Supervisor-started: no originating tool call.
+                            tool_call: None,
                         }],
                     )
                     .await?;
@@ -1719,6 +1722,7 @@ impl ResidentSupervisor {
                         agent.name.clone(),
                         description,
                         parent_depth.saturating_add(1),
+                        directive.clone(),
                     )
                     .await?;
             }

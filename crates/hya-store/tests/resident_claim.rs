@@ -125,6 +125,8 @@ async fn stop_fixture(path: &str) -> StopFixture {
             subagent_type: AgentName::new("child"),
             description: "running child".to_string(),
             depth: 2,
+            directive: String::new(),
+            tool_call: None,
         },
         Event::MemberStatusChanged {
             session: actor,
@@ -297,6 +299,8 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
             subagent_type: AgentName::new("child"),
             description: "running child".to_string(),
             depth: 2,
+            directive: String::new(),
+            tool_call: None,
         },
         Event::MemberStatusChanged {
             session: actor,

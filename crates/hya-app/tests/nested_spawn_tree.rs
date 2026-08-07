@@ -119,6 +119,8 @@ async fn nested_spawn() -> NestedSpawn {
                 subagent_type: AgentName::new("pending"),
                 description: "pending fixture member".to_string(),
                 depth: 1,
+                directive: String::new(),
+                tool_call: None,
             },
         )
         .await
