@@ -94,7 +94,7 @@ Key controls (defaults; leader is `Ctrl-X`):
 | `Ctrl-X` | Leader key — arms a timed chord for `<leader>…` bindings. |
 | `Escape` | Dismiss a dialog, hide autocomplete, clear a pending leader sequence, exit shell mode, return an observation pane to Main, or interrupt the running turn — press **twice** within 5 s (while the prompt is focused) to abort. |
 | `Ctrl-C` | Copy the selection if one is active (when explicit copy is required), clear the prompt if it has text, otherwise exit when the prompt is unfocused or empty. |
-| `Ctrl-D` | Exit when the prompt is empty and unfocused; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs. |
+| `Ctrl-D` | Exit when the prompt is unfocused **or** empty; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs. |
 | `<leader>l` | List sessions. |
 | `<leader>m` | List models. |
 | `<leader>a` | List agents. |

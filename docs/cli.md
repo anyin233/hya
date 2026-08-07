@@ -194,9 +194,13 @@ Each registry entry is `{ default, description }`.
   `<leader>x` are leader chords.
 - Major namespaces include app, session, pane, model, agent, messages, prompt,
   input, diff, theme, terminal, and which-key.
-- Override any binding by name in TUI config `keybinds`, or unbind it by setting
-  the value to `false` or the string `"none"` (both are valid in the binding
-  schema).
+- The binding schema accepts per-definition overrides under a `keybinds` map
+  (Definition names from `keybind.ts`), and `false` or `"none"` unbind a name —
+  see [Configuration → TUI Configuration](configuration.md#tui-configuration).
+  **Shipped launcher caveat:** the current entrypoint applies defaults only via
+  `resolve({}, { terminalSuspend: … })` and loads **no** on-disk TUI config file;
+  `config.yaml` has no `tui` / `keybinds` key. Until a host supplies a non-empty
+  config object, users cannot override or unbind factory chords from disk.
 
 **Command palette.** The `command.palette.show` command (default `ctrl+p`,
 keybind id `command_list`) lists every reachable non-hidden command together
