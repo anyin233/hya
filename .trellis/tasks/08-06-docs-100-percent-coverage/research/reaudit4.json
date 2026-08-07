@@ -1,0 +1,248 @@
+{
+ "verdict": "FAIL",
+ "totalChecked": 324,
+ "totalClosed": 318,
+ "perAxis": [
+  {
+   "axis": "cli",
+   "checked": 29,
+   "closed": 29,
+   "open": 0
+  },
+  {
+   "axis": "config",
+   "checked": 37,
+   "closed": 37,
+   "open": 0
+  },
+  {
+   "axis": "tools-permissions",
+   "checked": 40,
+   "closed": 39,
+   "open": 1
+  },
+  {
+   "axis": "providers",
+   "checked": 44,
+   "closed": 43,
+   "open": 1
+  },
+  {
+   "axis": "runtime-events",
+   "checked": 71,
+   "closed": 70,
+   "open": 1
+  },
+  {
+   "axis": "extensibility",
+   "checked": 50,
+   "closed": 50,
+   "open": 0
+  },
+  {
+   "axis": "tui",
+   "checked": 53,
+   "closed": 50,
+   "open": 3
+  }
+ ],
+ "stillOpen": [
+  {
+   "feature": "[config-key] resource_view allow/deny/aliases/namespace",
+   "target_doc": "docs/agent-bundle-authoring.md",
+   "status": "thin",
+   "why": "allow/deny/aliases and both hard failures (tool-vs-mcp NamespaceCollision, skill-facade requirement) are now correct and usable, but the `namespace` key is documented as \"Optional prefix for public names; default is the bundle id\" (line 227), which does not match the code. In runtime_registry.rs `assign_public_names`/`reserve_stable_names` (lines 1994-2100), `namespace` is substituted ONLY into the bundle-local qualified spelling `bundle:<namespace>/<kind>/<short>`; harness candidates keep `harness:tool/<name>` untouched, and no short public name is ever prefixed (test at runtime_registry.rs:3518 asserts exactly this). The doc's own worked example (lines 271-286) sets `namespace: explore` over an allow list containing only `harness:tool/*` and `harness:skill/*` entries, where the key provably has zero effect - so a reader following the section cannot predict what namespace does.",
+   "axis": "tools-permissions"
+  },
+  {
+   "feature": "configured_identity_v1 routing fingerprint \u2014 HTTP identity contents",
+   "target_doc": "docs/architecture/providers.md",
+   "status": "thin",
+   "why": "The `### HTTP fingerprint contents` list (providers.md:442-455) enumerates 11 components \u2014 tag, crate version, provider id, kind tag, endpoint, google base, alias markers, sorted model set, per-model reasoning variants, Capabilities bits, auth shape \u2014 but omits the last component the code actually appends: `crates/hya-provider/src/http.rs:410-417` writes the literal `bearer-resolver-slot` followed by a presence byte and (when a resolver is installed) the provider id. The gap entry's own remediation asked for exactly this (\"and whether a bearer resolver is installed\"). Consequence: a reader asking whether wiring OAuth bearer resolution onto a route flips the TurnBinding identity gets no answer from the list, and the `**Deliberately excluded:**` paragraph immediately after invites the list to be read as complete. The wording \"identity bytes include\" is the only thing keeping this from being an outright false statement.",
+   "source": "crates/hya-provider/src/http.rs:410",
+   "axis": "providers"
+  },
+  {
+   "feature": "Root-turn admission cleanup (finalize_root_spawn_admissions)",
+   "target_doc": "docs/architecture/runtime.md",
+   "source": "crates/hya-core/src/engine/turn.rs:506",
+   "status": "contradicted",
+   "why": "runtime.md:269 states flatly \"A completed depth-0 turn calls finalize_root_spawn_admissions(root)\", and docs/architecture/admission-and-governor.md:196-205 repeats it as \"Root-turn cleanup (depth-0 turn completion)\". The real call site is guarded: `if self.governor.is_some() && let Ok((root, 0)) = self.session_lineage(session).await { self.finalize_root_spawn_admissions(root).await?; }`. With no governor installed the cleanup never runs at all. That matters because admission-and-governor.md:184 itself documents that `begin_spawn_admission` still performs the durable `claim_admission` + `start_admission` without a governor (\"Without a governor, steps 3-4 are skipped; start still runs after cancel check\"), so journal rows are created but never cancel-finalized on a governor-less engine. Both docs need the guard stated, or the claim narrowed to \"a completed depth-0 turn on a governor-backed engine\".",
+   "axis": "runtime-events"
+  },
+  {
+   "feature": "TUI XDG data/cache/config/state directories and the files it writes (model.json recents+favorites, session pins, worktree root)",
+   "source": "packages/hya-tui-ts/src/hya/platform.ts:6, packages/hya-tui-ts/src/upstream/context/local.tsx:418, packages/hya-tui-ts/src/upstream/context/kv.tsx:12",
+   "target_doc": "docs/configuration.md",
+   "status": "thin",
+   "why": "The new 'Where the TUI stores state' table names exactly one file (`model.json`) and then hand-waves: 'session pin list for nine quick-switch slots, other KV'. The pin list is `<state>/session.json` (`path.join(paths.state, \"session.json\")` in context/local.tsx) and every KV flag the rest of the doc set tells the reader about \u2014 `thinking_mode`, `tips_hidden`, `diff_wrap_mode`, `terminal_title_enabled`, `paste_summary_enabled`, `sidebar`, `timestamps`, `scrollbar_visible`, `tool_details_visibility`, `generic_tool_output_visibility`, `which_key_layout`, `which_key_pending_preview`, `diff_viewer_show_file_tree`, `diff_viewer_single_patch`, `diff_viewer_view`, `attention_sound_pack` \u2014 is persisted to `<state>/kv.json` (context/kv.tsx). Neither filename appears anywhere in docs/. A reader who is told 'persisted in KV as X' has no way to find, inspect, or reset it. The XDG base rows themselves and the model.json semantics are correct.",
+   "axis": "tui"
+  },
+  {
+   "feature": "Tool renderers (bash/Shell, glob, read, grep, webfetch, websearch, write, edit, task, apply_patch, todowrite, question, skill, GenericTool fallback)",
+   "source": "packages/hya-tui-ts/src/upstream/routes/session/index.tsx:2179 (dispatch), 2536-3045 (renderers), 3089 (toolDisplays set)",
+   "target_doc": "docs/tui-reference.md",
+   "status": "thin",
+   "why": "The 'Tool rendering' section names all 13 dedicated renderers correctly and then describes only `bash` (Shell block) and the GenericTool fallback in usable detail. `glob`, `read`, `grep`, `webfetch`, `websearch`, `skill` get nothing but their name \u2014 the source gives each a distinct icon and pending label (`\u2731`/'Finding files...', `\u2192`/'Reading file...' plus `\u21b3 Loaded <path>` sublines, `\u2731`/'Searching content...', `%`/'Fetching from the web...', `\u25c8`/'Searching web...', `\u2192`/'Loading skill...') that a reader cannot recover from the doc. Worse, `write` and `question` are NOT inline rows at all \u2014 they use `BlockTool` with titles `# Wrote <path>` and `# Questions` (index.tsx:2546, 3016) \u2014 while the doc's single 'Inline row states' paragraph implies everything that is not shell/generic renders as an inline row. So a reader cannot map a transcript row back to the tool that produced it.",
+   "axis": "tui"
+  },
+  {
+   "feature": "External editor integration (prompt.editor) \u2014 and the session.export flow that also opens $EDITOR",
+   "source": "packages/hya-tui-ts/src/upstream/editor.ts:27, packages/hya-tui-ts/src/upstream/routes/session/index.tsx:1124-1152",
+   "target_doc": "docs/tui-reference.md",
+   "status": "thin",
+   "why": "The `prompt.editor` half is fully and accurately documented. The half the gap explicitly asked for \u2014 'alongside the `session.export` flow which also opens `$EDITOR`' \u2014 was not written anywhere. In the source BOTH export branches call `openEditor`: with `openWithoutSaving` it opens the transcript in `$VISUAL`/`$EDITOR` and never writes a file; without it, it writes `session-<id8>.md`, opens the editor anyway, and then writes the editor's returned text back over the file (`if (result !== undefined) await writeExport(filepath, result)`). The tui-reference 'Export options' dialog row mentions only the filename and the four switches; the 'External editor' section covers only `prompt.editor`. A user running `/export` will be dropped into vim with no warning and can silently overwrite the export.",
+   "axis": "tui"
+  }
+ ],
+ "newProblems": [
+  {
+   "doc": "docs/architecture/storage.md:18-21",
+   "claim": "\"The CLI uses in-memory stores for goal mode and `rpc`; `exec`, `run`, the TUI, `serve`, `tail-session`, and `sessions` use file-backed SQLite when `--db <PATH>` is supplied, otherwise they use in-memory stores where the command supports an empty database path.\" This sentence was rewritten in the same docs push (commit 11a28f01 \"docs(cli): document session persistence semantics\").",
+   "reality": "For the interactive TUI path, `sessions`, and `tail-session`, an empty/default `--db` is NOT in-memory: `resolve_interactive_db` (crates/hya-backend/src/main.rs:51, called at lines 319, 355, 373) remaps it to $XDG_STATE_HOME/hya/sessions.db (falling back to $HOME/.local/state/hya/sessions.db, then ./.local/state/hya/sessions.db) and creates the directory. Only `exec`, `run`, and `serve` fall back to `SessionStore::connect_memory`. The trailing hedge \"where the command supports an empty database path\" is the only thing keeping the sentence from being flatly false; it never states the XDG remap, so a reader reaches exactly the wrong conclusion that gap entry 24 existed to correct. docs/cli.md itself was fixed properly; this sibling doc was not.",
+   "source": "crates/hya-backend/src/main.rs:45-67,319,355,373",
+   "axis": "cli"
+  },
+  {
+   "doc": "docs/cli.md:181-184",
+   "claim": "\"User-defined commands from config and on-disk command sources are merged with this list via upsert: a user-defined command with the same name overrides the built-in of that name (and may set `expandable: true` so the template is expanded server-side).\"",
+   "reality": "`expandable` is not a user-settable field anywhere. `CommandInfo::command` (command_catalog.rs:197-214) hardcodes `expandable: true` for every command built from `command_sources`, and neither `CommandFrontmatter` (command_sources.rs:8-14: description, agent, model, subtask) nor `InlineCommand` (lines 22-29: template, description, agent, model, subtask) has an `expandable` key. The parenthetical reads as an authoring option; a user who writes `expandable: true` in frontmatter or opencode.json gets it silently dropped (no deny_unknown_fields). The correct statement is that every user-defined command is unconditionally expandable.",
+   "source": "crates/hya-server/src/compat/command_catalog.rs:197-214; crates/hya-server/src/compat/command_sources.rs:8-29",
+   "axis": "cli"
+  },
+  {
+   "doc": "docs/configuration.md:709",
+   "claim": "HYA_* table row: \"`HYA_DB` | Session SQLite path for the backend. Empty string forces in-memory.\"",
+   "reality": "HYA_DB is read only by `hya_sdk::server::default_session_db_path` (crates/hya-sdk/src/server.rs:157-165), i.e. only when `hya` / `hya-ts` spawns an owned backend and decides whether to append `--db <path>` to the `hya-backend serve` argv. `hya-backend` itself never reads HYA_DB \u2014 grep across crates shows HYA_DB_ENV used nowhere outside hya-sdk. Describing it as \"the session SQLite path for the backend\" implies it configures a directly-invoked `hya-backend`, where it has no effect at all (that path is governed by `--db` plus `resolve_interactive_db`). docs/cli.md:104-108 scopes this correctly (\"Owned backends started by `hya`\"); the configuration.md row does not.",
+   "source": "crates/hya-sdk/src/server.rs:38,74-86,155-165",
+   "axis": "cli"
+  },
+  {
+   "doc": "docs/configuration.md",
+   "claim": "\"**Python pair:** `disabled: true` on **either** `ruff` **or** `uv` removes **both** from the active set (they share `.py` / `.pyi`).\" (Formatter section, after the custom-entry field list.)",
+   "reality": "`custom_definitions` computes `disable_python` as `entries.get(\"ruff\").or_else(|| entries.get(\"uv\")).is_some_and(|e| e.disabled)`. `or_else` is only consulted when the `ruff` key is ABSENT. If a `ruff` entry exists and is not disabled, a `uv: { disabled: true }` entry removes only `uv`; `ruff` survives. Failure scenario: `formatter: { ruff: { extensions: [.py] }, uv: { disabled: true } }` -> the doc says both are gone, but `ruff` is still active and still formats `.py` files on write/edit.",
+   "source": "crates/hya-tool/src/formatter_definition.rs:93-101 (custom_definitions / disable_python)",
+   "axis": "config"
+  },
+  {
+   "doc": "docs/configuration.md",
+   "claim": "Plugin directory manifests are discovered from `<workdir>/.hya/plugins/<name>/plugin.toml` \u2014 repeated in the sample config comment, the Plugins intro, and the \"Directory manifests\" heading (\"Layout: `<workdir>/.hya/plugins/<name>/plugin.toml`\").",
+   "reality": "`plugins_dir()` returns `std::env::current_dir()?.join(\".hya/plugins\")` \u2014 the backend PROCESS working directory \u2014 and it is evaluated exactly once during runtime composition (`plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref())`). It is not the per-session/per-request workdir, which the server resolves independently (`Engine::bind_root_runtime(workdir)`). Failure scenario: run `hya-backend serve` from `~` and drive a session whose workdir is `/proj` containing `/proj/.hya/plugins/memory/plugin.toml`; the doc says the manifest is discovered, but nothing under `/proj` is ever scanned \u2014 only `~/.hya/plugins`. The two coincide only on the launcher path, where `hya` spawns the backend with `.current_dir(project)`.",
+   "source": "crates/hya-app/src/plugins.rs:11-14 (plugins_dir), crates/hya-app/src/runtime.rs:1298, crates/hya-core/src/engine.rs:492-495, crates/hya-sdk/src/server.rs:97",
+   "axis": "config"
+  },
+  {
+   "doc": "docs/architecture/agent-tool-surface.md:86",
+   "claim": "The `task` parameter table lists `inline_agent` as \"Request-scoped agent overlay (`name`, `prompt`, `description`, `category`, `model`, `resident`). Unsupported fields fail with `unsupported_inline_agent_field`\" - presenting `description` as one of the supported overlay fields.",
+   "reality": "`description` is the ONE inline_agent field the runtime rejects. `validate_unsupported_inline_agent_fields` returns `SpawnError::UnsupportedInlineAgentField { field: \"description\" }` whenever `inline.description.is_some()`, and it is called on every spawn path. A caller that follows the doc and sends `inline_agent.description` gets a tool error with wire type `unsupported_inline_agent_field`.",
+   "source": "crates/hya-app/src/runtime.rs:1961-1971 (called at 2033 and 2092); schema advertising the field at crates/hya-tool/src/task.rs:155",
+   "axis": "tools-permissions"
+  },
+  {
+   "doc": "docs/architecture/tools-and-permissions.md:236-254 (\"External directory boundary\" / \"Enforcement points\")",
+   "claim": "\"For any resolved path outside the session workdir, tools run an `Action::ExternalDirectory` assert on the containing directory's `<dir>/*` pattern before the normal Read/Edit/Lsp/... check\", and the enforcement-points table names `find` as the single exception (\"**Does not** perform the external-directory check (deliberate compatibility gap)\").",
+   "reality": "`ls` also performs no external-directory check and is absent from the table entirely. `LsTool::execute` asserts only `Action::Read` on the raw string, and - like `find` - builds its directory with `PathBuf::from(path)` rather than `resolve_file(&ctx.workdir, path)`, so a relative path is not even resolved against the session workdir. `ls /etc` outside the workdir therefore never raises `Action::ExternalDirectory`, contradicting both the universal claim and the \"find is the deliberate gap\" framing.",
+   "source": "crates/hya-tool/src/tool.rs:951-1000 (LsTool; permission assert at 972-977), compare crates/hya-tool/src/tool.rs:1014-1032 (FindTool)",
+   "axis": "tools-permissions"
+  },
+  {
+   "doc": "docs/architecture/runtime.md",
+   "claim": "\"A completed depth-0 turn calls finalize_root_spawn_admissions(root), which: cancels every live governor operation for that root; cancel-finalizes every nonterminal admission journal row; releases the root's per-run subagent budget entry.\" (runtime.md:267-276, mirrored at admission-and-governor.md:196-205)",
+   "reality": "The call is conditional on a governor being installed: `if self.governor.is_some() && let Ok((root, 0)) = self.session_lineage(session).await { self.finalize_root_spawn_admissions(root).await?; }`. On an engine built without a `SubagentGovernor` the cleanup is skipped entirely, even though durable admission rows can still be written (claim_admission/start_admission run governor-free per admission-and-governor.md's own step list).",
+   "source": "crates/hya-core/src/engine/turn.rs:506-512",
+   "axis": "runtime-events"
+  },
+  {
+   "doc": "docs/self-update.md:129",
+   "claim": "In the \"Metadata field validation\" table, attributed to `canonical_metadata_payload` in verify.rs: \"Each artifact `sha256_hex` | Exactly **64 lower-hex** characters. Uppercase hex is rejected.\"",
+   "reality": "`canonical_metadata_payload` checks only `artifact.sha256_hex.len() != 64 || !artifact.sha256_hex.bytes().all(|b| b.is_ascii_hexdigit())`. `is_ascii_hexdigit()` accepts A-F, so an uppercase digest PASSES this gate and can be signed and verified. It only fails much later in `verify_artifact_bytes`, which formats the computed digest with `{b:02x}` and does a plain string compare, yielding `ArtifactDigestMismatch` (a \"wrong bytes\" error) rather than a metadata-format rejection. The code's own error string says \"lower-hex\" but the predicate does not enforce it. Contrast `trust.rs::decode_hex_key`, which DOES have an explicit `is_ascii_uppercase()` rejection \u2014 the doc's identical claim at line 105 for `verifying_key_hex` is correct, which makes the line-129 row look verified when it is not.",
+   "source": "crates/hya-updater/src/verify.rs:64-70 (canonical_metadata_payload), crates/hya-updater/src/verify.rs:213-227 (verify_artifact_bytes), crates/hya-updater/src/trust.rs:77-93 (decode_hex_key, for contrast)",
+   "axis": "extensibility"
+  },
+  {
+   "doc": "docs/compat-plugins.md:176-178",
+   "claim": "Under \"Local path resolution\": \"A directory resolves to itself if it contains `package.json`, otherwise to `index.ts` / `index.tsx` / `index.js` / `index.mjs` / `index.cjs`, otherwise `PluginPathResolutionError`.\"",
+   "reality": "`resolvePathPluginTarget` does throw `PluginPathResolutionError`, but its ONLY caller, `resolveLocalPluginSpec`, wraps the call in `.catch((error) => { if (error instanceof Error) return target; throw error })` \u2014 every `PluginPathResolutionError` is swallowed and the spec silently falls back to the raw directory `file://` URL. The author never sees `PluginPathResolutionError`; they see a later import failure printed as `compat plugin <spec>: <message>` on stderr while the adapter keeps running. Grep confirms `PluginPathResolutionError` has no other construction or propagation site in src/ or test/.",
+   "source": "crates/hya-plugin-compat/adapter/src/loader/shape.ts:39-54 (resolveLocalPluginSpec catch), :56-83 (resolvePathPluginTarget throw site)",
+   "axis": "extensibility"
+  },
+  {
+   "doc": "docs/compat-plugins.md:99-120",
+   "claim": "The five-step discovery list attaches \"(unless `COMPAT_DISABLE_PROJECT_CONFIG` is set)\" only to step 3 (\"Project ancestor configs\"). Step 4 (\"Compat config dirs\") is listed as unconditionally including \"project `.opencode` dirs (cwd \u2192 worktree)\".",
+   "reality": "`compatConfigDirs` guards the project dirs with the same flag: `if (context.disableProjectConfig !== true) { dirs.push(...projectConfigDirs(context.directory, context.worktree)) }`. Setting `COMPAT_DISABLE_PROJECT_CONFIG=1` therefore also removes every `<ancestor>/.opencode` directory from step 4, so `<project>/.opencode/opencode.json` and every `.js`/`.ts` under `<project>/.opencode/plugin/` and `/plugins/` stop loading too. A reader following the doc would expect project-directory plugin files to still be scanned.",
+   "source": "crates/hya-plugin-compat/adapter/src/loader/config_dirs.ts:5-23 (compatConfigDirs), :25-38 (projectConfigFiles)",
+   "axis": "extensibility"
+  },
+  {
+   "doc": "docs/compat-plugins.md:64-78",
+   "claim": "The \"OpenCode \u2192 hya hook translation\" table is introduced by \"duplicate hya names collapse to one registration (first match wins in adapter registration order)\", implying the table rows are in adapter registration order; it places `tool.definition` 9th, between `experimental.chat.system.transform` and `permission.ask`.",
+   "reality": "`HOOK_MAPPINGS` puts `tool.definition` LAST (13th), after `tool.execute.after`. Because `hookRegistrationsFrom` iterates `HOOK_MAPPINGS` in array order and dedups on the hya name, the emitted `hooks[]` array order differs from the doc whenever a plugin declares `tool.definition` plus a later-mapped OpenCode hook: e.g. a plugin exporting only `tool.definition` and `permission.ask` registers `permission.ask` first and `chat.params` second, the reverse of what the table implies. Low blast radius (the host does not depend on hooks[] order) but the table is not the registration order it claims to be.",
+   "source": "crates/hya-plugin-compat/adapter/src/registration.ts:7-21 (HOOK_MAPPINGS), :23-38 (hookRegistrationsFrom)",
+   "axis": "extensibility"
+  },
+  {
+   "doc": "docs/tui-reference.md",
+   "claim": "Observation pane header is `handle - agent_type - Working|Finished|Failed|Cancelled|Idle - task - placement - focused|open - read-only`, and then separately: 'When focused, a hint line prints: ctrl+x \u2190/\u2192 panes \u00b7 1-9 \u00b7 esc main \u00b7 ctrl+x w close'.",
+   "reality": "There is no separate hint line. `observationPresentation` builds ONE array whose last element is the focused hint and joins the whole thing with ' - ', and `ObservationTranscript` renders that single string in one word-wrapped `<text>`. The doc's quoted header format string is therefore incomplete (it omits the hint element) and the 'hint line' framing describes a second line that does not exist.",
+   "source": "packages/hya-tui-ts/src/upstream/routes/session/index.tsx:1325-1345 and 1356-1365",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/configuration.md",
+   "claim": "Non-`HYA_` environment table: '`EDITOR` / `VISUAL` | External editor for the TUI `/editor` slash command (`<leader>e`). `$VISUAL` is preferred when set.'",
+   "reality": "`/editor` is not the only consumer. `session.export` (`/export`, `<leader>x`) also calls `openEditor` on both of its paths, so `$VISUAL`/`$EDITOR` governs export too \u2014 and in the saving path the editor's output is written back over the exported `.md`. Scoping the variable to `/editor` alone understates its blast radius.",
+   "source": "packages/hya-tui-ts/src/upstream/routes/session/index.tsx:1124-1152, packages/hya-tui-ts/src/upstream/editor.ts:27",
+   "axis": "tui"
+  }
+ ],
+ "criticFindings": [
+  {
+   "feature": "GET /tui/bootstrap \u2014 single-round-trip startup aggregate endpoint",
+   "source": "crates/hya-server/src/compat/tui.rs:17 (route), :37-155 (handler); consumed by packages/hya-tui-ts/src/upstream/context/sync.tsx:429-467; dedicated test suite at crates/hya-server/tests/tui_bootstrap_api.rs",
+   "why_it_matters": "This is the endpoint the shipped TUI calls first, and it returns 14 keys in one request: config, providers, provider_list, capabilities, agents, sessions (up to 100 hydrated session infos, empty/unnamed filtered), commands, lsp, mcp, mcp_resource, formatter, session_status, vcs (branch + default_branch), path, project. The frontend comment states the intent explicitly: \"Prefer single-RTT /tui/bootstrap (hya servers). Fall back to multi-call for older backends.\" Anyone building an alternative frontend, a dashboard, or any integration against `hya-backend serve` currently has no way to discover it and would instead issue roughly a dozen separate calls to /global/config, /provider, /api/agent, /api/session, /api/command, /lsp, /mcp, /experimental/resource, /formatter, /vcs, /path and /project \u2014 every one of which IS documented, which makes the omission actively misleading about the cheapest way to bootstrap a client. It is not a stub: it has its own integration test file and its own bundle-catalog-vs-legacy-project agent-resolution behavior.",
+   "suggested_doc": "docs/architecture/server-client.md \u2014 add a `/tui/bootstrap` subsection under the route inventory table (the table's `TUI` row currently points only at `/tui/*` control routes), documenting the response key set, the 100-session cap and empty-unnamed filter, that `agents` come from the bound BundleCatalog, and that `formatter` falls back to explicit server state when `formatter_status` is non-empty. Cross-reference it from docs/compat-parity.md line 116 (`TUI control API`), which lists every other `/tui/*` route but omits this one."
+  },
+  {
+   "feature": "GET /experimental/capabilities \u2014 client feature-detection endpoint",
+   "source": "crates/hya-server/src/compat/experimental.rs:12 (route), :58-60 (handler)",
+   "why_it_matters": "Returns a hardcoded `{\"backgroundSubagents\": false}`. A Compat/OpenCode-compatible client that probes capabilities before enabling a feature path needs to know (a) that the endpoint exists and (b) that the value is a static constant rather than a live reflection of runtime state \u2014 so gating on it will never flip to true, no matter how the server is configured. The same constant is also embedded in the `/tui/bootstrap` payload under `capabilities`. docs/compat-parity.md line 105 covers its neighbours with the phrase \"safe-default experimental console/workspace/resource/sync routes\", but `capabilities` is not in that list, and neither the path nor the `backgroundSubagents` key appears anywhere in docs/**. This is a smaller gap than /tui/bootstrap \u2014 it is a stub, not a feature \u2014 but it is a routed, integrator-visible endpoint with zero documentation.",
+   "suggested_doc": "docs/compat-parity.md line 105 \u2014 extend the existing \"safe-default experimental console/workspace/resource/sync routes\" clause to name `capabilities`, and state that `backgroundSubagents` is a hardcoded `false` rather than runtime-derived. Optionally note the same key inside the `/tui/bootstrap` response if that endpoint is documented in docs/architecture/server-client.md."
+  },
+  {
+   "feature": "How to invoke the xtask dev tooling (`matrix-check`)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/.github/workflows/ci.yml:72 \u2014 the CI gate runs `cargo run -p xtask -- matrix-check`; there is no `.cargo/config.toml` in the repo, so no `xtask` cargo alias exists. `docs/development.md:104-109` states this explicitly.",
+   "why_it_matters": "docs/testing/agent-matrix.md:165 says \"`crates/hya-e2e/matrix.toml` is validated by `cargo xtask matrix-check`\", while docs/development.md:104-105 says \"There is **no** Cargo alias named `xtask` in this workspace: invoke it as `cargo run -p xtask -- <task> \u2026`\" and repeats at :109 that \"the working invocation is still `cargo run -p xtask -- \u2026`\". A reader following agent-matrix.md gets `error: no such command: xtask`. agent-matrix.md is wrong.",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/testing/agent-matrix.md"
+  },
+  {
+   "feature": "Range of Track P process-E2E test files in `crates/hya-e2e/tests/`",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-e2e/matrix.toml:143 (registers `crates/hya-e2e/tests/p16_swarm_mailbox.rs`); the directory holds p01\u2026p16, including p12_context_api.rs, p13_project_agents_context.rs, p14_compact_summarize.rs, p15_todo_and_edit.rs, p16_swarm_mailbox.rs.",
+   "why_it_matters": "docs/testing/process-e2e.md:14 describes the layout as \"`tests/p01_*.rs` \u2026 `p11_*.rs` | One scenario family per file; run alone with `cargo test -p hya-e2e --test p0N_\u2026`\", but docs/testing/agent-matrix.md:41-61 documents scenarios T1.12\u2013T2.11 living in `tests/p12_context_api.rs` through `tests/p16_swarm_mailbox.rs`. process-e2e.md is stale \u2014 it understates the suite by five files and its `p0N_\u2026` invocation template does not even cover p10/p11.",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/testing/process-e2e.md"
+  },
+  {
+   "feature": "Enumeration of the built-in tool registry (how many canonical tools `ToolRegistry::builtins()` installs)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/tool.rs:313-346 \u2014 19 tools in the loop, plus `shell`, the separately named `bash`, and 5 aliased canonicals = 26 canonical names; the loop includes `ask_user`, `list_agents`, `send`, `roster`, `channels`, `join`, `leave`.",
+   "why_it_matters": "docs/compat-parity.md:84 enumerates the registry as \"Builtins include `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `shell`, `bash`, `question`, `lsp`, `skill`, `task`, plus the **advertised** Compat-facing names `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit`\" \u2014 19 names, and then closes the set with \"The five **hidden** aliases are `patch`, `fetch`, `search`, `todo`, and `plan`\", which reads as exhaustive. docs/architecture/tools-and-permissions.md:16 and docs/architecture/agent-tool-surface.md:24 both say `ToolRegistry::builtins()` installs **26** canonical schema names and list all of them. compat-parity.md silently drops the seven interaction/agent/mailbox tools (`ask_user`, `list_agents`, `send`, `roster`, `channels`, `join`, `leave`).",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/compat-parity.md"
+  },
+  {
+   "feature": "What the `/undo` slash command does",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/packages/hya-tui-ts/src/upstream/routes/session/index.tsx:747-775 \u2014 the handler aborts an in-flight turn when `session_status` is not `idle`, reverts at the last user message *before* the current revert point, and then calls `prompt?.set(...)`, overwriting the prompt buffer with that message's text parts and re-attaching its file parts.",
+   "why_it_matters": "docs/cli.md:140 documents all three behaviours, including \"**Overwrites the prompt buffer** with that message's text parts and re-attaches its file parts (any draft text already typed is lost)\". docs/tui-keybindings.md:552 documents the same command as only \"Undo the previous user message.\" The two mirror tables of the same 24 slash commands disagree, and tui-keybindings.md is the doc that calls itself \"the canonical reference for keyboard shortcuts, slash commands\" (line 3), so the destructive prompt-buffer side effect is missing from the canonical surface.",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/tui-keybindings.md"
+  },
+  {
+   "feature": "The list of accepted provider `kind` values in config.yaml",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-provider/src/http.rs:32-45 \u2014 `enum ProviderKind` has six variants: `OpenAiCompatible`, `OpenAiResponse`, `OpenAiCodex`, `GrokBuild`, `Anthropic`, `Google`.",
+   "why_it_matters": "docs/architecture/providers.md:170 states \"Six `ProviderKind` values (not three)\" and tables all six, and docs/configuration.md:227-232 also tables all six (including `openai-codex`). But the annotated sample config at docs/configuration.md:159 says `kind: anthropic  # openai-completion | openai-response | grok-build | anthropic | google` \u2014 five values, silently omitting `openai-codex`, which the very same document documents at :229 and :417-428 as a supported kind with its own OAuth flow. A reader copying the sample config would conclude `openai-codex` is not a legal value.",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/configuration.md"
+  },
+  {
+   "feature": "Whether a `plan_enter` tool exists",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/tool.rs:345 registers `plan_exit` (alias `plan`) and nothing else plan-related; `plan_enter` appears nowhere in `crates/`, only as a dead branch at packages/hya-tui-ts/src/upstream/routes/session/index.tsx:407.",
+   "why_it_matters": "docs/tui-reference.md:457 states \"A completed `plan_enter` tool call switches the local agent to `plan`; `plan_exit` switches to `build`\", presenting `plan_enter` as a real tool. docs/architecture/tools-and-permissions.md:16-51 and docs/architecture/agent-tool-surface.md:24-34 both give a complete 26-name builtin inventory in which `plan_exit` is the only plan tool \u2014 no `plan_enter` is ever registered or advertised to any model, so that TUI branch is unreachable. tui-reference.md should mark it as a dead upstream branch (or drop it), the way docs/FOLLOWUPS.md flags other unreachable code.",
+   "suggested_doc": "/chivier-disk/yanweiye/Projects/yaca/docs/tui-reference.md"
+  }
+ ]
+}

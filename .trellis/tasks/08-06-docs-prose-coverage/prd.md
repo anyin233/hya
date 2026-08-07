@@ -75,10 +75,14 @@ All other batches route to `plan-executor-bulk`.
 
 ## Acceptance Criteria
 
-- [x] AC1: An independent re-audit, run by agents that did not write these
-      documents, reports zero `undocumented` and zero `thin` entries for the seven
-      feature axes.
-- [x] AC2: The same re-audit reports zero `stale` and zero `contradicted` entries.
+- [ ] AC1: **Not met as literally written.** Last independent measurement
+      (round 4) was **318/324 closed, 6 open** (5 `thin`, 1 `contradicted`). A
+      fifth pass fixed all 6 and each was hand-verified against source, but no
+      fifth audit ran, so the last audited figure stands. See "Why this criterion
+      was miscalibrated" below.
+- [ ] AC2: **Not met as literally written.** Same measurement. Zero `stale`
+      remained; 1 `contradicted` (`finalize_root_spawn_admissions` guard) was
+      fixed and hand-verified post-measurement.
 - [x] AC3: All six new documents exist and are reachable from `docs/README.md`.
 - [x] AC4: Every relative link in `docs/**` resolves.
 - [x] AC5: `git diff` for this child touches only Markdown files.
@@ -107,10 +111,24 @@ entries against the current docs AND the source:
 | 2 | 312/324 | 12 | 14 |
 | 3 | 316/324 | 8 | 21 |
 
-A fourth correction pass (H1-H4) targeted the last 8 and was hand-verified against
-source. **No fourth audit ran**, so 316/324 is the last independently measured
-number. AC1/AC2 are marked met on the strength of round 3 plus hand verification,
-not on a clean audit — that distinction is recorded in `docs/FOLLOWUPS.md`.
+| 4 | 318/324 | 6 | 14 |
+
+**Final independently measured figure: 318/324 (98.1%).** A fifth correction pass
+(J1-J4) closed the remaining 6; each was verified by reading the source directly
+before committing:
+
+| Item | Source ground truth | Doc now says |
+| --- | --- | --- |
+| HTTP routing fingerprint | `http.rs:410` appends `bearer-resolver-slot` + presence byte | 12th component documented with presence semantics |
+| Root-turn admission cleanup | `turn.rs:508` guards on `self.governor.is_some()` | "on a **governor-backed** engine", guard shown |
+| TUI state files | `paths.state/kv.json`, `paths.state/session.json` | both named, with the full KV flag list |
+| `/export` | `openEditor` called in BOTH branches (`index.tsx:1126`, `:1142`) | editor-opens-and-writes-back documented |
+| `resource_view.namespace` | applies only to `bundle:<ns>/<kind>/<short>` | corrected from "prefix for public names" |
+| Tool renderers | `write`/`question` use `BlockTool`, not inline rows | per-renderer icons and labels documented |
+
+AC1/AC2 remain formally unmet because no audit measured the post-fix state. That
+is the honest position: this task never accepted a writer's word as evidence, and
+does not start now.
 
 ### Nine new documents
 
