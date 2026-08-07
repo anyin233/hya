@@ -273,15 +273,21 @@ on a model, it **replaces** (does not extend) the provider-kind default menu.
 
 When `reasoning.default` is omitted, the effective default is the **highest**
 effort in the resulting list (ordering Off &lt; Minimal &lt; Low &lt; Medium &lt;
-High &lt; XHigh &lt; Max). Full default resolution
-([`resolve_default_reasoning`](../crates/hya-provider/src/lib.rs)):
+High &lt; XHigh &lt; Max). Shipped default resolution uses
+[`resolve_default_reasoning`](../crates/hya-provider/src/lib.rs) from
+[`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs), which always
+passes `last_used: None`:
 
-1. Explicit `reasoning.default` from config.
-2. Otherwise the last-used effort, kept when it is `none`/`off` or present in the advertised variants.
-3. Otherwise the highest supported level.
+1. Explicit `reasoning.default` from config (must be advertised, else config error).
+2. Otherwise the highest supported level among the route's advertised variants.
 
 If the model advertises no reasoning at all, the result is `None` and no default
 is shown. A route emits an empty variant list when `reasoning_request` is false.
+
+The helper also accepts a `last_used` argument (kept when it is `none`/`off` or
+present in the advertised variants), but **no production caller supplies it** —
+only unit tests exercise that branch. hya does **not** remember a previously
+selected effort across runs or UI picks.
 
 **Provider budget / label mapping:**
 
@@ -709,7 +715,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | --- | --- | --- | --- |
 | `HYA_DISABLE_MOUSE` | Truthy `1`/`true` disables OpenTUI mouse capture regardless of the `mouse` config key. | off | `packages/hya-tui-ts/src/hya/platform.ts` |
 | `HYA_DISABLE_TERMINAL_TITLE` | Suppresses all terminal-title writes even when `terminal.title.toggle` is on. | off | same |
-| `HYA_DISABLE_COPY_ON_SELECT` | Disables copy-on-mouse-selection and the selection key intercept. **Always true on win32.** | off (except win32) | same |
+| `HYA_DISABLE_COPY_ON_SELECT` | Disables copy-on-mouse-selection (`onMouseUp` auto-copy). **Always true on win32.** Does **not** disable the selection key intercept — when this flag is true the TUI *registers* that intercept so keys can still operate on a selection. | off (except win32) | same |
 | `HYA_SHOW_TTFD` | Renders OpenTUI’s first-paint overlay. | off | same |
 | `HYA_WAIT_THEME` | Classic mode: block first paint up to 1s waiting for OS light/dark. Default is instant dark with async correction. | off | same |
 | `HYA_SYNC_PLUGIN_START` | Classic mode: gate shell routes on sequential builtin plugin-host start. Default paints shell chrome immediately. | off | same |
@@ -1122,8 +1128,12 @@ The `formatter` key controls the formatter plane exposed through tools and the
 Compat-compatible `/formatter` route. It is untagged: either a bool or a map.
 
 When the key is **absent**, the default is `false` (`FormatterConfig::Disabled`).
-`true` enables the built-in formatter set; a mapping supplies fully custom
-entries.
+`true` enables the built-in formatter set (`FormatterConfig::Builtins`). A
+**mapping** is `FormatterConfig::Custom`: it **merges** your entries over the
+builtin set — it does **not** replace the builtins. Writing
+`formatter: { treefmt: { … } }` keeps every available builtin **and** adds
+`treefmt`. To stop a builtin, set `disabled: true` on that name (see
+[`formatter_definition.rs`](../crates/hya-tool/src/formatter_definition.rs)).
 
 ```yaml
 formatter: true
@@ -1139,7 +1149,13 @@ formatter:
 ```
 
 Custom entries support `disabled`, `command`, `environment`, and `extensions`.
-`$FILE` in `command` is the placeholder for the file being formatted.
+`$FILE` in `command` is the placeholder for the file being formatted. For a
+known builtin name, a non-disabled map entry **merges** into that builtin
+(override extensions/command/env); an unknown name is **appended** as a new
+formatter (requires `command` / `extensions` as needed).
+
+**Python pair:** `disabled: true` on **either** `ruff` **or** `uv` removes
+**both** from the active set (they share `.py` / `.pyi`).
 
 The formatter block is parsed **independently** of the rest of `config.yaml`. A
 parse error there disables only formatting and prints on stderr:
@@ -1150,7 +1166,50 @@ hya: formatter config error (...); formatter status disabled
 
 It does not abort startup and does not push hya offline. The formatter runs
 after successful `write`, `edit`, and `apply_patch` tool operations when a
-matching provider entry is available.
+matching definition is available (binary found and any probe succeeds). Several
+builtins claim the same extensions (for example `.ts`); whichever enabled
+definition matches first for that path runs. Binaries that are not on `PATH`
+(or fail their probe) are skipped silently.
+
+### Built-in formatter set (`formatter: true`)
+
+Twenty-six builtins are defined in
+[`formatter_catalog.rs`](../crates/hya-tool/src/formatter_catalog.rs). Only
+entries whose availability probe succeeds actually run. Argv when enabled
+comes from [`formatter_command.rs`](../crates/hya-tool/src/formatter_command.rs)
+(`$FILE` = path being formatted).
+
+| Name | Extensions | Typical argv (when enabled) | Availability notes |
+| --- | --- | --- | --- |
+| `gofmt` | `.go` | `gofmt -w $FILE` | `gofmt` on PATH |
+| `mix` | `.ex` `.exs` `.eex` `.heex` `.leex` `.neex` `.sface` | `mix format $FILE` | `mix` on PATH |
+| `prettier` | `.js` `.jsx` `.mjs` `.cjs` `.ts` `.tsx` `.mts` `.cts` `.html` `.htm` `.css` `.scss` `.sass` `.less` `.vue` `.svelte` `.json` `.jsonc` `.yaml` `.yml` `.toml` `.xml` `.md` `.mdx` `.graphql` `.gql` | `prettier --write $FILE` | `package.json` mentions `prettier`; binary on PATH |
+| `oxfmt` | `.js` `.jsx` `.mjs` `.cjs` `.ts` `.tsx` `.mts` `.cts` | — | Catalog entry only today: builtin probe always returns disabled (`CheckKind::Oxfmt` → no argv) unless you override with a custom `command` |
+| `biome` | same broad web set as prettier | `biome format --write $FILE` | `biome.json` or `biome.jsonc` found upward; binary on PATH |
+| `zig` | `.zig` `.zon` | `zig fmt $FILE` | `zig` on PATH |
+| `clang-format` | `.c` `.cc` `.cpp` `.cxx` `.c++` `.h` `.hh` `.hpp` `.hxx` `.h++` `.ino` `.C` `.H` | `clang-format -i $FILE` | `.clang-format` found upward; binary on PATH |
+| `ktlint` | `.kt` `.kts` | `ktlint -F $FILE` | `ktlint` on PATH |
+| `ruff` | `.py` `.pyi` | `ruff format $FILE` | `ruff` on PATH **and** ruff config/dependency signal (`[tool.ruff]`, `ruff.toml` / `.ruff.toml`, or `ruff` mentioned in requirements/pyproject/Pipfile) |
+| `air` | `.R` | `air format $FILE` | `air` on PATH and `air --help` first line mentions R language formatter |
+| `uv` | `.py` `.pyi` | `uv format -- $FILE` | Only when ruff is **not** enabled for the workdir; `uv` on PATH and `uv format --help` succeeds |
+| `rubocop` | `.rb` `.rake` `.gemspec` `.ru` | `rubocop --autocorrect $FILE` | `rubocop` on PATH |
+| `standardrb` | `.rb` `.rake` `.gemspec` `.ru` | `standardrb --fix $FILE` | `standardrb` on PATH |
+| `htmlbeautifier` | `.erb` `.html.erb` | `htmlbeautifier $FILE` | binary on PATH |
+| `dart` | `.dart` | `dart format $FILE` | `dart` on PATH |
+| `ocamlformat` | `.ml` `.mli` | `ocamlformat -i $FILE` | `.ocamlformat` found upward; binary on PATH |
+| `terraform` | `.tf` `.tfvars` | `terraform fmt $FILE` | `terraform` on PATH |
+| `latexindent` | `.tex` | `latexindent -w -s $FILE` | `latexindent` on PATH |
+| `gleam` | `.gleam` | `gleam format $FILE` | `gleam` on PATH |
+| `shfmt` | `.sh` `.bash` | `shfmt -w $FILE` | `shfmt` on PATH |
+| `nixfmt` | `.nix` | `nixfmt $FILE` | `nixfmt` on PATH |
+| `rustfmt` | `.rs` | `rustfmt $FILE` | `rustfmt` on PATH |
+| `pint` | `.php` | `./vendor/bin/pint $FILE` | `composer.json` mentions `laravel/pint` |
+| `ormolu` | `.hs` | `ormolu -i $FILE` | `ormolu` on PATH |
+| `cljfmt` | `.clj` `.cljs` `.cljc` `.edn` | `cljfmt fix --quiet $FILE` | `cljfmt` on PATH |
+| `dfmt` | `.d` | `dfmt -i $FILE` | `dfmt` on PATH |
+
+Disable an unwanted rewrite with a map entry, for example
+`prettier: { disabled: true }` or `rustfmt: { disabled: true }`.
 
 ## Project Config (`opencode.json`)
 
@@ -1271,6 +1330,76 @@ and the workdir-local one last
 or missing files are skipped silently. This is the sole discovery
 implementation — callers re-export it rather than reimplement walk order.
 
+## Project references (`references` / `reference`)
+
+Project **references** are external directories the agent may use (local paths or
+git clones). They power `@` alias autocomplete, turn-scoped
+`ExternalDirectory` allow rules, and optional system-prompt guidance. There is
+**no** `config.yaml` key and **no** on-disk file for this map: the only way to
+declare them is the process-local Compat config bag —
+
+- `PATCH /config` or `PATCH /global/config` (same in-memory JSON object)
+- bag key: `references` **or** `reference` (object of alias → entry)
+
+PATCH **replaces** the whole bag (no deep merge). State is lost on process
+restart. Source:
+[`reference_entries.rs`](../crates/hya-server/src/compat/reference_entries.rs),
+[`reference.rs`](../crates/hya-server/src/compat/reference.rs).
+
+### Entry shapes
+
+| Form | Meaning |
+| --- | --- |
+| string starting with `.`, `/`, or `~` | Local path (resolved against the session workdir; `~/…` uses `$HOME`) |
+| any other string | Git repository shorthand (background-cloned; see cache root below) |
+| `{ "path", "description"?, "hidden"? }` | Local path object |
+| `{ "repository", "branch"?, "description"?, "hidden"? }` | Git object (`branch` must pass `valid_branch` or the entry is dropped) |
+
+### Alias rules
+
+Aliases that are empty or contain `/`, whitespace, backtick (`` ` ``), or `,`
+are **silently dropped** (`valid_alias`).
+
+### Git cache
+
+Clones land under `$XDG_DATA_HOME/compat/repos` (fallback
+`~/.local/share/compat/repos`), keyed by host/path segments. Materialization is
+background (`reference_cache`). Override GitHub remotes with
+`COMPAT_REPO_CLONE_GITHUB_BASE_URL` (see environment table above).
+
+### Permission and prompt effects (security)
+
+Every resolved reference **path** is layered onto the turn's permission snapshot
+as:
+
+```text
+Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
+```
+
+so tools may read/write/shell under that tree **without** an
+`ExternalDirectory` permission prompt for those paths
+([`run_turn_with_external_dirs`](../crates/hya-core/src/engine/turn.rs)).
+
+References that carry a non-empty `description` are also injected into the
+system prompt as sorted `<available_references>` / `<reference>` blocks (name,
+path, description), which changes model behavior.
+
+Example bag fragment:
+
+```json
+{
+  "references": {
+    "docs": "./docs",
+    "sdk": { "path": "~/src/sdk", "description": "Shared SDK checkout" },
+    "upstream": {
+      "repository": "github.com/example/lib",
+      "branch": "main",
+      "description": "Upstream library"
+    }
+  }
+}
+```
+
 ## TUI Configuration
 
 The TypeScript TUI validates a config object through
@@ -1283,7 +1412,7 @@ host supplies a non-empty object (or when defaults apply).
 | Key | Default / range | Meaning |
 | --- | --- | --- |
 | `theme` | `hya` | Theme name. |
-| `keybinds` | factory defaults | Overrides keyed by **Definition names** from `keybind.ts` (e.g. `app_exit`, `session_new`, `command_list`, `editor_open`, `status_view`, plus dotted keys such as `dialog.select.*` and `prompt.autocomplete.*`). **Not** the dotted command names from the palette (`session.new`, `app.exit` — those throw `Unrecognized keybind(s): …`). A value may be `false`, `"none"`, a key string, a keystroke object (`event` / `preventDefault` / `fallthrough`), or an array of those. Default **bindings** (keys users press) are listed in [TUI Keybindings](tui-keybindings.md); that table’s Command column is not the override vocabulary. |
+| `keybinds` | factory defaults | Overrides keyed by **Definition names** from `keybind.ts` (e.g. `app_exit`, `session_new`, `command_list`, `editor_open`, `status_view`, plus dotted keys such as `dialog.select.*` and `prompt.autocomplete.*`). **Not** the dotted command names from the palette (`session.new`, `app.exit` — those throw `Unrecognized keybind(s): …`). Each value is a **`BindingValue`** (see shapes below). Default **bindings** (keys users press) are listed in [TUI Keybindings](tui-keybindings.md); that table’s Command column is not the override vocabulary. |
 | `leader_timeout` | `2000` (positive int, ms) | Leader chord timeout. |
 | `attention.enabled` | `false` | Master switch for notifications/sounds. |
 | `attention.notifications` | `true` | Desktop notifications when attention is enabled. |
@@ -1297,6 +1426,50 @@ host supplies a non-empty object (or when defaults apply).
 | `scroll_acceleration` | `{ enabled }` | Applied to every scrollbox including the sidebar and observation panes. |
 | `diff_style` | `auto` | `auto` = split above 120 columns; `stacked` = always unified. |
 | `mouse` | `true` | ANDed with `HYA_DISABLE_MOUSE`. |
+
+#### `keybinds` value shapes
+
+Schema:
+[`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
+(`KeyStroke`, `BindingObject`, `BindingItem`, `BindingValueSchema`).
+
+Top-level **`BindingValue`** for one definition name:
+
+| Shape | Role |
+| --- | --- |
+| `false` or `"none"` | Disable that binding (**top-level only** — not valid inside an array) |
+| **`BindingItem`** | Single binding (see below) |
+| **array of `BindingItem`** | Multiple alternate chords for the same command |
+
+A **`BindingItem`** is one of:
+
+1. **Key string** — e.g. `"ctrl+c"`, `"ctrl+c,ctrl+d,<leader>q"` (comma-separated chords in one string are a single default encoding used by factory defaults).
+2. **`KeyStroke` object** — `{ "name": string, "ctrl"?: bool, "shift"?: bool, "meta"?: bool, "super"?: bool, "hyper"?: bool }`. Separate union member; not the same as `BindingObject`.
+3. **`BindingObject`** — **requires** `key` (`string` **or** nested `KeyStroke`). Optional: `event` (`"press"` \| `"release"`), `preventDefault`, `fallthrough`. Writing `{ "event": "press" }` without `key` fails schema decode.
+
+Examples:
+
+```json
+{
+  "keybinds": {
+    "app_exit": false,
+    "app_debug": "none",
+    "session_new": "ctrl+n",
+    "command_list": { "name": "p", "ctrl": true },
+    "editor_open": {
+      "key": "ctrl+e",
+      "event": "press",
+      "preventDefault": true
+    },
+    "status_view": [
+      "ctrl+s",
+      { "key": { "name": "s", "meta": true }, "fallthrough": false }
+    ]
+  }
+}
+```
+
+`false` / `"none"` **inside** an array is rejected; only top-level values may use those disable literals.
 
 Example object (when a host loads it):
 
