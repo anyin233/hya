@@ -141,36 +141,39 @@ each channel with the unit that owns it.
 
 ## Acceptance criteria
 
-- [ ] **AC1** A worker addressing a sibling by relative leaf succeeds; the same
-      worker addressing an agent in another unit is rejected, and a replay of the
-      root log shows **no** `MailSent` for the rejected send.
-- [ ] **AC2** Full-path and relative-leaf addressing of the same in-scope agent
-      produce identical delivery.
+- [x] **AC1** `sibling_is_reachable_and_cousin_is_refused_without_appending`
+      (delivery, rejection, and an unchanged log length) plus
+      `grandparent_and_grandchild_are_both_refused`; end-to-end in
+      `t2_12_cross_unit_send_is_refused_and_never_crosses`.
+- [x] **AC2** `relative_leaf_and_full_path_deliver_identically`, plus
+      `resolve_in_scope_accepts_leaf_and_path_but_only_within_the_unit`.
 - [x] **AC3** The handle minter never produces a leaf that duplicates a sibling
       or equals the parent's leaf — including a batch spawned at once — and
       `resolve_in_scope` refuses to deliver on an ambiguous leaf.
       *(Revised: prevention by construction rather than a spawn-time rejection —
       see R2.)*
-- [ ] **AC4** Two units each own a `#build`. A post in one unit lands in that
-      unit's subscribers only, and the other `#build` log is untouched.
-- [ ] **AC5** A leader's `join("#build")` targets its led unit and
-      `join("#^build")` targets its home unit; a non-leader using `^` is an error.
-- [ ] **AC6** `announce` from a leader reaches its direct children and **not**
-      its grandchildren. A grandchild receives it only after the intermediate
-      leader announces in turn.
-- [ ] **AC7** `roster` returns `self`/`parent`/`peers`/`reports`, omits empty
-      groups, and never contains an out-of-scope agent.
-- [ ] **AC8** An event log recorded before this change replays to the same team
-      topology and the same delivery outcomes as today (same roster members, same
-      inbox contents in the same order, one flat unit in which every agent may
-      address every other), under canonically re-keyed maps.
-- [ ] **AC9** A cross-unit message delivered by relay through the common ancestor
-      arrives, proving R5 leaves a working path.
-- [ ] **AC10** `hya-sdk::TeamProjection` folded over the same envelope stream
-      equals the `hya-proto` projection, including scope and unit-qualified
-      channel keys.
-- [ ] **AC11** Handle assignment for a spawn batch is deterministic: the same
-      roster plus the same batch order yields the same paths on repeat runs.
+- [x] **AC4** `same_channel_name_in_two_units_never_cross_talks` (reducer) and
+      `same_channel_name_in_two_units_stays_separate` (engine).
+- [x] **AC5** `caret_channel_is_leader_only` (engine) and
+      `channel_resolution_follows_leadership` (projection).
+- [x] **AC6** `announce_reaches_direct_reports_only`, which asserts the
+      grandchildren stay silent and then drives the relay hop; plus
+      `announce_from_a_leaf_agent_is_refused`.
+- [x] **AC7** `scoped_roster_shows_only_the_unit`,
+      `scoped_roster_and_channels_stop_at_the_unit_boundary`, and
+      `render_roster_groups_by_relation_and_omits_empty_groups`.
+- [x] **AC8** `crates/hya-proto/tests/legacy_flat_mailbox.rs` — 6 tests over a
+      fixture captured from the pre-scoping build, including
+      `legacy_log_replays_identical_deliveries` and
+      `every_legacy_pair_stays_mutually_addressable`.
+- [x] **AC9** `cross_unit_relay_through_the_common_ancestor_arrives`.
+- [x] **AC10** `crates/hya-sdk/tests/team_mirror_conformance.rs` — 4 streams
+      (scoped, legacy, mail-before-registration, terminal-resident fan-out). It
+      found a real **pre-existing** mirror bug: the TUI never skipped terminal
+      residents in channel fan-out, so a stopped agent appeared to keep receiving
+      mail. Fixed as part of this change.
+- [x] **AC11** `assignment_is_deterministic_across_runs`, plus
+      `ordinals_restart_in_each_unit` and `a_batch_never_repeats_a_sibling_leaf`.
 
 ## Out of scope
 

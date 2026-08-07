@@ -235,6 +235,29 @@ reducer); `plan-executor-heavy` if the conformance test exposes a reducer defect
 
 ---
 
+## Outcome
+
+All nine phases landed. Final gate on the implementation commit:
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all --check` | clean (also fixed the 2 pre-existing `hya-sdk` diffs) |
+| `cargo clippy` (touched crates, `-D warnings`) | 0 errors |
+| `cargo test --workspace --exclude hya-e2e` | green, 240 suites |
+| `cargo test -p hya-e2e -- --test-threads=1` | green, 18 suites |
+| `bun test` + `bun run typecheck` (TUI) | 50 pass, typecheck clean |
+
+`cargo clippy --workspace` still fails on the 48 pre-existing `hya-sdk` errors
+described above. Those are untouched and unrelated.
+
+### Found while implementing
+
+- **A pre-existing bug in the SDK mirror.** The conformance test (AC10) showed
+  that `hya_sdk::TeamProjection` never skipped terminal residents in channel
+  fan-out, while the backend reducer always has — so the TUI showed a stopped
+  agent still receiving mail. Fixed here, since the mirror's whole contract is to
+  carry no divergent logic.
+
 ## Review gates
 
 | After | Check |
