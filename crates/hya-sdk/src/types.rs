@@ -356,7 +356,10 @@ mod tests {
 
     #[test]
     fn agents_fixture_yields_a_non_hidden_default() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/agents.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/agents.json"
+        );
         let raw = std::fs::read_to_string(path).expect("fixtures/agents.json missing");
         let agents: Vec<Agent> = serde_json::from_str(&raw).expect("deser agents array");
         assert!(
