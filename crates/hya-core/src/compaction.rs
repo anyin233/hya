@@ -191,6 +191,57 @@ pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, thresho
     messages.len() > cfg.keep_recent && tokens_in_use(messages) > threshold
 }
 
+/// Replaces a dropped tool output; tells the model the result is re-fetchable.
+const EVICTED_OUTPUT_NOTICE: &str = "[tool output evicted to fit the context window; \
+                                     re-run the tool if you still need it]";
+
+/// Drop stale completed tool outputs from `messages`, keeping calls and inputs.
+///
+/// Returns how many parts were evicted. Messages in the most recent
+/// `keep_recent` are never touched, so the model keeps full fidelity on what it
+/// just did.
+///
+/// **Request-local.** Callers pass a transcript built for one provider request;
+/// the event log is untouched, so the full output stays recoverable offline.
+///
+/// This is tried before summarizing because tool output dominates a tool-heavy
+/// transcript, and losing it costs the model far less than folding whole turns
+/// into prose: every call, its input, and all reasoning survive.
+pub fn evict_stale_tool_outputs(messages: &mut [Message], keep_recent: usize) -> u32 {
+    let cutoff = messages.len().saturating_sub(keep_recent);
+    let mut evicted = 0;
+    for message in messages.iter_mut().take(cutoff) {
+        let (Message::Assistant { parts, .. } | Message::User { parts, .. }) = message else {
+            continue;
+        };
+        for part in parts.iter_mut() {
+            let Part::Tool { state, .. } = part else {
+                continue;
+            };
+            let hya_proto::ToolPartState::Completed {
+                input,
+                output,
+                time_ms,
+            } = state
+            else {
+                continue;
+            };
+            // Already evicted: skip so a repeat pass is idempotent and the count
+            // reflects real work.
+            if output.as_str() == Some(EVICTED_OUTPUT_NOTICE) {
+                continue;
+            }
+            *state = hya_proto::ToolPartState::Completed {
+                input: input.clone(),
+                output: serde_json::Value::String(EVICTED_OUTPUT_NOTICE.to_string()),
+                time_ms: *time_ms,
+            };
+            evicted += 1;
+        }
+    }
+    evicted
+}
+
 /// Produces a summary string for older transcript segments.
 ///
 /// **Contract:** Called only with the messages being folded. Must not write the
@@ -255,6 +306,26 @@ pub async fn plan_compaction_at(
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
     if !needs_compaction_at(messages, cfg, threshold) {
+        return Ok(None);
+    }
+    fold_prefix(messages, cfg, summarizer, options).await
+}
+
+/// Summarize the foldable prefix unconditionally, without re-checking a threshold.
+///
+/// For callers that already decided to compact. Re-deriving the decision here
+/// would be wrong after a request-local edit such as tool-output eviction: the
+/// provider-measured token count still describes the pre-edit transcript.
+///
+/// # Errors
+/// Propagates summarizer failures.
+pub async fn fold_prefix(
+    messages: &[Message],
+    cfg: &CompactionConfig,
+    summarizer: &dyn Summarizer,
+    options: SummarizeOptions,
+) -> Result<Option<CompactionPlan>, CoreError> {
+    if messages.len() <= cfg.keep_recent {
         return Ok(None);
     }
     let split = messages.len() - cfg.keep_recent;
@@ -471,6 +542,98 @@ mod tests {
             assert!(content.contains("CONDENSED"));
             assert!(content.contains("4 earlier"));
         }
+    }
+
+    fn assistant_with_tool(output: &str) -> Message {
+        use hya_proto::{ToolCallId, ToolName, ToolPartState};
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts: vec![Part::Tool {
+                id: PartId::new(),
+                call_id: ToolCallId::new(),
+                name: ToolName::new("find"),
+                state: ToolPartState::Completed {
+                    input: serde_json::json!({"pattern": "*.rs"}),
+                    output: serde_json::Value::String(output.to_string()),
+                    time_ms: 7,
+                },
+            }],
+            finish: None,
+            tokens: None,
+        }
+    }
+
+    fn tool_output_of(message: &Message) -> Option<String> {
+        let Message::Assistant { parts, .. } = message else {
+            return None;
+        };
+        parts.iter().find_map(|p| match p {
+            Part::Tool {
+                state: hya_proto::ToolPartState::Completed { output, .. },
+                ..
+            } => output.as_str().map(ToString::to_string),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn eviction_drops_stale_outputs_keeps_inputs_and_respects_keep_recent() {
+        let mut msgs = vec![
+            assistant_with_tool(&"OLD_OUTPUT_A".repeat(100)),
+            assistant_with_tool(&"OLD_OUTPUT_B".repeat(100)),
+            assistant_with_tool(&"RECENT_OUTPUT".repeat(100)),
+        ];
+        let before = estimate_tokens(&msgs);
+
+        let evicted = evict_stale_tool_outputs(&mut msgs, 1);
+        assert_eq!(evicted, 2, "only the two stale messages are evicted");
+        assert!(
+            estimate_tokens(&msgs) < before,
+            "eviction must reduce the token count"
+        );
+
+        // Stale outputs replaced by the notice; the recent one is untouched.
+        assert_eq!(
+            tool_output_of(&msgs[0]).as_deref(),
+            Some(EVICTED_OUTPUT_NOTICE)
+        );
+        assert_eq!(
+            tool_output_of(&msgs[1]).as_deref(),
+            Some(EVICTED_OUTPUT_NOTICE)
+        );
+        assert!(
+            tool_output_of(&msgs[2]).is_some_and(|o| o.contains("RECENT_OUTPUT")),
+            "the most recent tool output must survive"
+        );
+
+        // The call and its input survive, so the model still knows what it ran.
+        let Message::Assistant { parts, .. } = &msgs[0] else {
+            panic!("expected assistant");
+        };
+        let Part::Tool { name, state, .. } = &parts[0] else {
+            panic!("expected tool part");
+        };
+        assert_eq!(name.as_str(), "find");
+        let hya_proto::ToolPartState::Completed { input, .. } = state else {
+            panic!("expected completed state");
+        };
+        assert_eq!(input["pattern"], "*.rs", "tool input must be preserved");
+    }
+
+    #[test]
+    fn eviction_is_idempotent() {
+        let mut msgs = vec![
+            assistant_with_tool(&"OLD".repeat(200)),
+            assistant_with_tool("recent"),
+        ];
+        assert_eq!(evict_stale_tool_outputs(&mut msgs, 1), 1);
+        assert_eq!(
+            evict_stale_tool_outputs(&mut msgs, 1),
+            0,
+            "a second pass has nothing left to evict"
+        );
     }
 
     #[test]

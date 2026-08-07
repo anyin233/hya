@@ -678,3 +678,138 @@ async fn provider_error_still_finishes_the_assistant_message() {
         "the assistant message must be terminally finished on provider error so UI clients never hang"
     );
 }
+
+/// E3: eviction alone must be enough to skip summarizing, and it must not touch
+/// the event log — the full tool output stays recoverable offline.
+///
+/// Spans two turns deliberately: within one turn every tool part lands in the
+/// same assistant message, which sits inside `keep_recent`. Eviction is a
+/// cross-turn reduction.
+#[tokio::test]
+async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
+    let dir = tempdir();
+    let big_file = dir.join("big.txt");
+    let big = "R".repeat(20_000);
+    tokio::fs::write(&big_file, &big).await.unwrap();
+    let path = big_file.to_string_lossy().into_owned();
+
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: json!({ "path": path }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("read it".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("second turn".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            token_threshold: 1_000_000,
+            keep_recent: 1,
+            // 200k window * 0.02 = 4000 tokens. Turn 1 (~1400) stays under, so the
+            // tool output survives into turn 2 — where it is finally stale.
+            context_fraction: 0.02,
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+
+    // Turn 1 produces a large tool output.
+    engine
+        .admit_user_prompt(session, "read the big file".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    // Turn 2 sees turn 1's tool output as stale and should evict it.
+    engine
+        .admit_user_prompt(session, "now summarize ".repeat(900))
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let evicted: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match &e.event {
+            hya_proto::Event::ContextEvicted {
+                evicted_parts,
+                tokens_before,
+                tokens_after,
+                ..
+            } => Some((*evicted_parts, *tokens_before, *tokens_after)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !evicted.is_empty(),
+        "a stale large tool output over the threshold must be evicted"
+    );
+    let (parts, before, after) = evicted[0];
+    assert!(parts > 0);
+    assert!(after < before, "eviction must reduce the token count");
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "eviction alone was enough; the summarizer must not have run"
+    );
+
+    // The log is untouched: the full tool output is still recoverable.
+    let projection = hya_proto::Projection::from_events(&envelopes);
+    let logged = projection.session.messages.iter().any(|m| {
+        m.parts.iter().any(|p| {
+            matches!(
+                p,
+                PartProjection::Tool { state: ToolPartState::Completed { output, .. }, .. }
+                    if output.to_string().contains("RRRRRRRRRR")
+            )
+        })
+    });
+    assert!(
+        logged,
+        "eviction is request-local; the event log must keep full fidelity"
+    );
+}

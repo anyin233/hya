@@ -574,6 +574,28 @@ pub enum Event {
         before_message: Option<MessageId>,
     },
 
+    /// Stale tool outputs were dropped from this turn's request to fit the window.
+    ///
+    /// Cheaper than summarizing: the model keeps every tool call and its input,
+    /// and loses only old outputs it can re-fetch. Emitted when eviction alone
+    /// brought the transcript under the threshold, so no summarization ran.
+    ///
+    /// **Request-local.** The event log still holds every tool output in full, so
+    /// an offline viewer reconstructs the true trajectory; only what was *sent*
+    /// this turn was reduced. Reducer no-op.
+    ContextEvicted {
+        /// Session whose request was reduced.
+        session: SessionId,
+        /// Number of tool-output parts replaced with a size notice.
+        evicted_parts: u32,
+        /// Token count before eviction.
+        tokens_before: u64,
+        /// Token count after eviction.
+        tokens_after: u64,
+        /// Threshold in force when it ran.
+        threshold: u64,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors; reducer no-op.
     Error {
@@ -659,9 +681,9 @@ impl Event {
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. } => Some(*session),
-            Event::ContextCompacted { session, .. } | Event::SessionForked { session, .. } => {
-                Some(*session)
-            }
+            Event::ContextCompacted { session, .. }
+            | Event::SessionForked { session, .. }
+            | Event::ContextEvicted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
@@ -935,6 +957,46 @@ mod tests {
             assert_eq!(event, back, "session_forked must round-trip: {json}");
             assert_eq!(back.session(), Some(session));
         }
+    }
+
+    #[test]
+    fn context_evicted_round_trips_and_is_a_record_only() {
+        let session = SessionId::new();
+        let event = Event::ContextEvicted {
+            session,
+            evicted_parts: 3,
+            tokens_before: 5000,
+            tokens_after: 1200,
+            threshold: 4000,
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, back, "context_evicted must round-trip: {json}");
+        assert_eq!(back.session(), Some(session));
+
+        let base = [Envelope {
+            seq: EventSeq(1),
+            ts_millis: 1,
+            event: Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("m"),
+                workdir: "/w".to_string(),
+            },
+        }];
+        let mut with_record = base.to_vec();
+        with_record.push(Envelope {
+            seq: EventSeq(2),
+            ts_millis: 2,
+            event: back,
+        });
+        let before = crate::Projection::from_events(&base);
+        let after = crate::Projection::from_events(&with_record);
+        assert_eq!(
+            before.session, after.session,
+            "eviction is request-local; it must not change reduced state"
+        );
     }
 
     #[test]
