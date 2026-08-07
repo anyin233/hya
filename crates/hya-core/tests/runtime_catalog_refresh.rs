@@ -21,7 +21,7 @@ use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistr
 use tokio_util::sync::CancellationToken;
 
 struct PublishingRefresh {
-    replacement: Arc<hya_bundle::BundleCatalog>,
+    replacement: Arc<hya_core::AgentCatalog>,
     calls: AtomicUsize,
 }
 
@@ -35,8 +35,8 @@ impl RuntimeCatalogRefresh for PublishingRefresh {
 }
 
 struct LoopCatalogRefresh {
-    first: Arc<hya_bundle::BundleCatalog>,
-    second: Arc<hya_bundle::BundleCatalog>,
+    first: Arc<hya_core::AgentCatalog>,
+    second: Arc<hya_core::AgentCatalog>,
     calls: Arc<AtomicUsize>,
 }
 
@@ -105,11 +105,8 @@ impl LoopPlanner for OneDirectivePlanner {
 
 #[tokio::test]
 async fn root_binding_refreshes_before_capture_while_plain_binding_stays_pure() {
-    let old_catalog = support::test_catalog(&[("general", AgentRole::Main, &[])]);
-    let replacement = support::test_catalog(&[
-        ("general", AgentRole::Main, &[]),
-        ("installed-agent", AgentRole::Main, &[]),
-    ]);
+    let old_catalog = support::builtin_only_catalog();
+    let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
     let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
@@ -145,11 +142,8 @@ async fn root_binding_refreshes_before_capture_while_plain_binding_stays_pure() 
 
 #[tokio::test]
 async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
-    let old_catalog = support::test_catalog(&[("general", AgentRole::Main, &[])]);
-    let replacement = support::test_catalog(&[
-        ("general", AgentRole::Main, &[]),
-        ("installed-agent", AgentRole::Main, &[]),
-    ]);
+    let old_catalog = support::builtin_only_catalog();
+    let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
     let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
@@ -202,11 +196,8 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
 
 #[tokio::test]
 async fn root_shell_refreshes_catalog_before_agent_resolution() {
-    let old_catalog = support::test_catalog(&[("general", AgentRole::Main, &[])]);
-    let replacement = support::test_catalog(&[
-        ("general", AgentRole::Main, &[]),
-        ("installed-agent", AgentRole::Main, &[]),
-    ]);
+    let old_catalog = support::builtin_only_catalog();
+    let replacement = support::test_catalog(&[("installed-agent", AgentRole::Main, &[])]);
     let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), old_catalog));
     let refresh = Arc::new(PublishingRefresh {
         replacement,
@@ -259,12 +250,9 @@ async fn root_shell_refreshes_catalog_before_agent_resolution() {
 
 #[tokio::test]
 async fn loop_children_reuse_one_root_catalog_binding() {
-    let initial = support::test_catalog(&[("general", AgentRole::Main, &[])]);
-    let catalog_a = support::test_catalog(&[
-        ("general", AgentRole::Main, &[]),
-        ("loop-agent", AgentRole::Main, &[]),
-    ]);
-    let catalog_b = support::test_catalog(&[("general", AgentRole::Main, &[])]);
+    let initial = support::builtin_only_catalog();
+    let catalog_a = support::test_catalog(&[("loop-agent", AgentRole::Main, &[])]);
+    let catalog_b = support::builtin_only_catalog();
     let calls = Arc::new(AtomicUsize::new(0));
     let refresh = Arc::new(LoopCatalogRefresh {
         first: catalog_a,

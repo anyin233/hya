@@ -28,7 +28,6 @@ Static-only Bundles remain process-free. Bun Compat is the only executable sidec
 Use one root `bundle.hya.md` with both v1 markers:
 
 ```yaml
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 ```
 

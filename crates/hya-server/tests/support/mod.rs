@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::RuntimeRegistry;
@@ -70,8 +70,7 @@ pub fn runtime_with_catalog(
     let prepared: Vec<PreparedAgent> = agents
         .iter()
         .map(|agent| PreparedAgent {
-            local_id: agent.stable_id.to_string(),
-            stable_id: AgentName::new(agent.stable_id),
+            id: AgentName::new(agent.stable_id),
             description: agent.description.map(str::to_string),
             role: agent.role,
             color: None,
@@ -81,7 +80,6 @@ pub fn runtime_with_catalog(
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: HarnessAccess::Full,
             resource_view: ResourceView::default(),
             can_spawn: agent
                 .can_spawn
@@ -98,8 +96,6 @@ pub fn runtime_with_catalog(
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
         agents: prepared,
         tools: Vec::new(),

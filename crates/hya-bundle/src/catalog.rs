@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BundleError, BundleOrigin, PreparedAgent, PreparedBundle, PreparedCatalog, PreparedResource,
+    BundleError, PreparedAgent, PreparedBundle, PreparedCatalog, PreparedResource,
     prepare::validate_hook_local_id,
 };
 
@@ -38,7 +38,7 @@ impl ExportKind {
 #[derive(Debug)]
 pub struct BundleCatalog {
     bundles: Vec<PreparedBundle>,
-    agents: BTreeMap<String, (usize, usize)>,
+    agents: BTreeMap<String, usize>,
     resources: BTreeMap<(ExportKind, String), (usize, usize)>,
     local_resources: BTreeMap<(String, ExportKind, String), String>,
     semantic_identity_v1: Option<Vec<u8>>,
@@ -62,7 +62,7 @@ impl BundleCatalog {
             verified_catalog_records: None,
         };
         let mut bundle_ids = BTreeSet::new();
-        let mut stable_agent_ids = BTreeSet::new();
+        let mut stable_agent_id = BTreeSet::new();
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
             if !bundle.mcp.is_empty() {
                 return Err(BundleError::UnsupportedBundleFeature {
@@ -78,26 +78,25 @@ impl BundleCatalog {
                     bundle_id: bundle.identity.id.clone(),
                 });
             }
-            for (agent_index, agent) in bundle.agents.iter().enumerate() {
-                if !stable_agent_ids.insert(agent.stable_id.as_str()) {
-                    return Err(BundleError::DuplicateStableAgentId {
-                        stable_id: agent.stable_id.as_str().to_string(),
+            let agent = &bundle.agent;
+            if !stable_agent_id.insert(agent.id.as_str()) {
+                return Err(BundleError::DuplicateStableAgentId {
+                    stable_id: agent.id.as_str().to_string(),
+                });
+            }
+            for reference in [
+                agent.id.as_str().to_string(),
+                format!("bundle:{}/agent/{}", bundle.identity.id, agent.id),
+            ] {
+                if catalog
+                    .agents
+                    .insert(reference.clone(), bundle_index)
+                    .is_some()
+                {
+                    return Err(BundleError::NamespaceCollision {
+                        bundle_id: bundle.identity.id.clone(),
+                        name: reference,
                     });
-                }
-                for reference in [
-                    agent.stable_id.as_str().to_string(),
-                    format!("bundle:{}/agent/{}", bundle.identity.id, agent.local_id),
-                ] {
-                    if catalog
-                        .agents
-                        .insert(reference.clone(), (bundle_index, agent_index))
-                        .is_some()
-                    {
-                        return Err(BundleError::NamespaceCollision {
-                            bundle_id: bundle.identity.id.clone(),
-                            name: reference,
-                        });
-                    }
                 }
             }
             for kind in [
@@ -204,7 +203,7 @@ impl BundleCatalog {
         &self.bundles
     }
 
-    /// Resolve an agent by stable id or `bundle:{id}/agent/{local}` reference.
+    /// Resolve an agent by stable id or `bundle:{id}/agent/{id}` reference.
     #[must_use]
     pub fn resolve_agent(&self, reference: &str) -> Option<&PreparedAgent> {
         self.resolve_agent_entry(reference).map(|(_, agent)| agent)
@@ -213,9 +212,8 @@ impl BundleCatalog {
     /// Like [`Self::resolve_agent`], also returning the owning bundle id.
     #[must_use]
     pub fn resolve_agent_entry(&self, reference: &str) -> Option<(&str, &PreparedAgent)> {
-        let (bundle, agent) = *self.agents.get(reference)?;
-        let bundle = self.bundles.get(bundle)?;
-        Some((bundle.identity.id.as_str(), bundle.agents.get(agent)?))
+        let bundle = self.bundles.get(*self.agents.get(reference)?)?;
+        Some((bundle.identity.id.as_str(), &bundle.agent))
     }
 
     /// All prepared resources of `kind` for `bundle_id`, if that bundle exists.
@@ -229,59 +227,6 @@ impl BundleCatalog {
             .iter()
             .find(|bundle| bundle.identity.id == bundle_id)
             .map(|bundle| resources(bundle, kind))
-    }
-
-    /// Resolve one ordinary agent-to-agent spawn against the caller's compiled
-    /// reachability graph. Exact catalog lookup remains available separately for
-    /// the Harness-owned system operations.
-    pub fn resolve_spawn(
-        &self,
-        caller: &str,
-        requested: &str,
-    ) -> Result<&PreparedAgent, BundleError> {
-        let caller_agent =
-            self.resolve_agent(caller)
-                .ok_or_else(|| BundleError::UnknownAgentId {
-                    agent_id: caller.to_string(),
-                })?;
-        let requested_agent =
-            self.resolve_agent(requested)
-                .ok_or_else(|| BundleError::UnknownAgentId {
-                    agent_id: requested.to_string(),
-                })?;
-        if !caller_agent
-            .can_spawn
-            .iter()
-            .any(|allowed| allowed == &requested_agent.stable_id)
-        {
-            return Err(BundleError::AgentSpawnNotAllowed {
-                caller: caller_agent.stable_id.as_str().to_string(),
-                agent_id: requested_agent.stable_id.as_str().to_string(),
-            });
-        }
-        Ok(requested_agent)
-    }
-
-    /// List agents in `caller`'s `can_spawn` graph, resolving each stable id.
-    ///
-    /// Returns [`BundleError::UnknownAgentId`] if the caller or any listed target
-    /// is missing from the catalog.
-    pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<&PreparedAgent>, BundleError> {
-        let caller_agent =
-            self.resolve_agent(caller)
-                .ok_or_else(|| BundleError::UnknownAgentId {
-                    agent_id: caller.to_string(),
-                })?;
-        caller_agent
-            .can_spawn
-            .iter()
-            .map(|stable_id| {
-                self.resolve_agent(stable_id.as_str())
-                    .ok_or_else(|| BundleError::UnknownAgentId {
-                        agent_id: stable_id.as_str().to_string(),
-                    })
-            })
-            .collect()
     }
 
     /// Resolve a resource by local id, alias, or qualified `bundle:…` name.
@@ -360,8 +305,6 @@ fn encode_verified_catalog_records(
             append_bytes(&mut record, bundle.identity.id.as_bytes())?;
             append_bytes(&mut record, bundle.identity.version.as_bytes())?;
             append_bytes(&mut record, bundle.identity.publisher.as_bytes())?;
-            append_bytes(&mut record, bundle_origin_bytes(bundle.origin))?;
-            append_flag(&mut record, bundle.immutable);
             append_bytes(&mut record, bundle.digest.as_bytes())?;
         }
         records.push(record);
@@ -397,16 +340,7 @@ fn compare_bundle_identity(left: &PreparedBundle, right: &PreparedBundle) -> std
                 .as_bytes()
                 .cmp(right.identity.publisher.as_bytes())
         })
-        .then_with(|| bundle_origin_bytes(left.origin).cmp(bundle_origin_bytes(right.origin)))
-        .then_with(|| left.immutable.cmp(&right.immutable))
         .then_with(|| left.digest.as_bytes().cmp(right.digest.as_bytes()))
-}
-
-fn bundle_origin_bytes(origin: BundleOrigin) -> &'static [u8] {
-    match origin {
-        BundleOrigin::Builtin => b"builtin",
-        BundleOrigin::Installed => b"installed",
-    }
 }
 
 fn append_count(bytes: &mut Vec<u8>, count: usize) -> Result<(), BundleError> {
@@ -426,6 +360,3 @@ fn append_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), BundleError> {
     Ok(())
 }
 
-fn append_flag(bytes: &mut Vec<u8>, value: bool) {
-    bytes.push(u8::from(value));
-}

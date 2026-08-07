@@ -1,0 +1,7 @@
+{"file": "docs/agent-bundle-authoring.md", "reason": "Must be rewritten for the single-agent format. Check that no stale harness_access, agents:, api_version, or builtin-bundle text survives."}
+{"file": "AGENTS.md", "reason": "Verification gate the check must actually run: fmt, clippy -D warnings, workspace tests excluding hya-e2e."}
+{"file": "CONTEXT.md", "reason": "Confirm the ubiquitous language was updated: builtin agents are no longer part of the AgentBundle catalog."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Forbidden patterns and code standards for the review pass."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "AgentDefinition and AgentCatalog must not duplicate resolution logic that BundleCatalog already owns."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify the clamp holds at every layer boundary, not just the first resource-view build path."}
+{"file": "docs/testing/agent-matrix.md", "reason": "Agent coverage matrix; confirm builtin agent behaviour is still covered after the registry split."}

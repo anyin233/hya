@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
-use hya_bundle::{BundleCatalog, PreparedAgent, PreparedCatalog, SpawnLifecycle};
+use hya_bundle::{BundleCatalog, SpawnLifecycle};
+use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AdmissionMemberIdentity, AgentResourcePolicy, AgentSpec, BoundSidecarFactory,
     BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CompactionConfig, CoreError,
@@ -59,43 +60,19 @@ use crate::runtime_reconcile::{
 use crate::spawn_intent::{PriorStartV1, SpawnIntentInputV1, SpawnIntentV1};
 use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plugins};
 
-const BUILTIN_BUNDLES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-bundles.json"));
-const BUILTIN_BUNDLES_DIGEST: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/builtin-bundles.sha256"));
-
-/// Injectable decode path for invalid/tamper unit tests. Production bootstrap
-/// uses [`builtin_catalog`], which caches the embedded artifact once.
-#[cfg(test)]
-fn builtin_catalog_from(bytes: &[u8], expected_digest: &str) -> anyhow::Result<Arc<BundleCatalog>> {
-    let prepared = PreparedCatalog::decode(bytes, expected_digest)
-        .context("decode embedded built-in AgentBundle catalog")?;
-    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
-        .context("validate embedded built-in AgentBundle catalog")?;
-    Ok(Arc::new(catalog))
-}
-
-/// Decode and validate the build-embedded prepared catalog exactly once.
+/// Agent catalog for a process with no installed bundles yet.
 ///
-/// Success and failure are both cached so a corrupt embedded artifact stays
-/// fail-closed for the process lifetime without silent retry or substitution.
-/// Read-only public accessor for consumers (e.g. `hya-backend` agent list) that
-/// must share the same process-wide `Arc` — no second embed, decode, or cache.
-/// Injectable `builtin_catalog_from` remains uncached for tamper tests.
-pub fn builtin_catalog() -> anyhow::Result<Arc<BundleCatalog>> {
-    use hya_bundle::BundleError;
-
-    static EMBEDDED_CATALOG: OnceLock<Result<Arc<BundleCatalog>, BundleError>> = OnceLock::new();
-    match EMBEDDED_CATALOG.get_or_init(|| {
-        PreparedCatalog::decode(BUILTIN_BUNDLES, BUILTIN_BUNDLES_DIGEST)
-            .and_then(|prepared| BundleCatalog::from_verified_catalogs(&[&prepared]))
-            .map(Arc::new)
-    }) {
-        Ok(catalog) => Ok(Arc::clone(catalog)),
-        Err(error) => {
-            Err(anyhow::Error::new(error.clone())
-                .context("load embedded built-in AgentBundle catalog"))
-        }
-    }
+/// Built-in agents are compiled into the binary (`hya_core::builtin_agents`),
+/// so a fresh install starts with an empty installed-bundle catalog and still
+/// resolves every built-in. `from_verified_catalogs(&[])` (not `from_prepared`)
+/// is deliberate: it records verified provenance for the empty set, which keeps
+/// the runtime semantic fingerprint available.
+pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
+    let bundles = BundleCatalog::from_verified_catalogs(&[])
+        .context("build empty installed AgentBundle catalog")?;
+    let catalog =
+        AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
+    Ok(Arc::new(catalog))
 }
 
 /// Host identity sent to plugins during `initialize` (`name` + crate version).
@@ -149,7 +126,7 @@ pub(crate) fn materialize_bundle_sidecar_resources(
     activation_dir: &Path,
 ) -> Result<Vec<PathBuf>, CoreError> {
     let (bundle_id, _) = binding
-        .agent_catalog()
+        .bundle_catalog()
         .resolve_agent_entry(stable_agent_id)
         .ok_or_else(|| CoreError::AgentDefinitionMissing {
             agent_id: stable_agent_id.to_string(),
@@ -157,7 +134,7 @@ pub(crate) fn materialize_bundle_sidecar_resources(
 
     binding.has_selected_bundle_sidecar_capability(stable_agent_id)?;
     let policy = binding.agent_resource_policy(stable_agent_id)?;
-    let catalog = binding.agent_catalog();
+    let catalog = binding.bundle_catalog();
     let mut resources = BTreeMap::new();
     let mut entrypoints = BTreeMap::new();
 
@@ -660,7 +637,7 @@ impl SidecarEnvironment for BundleSidecarEnvironment {
             observer.mark_resolution_hook(stable_agent_id);
         }
         let (_, _) = binding
-            .agent_catalog()
+            .bundle_catalog()
             .resolve_agent_entry(stable_agent_id)
             .ok_or_else(|| CoreError::AgentDefinitionMissing {
                 agent_id: stable_agent_id.to_string(),
@@ -1001,7 +978,7 @@ fn bind_bundle_sidecar_tools(
     declarations: &[ToolInfo],
 ) -> Result<Arc<[ResolvedTool]>, CoreError> {
     let (bundle_id, _) = binding
-        .agent_catalog()
+        .bundle_catalog()
         .resolve_agent_entry(stable_agent_id)
         .ok_or_else(|| CoreError::AgentDefinitionMissing {
             agent_id: stable_agent_id.to_string(),
@@ -1012,7 +989,7 @@ fn bind_bundle_sidecar_tools(
         .iter()
         .map(|stable_id| {
             binding
-                .agent_catalog()
+                .bundle_catalog()
                 .resolve_resource_entry(bundle_id, hya_bundle::ExportKind::Tool, stable_id)
                 .map(|(_, resource)| resource)
         })
@@ -1106,7 +1083,7 @@ fn validate_bundle_sidecar_hooks(
 ) -> Result<(), CoreError> {
     let actual = declared_bundle_sidecar_hooks(registrations)?;
     let (bundle_id, _) = binding
-        .agent_catalog()
+        .bundle_catalog()
         .resolve_agent_entry(stable_agent_id)
         .ok_or_else(|| CoreError::AgentDefinitionMissing {
             agent_id: stable_agent_id.to_string(),
@@ -1114,7 +1091,7 @@ fn validate_bundle_sidecar_hooks(
     let policy = binding.agent_resource_policy(stable_agent_id)?;
     let mut expected = BTreeSet::new();
     for stable_id in policy.canonical_hook_ids() {
-        let (_, resource) = binding.agent_catalog().resolve_resource_entry(
+        let (_, resource) = binding.bundle_catalog().resolve_resource_entry(
             bundle_id,
             hya_bundle::ExportKind::Hook,
             stable_id,
@@ -1933,7 +1910,7 @@ fn authorize_spawn_target<'a>(
     allowed_agents: &[hya_tool::AgentDef],
     caller: &str,
     member: &SpawnMember,
-) -> Result<&'a PreparedAgent, SpawnError> {
+) -> Result<AgentDefinition<'a>, SpawnError> {
     let requested = member.subagent_type.trim();
     let requested = if requested.is_empty() {
         "general"
@@ -1948,11 +1925,11 @@ fn authorize_spawn_target<'a>(
             })?;
     if !allowed_agents
         .iter()
-        .any(|allowed| allowed.name == definition.stable_id.as_str())
+        .any(|allowed| allowed.name == definition.stable_id)
     {
         return Err(SpawnError::AgentSpawnNotAllowed {
             caller: caller.to_string(),
-            agent_id: definition.stable_id.as_str().to_string(),
+            agent_id: definition.stable_id.to_string(),
         });
     }
     Ok(definition)
@@ -2053,7 +2030,7 @@ fn prepare_spawn_admission(
             SpawnIntentV1::new(SpawnIntentInputV1 {
                 member,
                 parent: req.parent,
-                stable_target: definition.stable_id.clone(),
+                stable_target: hya_proto::AgentName::new(definition.stable_id),
                 background: req.background,
                 operation: req.operation,
                 member_ordinal,
@@ -2081,31 +2058,31 @@ fn resolve_spawn_member(
     member: SpawnMember,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
     let definition = authorize_spawn_target(ctx.binding, ctx.allowed_agents, ctx.caller, &member)?;
-    resolve_authorized_spawn_member(ctx, member, definition)
+    resolve_authorized_spawn_member(ctx, member, &definition)
 }
 
 fn resolve_authorized_spawn_member(
     ctx: &ResolveSpawnMemberCtx<'_>,
     member: SpawnMember,
-    definition: &PreparedAgent,
+    definition: &AgentDefinition<'_>,
 ) -> Result<ResolvedSpawnMember, SpawnError> {
     validate_unsupported_inline_agent_fields(&member)?;
-    let authorized_target = definition.stable_id.clone();
+    let authorized_target = hya_proto::AgentName::new(definition.stable_id);
     let sidecar_factory = ctx
         .sidecar_environment
         .factory_for(ctx.binding, authorized_target.as_str())
         .map_err(|_| SpawnError::Unavailable)?;
     let mut agent = ctx
         .engine
-        .agent_spec_for_binding(ctx.binding, ctx.base, definition.stable_id.as_str())
+        .agent_spec_for_binding(ctx.binding, ctx.base, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
     let agents = ctx
         .engine
-        .agent_roster_for_binding(ctx.binding, definition.stable_id.as_str())
+        .agent_roster_for_binding(ctx.binding, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
     let resources = ctx
         .engine
-        .agent_resource_policy_for_binding(ctx.binding, definition.stable_id.as_str())
+        .agent_resource_policy_for_binding(ctx.binding, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
 
     let resolve_category = |name: &str| {
@@ -2233,13 +2210,13 @@ fn resolve_admission_launches(
                 ctx.caller,
                 intent.raw_member(),
             )?;
-            if definition.stable_id != *intent.stable_target() {
+            if definition.stable_id != intent.stable_target().as_str() {
                 return Err(SpawnError::Unavailable);
             }
             let resolved = resolve_authorized_spawn_member(
                 &resolve_ctx,
                 intent.raw_member().clone(),
-                definition,
+                &definition,
             )?;
             Ok(ResolvedAdmissionLaunch {
                 launch,
@@ -3982,12 +3959,9 @@ async fn build_session_engine_with_mcp_defer(
         .map(|plugin| (plugin.id().to_string(), plugin))
         .collect::<BTreeMap<_, _>>();
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
-    let catalog = builtin_catalog()?;
-    let runtime = Arc::new(RuntimeRegistry::new(registry, Arc::clone(&catalog)));
-    let catalog_refresh = Arc::new(InstalledBundleRefresh::new(
-        bundle_registry_path(),
-        Arc::clone(&catalog),
-    ));
+    let catalog = builtin_agent_catalog()?;
+    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog));
+    let catalog_refresh = Arc::new(InstalledBundleRefresh::new(bundle_registry_path()));
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
@@ -4412,9 +4386,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleOrigin, BundleSource, HarnessAccess, ModelPolicy,
+        AgentRole, BundleIdentity, BundleSource, ModelPolicy,
         PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SourceFile,
-        prepare_builtins, prepare_package,
+        prepare_package,
     };
     use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
@@ -4629,92 +4603,30 @@ mod tests {
     }
 
     #[test]
-    fn zero_bundle_prepared_document_cannot_bootstrap_registry_catalog() {
-        let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
-        let digest = hex_digest(bytes);
-        match builtin_catalog_from(bytes, &digest) {
-            Ok(catalog) => panic!(
-                "zero-bundle prepared must not bootstrap a catalog for RuntimeRegistry, got {} bundles",
-                catalog.bundles().len()
-            ),
-            Err(err) => {
-                let message = format!("{err:#}");
-                assert!(
-                    message.contains("validate embedded built-in AgentBundle catalog"),
-                    "empty prepared must surface validate context, got: {message}"
-                );
-                assert!(
-                    message.contains("no bundles") || message.contains("empty"),
-                    "empty prepared must fail closed as empty-catalog integrity, got: {message}"
-                );
-            }
+    fn builtin_agent_catalog_starts_with_no_installed_bundles() {
+        let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
+        assert!(
+            catalog.bundles().bundles().is_empty(),
+            "a fresh process has no installed bundles"
+        );
+        for id in ["build", "plan", "explore", "general", "hya-main"] {
+            assert!(
+                catalog.resolve(id).is_some(),
+                "builtin `{id}` must resolve without any installed bundle"
+            );
         }
     }
 
     #[test]
-    fn corrupted_prepared_bytes_or_digest_fail_closed_with_decode_context() {
-        let wrong_digest =
-            builtin_catalog_from(BUILTIN_BUNDLES, "0".repeat(64).as_str()).expect_err("digest");
-        let wrong_digest_message = format!("{wrong_digest:#}");
-        assert!(
-            wrong_digest_message.contains("decode embedded built-in AgentBundle catalog"),
-            "digest mismatch must keep decode context, got: {wrong_digest_message}"
-        );
-        assert!(
-            wrong_digest.chain().any(|cause| cause
-                .downcast_ref::<hya_bundle::BundleError>()
-                .is_some_and(|error| {
-                    matches!(
-                        error,
-                        hya_bundle::BundleError::PreparedDigestMismatch { .. }
-                    )
-                })),
-            "digest mismatch must remain typed BundleError, got: {wrong_digest_message}"
-        );
-
-        let garbage = b"not-a-prepared-catalog";
-        let garbage_digest = hex_digest(garbage);
-        let decode_err = builtin_catalog_from(garbage, &garbage_digest).expect_err("corrupt bytes");
-        let decode_message = format!("{decode_err:#}");
-        assert!(
-            decode_message.contains("decode embedded built-in AgentBundle catalog"),
-            "corrupt bytes must keep decode context, got: {decode_message}"
-        );
-        assert!(
-            decode_err.chain().any(|cause| {
-                cause
-                    .downcast_ref::<hya_bundle::BundleError>()
-                    .is_some_and(|error| {
-                        matches!(error, hya_bundle::BundleError::PreparedDecode { .. })
-                    })
-            }),
-            "corrupt bytes must remain typed PreparedDecode, got: {decode_message}"
-        );
-    }
-
-    #[test]
-    fn builtin_catalog_initializes_once_and_shares_arc() {
-        let first = builtin_catalog().expect("embedded catalog must load");
-        let second = builtin_catalog().expect("embedded catalog must load");
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "embedded prepared catalog must initialize once and be shared"
-        );
-        assert!(
-            !first.bundles().is_empty(),
-            "shared embedded catalog must not be empty"
-        );
-    }
-
-    #[test]
-    fn embedded_builtin_catalog_retains_verified_semantic_identity() {
-        let catalog = builtin_catalog_from(BUILTIN_BUNDLES, BUILTIN_BUNDLES_DIGEST)
-            .expect("embedded catalog must load");
+    fn builtin_agent_catalog_retains_semantic_identity_when_empty() {
+        // The fingerprint must stay available on a fresh install; an empty
+        // installed catalog is "nothing to attest", not "unidentifiable".
+        let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
         assert!(
             catalog
                 .semantic_identity_v1()
                 .is_some_and(|identity| !identity.is_empty()),
-            "embedded catalog must retain verified semantic identity"
+            "empty installed catalog must still yield a semantic identity"
         );
     }
 
@@ -6846,13 +6758,12 @@ mod tests {
         }
 
         let catalog = {
-            let prepared = prepare_builtins(vec![BundleSource::new(
+            let prepared = prepare_package(BundleSource::new(
                 "post-claim-resolution",
                 vec![
                     SourceFile::new(
                         "bundle.yaml",
-                        br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                        br#"kind: AgentBundle
 identity:
   id: hya/post-claim-resolution
   version: 0.0.1
@@ -6865,12 +6776,11 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
+AGENTS_TODO:
   - local_id: build
     stable_id: build
     role: main
     spawn_lifecycle: transient
-    harness_access: full
     can_spawn:
       - worker
     prompt: prompts/build.md
@@ -6878,7 +6788,6 @@ agents:
     stable_id: worker
     role: subagent
     spawn_lifecycle: transient
-    harness_access: full
     resource_view:
       allow:
         - echo
@@ -6890,7 +6799,7 @@ agents:
                     SourceFile::new("prompts/worker.md", b"post-claim worker prompt"),
                     SourceFile::new("extensions/runtime.js", b"export default {};\n"),
                 ],
-            )])
+            ))
             .expect("selected-sidecar fixture must prepare");
             Arc::new(
                 BundleCatalog::from_verified_catalogs(&[&prepared])
@@ -7780,23 +7689,21 @@ agents:
             .await
             .unwrap();
 
-        let prepared = prepare_builtins(vec![BundleSource::new(
+        let prepared = prepare_package(BundleSource::new(
             "foreign-promotion-wake-only",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                    br#"kind: AgentBundle
 identity:
   id: hya/foreign-promotion-wake-only
   version: 0.0.1
   publisher: hya-tests
-agents:
+AGENTS_TODO:
   - local_id: build
     stable_id: build
     role: main
     spawn_lifecycle: transient
-    harness_access: full
     can_spawn:
       - worker-a
       - worker-b
@@ -7805,13 +7712,11 @@ agents:
     stable_id: worker-a
     role: subagent
     spawn_lifecycle: transient
-    harness_access: full
     prompt: prompts/worker-a.md
   - local_id: worker-b
     stable_id: worker-b
     role: subagent
     spawn_lifecycle: transient
-    harness_access: full
     prompt: prompts/worker-b.md
 "#
                     .to_vec(),
@@ -7820,7 +7725,7 @@ agents:
                 SourceFile::new("prompts/worker-a.md", b"foreign wake worker-a prompt"),
                 SourceFile::new("prompts/worker-b.md", b"foreign wake worker-b prompt"),
             ],
-        )])
+        ))
         .expect("foreign-promotion catalog must prepare");
         let catalog = Arc::new(
             BundleCatalog::from_verified_catalogs(&[&prepared])
@@ -8176,23 +8081,21 @@ agents:
             .await
             .unwrap();
 
-        let prepared = prepare_builtins(vec![BundleSource::new(
+        let prepared = prepare_package(BundleSource::new(
             "owner-rehydrate-wake",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                    br#"kind: AgentBundle
 identity:
   id: hya/owner-rehydrate-wake
   version: 0.0.1
   publisher: hya-tests
-agents:
+AGENTS_TODO:
   - local_id: build
     stable_id: build
     role: main
     spawn_lifecycle: transient
-    harness_access: full
     can_spawn:
       - worker-a
       - worker-b
@@ -8201,13 +8104,11 @@ agents:
     stable_id: worker-a
     role: subagent
     spawn_lifecycle: transient
-    harness_access: full
     prompt: prompts/worker-a.md
   - local_id: worker-b
     stable_id: worker-b
     role: subagent
     spawn_lifecycle: transient
-    harness_access: full
     prompt: prompts/worker-b.md
 "#
                     .to_vec(),
@@ -8216,7 +8117,7 @@ agents:
                 SourceFile::new("prompts/worker-a.md", b"owner rehydrate worker-a prompt"),
                 SourceFile::new("prompts/worker-b.md", b"owner rehydrate worker-b prompt"),
             ],
-        )])
+        ))
         .expect("owner-rehydrate catalog must prepare");
         let catalog = Arc::new(
             BundleCatalog::from_verified_catalogs(&[&prepared])
@@ -10363,18 +10264,15 @@ for line in sys.stdin:
             vec![SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/runtime-installed-test
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: runtime-installed
-    stable_id: runtime-installed-agent
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: runtime-installed-agent
+  role: main
+  spawn_lifecycle: transient
 ---
 You are the runtime-installed agent.
 "#,
@@ -10689,7 +10587,6 @@ You are the runtime-installed agent.
                 SourceFile::new(
                     "bundle.hya.md",
                     br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/runtime-installed-resident
@@ -10703,15 +10600,13 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
-  - local_id: runtime-installed-resident
-    stable_id: runtime-installed-resident-agent
-    role: subagent
-    spawn_lifecycle: resident
-    harness_access: full
-    resource_view:
-      allow:
-        - bundle:hya/runtime-installed-resident/tool/echo
+agent:
+  id: runtime-installed-resident-agent
+  role: subagent
+  spawn_lifecycle: resident
+  resource_view:
+    allow:
+      - bundle:hya/runtime-installed-resident/tool/echo
 ---
 You are the installed resident agent.
 "#,
@@ -11153,14 +11048,11 @@ You are the installed resident agent.
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
             digest: "test-only".to_string(),
             agents: stable_ids
                 .iter()
                 .map(|stable_id| PreparedAgent {
-                    local_id: (*stable_id).to_string(),
-                    stable_id: AgentName::new(*stable_id),
+                    id: AgentName::new(*stable_id),
                     description: None,
                     role: AgentRole::Main,
                     color: None,
@@ -11170,7 +11062,6 @@ You are the installed resident agent.
                     model_policy: ModelPolicy::default(),
                     workdir: None,
                     spawn_lifecycle: SpawnLifecycle::Transient,
-                    harness_access: HarnessAccess::Full,
                     resource_view: ResourceView::default(),
                     // Deliberately empty: recovery must not depend on can_spawn.
                     can_spawn: Vec::new(),
@@ -11294,8 +11185,7 @@ You are the installed resident agent.
     fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<BundleCatalog> {
         let agent = |stable_id: &str, role: AgentRole, can_spawn: &[&str], policy: ModelPolicy| {
             PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
+                id: AgentName::new(stable_id),
                 description: None,
                 role,
                 color: None,
@@ -11305,7 +11195,6 @@ You are the installed resident agent.
                 model_policy: policy,
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -11318,8 +11207,6 @@ You are the installed resident agent.
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
             digest: "test-only".to_string(),
             agents: vec![
                 agent(
@@ -11625,7 +11512,7 @@ for line in sys.stdin:
             "tool.execute.after",
             "extensions/runtime.js",
         );
-        bundle.agents[0].hook_refs = vec![
+        bundle.agent.hook_refs = vec![
             event_hook_id,
             before_hook.stable_id.clone(),
             after_hook.stable_id.clone(),
@@ -12048,7 +11935,6 @@ for line in sys.stdin:
         std::fs::write(
             authoring_root.join("bundle.hya.md"),
             br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/directory-helper-import
@@ -12062,15 +11948,13 @@ extensions:
   js:
     - id: main
       path: extensions/main.js
-agents:
-  - local_id: main
-    stable_id: directory-helper-main
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - echo
+agent:
+  id: directory-helper-main
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
 ---
 You are a directory-authored executable Bundle agent.
 "#,
@@ -12650,16 +12534,16 @@ export default {
             "tool.execute.after",
             "extensions/runtime.js",
         );
-        bundle.agents[0].hook_refs = vec![
+        bundle.agent.hook_refs = vec![
             event_hook.stable_id.clone(),
             before_hook.stable_id.clone(),
             after_hook.stable_id.clone(),
         ];
         bundle.hooks.extend([event_hook, before_hook, after_hook]);
-        bundle.agents[0].local_id = "build".to_string();
-        bundle.agents[0].stable_id = AgentName::new("build");
-        bundle.agents[0].role = AgentRole::Main;
-        bundle.agents[0].spawn_lifecycle = SpawnLifecycle::Transient;
+        bundle.agent.local_id = "build".to_string();
+        bundle.agent.stable_id = AgentName::new("build");
+        bundle.agent.role = AgentRole::Main;
+        bundle.agent.spawn_lifecycle = SpawnLifecycle::Transient;
         set_materialized_extension_content(
             &mut bundle,
             r#"
@@ -12813,7 +12697,7 @@ export default {
     async fn resident_bun_bundle_reuses_one_sidecar_across_two_mailbox_turns() {
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_bun_bundle("bun-resident");
-        bundle.agents[0].spawn_lifecycle = SpawnLifecycle::Resident;
+        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         set_materialized_extension_content(
             &mut bundle,
             r#"
@@ -13098,7 +12982,7 @@ export default {
     async fn resident_idle_sidecar_loss_restarts_before_next_mail() {
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_tool_bundle("bun-resident-loss");
-        bundle.agents[0].spawn_lifecycle = SpawnLifecycle::Resident;
+        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         let catalog = Arc::new(
             BundleCatalog::from_prepared(&[bundle]).expect("resident loss fixture catalog"),
         );
@@ -13434,7 +13318,7 @@ for line in sys.stdin:
     async fn resident_running_sidecar_loss_fences_epoch_and_resumes_queued_mail_once() {
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_tool_bundle("bun-resident-running-loss");
-        bundle.agents[0].spawn_lifecycle = SpawnLifecycle::Resident;
+        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         let catalog = Arc::new(
             BundleCatalog::from_prepared(&[bundle]).expect("resident running loss fixture catalog"),
         );
@@ -13991,12 +13875,9 @@ for line in sys.stdin:
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
             digest: format!("{marker}-bundle-digest"),
-            agents: vec![PreparedAgent {
-                local_id: "worker".to_string(),
-                stable_id: AgentName::new("worker"),
+            agent: PreparedAgent {
+                id: AgentName::new("worker"),
                 description: None,
                 role: AgentRole::Subagent,
                 color: None,
@@ -14006,7 +13887,6 @@ for line in sys.stdin:
                 model_policy: ModelPolicy::default(),
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view,
                 can_spawn: Vec::new(),
                 hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
@@ -14059,13 +13939,10 @@ for line in sys.stdin:
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
             digest: format!("{marker}-disjoint-bundle-digest"),
             agents: vec![
                 PreparedAgent {
-                    local_id: "alpha".to_string(),
-                    stable_id: AgentName::new("alpha"),
+                    id: AgentName::new("alpha"),
                     description: None,
                     role: AgentRole::Subagent,
                     color: None,
@@ -14075,7 +13952,6 @@ for line in sys.stdin:
                     model_policy: ModelPolicy::default(),
                     workdir: None,
                     spawn_lifecycle: SpawnLifecycle::Transient,
-                    harness_access: HarnessAccess::Full,
                     resource_view: ResourceView {
                         allow: vec![alpha_tool.stable_id.clone()],
                         ..ResourceView::default()
@@ -14084,8 +13960,7 @@ for line in sys.stdin:
                     hook_refs: vec![alpha_hook.stable_id.clone()],
                 },
                 PreparedAgent {
-                    local_id: "beta".to_string(),
-                    stable_id: AgentName::new("beta"),
+                    id: AgentName::new("beta"),
                     description: None,
                     role: AgentRole::Subagent,
                     color: None,
@@ -14095,7 +13970,6 @@ for line in sys.stdin:
                     model_policy: ModelPolicy::default(),
                     workdir: None,
                     spawn_lifecycle: SpawnLifecycle::Transient,
-                    harness_access: HarnessAccess::Full,
                     resource_view: ResourceView {
                         allow: vec![beta_tool.stable_id.clone()],
                         ..ResourceView::default()
@@ -14117,7 +13991,7 @@ for line in sys.stdin:
         let mut selector = owner.clone();
         selector.identity.id = "hya/selector".to_string();
         selector.digest = "selector-bundle-digest".to_string();
-        let mut selector_agent = selector.agents[0].clone();
+        let mut selector_agent = selector.agent.clone();
         selector_agent.local_id = "selector".to_string();
         selector_agent.stable_id = AgentName::new("selector");
         selector_agent.resource_view = ResourceView::default();
@@ -14332,7 +14206,7 @@ export default {
     #[test]
     fn sidecar_materialization_orders_deduplicated_extensions_by_canonical_identity() {
         let mut bundle = disjoint_materialized_bundle("ordered");
-        bundle.agents[0]
+        bundle.agent
             .resource_view
             .allow
             .push(bundle.tools[1].stable_id.clone());
@@ -14428,7 +14302,7 @@ export default {
         let mut selector = materialized_tool_bundle("selector");
         selector.identity.id = "hya/selector".to_string();
         selector.digest = "selector-bundle-digest".to_string();
-        let mut selector_agent = selector.agents[0].clone();
+        let mut selector_agent = selector.agent.clone();
         selector_agent.local_id = "selector".to_string();
         selector_agent.stable_id = AgentName::new("selector");
         selector_agent.resource_view = ResourceView {
@@ -14492,7 +14366,7 @@ export default {
         let mut selector = owner.clone();
         selector.identity.id = "hya/selector".to_string();
         selector.digest = "selector-cross-tool-digest".to_string();
-        let mut selector_agent = selector.agents[0].clone();
+        let mut selector_agent = selector.agent.clone();
         selector_agent.local_id = "selector".to_string();
         selector_agent.stable_id = AgentName::new("selector");
         selector_agent.resource_view = ResourceView {
@@ -14675,8 +14549,8 @@ export default {
             .iter()
             .map(|resource| resource.stable_id.clone())
             .collect::<Vec<_>>();
-        bundle.agents[0].resource_view.allow = selected_tool_ids;
-        bundle.agents[0].hook_refs = selected_hook_ids;
+        bundle.agent.resource_view.allow = selected_tool_ids;
+        bundle.agent.hook_refs = selected_hook_ids;
 
         let catalog = Arc::new(
             BundleCatalog::from_prepared(&[bundle])
@@ -14735,7 +14609,7 @@ export default {
     async fn bundle_sidecar_hook_only_declaration_accepts_zero_tools() {
         let mut bundle = materialized_bundle("hook-only");
         bundle.tools.clear();
-        bundle.agents[0].resource_view = ResourceView::default();
+        bundle.agent.resource_view = ResourceView::default();
         let catalog =
             Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("hook-only fixture catalog"));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -14860,8 +14734,7 @@ export default {
             .deny
             .push("bundle:hya/materialized/tool/echo".to_string());
         let build = PreparedAgent {
-            local_id: "build".to_string(),
-            stable_id: AgentName::new("build"),
+            id: AgentName::new("build"),
             description: None,
             role: AgentRole::Main,
             color: None,
@@ -14871,7 +14744,6 @@ export default {
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: HarnessAccess::None,
             resource_view: build_resource_view,
             can_spawn: vec![AgentName::new("worker")],
             hook_refs: Vec::new(),

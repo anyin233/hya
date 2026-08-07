@@ -1,5 +1,4 @@
 ---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/docs-bun-transient
@@ -13,15 +12,13 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
-  - local_id: docs-bun-transient
-    stable_id: docs-bun-transient
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - echo
+agent:
+  id: docs-bun-transient
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
 ---
 
 Harness remains the agent and model loop; this activation sidecar supplies only the Bundle-local tools.

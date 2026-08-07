@@ -605,7 +605,7 @@ impl SessionEngine {
                         if let Some(summarizer) = &self.summarizer {
                             // Local fallback reuses the same exact-resolved definition
                             // (Bundle model/reasoning overrides apply here only).
-                            let options = summarize_options_from_definition(definition);
+                            let options = summarize_options_from_definition(&definition);
                             // Provider failures stay soft (prior behavior); missing
                             // definition already failed closed above.
                             if let Ok(compacted) = crate::compaction::compact_with(

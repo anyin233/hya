@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
+use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
@@ -69,22 +69,21 @@ impl Provider for CaptureProvider {
 }
 
 /// Catalog with ordinary fallback agents only — historical id is intentionally absent.
-fn catalog_without_historical() -> Arc<BundleCatalog> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/historical-identity".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: ["build", "general", "base"]
-            .into_iter()
-            .map(|stable_id| PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
+fn catalog_without_historical() -> Arc<AgentCatalog> {
+    // One bundle per agent: `base` is the only non-builtin id here, since
+    // `build` and `general` are now compiled-in built-ins.
+    let bundles = ["base"]
+        .into_iter()
+        .map(|stable_id| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/historical-identity-{stable_id}"),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{stable_id}"),
+            agent: PreparedAgent {
+                id: AgentName::new(stable_id),
                 description: None,
                 role: AgentRole::Main,
                 color: None,
@@ -94,19 +93,19 @@ fn catalog_without_historical() -> Arc<BundleCatalog> {
                 model_policy: ModelPolicy::default(),
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
-            })
-            .collect(),
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("valid historical identity catalog"))
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
 async fn engine_with(provider: Arc<CaptureProvider>) -> SessionEngine {
@@ -393,4 +392,10 @@ async fn forked_historical_session_continue_fails_definition_missing_before_prov
             .map(AgentName::as_str),
         Some(HISTORICAL_BYTES)
     );
+}
+
+/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
+    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }

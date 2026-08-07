@@ -688,10 +688,8 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
     let mut prepared_paths = BTreeSet::new();
     prepared_paths.insert("bundle.hya.md".to_string());
     for bundle in prepared.bundles() {
-        for agent in &bundle.agents {
-            if let Some(prompt_source) = &agent.prompt_source {
-                prepared_paths.insert(prompt_source.clone());
-            }
+        if let Some(prompt_source) = &bundle.agent.prompt_source {
+            prepared_paths.insert(prompt_source.clone());
         }
         for resource in bundle
             .tools

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
@@ -2510,8 +2510,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
                  access: HarnessAccess|
      -> PreparedAgent {
         PreparedAgent {
-            local_id: stable_id.to_string(),
-            stable_id: AgentName::new(stable_id),
+            id: AgentName::new(stable_id),
             description: None,
             role,
             color: None,
@@ -2521,7 +2520,6 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: access,
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
@@ -2534,8 +2532,6 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
         agents: vec![
             // Root main: Full tools + root-only can_spawn target.
@@ -2543,37 +2539,32 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
                 "build",
                 AgentRole::Main,
                 ROOT_MAIN_BUNDLE_PROMPT,
-                &["planner", ROOT_ONLY_SPAWN_TARGET],
-                HarnessAccess::Full,
+                &["planner", ROOT_ONLY_SPAWN_TARGET]::Full,
             ),
             // Nested caller: No harness tools + only resident quick.
             agent(
                 "planner",
                 AgentRole::Subagent,
                 NESTED_CALLER_BUNDLE_PROMPT,
-                &["quick"],
-                HarnessAccess::None,
+                &["quick"]::None,
             ),
             agent(
                 "quick",
                 AgentRole::Subagent,
                 "quick prompt",
-                &[],
-                HarnessAccess::Full,
+                &[]::Full,
             ),
             agent(
                 ROOT_ONLY_SPAWN_TARGET,
                 AgentRole::Subagent,
                 "root-only helper prompt",
-                &[],
-                HarnessAccess::Full,
+                &[]::Full,
             ),
             agent(
                 "general",
                 AgentRole::Main,
                 "general prompt",
-                &[],
-                HarnessAccess::Full,
+                &[]::Full,
             ),
         ],
         tools: Vec::new(),
@@ -2802,8 +2793,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
     let runtime = {
         let agent = |stable_id: &str, role: AgentRole, can_spawn: &[&str]| -> PreparedAgent {
             PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
+                id: AgentName::new(stable_id),
                 description: None,
                 role,
                 color: None,
@@ -2813,7 +2803,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 model_policy: ModelPolicy::default(),
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -2826,8 +2815,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
             digest: "test-only".to_string(),
             agents: vec![
                 agent("planner", AgentRole::Subagent, &["quick"]),

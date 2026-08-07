@@ -90,7 +90,6 @@ Public package extraction enforces ([`package.rs`](../crates/hya-bundle/src/pack
 Both markers are required at the top of the YAML:
 
 ```yaml
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 ```
 
@@ -180,19 +179,17 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 Example agent with `model_policy`:
 
 ```yaml
-agents:
-  - local_id: build
-    stable_id: build
-    description: Default coding agent
-    role: main
-    prompt: prompts/build.md
-    model_policy:
-      model: anthropic/claude-sonnet-4-6
-      category: deep
-      reasoning: high
-    spawn_lifecycle: transient
-    harness_access: full
-    can_spawn: [explore, general]
+agent:
+  id: build
+  description: Default coding agent
+  role: main
+  prompt: prompts/build.md
+  model_policy:
+    model: anthropic/claude-sonnet-4-6
+    category: deep
+    reasoning: high
+  spawn_lifecycle: transient
+  can_spawn: [explore, general]
 ```
 
 ---
@@ -269,23 +266,16 @@ Harness-only views do not need `namespace` (it would be a no-op). Short aliases
 and deny still apply:
 
 ```yaml
-agents:
-  - local_id: explorer
-    stable_id: explore
-    role: subagent
-    prompt: prompts/explore.md
-    harness_access: full
-    resource_view:
-      allow:
-        - harness:tool/read
-        - harness:tool/grep
-        - harness:tool/glob
-        - harness:tool/skill
-        - harness:skill/customize-compat
-      deny:
-        - harness:tool/write
-      aliases:
-        search: harness:tool/grep
+agent:
+  id: explore
+  role: subagent
+  prompt: prompts/explore.md
+  resource_view:
+    allow:
+      - harness:tool/write
+    deny:
+    aliases:
+      search: harness:tool/grep
 ```
 
 ### Example: `namespace` on a bundle-local resource
@@ -297,17 +287,15 @@ that resource’s qualified public name (short name unchanged):
 # Bundle id is e.g. hya/docs-probe; a local skill local_id is "probe".
 # With namespace: custom.ns the skill is also addressable as
 # bundle:custom.ns/skill/probe (not bundle:hya/docs-probe/skill/probe).
-agents:
-  - local_id: main
-    stable_id: main
-    role: main
-    prompt: prompts/main.md
-    harness_access: full
-    resource_view:
-      namespace: custom.ns
-      allow:
-        - harness:tool/skill
-        - probe   # bare bundle-local skill id
+agent:
+  id: main
+  role: main
+  prompt: prompts/main.md
+  resource_view:
+    namespace: custom.ns
+    allow:
+      - harness:tool/skill
+      - probe   # bare bundle-local skill id
 ```
 
 ---

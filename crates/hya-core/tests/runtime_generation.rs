@@ -31,12 +31,13 @@ fn skill_names(binding: &hya_core::TurnBinding) -> BTreeSet<String> {
 #[test]
 fn tool_publication_keeps_the_bound_agent_catalog_pinned() {
     let workdir = TestDir::new("agent-catalog-binding");
-    let catalog = test_catalog(&[("general", AgentRole::Main, &[])]);
+    // `general` is a built-in, so pin an installed bundle agent instead.
+    let catalog = test_catalog(&[("pinned-agent", AgentRole::Main, &[])]);
     let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
 
     let before = registry.bind_turn(workdir.path()).unwrap();
-    let before_agent = before.resolve_agent("general").unwrap();
-    assert_eq!(before_agent.prompt.as_deref(), Some("general prompt"));
+    let before_agent = before.resolve_agent("pinned-agent").unwrap();
+    assert_eq!(before_agent.prompt, Some("pinned-agent prompt"));
 
     registry
         .refresh(|candidate| candidate.register_tool(MarkerTool::new("after_publish")))
@@ -45,8 +46,8 @@ fn tool_publication_keeps_the_bound_agent_catalog_pinned() {
 
     assert!(std::ptr::eq(before.agent_catalog(), after.agent_catalog()));
     assert_eq!(
-        before.resolve_agent("general").unwrap(),
-        after.resolve_agent("general").unwrap()
+        before.resolve_agent("pinned-agent").unwrap(),
+        after.resolve_agent("pinned-agent").unwrap()
     );
 }
 
@@ -92,7 +93,6 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
         ("general", AgentRole::Main, &[]),
         ("lead", AgentRole::Main, &["worker"]),
         ("worker", AgentRole::Main, &[]),
-        ("compaction", AgentRole::Subagent, &[]),
     ]);
     let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
     let binding = registry.bind_turn(workdir.path()).unwrap();
@@ -101,8 +101,7 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
         binding
             .resolve_requested_agent(None)
             .unwrap()
-            .stable_id
-            .as_str(),
+            .stable_id,
         "general"
     );
     assert!(matches!(
@@ -113,7 +112,7 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
     assert_eq!(
         roster
             .iter()
-            .map(|agent| agent.stable_id.as_str())
+            .map(|agent| agent.stable_id)
             .collect::<Vec<_>>(),
         ["worker"]
     );
