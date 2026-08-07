@@ -49,7 +49,7 @@ fn rejects_empty_id() {
 /// test exists so nobody "hardens" the guard against them: `serde_norway`
 /// resolves only `true|True|TRUE|false|False|FALSE` as booleans, and these
 /// fields deserialize as raw `String`s regardless. Verified end-to-end through
-/// `hya_bundle::prepare_builtins`, not against a standalone parser probe.
+/// `hya_bundle::prepare_package`, not against a standalone parser probe.
 #[test]
 fn accepts_yaml_1_1_bareword_ids() {
     build(&[

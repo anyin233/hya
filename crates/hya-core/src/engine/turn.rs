@@ -644,7 +644,7 @@ impl SessionEngine {
                 // call (native or local). Missing definition fails closed here.
                 // Reuse the turn's captured binding; never re-bind or open a second catalog.
                 let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
-                let compaction_prompt = definition.prompt.as_deref();
+                let compaction_prompt = definition.prompt;
                 match self
                     .providers
                     .compact_if_supported(&model, &messages, compaction_prompt)
@@ -689,7 +689,7 @@ impl SessionEngine {
                         if let Some(summarizer) = &self.summarizer {
                             // Local fallback reuses the same exact-resolved definition
                             // (Bundle model/reasoning overrides apply here only).
-                            let options = summarize_options_from_definition(definition);
+                            let options = summarize_options_from_definition(&definition);
                             // Provider failures stay soft (prior behavior); missing
                             // definition already failed closed above.
                             if let Ok(Some(plan)) = crate::compaction::fold_prefix(

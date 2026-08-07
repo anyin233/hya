@@ -82,18 +82,17 @@ async fn assistant_turns(engine: &SessionEngine, session: SessionId) -> usize {
         .count()
 }
 
+/// Roster status by **leaf** name. The roster is keyed by canonical path
+/// (`main/worker-1`), so the leaf these tests register with is resolved through
+/// the same canonicalization the reducer uses.
 async fn roster_status(
     engine: &SessionEngine,
     root: SessionId,
     handle: &str,
 ) -> Option<RosterStatus> {
-    engine
-        .read_projection(root)
-        .await
-        .unwrap()
-        .team
-        .roster
-        .get(handle)
+    let team = engine.read_projection(root).await.unwrap().team;
+    team.roster
+        .get(&team.canonical_member(handle))
         .map(|e| e.status)
 }
 
@@ -346,7 +345,11 @@ async fn message_budget_kill_cancels_the_team() {
 
     assert!(
         wait_until(&engine, root, |p| {
-            p.team.roster.get("worker-1").map(|e| e.status) == Some(RosterStatus::Failed)
+            p.team
+                .roster
+                .get(&p.team.canonical_member("worker-1"))
+                .map(|e| e.status)
+                == Some(RosterStatus::Failed)
         })
         .await,
         "killed members are marked Failed with a reason"

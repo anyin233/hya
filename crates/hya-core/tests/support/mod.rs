@@ -6,32 +6,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
-use hya_core::RuntimeRegistry;
+use hya_core::{AgentCatalog, RuntimeRegistry};
 use hya_proto::{AgentName, ToolName, ToolSchema};
 use hya_tool::{Tool, ToolCtx, ToolError, ToolRegistry};
 use serde_json::{Value, json};
 
 static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
-pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<BundleCatalog> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/test".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: agents
-            .iter()
-            .map(|(stable_id, role, can_spawn)| PreparedAgent {
-                local_id: (*stable_id).to_string(),
-                stable_id: AgentName::new(*stable_id),
+/// One installed bundle per requested agent, over the compiled-in built-ins.
+///
+/// A bundle defines exactly one agent, so a fixture asking for N agents becomes
+/// N single-agent bundles.
+pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
+    let bundles = agents
+        .iter()
+        // Built-in ids are compiled in; a fixture asking for one just gets it.
+        .filter(|(stable_id, _, _)| !hya_core::is_builtin_id(stable_id))
+        .map(|(stable_id, role, can_spawn)| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/test-{stable_id}"),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{stable_id}"),
+            agent: PreparedAgent {
+                id: AgentName::new(*stable_id),
                 description: None,
                 role: *role,
                 color: None,
@@ -41,99 +44,47 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<BundleCatalog>
                 model_policy: ModelPolicy::default(),
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn
                     .iter()
                     .map(|agent| AgentName::new(*agent))
                     .collect(),
                 hook_refs: Vec::new(),
-            })
-            .collect(),
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = BundleCatalog::from_prepared(&[bundle]);
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");
+    };
+    let catalog = AgentCatalog::new(Arc::new(catalog));
+    let Ok(catalog) = catalog else {
+        panic!("test agent catalog must be valid: {catalog:?}");
     };
     Arc::new(catalog)
 }
 
+/// Agent catalog with no installed bundles: the compiled-in built-ins only.
+pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
+    let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("builtin-only agent catalog"))
+}
+
 /// Default runtime for root/main turn integration fixtures.
 ///
-/// Includes the common main stable IDs with `prompt = None` so root turns keep
-/// the already composed base system prompt (AGENTS/context), matching build/
-/// plan/general native Bundle semantics.
+/// Uses the compiled-in built-in roster only: `build` / `plan` / `general` keep
+/// `prompt = None` so root turns preserve the already composed base system
+/// prompt (AGENTS/context), and the reserved system agents stay available for
+/// exact lookup without entering any ordinary spawn roster.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/test-runtime".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: {
-            let ordinary = ["build", "plan", "general"].map(|stable_id| PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
-                description: None,
-                role: AgentRole::Main,
-                color: None,
-                prompt: None,
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy::default(),
-                workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
-                resource_view: ResourceView::default(),
-                can_spawn: vec![
-                    AgentName::new("build"),
-                    AgentName::new("plan"),
-                    AgentName::new("general"),
-                ],
-                hook_refs: Vec::new(),
-            });
-            // Fixed Harness system agents: present for exact lookup, not in can_spawn.
-            let system = ["compaction", "title", "summary"].map(|stable_id| PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
-                description: None,
-                role: AgentRole::Subagent,
-                color: None,
-                prompt: Some(format!("{stable_id} prompt")),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy::default(),
-                workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
-                resource_view: ResourceView::default(),
-                can_spawn: Vec::new(),
-                hook_refs: Vec::new(),
-            });
-            ordinary.into_iter().chain(system).collect()
-        },
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = BundleCatalog::from_prepared(&[bundle]);
-    let Ok(catalog) = catalog else {
-        panic!("test runtime catalog must be valid: {catalog:?}");
-    };
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
-        Arc::new(catalog),
+        builtin_only_catalog(),
     ))
 }
 

@@ -1,4 +1,4 @@
-//! Prepared AgentBundle value types: agents, resources, catalogs, and origin.
+//! Prepared AgentBundle value types: the agent, its resources, and catalogs.
 //!
 //! These types are what prepare emits and what the runtime catalog indexes.
 //! Source-only shapes live in `source.rs` and are not re-exported.
@@ -43,18 +43,6 @@ pub enum SpawnLifecycle {
     Resident,
 }
 
-/// Which Harness-owned resources enter the candidate view.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HarnessAccess {
-    /// No Harness builtins/tools in the candidate view.
-    None,
-    /// Restricted built-in set (basic coding tools).
-    Basic,
-    /// Full Harness tool surface allowed by the agent resource view.
-    Full,
-}
-
 /// Bundle identity block from the manifest (`identity:`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -65,16 +53,6 @@ pub struct BundleIdentity {
     pub version: String,
     /// Publisher label for display and audit.
     pub publisher: String,
-}
-
-/// Whether a prepared bundle came from built-ins or an installable package.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BundleOrigin {
-    /// Shipped with the binary / prepare_builtins path; treated as immutable.
-    Builtin,
-    /// User-installed package; may be replaced or uninstalled.
-    Installed,
 }
 
 /// Optional model routing overrides for a prepared agent.
@@ -103,14 +81,14 @@ pub struct ResourceView {
     pub namespace: Option<String>,
 }
 
-/// One agent after prepare: stable ids, prompt material, spawn graph, resource view.
+/// The one agent a bundle defines: id, prompt material, spawn graph, resource view.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedAgent {
-    /// Bundle-local agent id (unique within the bundle).
-    pub local_id: String,
-    /// Global stable agent id used for spawn graphs and session binding.
-    pub stable_id: AgentName,
+    /// Stable agent id. Also addressable as `bundle:{bundle_id}/agent/{id}`.
+    ///
+    /// One bundle holds one agent, so there is no separate bundle-local id.
+    pub id: AgentName,
     /// Optional human description for selectors.
     pub description: Option<String>,
     /// Main vs subagent selector role.
@@ -129,8 +107,6 @@ pub struct PreparedAgent {
     pub workdir: Option<String>,
     /// Transient vs resident when Harness spawns this entry.
     pub spawn_lifecycle: SpawnLifecycle,
-    /// How much of the Harness tool plane is visible.
-    pub harness_access: HarnessAccess,
     /// Per-agent allow/deny/alias resource view.
     pub resource_view: ResourceView,
     /// Stable agent ids this agent is allowed to spawn.
@@ -157,7 +133,7 @@ pub struct PreparedResource {
     pub aliases: Vec<String>,
 }
 
-/// Fully prepared single AgentBundle: agents, resources, digests, origin flags.
+/// Fully prepared AgentBundle: exactly one agent plus its own resources.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedBundle {
@@ -165,14 +141,13 @@ pub struct PreparedBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
-    /// Builtin vs installed provenance.
-    pub origin: BundleOrigin,
-    /// When true, uninstall/replace of this bundle id is rejected.
-    pub immutable: bool,
     /// Digest of this bundle's canonical content for integrity checks.
     pub digest: String,
-    /// Prepared agents in deterministic order.
-    pub agents: Vec<PreparedAgent>,
+    /// The single agent this bundle defines.
+    ///
+    /// A bundle carries exactly one agent, so "zero or two agents" is not
+    /// representable rather than merely rejected by a check.
+    pub agent: PreparedAgent,
     /// Prepared tool resources.
     pub tools: Vec<PreparedResource>,
     /// Prepared skill resources.
@@ -185,7 +160,7 @@ pub struct PreparedBundle {
     pub extensions: Vec<PreparedResource>,
 }
 
-/// Compact index row for one bundle in a prepared catalog (id, version, agents).
+/// Compact index row for one bundle in a prepared catalog (id, version, agent).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedBundleIndex {
@@ -195,13 +170,13 @@ pub struct PreparedBundleIndex {
     pub version: String,
     /// Bundle content digest.
     pub digest: String,
-    /// Stable agent ids exported by this bundle.
-    pub stable_agent_ids: Vec<AgentName>,
+    /// Stable id of the one agent this bundle exports.
+    pub stable_agent_id: AgentName,
 }
 
 /// Canonical prepared multi-bundle document: decoded bundles, index, raw bytes, digest.
 ///
-/// Build via [`crate::prepare_builtins`] / [`crate::prepare_package`], or
+/// Build via [`crate::prepare_package`] / [`crate::prepare_package`], or
 /// [`PreparedCatalog::decode`]. Accessors expose slices without cloning.
 #[derive(Debug)]
 pub struct PreparedCatalog {

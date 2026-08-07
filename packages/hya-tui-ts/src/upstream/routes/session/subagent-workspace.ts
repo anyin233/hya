@@ -142,6 +142,21 @@ export type RunTreeRow = {
   searchText: string
 }
 
+/**
+ * Display label for a roster handle.
+ *
+ * A handle is a canonical path (`main/lead-1/worker-2`). The run tree already
+ * indents by depth, so repeating the ancestry in every label is noise that
+ * crowds out the parts that differ. Show the leaf and let the indentation carry
+ * the hierarchy. The full path stays in `searchText`, so searching by path still
+ * finds the row.
+ */
+export function rosterLabel(handle: string | undefined): string | undefined {
+  if (handle === undefined) return undefined
+  const separator = handle.lastIndexOf("/")
+  return separator === -1 ? handle : handle.slice(separator + 1)
+}
+
 export function flattenRunTree(tree: RunTreeNode): RunTreeRow[] {
   const rows: RunTreeRow[] = []
   const visit = (node: RunTreeNode, depth: number) => {

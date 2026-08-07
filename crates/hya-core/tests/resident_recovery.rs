@@ -204,6 +204,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
                 session: queued_root,
                 agent_session: queued_actor,
                 handle: "queued-1".to_string(),
+                parent: None,
                 agent_type: AgentName::new("queued"),
                 mode: SubagentMode::Resident,
             },
@@ -287,6 +288,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
                 session: running_root,
                 agent_session: running_actor,
                 handle: "running-1".to_string(),
+                parent: None,
                 agent_type: AgentName::new("running"),
                 mode: SubagentMode::Resident,
             },
@@ -357,7 +359,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
         }
     );
     let projection = store.read_projection(running_root).await.unwrap();
-    let entry = projection.team.roster.get("running-1").unwrap();
+    let entry = projection.team.roster.get("main/running-1").unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.resident_cursor, 1);
     assert!(entry.resident_work.is_none());
@@ -396,6 +398,7 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
                 session: root,
                 agent_session: actor,
                 handle: handle.to_string(),
+                parent: None,
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -514,6 +517,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
                 session: root,
                 agent_session: actor,
                 handle: "repeat-1".to_string(),
+                parent: None,
                 agent_type: AgentName::new("repeat"),
                 mode: SubagentMode::Resident,
             },

@@ -4,8 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use hya_bundle::{
-    AgentRole, BundleSource, PreparedCatalog, SourceFile, SpawnLifecycle, prepare_builtins,
-    prepare_package,
+    AgentRole, BundleSource, PreparedCatalog, SourceFile, SpawnLifecycle, prepare_package,
 };
 
 fn repository_root() -> PathBuf {
@@ -33,17 +32,17 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
     );
 
     // When: the example is passed as a single SourceFile through the production preparer.
-    let first = prepare_builtins(vec![BundleSource::new(
+    let first = prepare_package(BundleSource::new(
         "docs-example",
         vec![SourceFile::new("bundle.hya.md", bytes.clone())],
-    )]);
+    ));
     let first = first.unwrap_or_else(|error| {
         panic!("docs example must prepare successfully: {error:?}");
     });
-    let second = prepare_builtins(vec![BundleSource::new(
+    let second = prepare_package(BundleSource::new(
         "docs-example",
         vec![SourceFile::new("bundle.hya.md", bytes)],
-    )]);
+    ));
     let second = second.unwrap_or_else(|error| {
         panic!("docs example must prepare successfully on second pass: {error:?}");
     });
@@ -55,8 +54,7 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
     assert_eq!(first.index().len(), 1);
 
     let bundle = &first.bundles()[0];
-    assert_eq!(bundle.agents.len(), 1);
-    let agent = &bundle.agents[0];
+    let agent = &bundle.agent;
     assert_eq!(agent.role, AgentRole::Main);
     assert_eq!(agent.spawn_lifecycle, SpawnLifecycle::Transient);
     assert!(
@@ -124,10 +122,12 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         ("tool-only", "tool-only reports zero hooks"),
         ("hook-only", "hook-only reports zero tools"),
+        ("one agent per bundle", "A bundle defines exactly one agent"),
         (
-            "multi-agent Markdown prompts",
-            "empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents",
+            "host-controlled tool plane",
+            "derived from its origin, not declared",
         ),
+        ("clamp is not a sandbox", "The clamp is not a sandbox."),
         ("bun-disjoint link/name", "bun-disjoint"),
         (
             "generic superset modules",
@@ -135,7 +135,7 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         (
             "self-contained public JS profile",
-            "The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
+            "The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
         ),
         (
             "external single-file bundling",
@@ -339,15 +339,18 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
         assert_eq!(first.bundles().len(), 1);
         let bundle = &first.bundles()[0];
         assert_eq!(bundle.identity.id, expected.bundle_id);
-        assert_eq!(bundle.agents.len(), expected.agents.len());
         assert_eq!(bundle.tools.len(), 1);
         assert_eq!(bundle.extensions.len(), 1);
         assert!(bundle.skills.is_empty());
         assert!(bundle.hooks.is_empty());
         assert!(bundle.mcp.is_empty());
 
-        for (agent, expected_agent) in bundle.agents.iter().zip(expected.agents) {
-            assert_eq!(agent.stable_id.as_str(), expected_agent.stable_id);
+        {
+            let agent = &bundle.agent;
+            let [expected_agent] = expected.agents else {
+                panic!("a bundle example declares exactly one agent");
+            };
+            assert_eq!(agent.id.as_str(), expected_agent.stable_id);
             assert_eq!(agent.role, expected_agent.role);
             assert_eq!(agent.spawn_lifecycle, expected_agent.lifecycle);
             let can_spawn = agent
@@ -383,7 +386,7 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
 }
 
 #[test]
-fn bun_disjoint_example_is_prepare_valid_and_captures_agent_specific_closures() {
+fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
     let (first, second) = prepare_bun_example("bun-disjoint");
     assert_eq!(first.bytes(), second.bytes());
     assert_eq!(first.digest(), second.digest());
@@ -391,20 +394,12 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_agent_specific_closures() 
 
     let bundle = &first.bundles()[0];
     assert_eq!(bundle.identity.id, "hya/docs-bun-disjoint");
-    assert_eq!(bundle.agents.len(), 3);
-    assert_eq!(bundle.tools.len(), 2);
-    assert_eq!(bundle.hooks.len(), 2);
-    assert_eq!(bundle.extensions.len(), 2);
+    assert_eq!(bundle.tools.len(), 1);
+    assert_eq!(bundle.hooks.len(), 1);
+    assert_eq!(bundle.extensions.len(), 1);
     assert!(bundle.skills.is_empty());
     assert!(bundle.mcp.is_empty());
 
-    let find_agent = |stable_id: &str| {
-        bundle
-            .agents
-            .iter()
-            .find(|agent| agent.stable_id.as_str() == stable_id)
-            .unwrap_or_else(|| panic!("prepared agent `{stable_id}` is missing"))
-    };
     fn find_resource<'a>(
         resources: &'a [hya_bundle::PreparedResource],
         local_id: &str,
@@ -414,75 +409,30 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_agent_specific_closures() 
             .find(|resource| resource.local_id == local_id)
             .unwrap_or_else(|| panic!("prepared resource `{local_id}` is missing"))
     }
-    let find_extension = |source_path: &str| {
-        bundle
-            .extensions
-            .iter()
-            .find(|extension| extension.source_path == source_path)
-            .unwrap_or_else(|| panic!("prepared extension `{source_path}` is missing"))
-    };
-    let assert_matches_extension = |resource: &hya_bundle::PreparedResource, source_path: &str| {
-        let extension = find_extension(source_path);
+    let assert_matches_extension = |resource: &hya_bundle::PreparedResource| {
+        let extension = &bundle.extensions[0];
         assert_eq!(resource.source_path, extension.source_path);
         assert_eq!(resource.content, extension.content);
         assert_eq!(resource.digest, extension.digest);
     };
 
-    let alpha = find_agent("docs-bun-alpha");
-    assert_eq!(alpha.local_id, "docs-bun-alpha");
+    let alpha = &bundle.agent;
+    assert_eq!(alpha.id.as_str(), "docs-bun-alpha");
     assert_eq!(alpha.role, AgentRole::Main);
     assert_eq!(alpha.spawn_lifecycle, SpawnLifecycle::Transient);
-    assert_eq!(alpha.prompt_source.as_deref(), Some("prompts/alpha.md"));
+    // The Markdown body is the prompt; the agent names no prompt resource.
+    assert_eq!(alpha.prompt_source.as_deref(), Some("bundle.hya.md"));
     assert_eq!(
         alpha.resource_view.allow,
         ["bundle:hya/docs-bun-disjoint/tool/echo"]
     );
     assert_eq!(alpha.hook_refs, ["bundle:hya/docs-bun-disjoint/hook/event"]);
 
-    let beta = find_agent("docs-bun-beta");
-    assert_eq!(beta.local_id, "docs-bun-beta");
-    assert_eq!(beta.role, AgentRole::Subagent);
-    assert_eq!(beta.spawn_lifecycle, SpawnLifecycle::Resident);
-    assert_eq!(beta.prompt_source.as_deref(), Some("prompts/beta.md"));
-    assert_eq!(
-        beta.resource_view.allow,
-        ["bundle:hya/docs-bun-disjoint/tool/beta"]
-    );
-    assert_eq!(
-        beta.hook_refs,
-        ["bundle:hya/docs-bun-disjoint/hook/tool.execute.before"]
-    );
-
-    let static_agent = find_agent("docs-bun-static");
-    assert_eq!(static_agent.local_id, "docs-bun-static");
-    assert_eq!(static_agent.role, AgentRole::Main);
-    assert_eq!(static_agent.spawn_lifecycle, SpawnLifecycle::Transient);
-    assert_eq!(
-        static_agent.prompt_source.as_deref(),
-        Some("prompts/static.md")
-    );
-    assert!(static_agent.resource_view.allow.is_empty());
-    assert!(static_agent.hook_refs.is_empty());
-
     let echo = find_resource(&bundle.tools, "echo");
     assert_eq!(echo.stable_id, "bundle:hya/docs-bun-disjoint/tool/echo");
-    assert_matches_extension(echo, "extensions/alpha.js");
+    assert_matches_extension(echo);
 
     let event = find_resource(&bundle.hooks, "event");
     assert_eq!(event.stable_id, "bundle:hya/docs-bun-disjoint/hook/event");
-    assert_matches_extension(event, "extensions/alpha.js");
-
-    let beta_tool = find_resource(&bundle.tools, "beta");
-    assert_eq!(
-        beta_tool.stable_id,
-        "bundle:hya/docs-bun-disjoint/tool/beta"
-    );
-    assert_matches_extension(beta_tool, "extensions/beta.js");
-
-    let before = find_resource(&bundle.hooks, "tool.execute.before");
-    assert_eq!(
-        before.stable_id,
-        "bundle:hya/docs-bun-disjoint/hook/tool.execute.before"
-    );
-    assert_matches_extension(before, "extensions/beta.js");
+    assert_matches_extension(event);
 }

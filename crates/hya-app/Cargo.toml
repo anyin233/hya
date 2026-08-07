@@ -39,5 +39,3 @@ http-body-util = { workspace = true }
 sqlx = { workspace = true }
 tower = { workspace = true }
 
-[build-dependencies]
-hya-bundle = { workspace = true }

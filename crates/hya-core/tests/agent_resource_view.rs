@@ -12,10 +12,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use futures::stream;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    PreparedResource, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
+use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, FinishReason, MessageId, ModelRef, SessionId, ToolName, ToolSchema};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -140,62 +140,84 @@ impl Tool for CountingTool {
     }
 }
 
-fn catalog() -> Arc<BundleCatalog> {
-    let agents = [
-        ("none-agent", HarnessAccess::None),
-        ("basic-agent", HarnessAccess::Basic),
-        ("full-agent", HarnessAccess::Full),
+/// Two installed bundle agents, both on the clamped plane.
+///
+/// `narrowed-agent` allows only its own bundle skill, so nothing Harness-owned
+/// enters its view at all. `clamped-agent` takes the default view, so it sees
+/// the internal public tool snapshot plus its own bundle resources. The full
+/// plane is reachable only through a built-in, which is the point of the split.
+/// Two installed bundle agents, both on the clamped plane.
+///
+/// `narrowed-agent` allows only its own bundle skill, so nothing Harness-owned
+/// enters its view at all. `clamped-agent` takes the default view, so it sees
+/// the internal public tool snapshot plus its own bundle resources. The full
+/// plane is reachable only through a built-in, which is the point of the split.
+///
+/// Each agent gets its own bundle, and therefore its own copy of the skill.
+fn catalog() -> Arc<AgentCatalog> {
+    let bundles = [
+        ("narrowed", "narrowed-agent", true),
+        ("clamped", "clamped-agent", false),
     ]
     .into_iter()
-    .map(|(stable_id, harness_access)| PreparedAgent {
-        local_id: stable_id.to_string(),
-        stable_id: AgentName::new(stable_id),
-        description: None,
-        role: AgentRole::Main,
-        color: None,
-        prompt: Some(format!("{stable_id} prompt")),
-        prompt_source: None,
-        prompt_digest: None,
-        model_policy: ModelPolicy::default(),
-        workdir: None,
-        spawn_lifecycle: SpawnLifecycle::Transient,
-        harness_access,
-        resource_view: ResourceView::default(),
-        can_spawn: Vec::new(),
-        hook_refs: Vec::new(),
+    .map(|(bundle_slug, stable_id, narrow)| {
+        let bundle_id = format!("hya/resource-view-{bundle_slug}");
+        let skill_id = format!("bundle:{bundle_id}/skill/bundle-skill");
+        PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: bundle_id.clone(),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{bundle_slug}"),
+            agent: PreparedAgent {
+                id: AgentName::new(stable_id),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: Some(format!("{stable_id} prompt")),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                resource_view: if narrow {
+                    ResourceView {
+                        allow: vec![skill_id.clone()],
+                        deny: Vec::new(),
+                        aliases: BTreeMap::new(),
+                        namespace: None,
+                    }
+                } else {
+                    ResourceView::default()
+                },
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            skills: vec![PreparedResource {
+                local_id: "bundle-skill".to_string(),
+                stable_id: skill_id,
+                source_path: "resources/skills/bundle-skill.md".to_string(),
+                digest: "test-only".to_string(),
+                content:
+                    "---\nname: bundle-skill\ndescription: embedded bundle skill\n---\nbundle body\n"
+                        .to_string(),
+                aliases: Vec::new(),
+            }],
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        }
     })
-    .collect();
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/resource-view-test".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents,
-        tools: Vec::new(),
-        skills: vec![PreparedResource {
-            local_id: "bundle-skill".to_string(),
-            stable_id: "bundle:hya/resource-view-test/skill/bundle-skill".to_string(),
-            source_path: "resources/skills/bundle-skill.md".to_string(),
-            digest: "test-only".to_string(),
-            content:
-                "---\nname: bundle-skill\ndescription: embedded bundle skill\n---\nbundle body\n"
-                    .to_string(),
-            aliases: Vec::new(),
-        }],
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    Arc::new(BundleCatalog::from_prepared(&[bundle]).unwrap())
+    .collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
 #[tokio::test]
-async fn harness_access_filters_schema_dispatch_and_skill_prompt() {
+async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
     let workdir = support::TestDir::new("agent-resource-access");
     workdir.write_skill("workdir-skill");
     let provider = Arc::new(CapturingProvider {
@@ -232,7 +254,9 @@ async fn harness_access_filters_schema_dispatch_and_skill_prompt() {
         reasoning: None,
     };
 
-    for stable_id in ["none-agent", "basic-agent", "full-agent"] {
+    // `general` is a built-in, so it is the only one of the three on the full
+    // plane. The other two are installed bundle agents and are clamped.
+    for stable_id in ["narrowed-agent", "clamped-agent", "general"] {
         let session = engine
             .create(CreateSession {
                 parent: None,
@@ -268,43 +292,52 @@ async fn harness_access_filters_schema_dispatch_and_skill_prompt() {
             .map(|schema| schema.name.as_str().to_string())
             .collect::<Vec<_>>()
     };
+    // narrowed: allow-list admits only the bundle skill, so no Harness tool.
     assert!(!tool_names(&first_requests[0]).contains(&"read".to_string()));
     assert!(!tool_names(&first_requests[0]).contains(&"dynamic_marker".to_string()));
     assert!(!tool_names(&first_requests[0]).contains(&"skill".to_string()));
+    // clamped: the internal public snapshot, but never a later-registered tool.
     assert!(tool_names(&first_requests[1]).contains(&"read".to_string()));
-    assert!(!tool_names(&first_requests[1]).contains(&"dynamic_marker".to_string()));
+    assert!(
+        !tool_names(&first_requests[1]).contains(&"dynamic_marker".to_string()),
+        "a bundle agent must not see a tool registered after the registry was built"
+    );
+    // builtin: the live snapshot, including the later-registered tool.
     assert!(tool_names(&first_requests[2]).contains(&"read".to_string()));
     assert!(tool_names(&first_requests[2]).contains(&"dynamic_marker".to_string()));
 
-    for request in &first_requests {
+    for request in &first_requests[..2] {
         assert!(
             request
                 .system
                 .as_deref()
                 .unwrap_or_default()
                 .contains("bundle-skill"),
-            "bundle-local skill must be independent of harness access"
+            "a bundle agent always sees its own bundle skill"
         );
     }
-    let none_system = first_requests[0].system.as_deref().unwrap_or_default();
+    let narrowed_system = first_requests[0].system.as_deref().unwrap_or_default();
     assert!(
-        none_system.contains("bundle body"),
-        "None must inline selected local static skill body into the prompt, got: {none_system}"
+        narrowed_system.contains("bundle body"),
+        "with no skill facade the local static skill body must be inlined, got: {narrowed_system}"
     );
-    assert!(!none_system.contains("workdir-skill"));
+
+    // Project/user skills discovered from the workdir belong to the Harness
+    // plane, so only the built-in sees them.
+    assert!(!narrowed_system.contains("workdir-skill"));
     assert!(
         !first_requests[1]
             .system
             .as_deref()
             .unwrap_or_default()
-            .contains("workdir-skill")
+            .contains("workdir-skill"),
+        "a bundle agent must not see project or user skills"
     );
+    let builtin_system = first_requests[2].system.as_deref().unwrap_or_default();
+    assert!(builtin_system.contains("workdir-skill"));
     assert!(
-        first_requests[2]
-            .system
-            .as_deref()
-            .unwrap_or_default()
-            .contains("workdir-skill")
+        !builtin_system.contains("bundle-skill"),
+        "a builtin owns no bundle, so it must not see bundle-local skills"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -325,12 +358,9 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
-        agents: vec![PreparedAgent {
-            local_id: "alias-agent".to_string(),
-            stable_id: AgentName::new("alias-agent"),
+        agent: PreparedAgent {
+            id: AgentName::new("alias-agent"),
             description: None,
             role: AgentRole::Main,
             color: None,
@@ -340,7 +370,6 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: HarnessAccess::Full,
             resource_view: ResourceView {
                 allow: vec![
                     "harness:tool/dynamic_marker".to_string(),
@@ -355,14 +384,14 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             },
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
-        }],
+        },
         tools: Vec::new(),
         skills: Vec::new(),
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
     };
-    let catalog = Arc::new(BundleCatalog::from_prepared(&[bundle]).unwrap());
+    let catalog = agent_catalog(bundle);
     let provider = Arc::new(AliasProvider {
         turn: AtomicUsize::new(0),
         requests: Mutex::new(Vec::new()),
@@ -494,46 +523,12 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
     }
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/mcp-engine".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: vec![PreparedAgent {
-            local_id: "mcp-agent".to_string(),
-            stable_id: AgentName::new("mcp-agent"),
-            description: None,
-            role: AgentRole::Main,
-            color: None,
-            prompt: Some("mcp prompt".to_string()),
-            prompt_source: None,
-            prompt_digest: None,
-            model_policy: ModelPolicy::default(),
-            workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: HarnessAccess::Full,
-            resource_view: ResourceView {
-                allow: vec!["harness:mcp/mcp__fixture__ping".to_string()],
-                deny: Vec::new(),
-                aliases: BTreeMap::new(),
-                namespace: None,
-            },
-            can_spawn: Vec::new(),
-            hook_refs: Vec::new(),
-        }],
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = Arc::new(BundleCatalog::from_prepared(&[bundle]).unwrap());
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    // Harness MCP exports live on the full plane, so only a built-in can select
+    // one. `general` takes the default (unfiltered) view.
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        support::builtin_only_catalog(),
+    ));
     runtime
         .refresh(|candidate| {
             candidate.upsert_sources(vec![hya_core::RuntimeSource::new(
@@ -575,7 +570,7 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("mcp-agent"),
+            agent: AgentName::new("general"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
         })
@@ -589,7 +584,7 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
         .run_turn(
             session,
             &AgentSpec {
-                name: AgentName::new("mcp-agent"),
+                name: AgentName::new("general"),
                 model: ModelRef::new("fake"),
                 system_prompt: String::new(),
                 workdir: workdir.path().to_path_buf(),
@@ -615,4 +610,70 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
         1,
         "selected MCP public name must dispatch the source tool exactly once"
     );
+}
+
+#[tokio::test]
+async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
+    // The clamp is fail-closed and says why: an out-of-plane reference is not
+    // reported as "unknown", which would send an author hunting a typo.
+    let workdir = support::TestDir::new("agent-resource-plane-refusal");
+    for (slug, reference) in [
+        ("mcp", "harness:mcp/mcp__fixture__ping"),
+        ("skill", "harness:skill/anything"),
+    ] {
+        let bundle_id = format!("hya/plane-refusal-{slug}");
+        let bundle = PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: bundle_id.clone(),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{slug}"),
+            agent: PreparedAgent {
+                id: AgentName::new(format!("plane-refusal-{slug}")),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: Some("plane refusal prompt".to_string()),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                resource_view: ResourceView {
+                    allow: vec![reference.to_string()],
+                    deny: Vec::new(),
+                    aliases: BTreeMap::new(),
+                    namespace: None,
+                },
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let runtime = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            agent_catalog(bundle),
+        ));
+        let binding = runtime.bind_turn(workdir.path()).expect("bind turn");
+        // A public path that compiles the effective view and propagates the
+        // refusal, rather than swallowing it.
+        let compiled =
+            binding.has_selected_bundle_sidecar_capability(&format!("plane-refusal-{slug}"));
+        let Err(hya_bundle::BundleError::ResourceNotInPlane { plane, .. }) = compiled else {
+            panic!("`{reference}` must be refused as out-of-plane, got {compiled:?}");
+        };
+        assert_eq!(plane, "internal-public");
+    }
+}
+
+/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
+    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }

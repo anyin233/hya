@@ -5,10 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
-};
+use hya_bundle::BundleCatalog;
 use hya_core::{AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::{FakeProvider, ProviderRouter};
@@ -33,49 +30,11 @@ fn tempdir() -> PathBuf {
     dir
 }
 
-fn prepared(stable_id: &str, role: AgentRole) -> PreparedAgent {
-    PreparedAgent {
-        local_id: stable_id.to_string(),
-        stable_id: AgentName::new(stable_id),
-        description: None,
-        role,
-        color: None,
-        prompt: None,
-        prompt_source: None,
-        prompt_digest: None,
-        model_policy: ModelPolicy::default(),
-        workdir: None,
-        spawn_lifecycle: SpawnLifecycle::Transient,
-        harness_access: HarnessAccess::Full,
-        resource_view: ResourceView::default(),
-        can_spawn: Vec::new(),
-        hook_refs: Vec::new(),
-    }
-}
-
 fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/reference-unit-tests".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: vec![
-            prepared("build", AgentRole::Main),
-            prepared("plan", AgentRole::Main),
-            prepared("general", AgentRole::Subagent),
-        ],
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = BundleCatalog::from_prepared(&[bundle]).expect("reference unit catalog");
+    // `build`, `plan`, and `general` are compiled-in built-ins now, so these
+    // fixtures need no installed bundle at all.
+    let catalog = BundleCatalog::from_verified_catalogs(&[]).expect("reference unit catalog");
+    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("reference agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

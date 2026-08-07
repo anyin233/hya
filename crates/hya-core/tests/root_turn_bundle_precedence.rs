@@ -15,16 +15,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
 use hya_core::{
-    AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus, HookDispatcher,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, RuntimeRegistry, SessionEngine,
-    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, TurnBinding,
+    AgentCatalog, AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome,
+    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, RuntimeRegistry,
+    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, TurnBinding,
 };
 use hya_proto::{AgentName, ConfigGeneration, Event, FinishReason, ModelRef, Role};
 use hya_provider::{
@@ -628,22 +628,22 @@ impl AgentFixture {
     }
 }
 
-fn catalog(agents: &[AgentFixture]) -> Arc<BundleCatalog> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/root-turn-precedence".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: agents
-            .iter()
-            .map(|agent| PreparedAgent {
-                local_id: agent.stable_id.clone(),
-                stable_id: AgentName::new(&agent.stable_id),
+fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
+    // A bundle defines one agent, so each fixture agent becomes its own bundle.
+    let bundles = agents
+        .iter()
+        // Built-in ids are compiled in; a fixture asking for one just gets it.
+        .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
+        .map(|agent| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/root-turn-precedence-{}", agent.stable_id),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{}", agent.stable_id),
+            agent: PreparedAgent {
+                id: AgentName::new(&agent.stable_id),
                 description: None,
                 role: AgentRole::Main,
                 color: None,
@@ -657,19 +657,19 @@ fn catalog(agents: &[AgentFixture]) -> Arc<BundleCatalog> {
                 },
                 workdir: agent.workdir.clone(),
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),
-            })
-            .collect(),
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("valid precedence catalog"))
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
 fn write_skill(root: &Path, name: &str) {
@@ -682,7 +682,7 @@ fn write_skill(root: &Path, name: &str) {
     .unwrap();
 }
 
-async fn engine_with(catalog: Arc<BundleCatalog>, provider: Arc<CaptureProvider>) -> SessionEngine {
+async fn engine_with(catalog: Arc<AgentCatalog>, provider: Arc<CaptureProvider>) -> SessionEngine {
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
         ToolRegistry::builtins().snapshot(),
         catalog,
@@ -703,7 +703,7 @@ async fn engine_with(catalog: Arc<BundleCatalog>, provider: Arc<CaptureProvider>
 }
 
 async fn engine_with_provider(
-    catalog: Arc<BundleCatalog>,
+    catalog: Arc<AgentCatalog>,
     provider: Arc<dyn Provider>,
 ) -> SessionEngine {
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
@@ -869,7 +869,7 @@ async fn root_turn_prompt_none_preserves_composed_base_and_appends_skills_once()
 }
 
 #[tokio::test]
-async fn root_turn_bundle_prompt_replaces_base_then_appends_skills_once() {
+async fn root_turn_bundle_prompt_replaces_base_and_sees_no_workdir_skill() {
     let home = support::TestDir::new("root-prompt-replace-home");
     let workdir = support::TestDir::new("root-prompt-replace");
     let _home = HomeGuard::set(home.path());
@@ -878,14 +878,14 @@ async fn root_turn_bundle_prompt_replaces_base_then_appends_skills_once() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with(
-        catalog(&[AgentFixture::new("explore").prompt(BUNDLE_PROMPT)]),
+        catalog(&[AgentFixture::new("bundle-explorer").prompt(BUNDLE_PROMPT)]),
         provider.clone(),
     )
     .await;
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("explore"),
+            agent: AgentName::new("bundle-explorer"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
         })
@@ -920,8 +920,13 @@ async fn root_turn_bundle_prompt_replaces_base_then_appends_skills_once() {
         !system.contains(AGENTS_MARKER),
         "replaced base composition must not remain: {system}"
     );
-    assert_eq!(skill_header_count(system), 1);
-    assert!(system.contains("session-skill"));
+    // A bundle agent is on the clamped plane, so workdir-discovered skills are
+    // not part of its view and never reach its prompt.
+    assert_eq!(skill_header_count(system), 0);
+    assert!(
+        !system.contains("session-skill"),
+        "a bundle agent must not see a project skill: {system}"
+    );
     assert_eq!(
         system.matches(BUNDLE_PROMPT).count(),
         1,
@@ -1252,8 +1257,10 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
     };
     let published_generation = engine
         .runtime_registry()
+        // Publishing a *different* installed catalog is what advances the
+        // generation; built-in ids are compiled in and never vary.
         .publish_catalog(catalog(&[
-            AgentFixture::new("build").prompt("root sidecar generation N+1")
+            AgentFixture::new("sidecar-generation-marker").prompt("root sidecar generation N+1")
         ]))
         .expect("publish root sidecar replacement catalog");
     assert!(

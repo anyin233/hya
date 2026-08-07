@@ -5,47 +5,33 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleOrigin, PreparedAgent, PreparedBundle, PreparedBundleIndex, PreparedCatalog,
-    PreparedDocument, PreparedDocumentOwned, PreparedResource,
+    PreparedAgent, PreparedBundle, PreparedBundleIndex, PreparedCatalog, PreparedDocument,
+    PreparedDocumentOwned, PreparedResource,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceExtensions, SourceFile, SourceManifest,
     SourceResource, SourceResources,
 };
 
-const SOURCE_API_VERSION: &str = "hya.agent-bundle/v1";
 const SOURCE_KIND: &str = "AgentBundle";
 const PREPARED_FORMAT_VERSION: u32 = 1;
 
-/// Validate and deterministically prepare repo-native built-in Bundle sources.
-///
-/// Marks every resulting bundle `origin = Builtin` and `immutable = true`.
-/// Callers pass one [`BundleSource`] per built-in directory (or in-memory
-/// equivalent). Failures leave no on-disk state — prepare is pure over the
-/// source bytes.
-pub fn prepare_builtins(sources: Vec<BundleSource>) -> Result<PreparedCatalog, BundleError> {
-    prepare_sources(sources, BundleOrigin::Builtin, true)
-}
-
 /// Validate and deterministically prepare one installable package source.
 ///
-/// Marks the resulting bundle(s) `origin = Installed` and `immutable = false`.
-/// Used after a public `.hyabundle` has been expanded into a [`BundleSource`]
-/// (or for directory install paths). Like [`prepare_builtins`], this is pure
-/// over source bytes: a failed prepare does not leave staging directories behind
-/// (staging is owned by [`crate::stage_package`]).
+/// Every prepared bundle is an installed bundle: built-in agents are compiled
+/// into the binary and never pass through prepare. Used after a public
+/// `.hyabundle` has been expanded into a [`BundleSource`] (or for directory
+/// install paths). Prepare is pure over source bytes: a failed prepare does not
+/// leave staging directories behind (staging is owned by
+/// [`crate::stage_package`]).
 ///
 /// Returns a [`PreparedCatalog`] with canonical JSON `bytes` and matching
 /// `digest` for durable registry storage.
 pub fn prepare_package(source: BundleSource) -> Result<PreparedCatalog, BundleError> {
-    prepare_sources(vec![source], BundleOrigin::Installed, false)
+    prepare_sources(vec![source])
 }
 
-fn prepare_sources(
-    sources: Vec<BundleSource>,
-    origin: BundleOrigin,
-    immutable: bool,
-) -> Result<PreparedCatalog, BundleError> {
+fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, BundleError> {
     let mut parsed = sources
         .into_iter()
         .map(parse_source)
@@ -53,14 +39,14 @@ fn prepare_sources(
     parsed.sort_by(|left, right| left.manifest.identity.id.cmp(&right.manifest.identity.id));
 
     let mut bundle_ids = BTreeSet::new();
-    let mut stable_agent_ids = BTreeSet::new();
+    let mut stable_agent_id = BTreeSet::new();
     let mut bundles = Vec::with_capacity(parsed.len());
     for source in parsed {
         let bundle_id = source.manifest.identity.id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let bundle = prepare_bundle(source, &mut stable_agent_ids, origin, immutable)?;
+        let bundle = prepare_bundle(source, &mut stable_agent_id)?;
         bundles.push(bundle);
     }
     resolve_catalog_references(&mut bundles)?;
@@ -136,18 +122,11 @@ impl PreparedCatalog {
 
 fn prepared_bundle_is_canonical(bundle: &PreparedBundle) -> bool {
     bundle.format_version == PREPARED_FORMAT_VERSION
-        && matches!(
-            (bundle.origin, bundle.immutable),
-            (BundleOrigin::Builtin, true) | (BundleOrigin::Installed, false)
-        )
         && validate_identity(&bundle.identity.id, &bundle.identity.version).is_ok()
-        && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.stable_id.as_str()))
-        && bundle.agents.iter().all(|agent| {
-            is_strictly_sorted(agent.can_spawn.iter().map(|target| target.as_str()))
-                && is_strictly_sorted(agent.hook_refs.iter().map(String::as_str))
-                && is_strictly_sorted(agent.resource_view.allow.iter().map(String::as_str))
-                && is_strictly_sorted(agent.resource_view.deny.iter().map(String::as_str))
-        })
+        && is_strictly_sorted(bundle.agent.can_spawn.iter().map(|target| target.as_str()))
+        && is_strictly_sorted(bundle.agent.hook_refs.iter().map(String::as_str))
+        && is_strictly_sorted(bundle.agent.resource_view.allow.iter().map(String::as_str))
+        && is_strictly_sorted(bundle.agent.resource_view.deny.iter().map(String::as_str))
         && bundle.mcp.is_empty()
         && resources_are_canonical(&bundle.identity.id, "tool", &bundle.tools)
         && resources_are_canonical(&bundle.identity.id, "skill", &bundle.skills)
@@ -161,22 +140,21 @@ fn validate_prepared_references(bundles: &[PreparedBundle]) -> Result<(), Bundle
     let mut agent_references = BTreeSet::new();
     let mut resources = BTreeSet::new();
     for bundle in bundles {
-        for agent in &bundle.agents {
-            if !stable_agents.insert(agent.stable_id.as_str()) {
-                return Err(BundleError::DuplicateStableAgentId {
-                    stable_id: agent.stable_id.as_str().to_string(),
+        let agent = &bundle.agent;
+        if !stable_agents.insert(agent.id.as_str()) {
+            return Err(BundleError::DuplicateStableAgentId {
+                stable_id: agent.id.as_str().to_string(),
+            });
+        }
+        for reference in [
+            agent.id.as_str().to_string(),
+            format!("bundle:{}/agent/{}", bundle.identity.id, agent.id),
+        ] {
+            if !agent_references.insert(reference.clone()) {
+                return Err(BundleError::NamespaceCollision {
+                    bundle_id: bundle.identity.id.clone(),
+                    name: reference,
                 });
-            }
-            for reference in [
-                agent.stable_id.as_str().to_string(),
-                format!("bundle:{}/agent/{}", bundle.identity.id, agent.local_id),
-            ] {
-                if !agent_references.insert(reference.clone()) {
-                    return Err(BundleError::NamespaceCollision {
-                        bundle_id: bundle.identity.id.clone(),
-                        name: reference,
-                    });
-                }
             }
         }
         for hook in &bundle.hooks {
@@ -200,16 +178,11 @@ fn validate_prepared_references(bundles: &[PreparedBundle]) -> Result<(), Bundle
     }
 
     for bundle in bundles {
-        for agent in &bundle.agents {
-            for reference in &agent.can_spawn {
-                if !stable_agents.contains(reference.as_str()) {
-                    return Err(BundleError::UnknownAgentReference {
-                        bundle_id: bundle.identity.id.clone(),
-                        agent_id: agent.stable_id.as_str().to_string(),
-                        reference: reference.as_str().to_string(),
-                    });
-                }
-            }
+        {
+            let agent = &bundle.agent;
+            // `can_spawn` targets are NOT validated here. Bundles install
+            // independently, so a cross-bundle target may legitimately be
+            // absent at prepare time; AgentCatalog resolves it at spawn.
             for reference in agent
                 .resource_view
                 .aliases
@@ -261,7 +234,8 @@ fn resources_are_canonical(bundle_id: &str, kind: &str, resources: &[PreparedRes
 }
 
 fn validate_prepared_content_digests(bundle: &PreparedBundle) -> Result<(), BundleError> {
-    for agent in &bundle.agents {
+    {
+        let agent = &bundle.agent;
         match (
             agent.prompt.as_deref(),
             agent.prompt_source.as_deref(),
@@ -314,20 +288,18 @@ fn resolve_catalog_references(bundles: &mut [PreparedBundle]) -> Result<(), Bund
         for hook in &bundle.hooks {
             hook_resources.insert(hook.stable_id.clone(), hook.local_id.clone());
         }
-        for agent in &bundle.agents {
-            for reference in [
-                agent.stable_id.as_str().to_string(),
-                format!("bundle:{}/agent/{}", bundle.identity.id, agent.local_id),
-            ] {
-                if agents
-                    .insert(reference.clone(), agent.stable_id.clone())
-                    .is_some()
-                {
-                    return Err(BundleError::NamespaceCollision {
-                        bundle_id: bundle.identity.id.clone(),
-                        name: reference,
-                    });
-                }
+        for reference in [
+            bundle.agent.id.as_str().to_string(),
+            format!("bundle:{}/agent/{}", bundle.identity.id, bundle.agent.id),
+        ] {
+            if agents
+                .insert(reference.clone(), bundle.agent.id.clone())
+                .is_some()
+            {
+                return Err(BundleError::NamespaceCollision {
+                    bundle_id: bundle.identity.id.clone(),
+                    name: reference,
+                });
             }
         }
         for resource in bundle
@@ -350,18 +322,9 @@ fn resolve_catalog_references(bundles: &mut [PreparedBundle]) -> Result<(), Bund
         }
     }
     for bundle in bundles.iter_mut() {
-        for agent in &mut bundle.agents {
-            let mut resolved = Vec::with_capacity(agent.can_spawn.len());
-            for reference in &agent.can_spawn {
-                let Some(target) = agents.get(reference.as_str()) else {
-                    return Err(BundleError::UnknownAgentReference {
-                        bundle_id: bundle.identity.id.clone(),
-                        agent_id: agent.stable_id.as_str().to_string(),
-                        reference: reference.as_str().to_string(),
-                    });
-                };
-                resolved.push(target.clone());
-            }
+        {
+            let agent = &mut bundle.agent;
+            let mut resolved = agent.can_spawn.clone();
             resolved.sort_by(|left, right| left.as_str().cmp(right.as_str()));
             resolved.dedup_by(|left, right| left.as_str() == right.as_str());
             agent.can_spawn = resolved;
@@ -522,11 +485,32 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
             source_name: name.clone(),
             detail: error.to_string(),
         })?;
-    if manifest.api_version != SOURCE_API_VERSION {
-        return Err(BundleError::WrongApiVersion {
-            source_name: name,
-            found: manifest.api_version,
-        });
+    for (present, key, guidance) in [
+        (
+            manifest.api_version.is_some(),
+            "api_version",
+            "delete it; the AgentBundle manifest is no longer versioned",
+        ),
+        (
+            manifest.agents.is_some(),
+            "agents",
+            "a bundle defines exactly one agent: replace the `agents:` list with a single \
+             `agent:` map",
+        ),
+        (
+            manifest.agent.harness_access.is_some(),
+            "harness_access",
+            "the tool plane is host-controlled: a bundle agent always gets the internal public \
+             tools plus its own bundle resources",
+        ),
+    ] {
+        if present {
+            return Err(BundleError::RemovedManifestKey {
+                source_name: name,
+                key: key.to_string(),
+                guidance: guidance.to_string(),
+            });
+        }
     }
     if manifest.kind != SOURCE_KIND {
         return Err(BundleError::WrongKind {
@@ -534,20 +518,19 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
             found: manifest.kind,
         });
     }
-    let markdown_prompt = if markdown_prompt.as_deref() == Some("")
-        && !manifest.agents.is_empty()
-        && manifest.agents.iter().all(|agent| agent.prompt.is_some())
-    {
-        None
-    } else {
-        markdown_prompt
-    };
-    if markdown_prompt.is_some()
-        && (manifest.agents.len() != 1 || manifest.agents[0].prompt.is_some())
-    {
+    // An empty Markdown body next to an explicit prompt reference means "no
+    // body", not "empty prompt".
+    let markdown_prompt =
+        if markdown_prompt.as_deref() == Some("") && manifest.agent.prompt.is_some() {
+            None
+        } else {
+            markdown_prompt
+        };
+    if markdown_prompt.is_some() && manifest.agent.prompt.is_some() {
         return Err(BundleError::InvalidManifest {
             source_name: name,
-            detail: "bundle.hya.md requires exactly one agent and uses its body as prompt"
+            detail: "bundle.hya.md uses its body as the agent prompt, so the agent must not \
+                     also name a prompt resource"
                 .to_string(),
         });
     }
@@ -620,9 +603,7 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
 
 fn prepare_bundle(
     source: ParsedSource,
-    stable_agent_ids: &mut BTreeSet<String>,
-    origin: BundleOrigin,
-    immutable: bool,
+    stable_agent_id: &mut BTreeSet<String>,
 ) -> Result<PreparedBundle, BundleError> {
     let bundle_id = source.manifest.identity.id.clone();
     validate_identity(&bundle_id, &source.manifest.identity.version)?;
@@ -699,31 +680,19 @@ fn prepare_bundle(
             });
         }
     }
-    let mut local_agent_ids = BTreeSet::new();
-    let mut agents = source
-        .manifest
-        .agents
-        .into_iter()
-        .map(|agent| {
-            prepare_agent(
-                &bundle_id,
-                &source.files,
-                source.markdown_prompt.as_deref(),
-                agent,
-                &mut local_agent_ids,
-                stable_agent_ids,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    agents.sort_by(|left, right| left.stable_id.as_str().cmp(right.stable_id.as_str()));
-    validate_resource_views(&bundle_id, &agents, &tools, &skills)?;
+    let agent = prepare_agent(
+        &bundle_id,
+        &source.files,
+        source.markdown_prompt.as_deref(),
+        source.manifest.agent,
+        stable_agent_id,
+    )?;
+    validate_resource_views(&bundle_id, &agent, &tools, &skills)?;
     let mut bundle = PreparedBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: source.manifest.identity,
-        origin,
-        immutable,
         digest: String::new(),
-        agents,
+        agent,
         tools,
         skills,
         mcp: Vec::new(),
@@ -736,7 +705,7 @@ fn prepare_bundle(
 
 fn validate_resource_views(
     bundle_id: &str,
-    agents: &[PreparedAgent],
+    agent: &PreparedAgent,
     tools: &[PreparedResource],
     skills: &[PreparedResource],
 ) -> Result<(), BundleError> {
@@ -748,18 +717,16 @@ fn validate_resource_views(
                 .chain(resource.aliases.iter().map(String::as_str))
         })
         .collect::<BTreeSet<_>>();
-    for agent in agents {
-        if let Some(alias) = agent
-            .resource_view
-            .aliases
-            .keys()
-            .find(|alias| occupied.contains(alias.as_str()))
-        {
-            return Err(BundleError::AliasCollision {
-                bundle_id: bundle_id.to_string(),
-                name: alias.clone(),
-            });
-        }
+    if let Some(alias) = agent
+        .resource_view
+        .aliases
+        .keys()
+        .find(|alias| occupied.contains(alias.as_str()))
+    {
+        return Err(BundleError::AliasCollision {
+            bundle_id: bundle_id.to_string(),
+            name: alias.clone(),
+        });
     }
     Ok(())
 }
@@ -820,24 +787,17 @@ fn prepare_agent(
     files: &BTreeMap<String, Vec<u8>>,
     markdown_prompt: Option<&str>,
     mut source: SourceAgent,
-    local_ids: &mut BTreeSet<String>,
     stable_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedAgent, BundleError> {
     if source.resource_profile.is_some() {
         return Err(BundleError::UnsupportedBundleFeature {
             bundle_id: bundle_id.to_string(),
-            feature: "agents[].resource_profile".to_string(),
+            feature: "agent.resource_profile".to_string(),
         });
     }
-    if !local_ids.insert(source.local_id.clone()) {
-        return Err(BundleError::DuplicateLocalAgentId {
-            bundle_id: bundle_id.to_string(),
-            local_id: source.local_id,
-        });
-    }
-    if !stable_ids.insert(source.stable_id.clone()) {
+    if !stable_ids.insert(source.id.clone()) {
         return Err(BundleError::DuplicateStableAgentId {
-            stable_id: source.stable_id,
+            stable_id: source.id,
         });
     }
     let (prompt, prompt_source) = match (source.prompt.take(), markdown_prompt) {
@@ -866,8 +826,7 @@ fn prepare_agent(
     source.resource_view.deny.sort();
     source.resource_view.deny.dedup();
     Ok(PreparedAgent {
-        local_id: source.local_id,
-        stable_id: AgentName::new(source.stable_id),
+        id: AgentName::new(source.id),
         description: source.description,
         role: source.role,
         color: source.color,
@@ -877,7 +836,6 @@ fn prepare_agent(
         model_policy: source.model_policy,
         workdir: source.workdir,
         spawn_lifecycle: source.spawn_lifecycle,
-        harness_access: source.harness_access,
         resource_view: source.resource_view,
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
         hook_refs: source.hook_refs,
@@ -968,11 +926,7 @@ fn build_index(bundles: &[PreparedBundle]) -> Vec<PreparedBundleIndex> {
             bundle_id: bundle.identity.id.clone(),
             version: bundle.identity.version.clone(),
             digest: bundle.digest.clone(),
-            stable_agent_ids: bundle
-                .agents
-                .iter()
-                .map(|agent| agent.stable_id.clone())
-                .collect(),
+            stable_agent_id: bundle.agent.id.clone(),
         })
         .collect()
 }
