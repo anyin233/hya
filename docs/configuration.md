@@ -692,7 +692,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
-| `HYA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/config.rs`, `crates/hya-app/src/runtime.rs` |
+| `HYA_MODEL` | Active model id when `--model` is not passed. **Wins over** `config.yaml` `default_model` (`model_override.or_else(HYA_MODEL).unwrap_or(default_model)` in `resolve_runtime`). | After CLI/`HYA_MODEL`: `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction. Env-only (no config.yaml key). Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/runtime.rs` |
 | `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Env-only. Unparseable values ignored. | `6` | same |
 | `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
@@ -707,7 +707,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_BACKEND_BIN` | Path to the `hya-backend` binary the `hya` / `hya-ts` launcher spawns. After CLI `--backend-bin`, before sibling and `target/{release,debug}` fallbacks. | sibling / workspace target | `crates/hya-ts/src/lib.rs` |
 | `HYA_TUI_TS_DIR` | Highest-priority override for the TypeScript TUI runtime directory. Order: (1) this env, (2) `<exe_dir>/../lib/hya/hya-tui-ts`, (3) `<workspace>/packages/hya-tui-ts`. | installed or workspace path | `crates/hya-ts/src/lib.rs` |
 | `HYA_DB` | Session SQLite path for the backend. Empty string forces in-memory. | `$XDG_STATE_HOME/hya/sessions.db` (see `docs/cli.md`) | `crates/hya-sdk/src/server.rs` |
-| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), emit newline-delimited JSON startup marks to stderr: `{"hya_startup":true,"mark":"<mark>","wall_ms":…,"detail":…}` (`detail` omitted when none). Marks include `hya_ts_start`, `backend_spawn`, `backend_listen`, plus backend and TUI marks. | off | `crates/hya-ts/src/main.rs`, `crates/hya-backend/src/serve.rs`, `packages/hya-tui-ts/src/hya/startup-trace.ts` |
+| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), emit newline-delimited JSON startup marks to stderr. Rust emitters (`hya-ts`, `hya-backend`): `{"hya_startup":true,"mark":"<mark>","wall_ms":…,"detail":…}` (`detail` omitted when none). TUI emitter (`startup-trace.ts`) **always** also includes `mono_ms` (monotonic ms from `performance.now()`). Marks include `hya_ts_start`, `backend_spawn`, `backend_listen`, plus backend and TUI marks. | off | `crates/hya-ts/src/main.rs`, `crates/hya-backend/src/serve.rs`, `packages/hya-tui-ts/src/hya/startup-trace.ts` |
 
 ### TUI environment variables
 
@@ -1014,9 +1014,12 @@ Config entries support:
 
 Layout: `<workdir>/.hya/plugins/<name>/plugin.toml` scanned from each
 **immediate** subdirectory of `.hya/plugins` only
-([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)). A
-subdirectory whose `plugin.toml` is unreadable or unparseable is **skipped**
-with a notice on stderr rather than failing startup.
+([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)
+`scan_manifests`). Missing or **unreadable** `plugin.toml` is skipped
+**silently** (`read_to_string` failure → `continue` with no log). Only an
+**unparseable** file prints
+`hya: skipping plugin manifest <path> (<error>)` on stderr. Neither case fails
+startup.
 
 Example:
 
@@ -1261,9 +1264,9 @@ Optional YAML frontmatter:
 
 | Field | Meaning |
 | --- | --- |
-| `description` | Shown in the command list. |
-| `agent` | Switch to this agent profile before the turn. |
-| `model` | Switch the submitted turn to this model. |
+| `description` | Shown in the command list / `/api/command` listing. |
+| `agent` | Optional string stored on `CommandInfo` and exposed in `/api/command` listing / bootstrap summary only. **No runtime consumer** switches the session agent from this field (`CommandRequest` carries only `command`, `arguments`, `text`; turn uses the session's current agent). |
+| `model` | Optional string stored and listed the same way as `agent`. **No runtime consumer** switches the turn model from this field. |
 | `subtask` | Optional boolean parsed into the `/api/command` wire payload. **No runtime consumer** currently reads it (the TUI and engine do not open a child session from this flag). |
 
 ```markdown
@@ -1279,8 +1282,9 @@ All args: $ARGUMENTS
 ```
 
 `$1`, `$2`, … and `$ARGUMENTS` inside the body become numbered hint slots.
-Expanded command bodies are submitted as normal prompts. If `agent` names a
-built-in TUI profile, hya applies that profile before the turn starts.
+Expanded command bodies are submitted as normal prompts under the **session's
+current** agent and model. Frontmatter `agent` / `model` / `subtask` do not
+change that path.
 
 ### Inline config commands
 
@@ -1292,8 +1296,8 @@ keyed by command name:
 | --- | --- | --- |
 | `template` | yes | Prompt body (`$1` / `$ARGUMENTS` hint slots apply). |
 | `description` | no | List description. |
-| `agent` | no | Agent override. |
-| `model` | no | Model override. |
+| `agent` | no | Listed on `/api/command` only; **not** applied as a turn agent override (same as disk frontmatter). |
+| `model` | no | Listed on `/api/command` only; **not** applied as a turn model override. |
 | `subtask` | no | Optional boolean on the command API; **not** used to spawn a child session today. |
 
 These are upserted over the backend built-ins, so an entry named `review`
