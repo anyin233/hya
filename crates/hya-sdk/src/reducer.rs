@@ -641,10 +641,10 @@ mod tests {
 
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/turn_stream.jsonl"
+            "/../../tests/fixtures/turn_stream.jsonl"
         );
         let raw = std::fs::read_to_string(path)
-            .expect("fixtures/turn_stream.jsonl missing — see PLAN.md W2");
+            .expect("tests/fixtures/turn_stream.jsonl missing — see PLAN.md W2");
         let mut data = Data::default();
         let mut applied = 0usize;
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
