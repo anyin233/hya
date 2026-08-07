@@ -768,9 +768,7 @@ mod tests {
         );
         let team = store.team_for("ses_root").expect("scoped team");
         assert_eq!(
-            team.roster
-                .get("main/reviewer-3")
-                .map(|e| e.session.as_str()),
+            team.roster.get("main/reviewer-3").map(|e| e.session.as_str()),
             Some("ses_child"),
             "roster folded from hya.envelope team event"
         );
@@ -936,9 +934,10 @@ mod tests {
     fn replay_live_capture_builds_user_and_assistant_text() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/live_session_turn.jsonl"
+            "/../../tests/fixtures/live_session_turn.jsonl"
         );
-        let raw = std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
+        let raw =
+            std::fs::read_to_string(path).expect("tests/fixtures/live_session_turn.jsonl missing");
         let mut store = MessageStore::default();
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
             let event: GlobalEvent = serde_json::from_str(line).expect("parse fixture line");
