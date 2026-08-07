@@ -23,8 +23,13 @@ Run the standard gate before publishing code changes:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude hya-e2e
 ```
+
+`--exclude hya-e2e` matches CI and [Testing](testing/README.md): Track P spawns
+real backend processes and must not run multi-threaded under the default suite.
+CI also uses `--jobs 1` on that step; local runs may omit the job cap. Run
+process E2E separately (below).
 
 For docs-only changes, at least run a local Markdown link check and a scan for
 accidental references to repository-private process notes that do not belong in
