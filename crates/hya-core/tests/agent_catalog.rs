@@ -6,8 +6,7 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleError, BundleIdentity, BundleOrigin, HarnessAccess,
-    ModelPolicy, PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, AgentOrigin};
 use hya_proto::AgentName;
@@ -21,12 +20,9 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedBun
             version: "1.0.0".to_string(),
             publisher: "tests".to_string(),
         },
-        origin: BundleOrigin::Installed,
-        immutable: false,
         digest: format!("digest-{bundle_id}"),
-        agents: vec![PreparedAgent {
-            local_id: agent_id.to_string(),
-            stable_id: AgentName::new(agent_id),
+        agent: PreparedAgent {
+            id: AgentName::new(agent_id),
             description: Some(format!("{agent_id} description")),
             role: AgentRole::Subagent,
             color: None,
@@ -36,11 +32,10 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedBun
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: HarnessAccess::Full,
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
-        }],
+        },
         tools: Vec::new(),
         skills: Vec::new(),
         mcp: Vec::new(),

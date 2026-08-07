@@ -50,11 +50,16 @@ pub enum StoreError {
     /// Private package inspection cannot be activated through the registry.
     #[error("PRIVATE_ACTIVATION_UNSUPPORTED")]
     PrivateActivationUnsupported,
-    /// Attempt to install/uninstall a builtin immutable bundle id.
-    #[error("BUNDLE_IMMUTABLE: bundle {bundle_id} is builtin and immutable")]
-    BundleImmutable {
-        /// Builtin bundle id that cannot be mutated.
+    /// An install candidate claims an agent id reserved by a built-in agent.
+    #[error(
+        "BUNDLE_AGENT_ID_RESERVED: bundle {bundle_id} declares agent {agent_id}, \
+         which is a reserved built-in agent id"
+    )]
+    BundleAgentIdReserved {
+        /// Bundle that tried to claim the id.
         bundle_id: String,
+        /// Reserved built-in agent id.
+        agent_id: String,
     },
     /// Reclaim of an admission `operation_id` with a different request fingerprint.
     #[error("OPERATION_ID_CONFLICT: immutable request differs for {operation_id}")]

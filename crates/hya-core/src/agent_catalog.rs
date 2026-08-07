@@ -48,7 +48,7 @@ impl AgentOrigin<'_> {
 }
 
 /// Borrowed, origin-tagged view of one agent, whatever its origin.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentDefinition<'a> {
     /// Stable agent id used for selection, spawn graphs, and session binding.
     pub stable_id: &'a str,
@@ -99,13 +99,11 @@ impl AgentCatalog {
     /// Reject installed bundles that shadow a built-in agent id.
     fn validate(&self) -> Result<(), BundleError> {
         for bundle in self.bundles.bundles() {
-            for agent in &bundle.agents {
-                if is_builtin_id(agent.stable_id.as_str()) {
-                    return Err(BundleError::BuiltinAgentIdShadowed {
-                        bundle_id: bundle.identity.id.clone(),
-                        agent_id: agent.stable_id.as_str().to_string(),
-                    });
-                }
+            if is_builtin_id(bundle.agent.id.as_str()) {
+                return Err(BundleError::BuiltinAgentIdShadowed {
+                    bundle_id: bundle.identity.id.clone(),
+                    agent_id: bundle.agent.id.as_str().to_string(),
+                });
             }
         }
         Ok(())
@@ -123,6 +121,28 @@ impl AgentCatalog {
         builtin_digest()
     }
 
+    /// Domain-separated semantic identity of the whole agent surface.
+    ///
+    /// Composes the compiled-in roster digest with the installed-bundle
+    /// catalog's own identity. Returns `None` when installed bundles are
+    /// present but carry no verified provenance, which preserves the rule that
+    /// an unverified catalog has no identity.
+    #[must_use]
+    pub fn semantic_identity_v1(&self) -> Option<Vec<u8>> {
+        let bundle_identity = match self.bundles.semantic_identity_v1() {
+            Some(identity) => identity.to_vec(),
+            // A catalog with zero installed bundles has nothing to attest, so an
+            // empty section is correct rather than "unidentifiable".
+            None if self.bundles.bundles().is_empty() => Vec::new(),
+            None => return None,
+        };
+        let mut identity = Vec::new();
+        append_section(&mut identity, AGENT_CATALOG_IDENTITY_DOMAIN_V1);
+        append_section(&mut identity, builtin_digest());
+        append_section(&mut identity, &bundle_identity);
+        Some(identity)
+    }
+
     /// Resolve by stable id, or by a `bundle:{id}/agent/{local}` reference.
     ///
     /// Built-ins win on an exact id match. [`Self::validate`] has already
@@ -134,7 +154,7 @@ impl AgentCatalog {
         }
         let (bundle_id, agent) = self.bundles.resolve_agent_entry(reference)?;
         Some(AgentDefinition {
-            stable_id: agent.stable_id.as_str(),
+            stable_id: agent.id.as_str(),
             description: agent.description.as_deref(),
             role: agent.role,
             color: agent.color.as_deref(),
@@ -204,16 +224,35 @@ impl AgentCatalog {
         self.all_ordinary()
     }
 
+    /// Every agent in the catalog, including the reserved system agents.
+    ///
+    /// Reserved agents are never selectable or spawnable; listings that must
+    /// still show them (the Compat agent metadata surface marks them `hidden`)
+    /// use this instead of [`Self::selectable`].
+    #[must_use]
+    pub fn all(&self) -> Vec<AgentDefinition<'_>> {
+        let mut agents = self.all_ordinary();
+        for agent in BUILTIN_AGENTS.iter().filter(|agent| agent.system_reserved) {
+            agents.push(agent.definition());
+        }
+        agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
+        agents
+    }
+
+    /// Whether `id` is a reserved system agent that no ordinary agent may spawn.
+    #[must_use]
+    pub fn is_reserved(&self, id: &str) -> bool {
+        is_reserved(id)
+    }
+
     /// Non-reserved built-ins followed by every installed bundle agent.
     fn all_ordinary(&self) -> Vec<AgentDefinition<'_>> {
         let mut agents = ordinary_builtins()
             .map(BuiltinAgent::definition)
             .collect::<Vec<_>>();
         for bundle in self.bundles.bundles() {
-            for agent in &bundle.agents {
-                if let Some(definition) = self.resolve(agent.stable_id.as_str()) {
-                    agents.push(definition);
-                }
+            if let Some(definition) = self.resolve(bundle.agent.id.as_str()) {
+                agents.push(definition);
             }
         }
         agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
@@ -232,6 +271,15 @@ impl AgentCatalog {
                 })?;
         Ok(CallerScope::Bundle(&agent.can_spawn))
     }
+}
+
+/// Domain separator for [`AgentCatalog::semantic_identity_v1`].
+const AGENT_CATALOG_IDENTITY_DOMAIN_V1: &[u8] = b"hya.core.agent-catalog.semantic-identity/v1";
+
+/// Append one length-prefixed section, so concatenation stays unambiguous.
+fn append_section(bytes: &mut Vec<u8>, value: &[u8]) {
+    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(value);
 }
 
 /// What the caller is allowed to spawn, normalised across origins.

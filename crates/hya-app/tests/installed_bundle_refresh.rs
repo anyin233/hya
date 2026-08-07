@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_builtins, prepare_package};
+use hya_bundle::{BundleCatalog, BundleSource, SourceFile, prepare_package};
 use hya_core::{EventBus, RuntimeRegistry, SessionEngine};
 use hya_provider::ProviderRouter;
 use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, SessionStore};
@@ -32,19 +32,16 @@ fn builtin_source() -> BundleSource {
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                br#"kind: AgentBundle
 identity:
   id: hya/builtin-test
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: general
-    stable_id: general
-    role: main
-    prompt: prompts/general.md
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: general
+  role: main
+  prompt: prompts/general.md
+  spawn_lifecycle: transient
 "#,
             ),
             SourceFile::new("prompts/general.md", b"You are general.\n".as_slice()),
@@ -58,18 +55,15 @@ fn installed_source() -> BundleSource {
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/installed-test
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: installed
-    stable_id: installed-agent
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: installed-agent
+  role: main
+  spawn_lifecycle: transient
 ---
 You are the installed agent.
 "#,
@@ -79,7 +73,7 @@ You are the installed agent.
 
 #[tokio::test]
 async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
-    let prepared_builtins = prepare_builtins(vec![builtin_source()]).expect("prepare builtins");
+    let prepared_builtins = prepare_package(builtin_source()]).expect("prepare builtins");
     let builtins = prepared_builtins.bundles().to_vec();
     let catalog = Arc::new(
         BundleCatalog::from_verified_catalogs(&[&prepared_builtins])

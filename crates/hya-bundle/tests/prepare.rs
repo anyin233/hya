@@ -1,23 +1,20 @@
 //! Source preparation, digesting, and rehashing of bundles.
 
-use hya_bundle::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_builtins};
+use hya_bundle::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_package};
 use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: bool) -> BundleSource {
     let manifest = format!(
-        r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+        r#"kind: AgentBundle
 identity:
   id: {bundle_id}
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: lead
-    stable_id: {stable_id}
-    role: main
-    prompt: prompts/lead.md
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: {stable_id}
+  role: main
+  prompt: prompts/lead.md
+  spawn_lifecycle: transient
 "#,
     );
     let mut files = vec![
@@ -67,19 +64,15 @@ fn rehash_first_bundle(document: &mut serde_json::Value) -> Vec<u8> {
 }
 
 #[test]
-fn deterministic_prepare_is_independent_of_source_and_file_order() {
-    let forward = prepare_builtins(vec![
-        source("z-source", "hya/zeta", "zeta", false),
-        source("a-source", "hya/alpha", "alpha", false),
-    ]);
+fn deterministic_prepare_is_independent_of_source_file_order() {
+    // One package prepares one bundle, so only file order within the source can
+    // vary. The prepared bytes must not depend on it.
+    let forward = prepare_package(source("a-source", "hya/alpha", "alpha", false));
     let Ok(forward) = forward else {
         panic!("forward preparation failed: {forward:?}");
     };
 
-    let reverse = prepare_builtins(vec![
-        source("a-source", "hya/alpha", "alpha", true),
-        source("z-source", "hya/zeta", "zeta", true),
-    ]);
+    let reverse = prepare_package(source("a-source", "hya/alpha", "alpha", true));
     let Ok(reverse) = reverse else {
         panic!("reverse preparation failed: {reverse:?}");
     };
@@ -92,13 +85,13 @@ fn deterministic_prepare_is_independent_of_source_and_file_order() {
             .iter()
             .map(|entry| entry.bundle_id.as_str())
             .collect::<Vec<_>>(),
-        ["hya/alpha", "hya/zeta"]
+        ["hya/alpha"]
     );
 }
 
 #[test]
 fn prepared_catalog_round_trips_and_rejects_tampered_bytes() {
-    let prepared = prepare_builtins(vec![source("alpha-source", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha-source", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -128,7 +121,7 @@ fn prepared_catalog_round_trips_and_rejects_tampered_bytes() {
 
 #[test]
 fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -139,13 +132,13 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     let Some(bundle) = document["bundles"].get_mut(0) else {
         panic!("prepared bundle missing");
     };
-    let Some(agents) = bundle["agents"].as_array_mut() else {
-        panic!("prepared agents missing");
+    // Reintroduce a plural `agents` array: a decoder that still honoured it
+    // would silently accept a multi-agent bundle.
+    let agent = bundle["agent"].clone();
+    let Some(fields) = bundle.as_object_mut() else {
+        panic!("prepared bundle is not an object");
     };
-    let mut second = agents[0].clone();
-    second["local_id"] = serde_json::Value::String("aardvark".to_string());
-    second["stable_id"] = serde_json::Value::String("aardvark".to_string());
-    agents.push(second);
+    fields.insert("agents".to_string(), serde_json::json!([agent]));
 
     let mut digest_input = bundle.clone();
     let Some(fields) = digest_input.as_object_mut() else {
@@ -159,19 +152,25 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
     document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
-    document["index"][0]["stable_agent_ids"] = serde_json::json!(["alpha", "aardvark"]);
+    document["index"][0]["stable_agent_id"] = serde_json::json!("alpha");
 
     let bytes = serde_json::to_vec(&document);
     let Ok(bytes) = bytes else {
         panic!("prepared document encode failed: {bytes:?}");
     };
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
-    assert_eq!(result.err(), Some(BundleError::NonCanonicalPreparedCatalog));
+    let Some(BundleError::PreparedDecode { detail }) = result.err() else {
+        panic!("a reintroduced `agents` array must be rejected at decode");
+    };
+    assert!(
+        detail.contains("unknown field `agents`"),
+        "decode must name the plural field it refuses: {detail}"
+    );
 }
 
 #[test]
 fn prepared_decode_rejects_content_with_recomputed_outer_digests() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -179,7 +178,7 @@ fn prepared_decode_rejects_content_with_recomputed_outer_digests() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["agents"][0]["prompt"] =
+    document["bundles"][0]["agent"]["prompt"] =
         serde_json::Value::String("tampered prompt".to_string());
 
     let Some(bundle) = document["bundles"].get_mut(0) else {
@@ -214,7 +213,7 @@ fn prepared_decode_rejects_content_with_recomputed_outer_digests() {
 
 #[test]
 fn prepared_decode_rejects_noncanonical_provenance_paths() {
-    let prepared = prepare_builtins(vec![skill_source("resources/skills/docs.md")]);
+    let prepared = prepare_package(skill_source("resources/skills/docs.md"));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -251,36 +250,23 @@ fn prepared_decode_rejects_noncanonical_provenance_paths() {
 
 #[test]
 fn prepared_decode_rejects_noncanonical_resolved_reference_vectors() {
-    let manifest = br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+    let manifest = br#"kind: AgentBundle
 identity:
   id: hya/spawn-order
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: alpha
-    stable_id: alpha
-    role: subagent
-    spawn_lifecycle: transient
-    harness_access: full
-  - local_id: beta
-    stable_id: beta
-    role: subagent
-    spawn_lifecycle: transient
-    harness_access: full
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    can_spawn:
-      - beta
-      - alpha
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  can_spawn:
+    - beta
+    - alpha
 "#;
-    let prepared = prepare_builtins(vec![BundleSource::new(
+    let prepared = prepare_package(BundleSource::new(
         "spawn-order",
         vec![SourceFile::new("bundle.yaml", manifest.as_slice())],
-    )]);
+    ));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -288,7 +274,7 @@ agents:
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    let Some(can_spawn) = document["bundles"][0]["agents"][2]["can_spawn"].as_array_mut() else {
+    let Some(can_spawn) = document["bundles"][0]["agent"]["can_spawn"].as_array_mut() else {
         panic!("prepared can_spawn missing");
     };
     can_spawn.reverse();
@@ -300,7 +286,7 @@ agents:
 
 #[test]
 fn prepared_decode_revalidates_full_catalog_references() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -308,24 +294,26 @@ fn prepared_decode_revalidates_full_catalog_references() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["agents"][0]["can_spawn"] = serde_json::json!(["missing"]);
+    // Resource references are still revalidated on decode; `can_spawn` is not,
+    // because a cross-bundle target may legitimately not be installed.
+    document["bundles"][0]["agent"]["resource_view"]["allow"] =
+        serde_json::json!(["bundle:hya/alpha/skill/missing"]);
     let bytes = rehash_first_bundle(&mut document);
 
     let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
     assert_eq!(
         result.err(),
-        Some(BundleError::UnknownAgentReference {
+        Some(BundleError::UnknownResourceReference {
             bundle_id: "hya/alpha".to_string(),
-            agent_id: "alpha".to_string(),
-            reference: "missing".to_string(),
+            kind: "resource".to_string(),
+            reference: "bundle:hya/alpha/skill/missing".to_string(),
         })
     );
 }
 
 #[test]
 fn prepared_decode_rejects_unreferenced_unsupported_hook_local_id() {
-    let manifest = br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+    let manifest = br#"kind: AgentBundle
 identity:
   id: hya/prepared-hook
   version: 1.0.0
@@ -338,14 +326,12 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
 "#;
-    let prepared = prepare_builtins(vec![BundleSource::new(
+    let prepared = prepare_package(BundleSource::new(
         "prepared-hook",
         vec![
             SourceFile::new("bundle.yaml", manifest.as_slice()),
@@ -354,7 +340,7 @@ agents:
                 b"export const runtime = true;\n".as_slice(),
             ),
         ],
-    )]);
+    ));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -379,7 +365,7 @@ agents:
 
 #[test]
 fn prepared_decode_rejects_harness_prefixed_hook_refs_before_catalog_publication() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -397,7 +383,7 @@ fn prepared_decode_rejects_harness_prefixed_hook_refs_before_catalog_publication
         ("harness:hook", "resource"),
     ] {
         let mut document = document.clone();
-        document["bundles"][0]["agents"][0]["hook_refs"] = serde_json::json!([raw_ref]);
+        document["bundles"][0]["agent"]["hook_refs"] = serde_json::json!([raw_ref]);
         let bytes = rehash_first_bundle(&mut document);
         let result = PreparedCatalog::decode(&bytes, &digest(&bytes));
         assert_eq!(
@@ -413,7 +399,7 @@ fn prepared_decode_rejects_harness_prefixed_hook_refs_before_catalog_publication
 
 #[test]
 fn prepared_decode_rejects_harness_prefixed_hook_resource_view_reference() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -421,7 +407,7 @@ fn prepared_decode_rejects_harness_prefixed_hook_resource_view_reference() {
     let Ok(mut document) = document else {
         panic!("prepared document was not JSON: {document:?}");
     };
-    document["bundles"][0]["agents"][0]["resource_view"]["allow"] =
+    document["bundles"][0]["agent"]["resource_view"]["allow"] =
         serde_json::json!(["harness:hook/event"]);
 
     let bytes = rehash_first_bundle(&mut document);
@@ -438,7 +424,7 @@ fn prepared_decode_rejects_harness_prefixed_hook_resource_view_reference() {
 
 #[test]
 fn prepared_decode_rejects_unknown_bundle_collections() {
-    let prepared = prepare_builtins(vec![source("alpha", "hya/alpha", "alpha", false)]);
+    let prepared = prepare_package(source("alpha", "hya/alpha", "alpha", false));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -458,8 +444,7 @@ fn prepared_decode_rejects_unknown_bundle_collections() {
 
 fn skill_source(resource_path: &str) -> BundleSource {
     let manifest = format!(
-        r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+        r#"kind: AgentBundle
 identity:
   id: hya/skills
   version: 1.0.0
@@ -468,12 +453,10 @@ resources:
   skills:
     - id: docs
       path: {resource_path}
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -487,11 +470,11 @@ agents:
 
 #[test]
 fn normalized_source_paths_produce_identical_prepared_content() {
-    let canonical = prepare_builtins(vec![skill_source("resources/skills/docs.md")]);
+    let canonical = prepare_package(skill_source("resources/skills/docs.md"));
     let Ok(canonical) = canonical else {
         panic!("canonical source failed: {canonical:?}");
     };
-    let dotted = prepare_builtins(vec![skill_source("resources/./skills/docs.md")]);
+    let dotted = prepare_package(skill_source("resources/./skills/docs.md"));
     let Ok(dotted) = dotted else {
         panic!("dotted source failed: {dotted:?}");
     };
@@ -511,13 +494,13 @@ fn build_time_directory_reader_feeds_the_same_preparer() {
     let Ok(source) = source else {
         panic!("directory read failed: {source:?}");
     };
-    let prepared = prepare_builtins(vec![source]);
+    let prepared = prepare_package(source);
     let Ok(prepared) = prepared else {
         panic!("directory preparation failed: {prepared:?}");
     };
     assert_eq!(prepared.index()[0].bundle_id, "hya/directory-fixture");
     assert_eq!(
-        prepared.bundles()[0].agents[0].prompt.as_deref(),
+        prepared.bundles()[0].agent.prompt.as_deref(),
         Some("You are the directory fixture.")
     );
 }

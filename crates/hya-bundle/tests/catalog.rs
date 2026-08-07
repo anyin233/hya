@@ -2,14 +2,13 @@
 
 use hya_bundle::{
     BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, PreparedResource,
-    SourceFile, prepare_builtins, prepare_package,
+    SourceFile, prepare_package,
 };
 use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_agent_id: &str, content: &str) -> BundleSource {
     let manifest = format!(
-        r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+        r#"kind: AgentBundle
 identity:
   id: {bundle_id}
   version: 1.0.0
@@ -18,12 +17,10 @@ resources:
   skills:
     - id: docs
       path: resources/skills/docs.md
-agents:
-  - local_id: lead
-    stable_id: {stable_agent_id}
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: {stable_agent_id}
+  role: main
+  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -41,56 +38,20 @@ fn installed_duplicate_package_source(
     stable_agent_id: &str,
 ) -> BundleSource {
     let manifest = format!(
-        r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+        r#"kind: AgentBundle
 identity:
   id: hya/duplicate-package
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: {local_agent_id}
-    stable_id: {stable_agent_id}
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: {stable_agent_id}
+  role: main
+  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
         root,
         vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
-    )
-}
-
-fn spawn_graph_source() -> BundleSource {
-    BundleSource::new(
-        "spawn-graph",
-        vec![SourceFile::new(
-            "bundle.yaml",
-            br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
-identity:
-  id: hya/spawn-graph
-  version: 1.0.0
-  publisher: hya
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    can_spawn: [worker]
-  - local_id: worker
-    stable_id: worker
-    role: subagent
-    spawn_lifecycle: transient
-    harness_access: full
-  - local_id: compaction
-    stable_id: compaction
-    role: subagent
-    spawn_lifecycle: transient
-    harness_access: full
-"#,
-        )],
     )
 }
 
@@ -133,12 +94,12 @@ fn zero_bundle_prepared_document_yields_an_empty_catalog() {
 
 #[test]
 fn only_verified_prepared_catalogs_supply_catalog_semantic_identity() {
-    let prepared = prepare_builtins(vec![source(
+    let prepared = prepare_package(source(
         "catalog-semantic-identity",
         "hya/catalog-semantic-identity",
         "catalog-semantic-identity",
         "catalog docs",
-    )]);
+    ));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -169,12 +130,12 @@ fn only_verified_prepared_catalogs_supply_catalog_semantic_identity() {
 
 #[test]
 fn verified_catalog_merge_matches_flat_verified_construction() {
-    let builtins = prepare_builtins(vec![source(
+    let builtins = prepare_package(source(
         "catalog-merge-builtin",
         "hya/catalog-merge-builtin",
         "catalog-merge-builtin",
         "builtin docs",
-    )]);
+    ));
     let Ok(builtins) = builtins else {
         panic!("builtin preparation failed: {builtins:?}");
     };
@@ -211,12 +172,12 @@ fn verified_catalog_merge_matches_flat_verified_construction() {
 
 #[test]
 fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
-    let prepared = prepare_builtins(vec![source(
+    let prepared = prepare_package(source(
         "catalog-mcp",
         "hya/catalog-mcp",
         "catalog-mcp",
         "catalog docs",
-    )]);
+    ));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -245,13 +206,12 @@ fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
 
 #[test]
 fn catalog_rejects_unsupported_hook_local_id_from_prepared_data() {
-    let prepared = prepare_builtins(vec![BundleSource::new(
+    let prepared = prepare_package(BundleSource::new(
         "catalog-hook",
         vec![
             SourceFile::new(
                 "bundle.yaml",
-                br#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                br#"kind: AgentBundle
 identity:
   id: hya/catalog-hook
   version: 1.0.0
@@ -264,20 +224,18 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
-  - local_id: lead
-    stable_id: catalog-hook
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    hook_refs:
-      - bundle:hya/catalog-hook/hook/event
+agent:
+  id: catalog-hook
+  role: main
+  spawn_lifecycle: transient
+  hook_refs:
+    - bundle:hya/catalog-hook/hook/event
 "#
                 .as_slice(),
             ),
             SourceFile::new("extensions/runtime.js", b"export default {};\n"),
         ],
-    )]);
+    ));
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
@@ -331,14 +289,16 @@ fn catalog_rejects_duplicate_bundle_identity_with_disjoint_exports() {
 
 #[test]
 fn bundle_local_short_name_wins_and_qualified_name_is_exact() {
-    let prepared = prepare_builtins(vec![
-        source("alpha", "hya/alpha", "alpha", "alpha docs"),
-        source("beta", "hya/beta", "beta", "beta docs"),
-    ]);
-    let Ok(prepared) = prepared else {
-        panic!("preparation failed: {prepared:?}");
+    let alpha = prepare_package(source("alpha", "hya/alpha", "alpha", "alpha docs"));
+    let Ok(alpha) = alpha else {
+        panic!("alpha preparation failed: {alpha:?}");
     };
-    let catalog = BundleCatalog::from_prepared(prepared.bundles());
+    let beta = prepare_package(source("beta", "hya/beta", "beta", "beta docs"));
+    let Ok(beta) = beta else {
+        panic!("beta preparation failed: {beta:?}");
+    };
+    let bundles = [alpha.bundles(), beta.bundles()].concat();
+    let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("catalog construction failed: {catalog:?}");
     };
@@ -360,28 +320,6 @@ fn bundle_local_short_name_wins_and_qualified_name_is_exact() {
 }
 
 #[test]
-fn reserved_system_agent_is_not_an_ordinary_spawn_target() {
-    let prepared = prepare_builtins(vec![spawn_graph_source()]);
-    let Ok(prepared) = prepared else {
-        panic!("preparation failed: {prepared:?}");
-    };
-    let catalog = BundleCatalog::from_prepared(prepared.bundles());
-    let Ok(catalog) = catalog else {
-        panic!("catalog construction failed: {catalog:?}");
-    };
-
-    assert!(catalog.resolve_spawn("lead", "worker").is_ok());
-    assert!(matches!(
-        catalog.resolve_spawn("lead", "compaction"),
-        Err(hya_bundle::BundleError::AgentSpawnNotAllowed { .. })
-    ));
-    assert!(
-        catalog.resolve_agent("compaction").is_some(),
-        "the fixed Harness system lookup must remain exact and available"
-    );
-}
-
-#[test]
 fn bundle_id_with_kind_segments_resolves_structurally() {
     let bundle_id = "hya/tool/skill/mcp-nest";
     let source = BundleSource::new(
@@ -390,8 +328,7 @@ fn bundle_id_with_kind_segments_resolves_structurally() {
             SourceFile::new(
                 "bundle.yaml",
                 format!(
-                    r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+                    r#"kind: AgentBundle
 identity:
   id: {bundle_id}
   version: 1.0.0
@@ -400,12 +337,10 @@ resources:
   skills:
     - id: docs
       path: resources/skills/docs.md
-agents:
-  - local_id: lead
-    stable_id: nested-lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: nested-lead
+  role: main
+  spawn_lifecycle: transient
 "#
                 )
                 .into_bytes(),
@@ -413,7 +348,7 @@ agents:
             SourceFile::new("resources/skills/docs.md", b"nested docs"),
         ],
     );
-    let Ok(prepared) = prepare_builtins(vec![source]) else {
+    let Ok(prepared) = prepare_package(source) else {
         panic!("prepare nested bundle id");
     };
     let Ok(catalog) = BundleCatalog::from_prepared(prepared.bundles()) else {

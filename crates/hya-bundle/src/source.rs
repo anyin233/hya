@@ -7,11 +7,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 use serde_json::Value;
 
 use crate::BundleError;
 use crate::model::{
-    AgentRole, BundleIdentity, HarnessAccess, ModelPolicy, ResourceView, SpawnLifecycle,
+    AgentRole, BundleIdentity, ModelPolicy, ResourceView, SpawnLifecycle,
 };
 
 /// One logical file in a bundle source: relative path plus raw bytes.
@@ -123,21 +124,27 @@ fn collect_directory(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Resul
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceManifest {
-    pub api_version: String,
     pub kind: String,
     pub identity: BundleIdentity,
     #[serde(default)]
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
-    pub agents: Vec<SourceAgent>,
+    /// The one agent this bundle defines.
+    pub agent: SourceAgent,
+    /// Keys removed with the single-agent format. Captured only so prepare can
+    /// name them; `deny_unknown_fields` alone gives an unhelpful serde message.
+    #[serde(default)]
+    pub api_version: Option<IgnoredAny>,
+    #[serde(default)]
+    pub agents: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceAgent {
-    pub local_id: String,
-    pub stable_id: String,
+    /// Stable agent id.
+    pub id: String,
     pub description: Option<String>,
     pub role: AgentRole,
     pub color: Option<String>,
@@ -148,13 +155,15 @@ pub(crate) struct SourceAgent {
     #[serde(default)]
     pub spawn_lifecycle: SpawnLifecycle,
     pub resource_profile: Option<Value>,
-    pub harness_access: HarnessAccess,
     #[serde(default)]
     pub resource_view: ResourceView,
     #[serde(default)]
     pub can_spawn: Vec<String>,
     #[serde(default)]
     pub hook_refs: Vec<String>,
+    /// Removed with the single-agent format; the tool plane is host-controlled.
+    #[serde(default)]
+    pub harness_access: Option<IgnoredAny>,
 }
 
 #[derive(Debug, Default, Deserialize)]

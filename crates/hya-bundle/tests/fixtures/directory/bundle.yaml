@@ -1,13 +1,10 @@
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/directory-fixture
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: lead
-    stable_id: directory-lead
-    role: main
-    prompt: prompts/lead.md
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: directory-lead
+  role: main
+  prompt: prompts/lead.md
+  spawn_lifecycle: transient

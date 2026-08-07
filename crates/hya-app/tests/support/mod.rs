@@ -62,7 +62,7 @@ impl Provider for IdentityFakeProvider {
 /// sequence `can_spawn: [a, b]`), so some ids parse successfully into a
 /// *different* value than the caller wrote. Those are the dangerous ones —
 /// they produce a fixture that silently disagrees with its own arguments.
-/// Measured against the real `hya_bundle::prepare_builtins` path:
+/// Measured against the real `hya_bundle::prepare_package` path:
 ///
 /// - `,` splits the `can_spawn` flow sequence: `can_spawn: [alpha,beta]`
 ///   silently yields two spawn edges (`alpha`, `beta`).
@@ -76,7 +76,7 @@ impl Provider for IdentityFakeProvider {
 ///
 /// Deliberately **not** guarded: YAML 1.1 bareword booleans (`no`, `on`, `y`,
 /// `off`, `yes`) and the other implicit-tag barewords (`null`, `~`, `123`,
-/// `.inf`). They were tested against `prepare_builtins` and every one
+/// `.inf`). They were tested against `prepare_package` and every one
 /// round-trips exactly — `serde_norway` resolves only `true|True|TRUE|
 /// false|False|FALSE` as booleans, and these fields deserialize as raw
 /// `String`s anyway. A guard against that list would catch nothing while
@@ -103,7 +103,7 @@ pub fn test_runtime(
     agents: &[(&str, AgentRole, &[&str])],
 ) -> Arc<RuntimeRegistry> {
     let mut manifest = String::from(
-        "api_version: hya.agent-bundle/v1\nkind: AgentBundle\nidentity:\n  id: hya/app-tests\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n",
+        "kind: AgentBundle\nidentity:\n  id: hya/app-tests\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n",
     );
     let mut files = Vec::with_capacity(agents.len() + 1);
     for (stable_id, role, can_spawn) in agents {
@@ -129,7 +129,7 @@ pub fn test_runtime(
         ));
     }
     files.push(SourceFile::new("bundle.yaml", manifest.into_bytes()));
-    let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])
+    let prepared = hya_bundle::prepare_package(BundleSource::new("hya/app-tests", files))
         .expect("test bundle must prepare");
     let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
         .expect("test bundle must retain verified identity");

@@ -409,7 +409,6 @@ async fn bundle_info_lists_prepared_static_resources() -> Result<(), Box<dyn std
             hya_bundle::SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/resource-info
@@ -419,12 +418,10 @@ resources:
   skills:
     - id: handbook
       path: skills/handbook.md
-agents:
-  - local_id: lead
-    stable_id: resource-info-lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: none
+agent:
+  id: resource-info-lead
+  role: main
+  spawn_lifecycle: transient
 ---
 You are the resource info lead.
 "#,
@@ -518,7 +515,7 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
     };
     assert_eq!(bundle.identity.id, "hya/archive-js");
     assert_eq!(bundle.agents.len(), 1);
-    assert_eq!(bundle.agents[0].stable_id.as_str(), "archive-js-lead");
+    assert_eq!(bundle.agent.stable_id.as_str(), "archive-js-lead");
     assert_eq!(bundle.tools.len(), 1);
     assert_eq!(bundle.hooks.len(), 1);
     assert_eq!(bundle.extensions.len(), 1);

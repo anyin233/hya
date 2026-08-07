@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::PreparedAgent;
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, SessionId,
     ToolCallId, ToolSchema, now_millis,
@@ -20,6 +19,7 @@ use serde_json::Value;
 #[cfg(test)]
 use tokio::sync::Notify;
 
+use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
 use crate::error::CoreError;
@@ -768,11 +768,11 @@ fn agent_from_definition(
                 agent_id: stable_id.to_string(),
             })?;
     let mut effective = agent.clone();
-    effective.name = definition.stable_id.clone();
+    effective.name = AgentName::new(definition.stable_id);
     effective.workdir = binding.workdir().to_path_buf();
-    // Bundle prompt Some replaces only agent_base; None preserves Harness base.
-    if let Some(prompt) = definition.prompt.as_ref() {
-        effective.system_prompt = prompt.clone();
+    // Agent prompt Some replaces only agent_base; None preserves Harness base.
+    if let Some(prompt) = definition.prompt {
+        effective.system_prompt = prompt.to_string();
     }
     if let Some(reasoning) = definition
         .model_policy
@@ -809,7 +809,7 @@ pub(crate) fn agent_with_guidance_layer(mut agent: AgentSpec, guidance: Option<&
 fn fixed_system_agent(
     binding: &TurnBinding,
     agent: FixedSystemAgent,
-) -> Result<&PreparedAgent, CoreError> {
+) -> Result<AgentDefinition<'_>, CoreError> {
     let stable_id = agent.stable_id();
     binding
         .resolve_agent(stable_id)
@@ -822,9 +822,9 @@ fn fixed_system_agent(
 ///
 /// Prepared prompt and explicit reasoning apply when present. Absent Bundle
 /// model leaves `model` unset so the caller/summarizer fallback is preserved.
-pub(crate) fn summarize_options_from_definition(definition: &PreparedAgent) -> SummarizeOptions {
+pub(crate) fn summarize_options_from_definition(definition: &AgentDefinition<'_>) -> SummarizeOptions {
     SummarizeOptions {
-        system: definition.prompt.clone(),
+        system: definition.prompt.map(str::to_string),
         model: definition.model_policy.model.as_deref().map(ModelRef::new),
         reasoning: definition
             .model_policy
@@ -856,18 +856,18 @@ pub(crate) fn agent_with_bound_skills(
 fn agent_roster(binding: &TurnBinding, caller: &str) -> Result<Arc<[AgentDef]>, CoreError> {
     Ok(binding
         .spawnable_agents(caller)?
-        .into_iter()
-        .map(agent_definition)
+        .iter()
+        .map(agent_def)
         .collect::<Vec<_>>()
         .into())
 }
 
-fn agent_definition(agent: &PreparedAgent) -> AgentDef {
+fn agent_def(agent: &AgentDefinition<'_>) -> AgentDef {
     AgentDef {
-        name: agent.stable_id.as_str().to_string(),
-        description: agent.description.clone(),
+        name: agent.stable_id.to_string(),
+        description: agent.description.map(str::to_string),
         category: agent.model_policy.category.clone(),
-        mode: agent.role.selector_mode().to_string(),
+        mode: agent.selector_mode().to_string(),
     }
 }
 

@@ -1,11 +1,11 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! Fixed Harness system agents (Commit 2): exact stable-ID lookup for
-//! `compaction` / `title` / `summary` from the same TurnBinding catalog.
+//! Fixed Harness system agents: exact stable-ID lookup for `compaction` /
+//! `title` / `summary` from the same TurnBinding catalog.
 //!
-//! These are not agent spawn. Ordinary can_spawn/roster must not list them,
-//! and missing definitions must fail closed with AGENT_DEFINITION_MISSING
-//! before any provider call.
+//! These are compiled-in built-ins, so they are always resolvable and their
+//! prompts are fixed. They are not agent spawn: ordinary can_spawn/roster must
+//! never list them, and their prompts must beat any root or hardcoded prompt.
 
 mod support;
 
@@ -13,25 +13,28 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
-use hya_core::{
+use hya_core::{AgentCatalog, 
     AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer, RuntimeRegistry,
     SessionEngine, Summarizer,
 };
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, PartId, Role};
 use hya_provider::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, Provider, ProviderError,
-    ProviderRouter, ReasoningEffort,
+    ProviderRouter,
 };
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
-const TITLE_PROMPT: &str = "FIXED_TITLE_BUNDLE_PROMPT_MARKER";
-const COMPACTION_PROMPT: &str = "FIXED_COMPACTION_BUNDLE_PROMPT_MARKER";
-const SUMMARY_PROMPT: &str = "FIXED_SUMMARY_BUNDLE_PROMPT_MARKER";
+/// Compiled-in prompt for a reserved system agent.
+fn builtin_prompt(id: &str) -> &'static str {
+    hya_core::builtin_agent(id)
+        .and_then(|agent| agent.prompt)
+        .unwrap_or_else(|| panic!("builtin `{id}` must carry a prompt"))
+}
 const ROOT_PROMPT: &str = "ROOT_AGENT_SYSTEM_PROMPT_MUST_NOT_BE_COMPACTION";
 const HARDCODED_TITLE: &str =
     "You are a title generator. Output only a concise single-line conversation title";
@@ -192,56 +195,56 @@ impl AgentFixture {
     }
 }
 
-fn catalog(agents: &[AgentFixture]) -> Arc<BundleCatalog> {
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/fixed-system-agents".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: agents
-            .iter()
-            .map(|agent| PreparedAgent {
-                local_id: agent.stable_id.clone(),
-                stable_id: AgentName::new(&agent.stable_id),
-                description: None,
-                role: agent.role,
-                color: None,
-                prompt: agent.prompt.clone(),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy {
-                    model: agent.model.clone(),
-                    category: None,
-                    reasoning: agent.reasoning.clone(),
-                },
-                workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
-                resource_view: ResourceView::default(),
-                can_spawn: agent
-                    .can_spawn
-                    .iter()
-                    .map(|id| AgentName::new(id.as_str()))
-                    .collect(),
-                hook_refs: Vec::new(),
-            })
-            .collect(),
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    Arc::new(BundleCatalog::from_prepared(&[bundle]).expect("valid fixed-system catalog"))
+fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
+    // A bundle defines one agent, so each fixture agent becomes its own bundle.
+    let bundles = agents
+        .iter()
+        // Built-in ids are compiled in; a fixture asking for one just gets it.
+        .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
+        .map(|agent| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/fixed-system-{}", agent.stable_id),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{}", agent.stable_id),
+            agent: PreparedAgent {
+            id: AgentName::new(&agent.stable_id),
+            description: None,
+            role: agent.role,
+            color: None,
+            prompt: agent.prompt.clone(),
+            prompt_source: None,
+            prompt_digest: None,
+            model_policy: ModelPolicy {
+                model: agent.model.clone(),
+                category: None,
+                reasoning: agent.reasoning.clone(),
+            },
+            workdir: None,
+            spawn_lifecycle: SpawnLifecycle::Transient,
+            resource_view: ResourceView::default(),
+            can_spawn: agent
+                .can_spawn
+                .iter()
+                .map(|id| AgentName::new(id.as_str()))
+                .collect(),
+            hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
 async fn engine_with(
-    catalog: Arc<BundleCatalog>,
+    catalog: Arc<AgentCatalog>,
     provider: Arc<dyn Provider>,
     with_summarizer: bool,
 ) -> SessionEngine {
@@ -279,7 +282,7 @@ async fn engine_with(
 }
 
 async fn engine_with_capture(
-    catalog: Arc<BundleCatalog>,
+    catalog: Arc<AgentCatalog>,
     provider: Arc<CaptureProvider>,
     with_summarizer: bool,
 ) -> SessionEngine {
@@ -305,9 +308,6 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
     let engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build").can_spawn(&["general"]),
-            AgentFixture::system("title", TITLE_PROMPT)
-                .model("title-bundle-model")
-                .reasoning("high"),
             AgentFixture::main("general"),
         ]),
         provider.clone(),
@@ -339,7 +339,7 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
     let req = &requests[0];
     assert_eq!(
         req.system.as_deref(),
-        Some(TITLE_PROMPT),
+        Some(builtin_prompt("title")),
         "title must send prepared Bundle system prompt, not hardcoded TITLE_SYSTEM_PROMPT"
     );
     assert!(
@@ -350,8 +350,12 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
         "hardcoded title system prompt must not be used: {:?}",
         req.system
     );
-    assert_eq!(req.model.as_str(), "title-bundle-model");
-    assert_eq!(req.reasoning, Some(ReasoningEffort::High));
+    assert_eq!(
+        req.model.as_str(),
+        "session-fallback-model",
+        "the builtin title agent declares no model, so the caller fallback stands"
+    );
+    assert_eq!(req.reasoning, None);
     assert!(req.tools.is_empty(), "title remains no-tools");
     assert_eq!(req.messages.len(), 1);
 }
@@ -365,7 +369,6 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
     let engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("title", TITLE_PROMPT),
         ]),
         provider.clone(),
         false,
@@ -397,7 +400,7 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
         "session-fallback-model",
         "absent Bundle model must preserve caller/session fallback"
     );
-    assert_eq!(requests[0].system.as_deref(), Some(TITLE_PROMPT));
+    assert_eq!(requests[0].system.as_deref(), Some(builtin_prompt("title")));
     assert_eq!(requests[0].reasoning, None);
 }
 
@@ -410,9 +413,6 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     let engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build").can_spawn(&["general"]),
-            AgentFixture::system("compaction", COMPACTION_PROMPT)
-                .model("compaction-bundle-model")
-                .reasoning("medium"),
             AgentFixture::main("general"),
         ]),
         provider.clone(),
@@ -449,7 +449,7 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     let requests = provider.requests.lock().unwrap();
     let compaction = requests
         .iter()
-        .find(|req| req.system.as_deref() == Some(COMPACTION_PROMPT))
+        .find(|req| req.system.as_deref() == Some(builtin_prompt("compaction")))
         .expect("compaction completion must use prepared Bundle system prompt");
     assert!(
         !compaction
@@ -464,8 +464,11 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
         Some(ROOT_PROMPT),
         "compaction must not reuse the root agent system prompt"
     );
-    assert_eq!(compaction.model.as_str(), "compaction-bundle-model");
-    assert_eq!(compaction.reasoning, Some(ReasoningEffort::Medium));
+    assert_eq!(compaction.model.as_str(), "summarizer-fallback-model");
+    assert_eq!(
+        compaction.reasoning, None,
+        "a builtin system agent declares no reasoning effort"
+    );
     assert!(compaction.tools.is_empty(), "compaction remains no-tools");
 }
 
@@ -478,9 +481,6 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
     let engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("summary", SUMMARY_PROMPT)
-                .model("summary-bundle-model")
-                .reasoning("low"),
         ]),
         provider.clone(),
         true,
@@ -508,148 +508,13 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 1, "exactly one summary completion");
     let req = &requests[0];
-    assert_eq!(req.system.as_deref(), Some(SUMMARY_PROMPT));
-    assert_eq!(req.model.as_str(), "summary-bundle-model");
-    assert_eq!(req.reasoning, Some(ReasoningEffort::Low));
+    assert_eq!(req.system.as_deref(), Some(builtin_prompt("summary")));
+    assert_eq!(req.model.as_str(), "summarizer-fallback-model");
+    assert_eq!(
+        req.reasoning, None,
+        "a builtin system agent declares no reasoning effort"
+    );
     assert!(req.tools.is_empty());
-}
-
-#[tokio::test]
-async fn missing_title_definition_fails_before_provider_without_hardcoded_fallback() {
-    let workdir = support::TestDir::new("fixed-title-missing");
-    let provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
-        provider.clone(),
-        false,
-    )
-    .await;
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap();
-    engine
-        .admit_user_prompt(session, "needs a title".to_string())
-        .await
-        .unwrap();
-
-    let err = engine
-        .auto_title_session(session, &ModelRef::new("session-model"))
-        .await
-        .expect_err("missing title must fail closed");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains("title"),
-        "error should name the fixed id, got {err}"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "must not call provider or fall back to hardcoded title prompt"
-    );
-}
-
-#[tokio::test]
-async fn missing_compaction_definition_fails_before_provider_without_root_or_hardcoded_fallback() {
-    let workdir = support::TestDir::new("fixed-compaction-missing");
-    let provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
-        provider.clone(),
-        true,
-    )
-    .await;
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap();
-    for i in 0..4 {
-        engine
-            .admit_user_prompt(session, format!("detail {i} {}", "y".repeat(40)))
-            .await
-            .unwrap();
-    }
-
-    let err = engine
-        .run_turn(
-            session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .expect_err("missing compaction must fail closed when compaction runs");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains("compaction"),
-        "error should name the fixed id, got {err}"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "must not call provider with hardcoded compaction/root prompts"
-    );
-}
-
-#[tokio::test]
-async fn missing_summary_definition_fails_before_provider_without_hardcoded_fallback() {
-    let workdir = support::TestDir::new("fixed-summary-missing");
-    let provider = Arc::new(CaptureProvider {
-        requests: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
-        provider.clone(),
-        true,
-    )
-    .await;
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap();
-    engine
-        .admit_user_prompt(session, "summarize me".to_string())
-        .await
-        .unwrap();
-
-    let err = engine
-        .summarize_session(session)
-        .await
-        .expect_err("missing summary must fail closed");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains("summary"),
-        "error should name the fixed id, got {err}"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "must not call provider or fall back to hardcoded summary prompt"
-    );
 }
 
 #[tokio::test]
@@ -663,9 +528,6 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
             AgentFixture::main("build").can_spawn(&["general", "explore"]),
             AgentFixture::main("general"),
             AgentFixture::main("explore"),
-            AgentFixture::system("compaction", COMPACTION_PROMPT),
-            AgentFixture::system("title", TITLE_PROMPT),
-            AgentFixture::system("summary", SUMMARY_PROMPT),
         ]),
         provider,
         false,
@@ -677,7 +539,8 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
         .agent_roster_for_binding(&binding, "build")
         .expect("ordinary roster");
     let names: Vec<&str> = roster.iter().map(|agent| agent.name.as_str()).collect();
-    assert_eq!(names.len(), 2, "ordinary roster: {names:?}");
+    // Built-ins spawn the whole ordinary set, so the roster is every
+    // non-reserved agent rather than a hand-listed pair.
     assert!(names.contains(&"explore") && names.contains(&"general"));
     for reserved in ["compaction", "title", "summary"] {
         assert!(
@@ -708,9 +571,6 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     let engine = engine_with(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("compaction", COMPACTION_PROMPT)
-                .model("compaction-bundle-model")
-                .reasoning("medium"),
         ]),
         provider.clone() as Arc<dyn Provider>,
         // Summarizer present only as unused fallback; native compact returns Some.
@@ -752,7 +612,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     let call = &compact_calls[0];
     assert_eq!(
         call.system.as_deref(),
-        Some(COMPACTION_PROMPT),
+        Some(builtin_prompt("compaction")),
         "native compact must exact-resolve the fixed compaction prompt, not root"
     );
     assert_ne!(
@@ -770,63 +630,8 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     assert!(
         stream_requests
             .iter()
-            .all(|req| req.system.as_deref() != Some(COMPACTION_PROMPT)),
+            .all(|req| req.system.as_deref() != Some(builtin_prompt("compaction"))),
         "native path must not also invoke ModelSummarizer with compaction prompt"
-    );
-}
-
-#[tokio::test]
-async fn missing_compaction_definition_fails_before_native_compact_responses() {
-    let workdir = support::TestDir::new("fixed-native-compact-missing");
-    let provider = Arc::new(NativeCompactProvider {
-        requests: Mutex::new(Vec::new()),
-        compact_calls: Mutex::new(Vec::new()),
-    });
-    let engine = engine_with(
-        catalog(&[AgentFixture::main("build")]),
-        provider.clone() as Arc<dyn Provider>,
-        true,
-    )
-    .await;
-    let session = engine
-        .create(CreateSession {
-            parent: None,
-            agent: AgentName::new("build"),
-            model: ModelRef::new("session-model"),
-            workdir: workdir.path().to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap();
-    for i in 0..4 {
-        engine
-            .admit_user_prompt(session, format!("detail {i} {}", "y".repeat(40)))
-            .await
-            .unwrap();
-    }
-
-    let err = engine
-        .run_turn(
-            session,
-            &base_agent(workdir.path()),
-            CancellationToken::new(),
-        )
-        .await
-        .expect_err("missing compaction must fail closed before native compact");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains("compaction"),
-        "error should name the fixed id, got {err}"
-    );
-    assert!(
-        provider.compact_calls.lock().unwrap().is_empty(),
-        "must not call compact_responses when compaction definition is missing"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "must not stream or fall back after missing fixed compaction definition"
     );
 }
 
@@ -895,7 +700,6 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let title_engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("title", TITLE_PROMPT),
         ]),
         title_provider.clone(),
         false,
@@ -922,7 +726,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = title_provider.requests.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let system = reqs[0].system.as_deref().unwrap_or("");
-        assert_eq!(system, TITLE_PROMPT);
+        assert_eq!(system, builtin_prompt("title"));
         assert!(
             !system.contains(ORDINARY_GUIDANCE_MARKER),
             "title must not include ordinary project guidance: {system}"
@@ -936,7 +740,6 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let summary_engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("summary", SUMMARY_PROMPT),
         ]),
         summary_provider.clone(),
         true,
@@ -963,7 +766,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = summary_provider.requests.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let system = reqs[0].system.as_deref().unwrap_or("");
-        assert_eq!(system, SUMMARY_PROMPT);
+        assert_eq!(system, builtin_prompt("summary"));
         assert!(
             !system.contains(ORDINARY_GUIDANCE_MARKER),
             "summary must not include ordinary project guidance: {system}"
@@ -977,7 +780,6 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let compaction_engine = engine_with_capture(
         catalog(&[
             AgentFixture::main("build"),
-            AgentFixture::system("compaction", COMPACTION_PROMPT).model("compaction-bundle-model"),
         ]),
         compaction_provider.clone(),
         true,
@@ -1013,7 +815,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = compaction_provider.requests.lock().unwrap();
         let compaction = reqs
             .iter()
-            .find(|r| r.system.as_deref() == Some(COMPACTION_PROMPT))
+            .find(|r| r.system.as_deref() == Some(builtin_prompt("compaction")))
             .expect("compaction completion must use fixed Bundle prompt");
         let system = compaction.system.as_deref().unwrap_or("");
         assert!(
@@ -1021,8 +823,34 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             "compaction must not include ordinary project guidance: {system}"
         );
         assert!(
-            !system.contains(ROOT_PROMPT) || system == COMPACTION_PROMPT,
+            !system.contains(ROOT_PROMPT) || system == builtin_prompt("compaction"),
             "compaction must stay on fixed Bundle prompt only"
         );
+    }
+}
+
+/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
+    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
+}
+
+#[tokio::test]
+async fn reserved_system_agents_are_always_resolvable_because_they_are_compiled_in() {
+    // The old "missing definition fails closed" tests are unreachable now: a
+    // reserved system agent cannot be absent, so the invariant is presence.
+    let workdir = support::TestDir::new("fixed-always-present");
+    let provider = Arc::new(CaptureProvider {
+        requests: Mutex::new(Vec::new()),
+    });
+    let engine = engine_with_capture(catalog(&[]), provider, false).await;
+    let binding = engine.bind_runtime(workdir.path()).unwrap();
+
+    for reserved in ["compaction", "title", "summary"] {
+        let definition = binding
+            .resolve_agent(reserved)
+            .unwrap_or_else(|| panic!("`{reserved}` must always resolve"));
+        assert!(definition.origin.is_builtin());
+        assert_eq!(definition.prompt, Some(builtin_prompt(reserved)));
     }
 }

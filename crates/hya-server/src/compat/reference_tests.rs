@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
@@ -35,8 +35,7 @@ fn tempdir() -> PathBuf {
 
 fn prepared(stable_id: &str, role: AgentRole) -> PreparedAgent {
     PreparedAgent {
-        local_id: stable_id.to_string(),
-        stable_id: AgentName::new(stable_id),
+        id: AgentName::new(stable_id),
         description: None,
         role,
         color: None,
@@ -46,7 +45,6 @@ fn prepared(stable_id: &str, role: AgentRole) -> PreparedAgent {
         model_policy: ModelPolicy::default(),
         workdir: None,
         spawn_lifecycle: SpawnLifecycle::Transient,
-        harness_access: HarnessAccess::Full,
         resource_view: ResourceView::default(),
         can_spawn: Vec::new(),
         hook_refs: Vec::new(),
@@ -61,8 +59,6 @@ fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
         agents: vec![
             prepared("build", AgentRole::Main),

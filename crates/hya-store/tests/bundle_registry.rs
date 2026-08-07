@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    BundleError, BundleOrigin, BundleSource, PackageInspection, PrivatePackageAuthentication,
-    PrivatePackageInspection, PrivatePackagePayload, SourceFile, prepare_builtins, prepare_package,
+    BundleError, BundleSource, PackageInspection, PrivatePackageAuthentication,
+    PrivatePackageInspection, PrivatePackagePayload, SourceFile, prepare_package,
 };
 use hya_store::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleUninstallOutcome,
@@ -38,7 +38,7 @@ fn installed_candidate(
     installed_at: i64,
 ) -> BundleInstallCandidate {
     let source = format!(
-        "---\napi_version: hya.agent-bundle/v1\nkind: AgentBundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagents:\n  - local_id: lead\n    stable_id: installed-package-lead\n    description: {description}\n    role: main\n    spawn_lifecycle: transient\n    harness_access: full\n---\n{prompt}\n"
+        "---\nkind: AgentBundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagent:\n  id: installed-package-lead\n  description: {description}\n  role: main\n  spawn_lifecycle: transient\n---\n{prompt}\n"
     );
     let prepared = prepare_package(BundleSource::new(
         "installed-package",
@@ -52,8 +52,6 @@ fn installed_candidate(
     };
     assert_eq!(bundle.identity.id, "hya/installed-package");
     assert_eq!(bundle.identity.version, version);
-    assert_eq!(bundle.origin, BundleOrigin::Installed);
-    assert!(!bundle.immutable);
     BundleInstallCandidate {
         source_digest,
         prepared_digest: prepared.digest().to_owned(),
@@ -170,18 +168,15 @@ async fn same_source_digest_install_is_idempotent_without_generation_advance() {
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/installed-package
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: lead
-    stable_id: installed-package-lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: installed-package-lead
+  role: main
+  spawn_lifecycle: transient
 ---
 You are the installed package lead.
 "#,
@@ -343,7 +338,10 @@ async fn different_version_replaces_atomically_and_advances_generation_once() {
 }
 
 #[tokio::test]
-async fn replacement_catalog_validation_failure_preserves_old_row_and_generation() {
+async fn conflicting_agent_id_install_preserves_old_row_and_generation() {
+    // Two installed bundles may not export the same agent id. The clash is
+    // found while revalidating the whole installed catalog, and the row that
+    // was already there must survive untouched.
     let old_candidate = installed_candidate(
         "1.0.0",
         "version one installed package",
@@ -366,49 +364,39 @@ async fn replacement_catalog_validation_failure_preserves_old_row_and_generation
     };
     assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
 
-    let builtins = prepare_builtins(vec![BundleSource::new(
+    let conflicting = prepare_package(BundleSource::new(
         "replacement-conflict",
         vec![SourceFile::new(
             "bundle.hya.md",
             br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/replacement-conflict
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: builtin-lead
-    stable_id: installed-package-lead
-    description: replacement conflict builtin lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: installed-package-lead
+  description: conflicting lead
+  role: main
+  spawn_lifecycle: transient
 ---
-You are the replacement conflict builtin lead.
+You are the conflicting lead.
 "#,
         )],
-    )]);
-    let Ok(builtins) = builtins else {
-        panic!("builtin package preparation failed: {builtins:?}");
+    ));
+    let Ok(conflicting) = conflicting else {
+        panic!("conflicting package preparation failed: {conflicting:?}");
     };
-    let [builtin] = builtins.bundles() else {
-        panic!("expected exactly one builtin bundle");
-    };
-    assert_eq!(builtin.identity.id, "hya/replacement-conflict");
-    assert_eq!(builtin.origin, BundleOrigin::Builtin);
-    assert!(builtin.immutable);
 
     let replacement = registry
         .install(
-            builtins.bundles(),
-            installed_candidate(
-                "2.0.0",
-                "version two installed package",
-                "You are the version two installed package lead.",
-                [0x77; 32],
-                1_725_000_007,
-            ),
+            &[],
+            BundleInstallCandidate {
+                source_digest: [0x77; 32],
+                prepared_digest: conflicting.digest().to_owned(),
+                prepared_bytes: conflicting.bytes().to_vec(),
+                installed_at: 1_725_000_007,
+            },
         )
         .await;
     assert!(matches!(
@@ -434,40 +422,10 @@ You are the replacement conflict builtin lead.
 }
 
 #[tokio::test]
-async fn builtin_bundle_id_is_immutable_and_registry_is_unchanged() {
-    let builtins = prepare_builtins(vec![BundleSource::new(
-        "builtin-installed-package",
-        vec![SourceFile::new(
-            "bundle.hya.md",
-            br#"---
-api_version: hya.agent-bundle/v1
-kind: AgentBundle
-identity:
-  id: hya/installed-package
-  version: 1.0.0
-  publisher: hya
-agents:
-  - local_id: builtin-lead
-    stable_id: builtin-installed-package-lead
-    description: builtin installed package lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
----
-You are the builtin installed package lead.
-"#,
-        )],
-    )]);
-    let Ok(builtins) = builtins else {
-        panic!("builtin package preparation failed: {builtins:?}");
-    };
-    let [builtin] = builtins.bundles() else {
-        panic!("expected exactly one builtin bundle");
-    };
-    assert_eq!(builtin.identity.id, "hya/installed-package");
-    assert_eq!(builtin.origin, BundleOrigin::Builtin);
-    assert!(builtin.immutable);
-
+async fn reserved_builtin_agent_id_is_rejected_and_registry_is_unchanged() {
+    // Built-in agents are compiled in, so a bundle may not claim one of their
+    // ids. Rejecting at install shows the operator the failure immediately,
+    // rather than at the next catalog publish.
     let candidate = installed_candidate(
         "1.0.0",
         "installed package",
@@ -481,10 +439,13 @@ You are the builtin installed package lead.
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let install = registry.install(builtins.bundles(), candidate).await;
+    let install = registry
+        .install(&["installed-package-lead"], candidate)
+        .await;
     assert!(matches!(
         install,
-        Err(StoreError::BundleImmutable { bundle_id }) if bundle_id == "hya/installed-package"
+        Err(StoreError::BundleAgentIdReserved { ref agent_id, .. })
+            if agent_id == "installed-package-lead"
     ));
 
     let snapshot = registry.snapshot().await;
@@ -569,7 +530,7 @@ async fn uninstall_removes_active_bundle_and_advances_generation_once() {
     assert_eq!(before_uninstall.generation, 1);
     assert_eq!(before_uninstall.bundles.len(), 1);
 
-    let removed = registry.uninstall(&[], "hya/installed-package").await;
+    let removed = registry.uninstall("hya/installed-package").await;
     let Ok(removed) = removed else {
         panic!("bundle uninstall failed: {removed:?}");
     };
@@ -591,7 +552,7 @@ async fn uninstall_unknown_bundle_is_typed_not_found_without_generation_change()
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let uninstall = registry.uninstall(&[], "hya/not-installed").await;
+    let uninstall = registry.uninstall("hya/not-installed").await;
     assert!(matches!(
         uninstall,
         Err(StoreError::BundleNotFound { bundle_id }) if bundle_id == "hya/not-installed"
@@ -606,52 +567,19 @@ async fn uninstall_unknown_bundle_is_typed_not_found_without_generation_change()
 }
 
 #[tokio::test]
-async fn uninstall_builtin_bundle_is_immutable_not_not_found() {
-    let builtins = prepare_builtins(vec![BundleSource::new(
-        "builtin-only",
-        vec![SourceFile::new(
-            "bundle.hya.md",
-            br#"---
-api_version: hya.agent-bundle/v1
-kind: AgentBundle
-identity:
-  id: hya/builtin-only
-  version: 1.0.0
-  publisher: hya
-agents:
-  - local_id: builtin-lead
-    stable_id: builtin-only-lead
-    description: builtin-only lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
----
-You are the builtin-only lead.
-"#,
-        )],
-    )]);
-    let Ok(builtins) = builtins else {
-        panic!("builtin package preparation failed: {builtins:?}");
-    };
-    let [builtin] = builtins.bundles() else {
-        panic!("expected exactly one builtin bundle");
-    };
-    assert_eq!(builtin.identity.id, "hya/builtin-only");
-    assert_eq!(builtin.origin, BundleOrigin::Builtin);
-    assert!(builtin.immutable);
-
+async fn uninstall_of_a_never_installed_bundle_is_typed_not_found() {
+    // There are no built-in bundles any more, so every uninstall target is
+    // either an installed row or simply absent.
     let path = temp_db();
     let registry = BundleRegistry::connect(&path).await;
     let Ok(registry) = registry else {
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let uninstall = registry
-        .uninstall(builtins.bundles(), "hya/builtin-only")
-        .await;
+    let uninstall = registry.uninstall("hya/builtin-only").await;
     assert!(matches!(
         uninstall,
-        Err(StoreError::BundleImmutable { bundle_id }) if bundle_id == "hya/builtin-only"
+        Err(StoreError::BundleNotFound { bundle_id }) if bundle_id == "hya/builtin-only"
     ));
 
     let snapshot = registry.snapshot().await;
@@ -661,3 +589,4 @@ You are the builtin-only lead.
     assert_eq!(snapshot.generation, 0);
     assert!(snapshot.bundles.is_empty());
 }
+

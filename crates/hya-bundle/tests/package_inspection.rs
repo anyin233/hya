@@ -53,7 +53,6 @@ const PUBLIC_RATIO_PREFLIGHT_LZMA2: [u8; 409] = [
 ];
 
 const PUBLIC_ARCHIVE_MANIFEST: &[u8] = br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/archive-js
@@ -72,18 +71,16 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - echo
-        - runtime
-    hook_refs:
-      - bundle:hya/archive-js/hook/event
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
+      - runtime
+  hook_refs:
+    - bundle:hya/archive-js/hook/event
 ---
 Archive JS lead.
 "#;
@@ -278,7 +275,6 @@ fn public_archive_rejects_unreferenced_regular_file() {
 #[test]
 fn public_archive_rejects_ascii_case_colliding_paths() {
     let manifest = br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/archive-case
@@ -290,16 +286,14 @@ resources:
       path: tools/echo.js
     - id: upper-echo
       path: Tools/Echo.js
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - echo
-        - upper-echo
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
+      - upper-echo
 ---
 Archive case lead.
 "#;
@@ -338,7 +332,6 @@ fn public_archive_rejects_wrapper_root() {
 #[test]
 fn public_archive_rejects_traversal_path() {
     let manifest = br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/archive-traversal
@@ -348,15 +341,13 @@ resources:
   tools:
     - id: escape
       path: ../escape.js
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - escape
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - escape
 ---
 Traversal lead.
 "#;
@@ -374,7 +365,6 @@ Traversal lead.
 #[test]
 fn public_archive_rejects_exact_duplicate_path() {
     let manifest = br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
   id: hya/archive-duplicate
@@ -384,15 +374,13 @@ resources:
   tools:
     - id: echo
       path: tools/echo.js
-agents:
-  - local_id: lead
-    stable_id: lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full
-    resource_view:
-      allow:
-        - echo
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
 ---
 Duplicate lead.
 "#;
@@ -501,9 +489,10 @@ fn public_archive_matches_directory_source_prepared_identity_and_ignores_undecla
             {
                 assert_ne!(resource.source_path, "extensions/helper.js");
             }
-            for agent in &bundle.agents {
-                assert_ne!(agent.prompt_source.as_deref(), Some("extensions/helper.js"));
-            }
+            assert_ne!(
+                bundle.agent.prompt_source.as_deref(),
+                Some("extensions/helper.js")
+            );
         }
     }
 
@@ -526,7 +515,10 @@ fn public_archive_trailing_bytes_are_typed_corrupt() {
 
 #[test]
 fn strict_public_reader_rejects_crc_covered_bytes_after_header_end() {
-    let mut bytes = include_bytes!("fixtures/packages/valid_public_bundle_copy.7z").to_vec();
+    // Archive-layer surgery with hand-recomputed CRCs, so it needs a frozen
+    // byte-for-byte fixture. Its payload is never parsed: inspection fails at
+    // the archive layer, before any manifest is read.
+    let mut bytes = include_bytes!("fixtures/packages/strict_reader_copy.7z").to_vec();
     bytes.push(0);
     bytes[20..28].copy_from_slice(&71_u64.to_le_bytes());
     bytes[28..32].copy_from_slice(&0x7bc7_9e5f_u32.to_le_bytes());
@@ -556,7 +548,9 @@ fn public_archive_stream_crc_failure_is_typed_corrupt() {
 
 #[test]
 fn public_copy_stream_with_extra_decoded_byte_is_rejected() {
-    let mut bytes = include_bytes!("fixtures/packages/valid_public_bundle_copy.7z").to_vec();
+    // Frozen archive-layer fixture, as above: the offsets and CRCs below are
+    // specific to these exact bytes.
+    let mut bytes = include_bytes!("fixtures/packages/strict_reader_copy.7z").to_vec();
     bytes.insert(326, 0xff);
     bytes[12..20].copy_from_slice(&295_u64.to_le_bytes());
     bytes[334] = 0x27;
@@ -769,4 +763,109 @@ fn private_v1_ciphertext_digest_mismatch_is_rejected() {
         inspect_private_package(&bytes),
         Err(BundleError::PrivateCiphertextDigestMismatch)
     ));
+}
+
+/// Source of truth for the checked-in valid public package fixtures.
+///
+/// The `.7z` files under `tests/fixtures/packages/` used to be opaque binaries.
+/// Regenerate them from this manifest after any manifest-format change:
+///
+/// ```sh
+/// cargo test -p hya-bundle --test package_inspection -- --ignored regenerate
+/// ```
+const FIXTURE_MANIFEST: &[u8] = br#"---
+kind: AgentBundle
+identity:
+  id: hya/valid-public
+  version: 1.0.0
+  publisher: hya
+agent:
+  id: valid-public-lead
+  role: main
+  spawn_lifecycle: transient
+---
+
+You are the valid public bundle lead.
+"#;
+
+const FIXTURE_JS_MANIFEST: &[u8] = br#"---
+kind: AgentBundle
+identity:
+  id: hya/archive-js
+  version: 1.0.0
+  publisher: hya
+resources:
+  tools:
+    - id: echo
+      path: extensions/runtime.js
+      aliases:
+        - say
+  hooks:
+    - id: event
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agent:
+  id: archive-js-lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - echo
+  hook_refs:
+    - event
+---
+
+Archive JS lead.
+"#;
+
+fn lzma2_copy_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = match ArchiveWriter::new(Cursor::new(Vec::new())) {
+        Ok(writer) => writer,
+        Err(error) => panic!("archive writer construction failed: {error}"),
+    };
+    writer.set_encrypt_header(false);
+    writer.set_content_methods(vec![
+        EncoderConfiguration::new(EncoderMethod::LZMA2),
+        EncoderConfiguration::new(EncoderMethod::COPY),
+    ]);
+    for (name, bytes) in entries {
+        if let Err(error) =
+            writer.push_archive_entry(ArchiveEntry::new_file(name), Some(Cursor::new(*bytes)))
+        {
+            panic!("archive entry `{name}` failed: {error}");
+        }
+    }
+    match writer.finish() {
+        Ok(output) => output.into_inner(),
+        Err(error) => panic!("archive finish failed: {error}"),
+    }
+}
+
+#[test]
+#[ignore = "regenerates checked-in fixtures; run explicitly after a format change"]
+fn regenerate_valid_public_package_fixtures() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages");
+    let write = |name: &str, bytes: &[u8]| {
+        if let Err(error) = fs::write(root.join(name), bytes) {
+            panic!("write fixture `{name}`: {error}");
+        }
+    };
+
+    let plain = public_copy_archive(&[("bundle.hya.md", FIXTURE_MANIFEST)]);
+    assert!(inspect_public_package(&plain).is_ok());
+    write("valid_public_bundle_copy.7z", &plain);
+
+    let js = public_copy_archive(&[
+        ("bundle.hya.md", FIXTURE_JS_MANIFEST),
+        ("extensions/runtime.js", b"export const runtime = true;\n"),
+    ]);
+    assert!(inspect_public_package(&js).is_ok());
+    write("valid_public_bundle_js_copy.7z", &js);
+
+    let lzma2 = lzma2_copy_archive(&[("bundle.hya.md", FIXTURE_MANIFEST)]);
+    assert!(inspect_public_package(&lzma2).is_ok());
+    write("valid_public_bundle_lzma2_copy.7z", &lzma2);
 }

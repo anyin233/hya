@@ -7,10 +7,10 @@ mod support;
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
     PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SpawnLifecycle,
 };
-use hya_core::{
+use hya_core::{AgentCatalog, 
     AdmissionMemberIdentity, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
     ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError,
     CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus, MessageUserBeforeInput,
@@ -471,12 +471,9 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedBundle 
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
-        agents: vec![PreparedAgent {
-            local_id: "sidecar-agent".to_string(),
-            stable_id: AgentName::new("sidecar-agent"),
+        agent: PreparedAgent {
+            id: AgentName::new("sidecar-agent"),
             description: None,
             role: AgentRole::Subagent,
             color: None,
@@ -486,11 +483,10 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedBundle 
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle,
-            harness_access: HarnessAccess::Full,
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
-        }],
+        },
         tools: vec![PreparedResource {
             local_id: "echo".to_string(),
             stable_id: SIDECAR_PERMISSION_TOOL.to_string(),
@@ -1573,7 +1569,7 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
 async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
     let canonical = SIDECAR_PERMISSION_TOOL;
     let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Transient)])
+        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient))
             .unwrap(),
     );
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1666,7 +1662,7 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
 async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events() {
     let canonical = SIDECAR_PERMISSION_TOOL;
     let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Transient)])
+        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient))
             .unwrap(),
     );
     let inputs = Arc::new(Mutex::new(Vec::new()));
@@ -1770,7 +1766,7 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
 async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
     let canonical = SIDECAR_PERMISSION_TOOL;
     let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Resident)])
+        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident))
             .unwrap(),
     );
     let calls = Arc::new(AtomicUsize::new(0));
@@ -3608,7 +3604,7 @@ async fn resident_activation_hook_transport_loss_enters_epoch_recovery() {
 async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
     let canonical = SIDECAR_PERMISSION_TOOL;
     let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Resident)])
+        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident))
             .unwrap(),
     );
     let calls = Arc::new(AtomicUsize::new(0));
@@ -5824,4 +5820,9 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             .collect::<Vec<_>>(),
         vec![MemberStatus::Done, MemberStatus::Failed, MemberStatus::Done]
     );
+}
+
+/// Wrap one prepared bundle as an agent catalog over the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedBundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
+    AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&[bundle])?))
 }
