@@ -128,7 +128,60 @@ pub trait Summarizer: Send + Sync {
     ) -> Result<String, CoreError>;
 }
 
+/// What a local compaction folded, and the summary produced for it.
+///
+/// Carries the range so the caller can persist a `ContextCompacted` record
+/// pointing at the folded messages instead of copying them.
+#[derive(Clone, Debug)]
+pub struct CompactionPlan {
+    /// Summary text produced for the folded prefix.
+    pub summary: String,
+    /// First message folded.
+    pub from_message: MessageId,
+    /// Last message folded.
+    pub to_message: MessageId,
+    /// Number of messages folded.
+    pub folded_count: u32,
+}
+
+/// Summarize the foldable prefix of `messages`, or `None` when under threshold.
+///
+/// Folds `messages[..len - keep_recent]`, leaving the most recent `keep_recent`
+/// untouched. Callers persist the result; this function performs no store writes.
+///
+/// # Errors
+/// Propagates summarizer failures.
+pub async fn plan_compaction(
+    messages: &[Message],
+    cfg: &CompactionConfig,
+    summarizer: &dyn Summarizer,
+    options: SummarizeOptions,
+) -> Result<Option<CompactionPlan>, CoreError> {
+    if !needs_compaction(messages, cfg) {
+        return Ok(None);
+    }
+    let split = messages.len() - cfg.keep_recent;
+    let older = &messages[..split];
+    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
+    let (Some(first), Some(last)) = (older.first(), older.last()) else {
+        return Ok(None);
+    };
+    let from_message = first.id();
+    let to_message = last.id();
+    let summary = summarizer.summarize(older, options).await?;
+    Ok(Some(CompactionPlan {
+        summary,
+        from_message,
+        to_message,
+        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+    }))
+}
+
 /// Compact `messages` when thresholds are exceeded; otherwise return them unchanged.
+///
+/// Request-local: the returned transcript is not persisted. Callers that must
+/// record the compaction use [`plan_compaction`] and inject the summary
+/// themselves.
 ///
 /// # Errors
 /// Propagates summarizer failures.
@@ -138,13 +191,13 @@ pub async fn compact_with(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Vec<Message>, CoreError> {
-    if !needs_compaction(&messages, cfg) {
+    let Some(plan) = plan_compaction(&messages, cfg, summarizer, options).await? else {
         return Ok(messages);
-    }
+    };
     let split = messages.len() - cfg.keep_recent;
     let recent = messages.split_off(split);
-    let older_count = messages.len();
-    let summary = summarizer.summarize(&messages, options).await?;
+    let older_count = plan.folded_count;
+    let summary = plan.summary;
     let mut out = Vec::with_capacity(recent.len() + 1);
     out.push(Message::System {
         id: MessageId::new(),
@@ -318,6 +371,39 @@ mod tests {
             assert!(content.contains("CONDENSED"));
             assert!(content.contains("4 earlier"));
         }
+    }
+
+    #[tokio::test]
+    async fn plan_reports_the_exact_folded_range() {
+        let msgs: Vec<Message> = (0..6).map(|_| user(&"y".repeat(40))).collect();
+        let cfg = CompactionConfig {
+            token_threshold: 10,
+            keep_recent: 2,
+        };
+        let plan = plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
+            .await
+            .unwrap()
+            .expect("over threshold must produce a plan");
+        // Folds the prefix before the retained recent messages: 6 - 2 = 4.
+        assert_eq!(plan.folded_count, 4);
+        assert_eq!(plan.from_message, msgs[0].id());
+        assert_eq!(plan.to_message, msgs[3].id());
+        assert_eq!(plan.summary, "CONDENSED");
+    }
+
+    #[tokio::test]
+    async fn plan_is_none_under_threshold() {
+        let msgs = vec![user("short")];
+        let cfg = CompactionConfig {
+            token_threshold: 1000,
+            keep_recent: 2,
+        };
+        assert!(
+            plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

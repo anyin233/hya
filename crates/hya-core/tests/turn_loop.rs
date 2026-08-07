@@ -6,6 +6,7 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -365,6 +366,184 @@ async fn compaction_auto_triggers_when_over_threshold() {
         called.load(Ordering::SeqCst),
         "summarizer must be invoked when over threshold"
     );
+}
+
+/// Records the text of every transcript the summarizer is asked to fold.
+struct FoldRecorder(Arc<Mutex<Vec<Vec<String>>>>);
+
+#[async_trait::async_trait]
+impl Summarizer for FoldRecorder {
+    async fn summarize(
+        &self,
+        messages: &[Message],
+        _options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        let folded = messages
+            .iter()
+            .map(|m| match m {
+                Message::User { parts, .. } | Message::Assistant { parts, .. } => parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        hya_proto::Part::Text { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                Message::System { content, .. } => content.clone(),
+            })
+            .collect();
+        self.0.lock().unwrap().push(folded);
+        Ok("LOCAL SUMMARY".to_string())
+    }
+}
+
+/// AC3 + AC1/AC2/AC4: a local-summarizer compaction must persist its summary
+/// behind the HYA_COMPACTED_CONTEXT marker, record one `ContextCompacted` whose
+/// range covers exactly `folded_count` messages, and stop the next round from
+/// re-folding the history it already summarized.
+#[tokio::test]
+async fn local_compaction_persists_and_is_not_repeated_next_round() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::Text("first".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("second".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let folds = Arc::new(Mutex::new(Vec::new()));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(FoldRecorder(folds.clone())),
+        CompactionConfig {
+            token_threshold: 1,
+            keep_recent: 1,
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    for i in 0..3 {
+        engine
+            .admit_user_prompt(session, format!("ORIGINAL_PROMPT_{i} padded with text"))
+            .await
+            .unwrap();
+    }
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let records: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match &e.event {
+            hya_proto::Event::ContextCompacted {
+                message,
+                strategy,
+                from_message,
+                to_message,
+                folded_count,
+                threshold,
+                ..
+            } => Some((
+                *message,
+                *strategy,
+                *from_message,
+                *to_message,
+                *folded_count,
+                *threshold,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        records.len(),
+        1,
+        "exactly one ContextCompacted per compaction"
+    );
+    let (marker_id, strategy, from_message, to_message, folded_count, threshold) = records[0];
+    assert_eq!(strategy, hya_proto::CompactionStrategy::LocalSummarizer);
+    assert_eq!(threshold, 1, "records the threshold in force");
+
+    // AC1: the recorded output message really is the marker System message.
+    let projection = hya_proto::Projection::from_events(&envelopes);
+    let marker = projection
+        .session
+        .messages
+        .iter()
+        .find(|m| m.id == marker_id)
+        .expect("ContextCompacted.message must point at a real message");
+    assert_eq!(marker.role, Role::System);
+    let marker_text: String = marker
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            PartProjection::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        marker_text.starts_with("HYA_COMPACTED_CONTEXT"),
+        "local summary must persist behind the shared marker: {marker_text}"
+    );
+    assert!(
+        marker_text.contains("LOCAL SUMMARY"),
+        "the summary text itself must be recoverable: {marker_text}"
+    );
+
+    // AC4: the recorded range covers exactly `folded_count` messages.
+    let ids: Vec<_> = projection.session.messages.iter().map(|m| m.id).collect();
+    let from_idx = ids.iter().position(|id| *id == from_message).unwrap();
+    let to_idx = ids.iter().position(|id| *id == to_message).unwrap();
+    assert_eq!(
+        to_idx - from_idx + 1,
+        folded_count as usize,
+        "from_message..=to_message must span exactly folded_count messages"
+    );
+
+    // AC3: a second turn must not re-fold the history already summarized.
+    engine
+        .admit_user_prompt(session, "NEW_PROMPT after compaction".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let folds = folds.lock().unwrap();
+    for (round, folded) in folds.iter().enumerate().skip(1) {
+        assert!(
+            !folded.iter().any(|t| t.contains("ORIGINAL_PROMPT_0")),
+            "round {round} re-folded pre-marker history: {folded:?}"
+        );
+    }
 }
 
 #[tokio::test]
