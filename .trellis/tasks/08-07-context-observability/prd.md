@@ -109,32 +109,48 @@ task only guarantees the inputs exist.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — A compaction on any session appends exactly one `ContextCompacted`
+- [x] AC1 — A compaction on any session appends exactly one `ContextCompacted`
       to that session's log, carrying strategy, `from_message`, `to_message`,
       `folded_count`, `input_tokens_est`, `threshold`, and the output `message`.
-- [ ] AC2 — Both compaction strategies emit `ContextCompacted`: the native
-      provider path and the local summarizer path.
-- [ ] AC3 — After a local-summarizer compaction, the summary is present in the
+      *`local_compaction_persists_and_is_not_repeated_next_round`.*
+- [x] AC2 — Both compaction strategies emit `ContextCompacted`: the native
+      provider path and the local summarizer path. *Local path covered by the
+      turn-loop test; native path emits at `turn.rs` with `Native` + whole-window
+      range. See residual R1 below.*
+- [x] AC3 — After a local-summarizer compaction, the summary is present in the
       session log behind a `HYA_COMPACTED_CONTEXT` marker, and the next round
-      slices from that marker instead of re-summarizing. Proven by a test that
-      counts summarizer invocations across two rounds.
-- [ ] AC4 — `ContextCompacted.from_message`/`to_message` resolve to messages that
+      slices from that marker instead of re-summarizing. *Verified failing
+      before the fix and passing after.*
+- [x] AC4 — `ContextCompacted.from_message`/`to_message` resolve to messages that
       are still present in the log, and the range covers exactly
       `folded_count` messages.
-- [ ] AC5 — A spawned subagent's `MemberSpawned` carries the parent's directive
+- [x] AC5 — A spawned subagent's `MemberSpawned` carries the parent's directive
       verbatim, for a fresh spawn and for a resumed session.
-- [ ] AC6 — `MemberSpawned` carries the `ToolCallId` of the originating `task`
+      *`member_spawn_records_directive_verbatim_and_originating_tool_call`;
+      the resume-preservation guard was verified load-bearing.*
+- [x] AC6 — `MemberSpawned` carries the `ToolCallId` of the originating `task`
       call, and it matches a tool part present in the parent's trajectory.
-- [ ] AC7 — A forked session is reachable from its source: the fork's source
+- [x] AC7 — A forked session is reachable from its source: the fork's source
       session id and cut point are recoverable from the log.
-- [ ] AC8 — A log containing every new event replays cleanly on the shared
+      *`compat_session_fork_records_source_and_cut_point`, both cut cases,
+      verified failing without the emit.*
+- [x] AC8 — A log containing every new event replays cleanly on the shared
       projection, and a log written before this task still replays unchanged.
-- [ ] AC9 — Parent model input is byte-identical before and after this task for
-      a run containing spawns and child compactions. Proven by a test asserting
-      no new material entered the parent request.
-- [ ] AC10 — `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
-      -- -D warnings`, and `cargo test --workspace --exclude hya-e2e` pass.
-- [ ] AC11 — No migration file is added and no table is created.
+      *`pre_change_member_spawned_still_decodes_and_folds` also asserts the
+      empty additions never appear on the wire.*
+- [x] AC9 — Parent model input is byte-identical before and after this task for
+      a run containing spawns and child compactions.
+      *`recorded_observability_never_enters_the_parent_model_input`, with the
+      threshold tuned so only the child compacts — otherwise the lead's own
+      marker would mask a real leak.*
+- [~] AC10 — `cargo test --workspace --exclude hya-e2e` passes (1323 tests), and
+      `cargo clippy` is clean on all five crates touched. **`cargo fmt --all
+      --check` and workspace-wide clippy still fail, but only inside
+      `crates/hya-sdk`, which this task never touched and which already fails
+      both gates on `main`.** Not fixed here: `main` has uncommitted in-flight
+      work in those exact files. Also ran the E2E gate: 30 passing.
+- [x] AC11 — No migration file is added and no table is created.
+      *`git diff main -- crates/hya-store/migrations/` is empty.*
 
 ## Non-Goals
 
@@ -155,4 +171,21 @@ task only guarantees the inputs exist.
 - **R5 may need a decision** on whether to reuse `SessionCreated.parent` for the
   fork link or add a distinct event. Reusing `parent` would make forks look like
   subagent children in the spawn tree, which is wrong — the tree derives from
-  spawn edges only. `design.md` resolves this.
+  spawn edges only. `design.md` resolves this: a distinct `SessionForked`.
+
+## Residuals after implementation
+
+- **R1 — the native compact path has no direct test.** Its emit is implemented
+  and shares the range helper, but no fake provider in the suite advertises
+  `/responses/compact`, so only the local path is exercised end to end. A
+  provider fake that returns a compact window would close this.
+- **R2 — `turn.rs` still has a dead under-threshold branch.** With the local
+  path now going through `plan_compaction`, the `else if let Some(summarizer)`
+  arm can never compact, yet it still clones the whole transcript every round.
+  Left untouched deliberately (out of this step's declared scope); removing it
+  is a cheap, behaviour-free win for the sibling efficiency task.
+- **R3 — repository corruption during this task.** A filesystem event zeroed 124
+  git objects and ~12.9k build artifacts (disk was at 97%). One commit was lost
+  and rebuilt from the working tree; two `hya-sdk` source files were zeroed and
+  restored from `main`. Unrelated to the code change, but it is why the branch
+  history was rewritten mid-task. See the session report.
