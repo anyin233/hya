@@ -25,10 +25,16 @@ pub struct SummarizeOptions {
 /// Thresholds for when and how aggressively to compact a transcript.
 #[derive(Clone, Copy, Debug)]
 pub struct CompactionConfig {
-    /// Approximate token threshold (chars/4) that triggers compaction.
+    /// Fallback token threshold, used when the route advertises no window.
     pub token_threshold: usize,
     /// Number of recent messages retained unsummarized.
     pub keep_recent: usize,
+    /// Share of the model's advertised context window at which to compact.
+    ///
+    /// Ignored when the route advertises no window, or when the value is outside
+    /// `(0.0, 1.0]` — a nonsense fraction falls back to `token_threshold` rather
+    /// than being trusted.
+    pub context_fraction: f32,
 }
 
 impl Default for CompactionConfig {
@@ -36,8 +42,35 @@ impl Default for CompactionConfig {
         Self {
             token_threshold: 100_000,
             keep_recent: 6,
+            context_fraction: 0.75,
         }
     }
+}
+
+/// Smallest threshold [`resolved_threshold`] will ever return.
+///
+/// A threshold near zero would compact on every single turn, which is worse than
+/// not compacting at all.
+pub const MIN_RESOLVED_THRESHOLD: usize = 1_000;
+
+/// Token threshold for this turn: a share of the model's advertised context
+/// window when one is known, else the configured flat threshold.
+///
+/// `max_context` of `None` or `0` means the route advertises nothing, so the
+/// configured threshold stands and behaviour matches the pre-window default.
+#[must_use]
+pub fn resolved_threshold(cfg: &CompactionConfig, max_context: Option<u32>) -> usize {
+    let Some(window) = max_context.filter(|w| *w > 0) else {
+        return cfg.token_threshold;
+    };
+    if !(cfg.context_fraction > 0.0 && cfg.context_fraction <= 1.0) {
+        return cfg.token_threshold;
+    }
+    let scaled = f64::from(window) * f64::from(cfg.context_fraction);
+    // `as` on a finite non-negative f64 saturates at usize::MAX here; the value
+    // is bounded by u32::MAX anyway.
+    let scaled = scaled as usize;
+    scaled.max(MIN_RESOLVED_THRESHOLD)
 }
 
 fn message_text_len(m: &Message) -> usize {
@@ -143,10 +176,19 @@ pub fn tokens_in_use(messages: &[Message]) -> usize {
     measured_tokens(messages).unwrap_or_else(|| estimate_tokens(messages))
 }
 
-/// Whether `messages` exceeds keep_recent and the token threshold.
+/// Whether `messages` exceeds keep_recent and the configured flat threshold.
+///
+/// Uses `cfg.token_threshold` directly. Callers that know the active model's
+/// window should prefer [`needs_compaction_at`] with [`resolved_threshold`].
 #[must_use]
 pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
-    messages.len() > cfg.keep_recent && tokens_in_use(messages) > cfg.token_threshold
+    needs_compaction_at(messages, cfg, cfg.token_threshold)
+}
+
+/// Whether `messages` exceeds keep_recent and an explicit token `threshold`.
+#[must_use]
+pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, threshold: usize) -> bool {
+    messages.len() > cfg.keep_recent && tokens_in_use(messages) > threshold
 }
 
 /// Produces a summary string for older transcript segments.
@@ -195,7 +237,24 @@ pub async fn plan_compaction(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
-    if !needs_compaction(messages, cfg) {
+    plan_compaction_at(messages, cfg, cfg.token_threshold, summarizer, options).await
+}
+
+/// [`plan_compaction`] against an explicit token `threshold`.
+///
+/// The turn loop passes the window-scaled threshold so this cannot disagree with
+/// the decision that got us here.
+///
+/// # Errors
+/// Propagates summarizer failures.
+pub async fn plan_compaction_at(
+    messages: &[Message],
+    cfg: &CompactionConfig,
+    threshold: usize,
+    summarizer: &dyn Summarizer,
+    options: SummarizeOptions,
+) -> Result<Option<CompactionPlan>, CoreError> {
+    if !needs_compaction_at(messages, cfg, threshold) {
         return Ok(None);
     }
     let split = messages.len() - cfg.keep_recent;
@@ -359,6 +418,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 5,
             keep_recent: 0,
+            context_fraction: 0.75,
         };
         assert!(needs_compaction(&msgs, &cfg));
     }
@@ -389,6 +449,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 50,
             keep_recent: 0,
+            context_fraction: 0.75,
         };
         assert!(needs_compaction(&msgs, &cfg));
     }
@@ -399,6 +460,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 10,
             keep_recent: 2,
+            context_fraction: 0.75,
         };
         let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
             .await
@@ -409,6 +471,52 @@ mod tests {
             assert!(content.contains("CONDENSED"));
             assert!(content.contains("4 earlier"));
         }
+    }
+
+    #[test]
+    fn resolved_threshold_scales_to_the_window_and_guards_bad_input() {
+        let base = CompactionConfig {
+            token_threshold: 100_000,
+            keep_recent: 6,
+            context_fraction: 0.75,
+        };
+        // No advertised window -> configured threshold stands (today's behaviour).
+        assert_eq!(resolved_threshold(&base, None), 100_000);
+        assert_eq!(resolved_threshold(&base, Some(0)), 100_000);
+        // Advertised window -> scaled by the fraction.
+        assert_eq!(resolved_threshold(&base, Some(200_000)), 150_000);
+        assert_eq!(resolved_threshold(&base, Some(1_000_000)), 750_000);
+        // A tiny window must not produce a compact-every-turn threshold.
+        assert_eq!(
+            resolved_threshold(&base, Some(100)),
+            MIN_RESOLVED_THRESHOLD,
+            "threshold is clamped to a usable floor"
+        );
+        // Nonsense fractions are not trusted.
+        for bad in [0.0_f32, -1.0, 1.5, f32::NAN] {
+            let cfg = CompactionConfig {
+                context_fraction: bad,
+                ..base
+            };
+            assert_eq!(
+                resolved_threshold(&cfg, Some(200_000)),
+                100_000,
+                "fraction {bad} must fall back to the configured threshold"
+            );
+        }
+    }
+
+    #[test]
+    fn needs_compaction_at_honours_an_explicit_threshold() {
+        let msgs: Vec<Message> = (0..8).map(|_| user(&"z".repeat(4000))).collect();
+        let cfg = CompactionConfig {
+            token_threshold: 100_000,
+            keep_recent: 2,
+            context_fraction: 0.75,
+        };
+        // 8 * 1000 = 8000 estimated tokens: under the flat 100k, over a 5k window.
+        assert!(!needs_compaction(&msgs, &cfg));
+        assert!(needs_compaction_at(&msgs, &cfg, 5_000));
     }
 
     fn assistant_with_usage(usage: Option<hya_proto::TokenUsage>) -> Message {
@@ -485,6 +593,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 10,
             keep_recent: 2,
+            context_fraction: 0.75,
         };
         let plan = plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
             .await
@@ -503,6 +612,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 1000,
             keep_recent: 2,
+            context_fraction: 0.75,
         };
         assert!(
             plan_compaction(&msgs, &cfg, &Fake, SummarizeOptions::default())
@@ -518,6 +628,7 @@ mod tests {
         let cfg = CompactionConfig {
             token_threshold: 1000,
             keep_recent: 2,
+            context_fraction: 0.75,
         };
         let out = compact_with(msgs, &cfg, &Fake, SummarizeOptions::default())
             .await

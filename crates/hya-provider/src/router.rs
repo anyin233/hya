@@ -57,6 +57,15 @@ impl ProviderRouter {
             .cloned()
     }
 
+    /// Capabilities advertised by the route that claims `model`.
+    ///
+    /// Exposes `max_context` so compaction can scale its threshold to the real
+    /// window instead of a flat constant.
+    #[must_use]
+    pub fn capabilities(&self, model: &ModelRef) -> Option<crate::Capabilities> {
+        self.providers.iter().find_map(|p| p.capabilities(model))
+    }
+
     /// Merged catalog rows from all routes, sorted and deduped by provider+model id.
     #[must_use]
     pub fn catalog(&self) -> Vec<ProviderModel> {

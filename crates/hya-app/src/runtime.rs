@@ -134,9 +134,14 @@ pub fn compaction_config() -> CompactionConfig {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default.keep_recent);
+    let context_fraction = std::env::var("HYA_COMPACTION_CONTEXT_FRACTION")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default.context_fraction);
     CompactionConfig {
         token_threshold,
         keep_recent,
+        context_fraction,
     }
 }
 

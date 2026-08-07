@@ -332,8 +332,11 @@ async fn compaction_auto_triggers_when_over_threshold() {
     .with_compaction(
         Arc::new(Recording(called.clone())),
         CompactionConfig {
-            token_threshold: 1,
+            // The fake route advertises a 200k window, so the threshold is
+            // window-scaled; 0.001 clamps to MIN_RESOLVED_THRESHOLD (1000).
+            token_threshold: 1_000_000,
             keep_recent: 1,
+            context_fraction: 0.001,
         },
     );
     let session = engine
@@ -347,7 +350,7 @@ async fn compaction_auto_triggers_when_over_threshold() {
         .unwrap();
     for _ in 0..3 {
         engine
-            .admit_user_prompt(session, "some earlier message text".to_string())
+            .admit_user_prompt(session, "earlier ".repeat(500))
             .await
             .unwrap();
     }
@@ -365,6 +368,71 @@ async fn compaction_auto_triggers_when_over_threshold() {
     assert!(
         called.load(Ordering::SeqCst),
         "summarizer must be invoked when over threshold"
+    );
+}
+
+/// E1: a route advertising a context window must drive the threshold, instead of
+/// the flat configured constant.
+#[tokio::test]
+async fn compaction_threshold_scales_to_the_advertised_context_window() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("ok".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    // FakeProvider advertises max_context = 200_000, so 0.001 resolves to a
+    // threshold of 200 tokens — far below the flat 1_000_000 fallback. If the
+    // window were ignored, nothing here would ever compact.
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            token_threshold: 1_000_000,
+            keep_recent: 1,
+            context_fraction: 0.001,
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    // ~2000 estimated tokens: under the flat fallback, over the scaled window.
+    for _ in 0..2 {
+        engine
+            .admit_user_prompt(session, "p".repeat(4000))
+            .await
+            .unwrap();
+    }
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        called.load(Ordering::SeqCst),
+        "the advertised context window must scale the compaction threshold"
     );
 }
 
@@ -429,8 +497,11 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
     .with_compaction(
         Arc::new(FoldRecorder(folds.clone())),
         CompactionConfig {
-            token_threshold: 1,
+            // The fake route advertises a 200k window, so the threshold is
+            // window-scaled; 0.001 clamps to MIN_RESOLVED_THRESHOLD (1000).
+            token_threshold: 1_000_000,
             keep_recent: 1,
+            context_fraction: 0.001,
         },
     );
     let session = engine
@@ -444,7 +515,7 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
         .unwrap();
     for i in 0..3 {
         engine
-            .admit_user_prompt(session, format!("ORIGINAL_PROMPT_{i} padded with text"))
+            .admit_user_prompt(session, format!("ORIGINAL_PROMPT_{i} {}", "p".repeat(3000)))
             .await
             .unwrap();
     }
@@ -490,7 +561,14 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
     );
     let (marker_id, strategy, from_message, to_message, folded_count, threshold) = records[0];
     assert_eq!(strategy, hya_proto::CompactionStrategy::LocalSummarizer);
-    assert_eq!(threshold, 1, "records the threshold in force");
+    // The record carries the RESOLVED threshold (window-scaled, clamped to the
+    // floor), not the flat configured fallback — that is the number that
+    // actually drove the decision.
+    assert_eq!(
+        threshold,
+        hya_core::MIN_RESOLVED_THRESHOLD as u64,
+        "records the threshold in force"
+    );
 
     // AC1: the recorded output message really is the marker System message.
     let projection = hya_proto::Projection::from_events(&envelopes);
