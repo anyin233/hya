@@ -102,3 +102,54 @@ confirmed against the source directly.
   `session.queued_prompts`; `<leader>h` is both `session.toggle.conceal` and
   `tips.toggle`.
 - `packages/hya-tui-ts/src/upstream/routes/session/footer.tsx` appears unused.
+
+## Documentation coverage: residual and known limits (2026-08-07)
+
+The coverage pass closed a 324-item work list derived from source. Three
+independent re-audits, each run by agents that did not write the documents,
+measured progress against that list:
+
+| Round | Gaps closed | Still open |
+| --- | ---: | ---: |
+| 1 | 306 / 324 | 18 |
+| 2 | 312 / 324 | 12 |
+| 3 | 316 / 324 | 8 |
+
+A fourth correction pass targeted the remaining 8 and was verified against source
+by hand, but **no fourth audit was run**, so 316/324 is the last independently
+measured figure. Treat the final 8 as fixed-but-unverified.
+
+### The audit found more than the work list contained
+
+Each round also reported claims outside the original 324 entries. That count did
+not converge (31 → 14 → 21), and the reason matters: **8 of the 13 documents
+flagged in round 3 had never been touched by an earlier fix pass**. The adversarial
+readers were sampling different regions of a ~15k-line corpus each time, so the
+stream is *discovery*, not regression. It will not reach zero by iterating.
+
+Anyone continuing this work should treat "zero findings from a fresh adversarial
+read" as unreachable for a corpus this size, and instead:
+
+- keep the 324-item list as the regression surface (it is stable and re-runnable),
+- add a documentation-contract test when a sentence encodes a real contract, the
+  way `crates/hya-bundle/tests/docs_example.rs` pins the AgentBundle wording — that
+  test is the only reason a rewrite that silently weakened 12 of its 22 pinned
+  sentences was caught.
+
+### Recurring defect class worth fixing in code, not docs
+
+The audits repeatedly found configuration fields that are parsed, serialized onto
+the wire, and then **silently dropped**. Documenting them accurately is a
+workaround; the fields either need consumers or removal:
+
+- Per-command `agent` and `model` (disk frontmatter and config maps) are listed on
+  `/api/command` but `CommandRequest` carries only `command`, `arguments`, `text`.
+- Per-command `subtask` has no consumer anywhere in `crates/` or `packages/`.
+- `PreparedAgent::workdir` has no reader.
+- `resolve_default_reasoning`'s `last_used` branch is unreachable — its one
+  production caller passes `None`.
+- Skill `allowed-tools` and `model` feed only a semantic-identity digest; neither
+  restricts tools nor routes models.
+
+Each of these reads as a working feature in configuration. A user setting them
+gets silence, not an error.
