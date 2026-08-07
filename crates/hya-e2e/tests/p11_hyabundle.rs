@@ -4,8 +4,8 @@
 use hya_e2e::{E2eEnvBuilder, materialize_public_bundle, text_step};
 use hya_proto::Event;
 
-const BUNDLE_ID: &str = "hya/public-fixture";
-const BUNDLE_AGENT: &str = "public-fixture-lead";
+const BUNDLE_ID: &str = "hya/valid-public";
+const BUNDLE_AGENT: &str = "valid-public-lead";
 
 #[tokio::test]
 async fn t2_7_hyabundle_install_list_info_uninstall() {
