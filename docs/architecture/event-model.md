@@ -234,7 +234,7 @@ subscribers:
 | `once` | **None** — only the answered request is resolved |
 | `always` | Cascades to every other pending request sharing the same `RememberScope` (and action rules for legacy scopes) |
 | `reject` + exact remember scope | Cascades like always for that exact scope |
-| `reject` + legacy action scope | Cascades to other pending in the session matching that legacy filter path |
+| `reject` + legacy action scope | Cascades to **every** other pending permission request in that session (no action or remember-scope filter; `take_related_for_reply` sets related scope to `None`) |
 
 An `always` reply may also persist a saved permission; `once` does not cascade.
 

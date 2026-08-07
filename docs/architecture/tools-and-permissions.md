@@ -15,18 +15,19 @@ after permission checks pass.
 
 `ToolRegistry::builtins()` installs **26** canonical schema names before model
 filtering
-([`tool.rs:237-271`](../../crates/hya-tool/src/tool.rs#L237-L271)). The table
+([`tool.rs:311-347`](../../crates/hya-tool/src/tool.rs#L311-L347)). The table
 below is the complete inventory. Advertised field names are the model-facing
-JSON schema `required`/`properties` keys. Runtime serde aliases (for example
-`path` for `filePath`) accept short spellings during direct execution, but
-provider-side schema validation requires the advertised names.
+JSON schema `required`/`properties` keys. Short spellings such as `path` for
+`filePath` (and `old`/`new`/`replace_all` for edit) are listed under schema
+`properties` for compatibility; they are usually absent from `required`, which
+still names the camelCase fields.
 
 | Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
-| `read` | `{ "filePath": string, "offset"?: number, "limit"?: number }` (`path` is a runtime-only alias) | File text/media or directory listing. |
-| `write` | `{ "filePath": string, "content": string }` (`path` is a runtime-only alias) | Write result plus formatter/LSP diagnostics when available. |
-| `edit` | `{ "filePath": string, "oldString": string, "newString": string, "replaceAll"?: bool }` (short spellings `path`/`old`/`new`/`replace_all` are runtime-only aliases) | Replacement result plus diff/formatter/LSP data. |
+| `read` | `{ "filePath": string, "offset"?: number, "limit"?: number }` (also lists `path` under `properties`) | File text/media or directory listing. |
+| `write` | `{ "filePath": string, "content": string }` (also lists `path` under `properties`) | Write result plus formatter/LSP diagnostics when available. |
+| `edit` | `{ "filePath": string, "oldString": string, "newString": string, "replaceAll"?: bool }` (also lists `path`/`old`/`new`/`replace_all` under `properties`) | Replacement result plus diff/formatter/LSP data. |
 | `apply_patch` (`patch`) | `{ "patchText": string }` (alias `patch`) | Aggregate diff and per-file metadata. |
 | `ls` | `{ "path"?: string }` | Immediate directory entries. |
 | `glob` | `{ "pattern": string, "path"?: string }` | Path matches and counts (cap 100). |
@@ -101,8 +102,13 @@ structured JSON tool result can collapse to a string after the global cap.
 
 ### Action (fourteen values)
 
-`Action` serializes lowercase in saved-permission rows and rules
-(`#[serde(rename_all = "lowercase")]`):
+`Action` serializes with `#[serde(rename_all = "lowercase")]` in saved-permission
+rows and rules
+([`permission.rs`](../../crates/hya-tool/src/permission.rs)): the variant name
+is lowercased **without** inserting separators, so multi-word variants become a
+single token (for example `ExternalDirectory` → `externaldirectory`). Server
+persistence writes that serde string into the DB `action` column
+([`saved_permission.rs`](../../crates/hya-server/src/pending/saved_permission.rs)).
 
 | Wire value | Variant | Typical raisers |
 | --- | --- | --- |
@@ -119,7 +125,7 @@ structured JSON tool result can collapse to a string after the global cap.
 | `todowrite` | `TodoWrite` | `todowrite`. |
 | `skill` | `Skill` | `skill`. |
 | `lsp` | `Lsp` | `lsp`. |
-| `external_directory` | `ExternalDirectory` | Any tool whose resolved path (or shell `workdir`) lies outside the session workdir. |
+| `externaldirectory` | `ExternalDirectory` | Any tool whose resolved path (or shell `workdir`) lies outside the session workdir. |
 
 ### Resource (nine shapes)
 
@@ -280,9 +286,15 @@ Mapping from `ToolError` to the wire `type` string
 | `UnsupportedInlineAgentField` | `unsupported_inline_agent_field` |
 | `Other` | `unknown` |
 
-Clients that switch on this string should treat all twelve values as first-class.
-`permission` errors are protected from rewriting by `tool.execute.after` hooks;
-other outcomes may be rewritten by those hooks
+A thirteenth wire `type` is **not** a `ToolError` variant: when a
+`tool.execute.before` hook vetoes a call, the engine emits
+`Event::ToolError` with `value` built as
+`tool_error_message_value("blocked", …)` and message text
+`blocked by plugin: <reason>`
+([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)). Clients that switch on
+this string should treat the twelve `ToolError` mappings **and** `blocked` as
+first-class. `permission` errors are protected from rewriting by
+`tool.execute.after` hooks; other outcomes may be rewritten by those hooks
 ([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)).
 
 ## CLI Defaults
