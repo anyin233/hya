@@ -10,7 +10,7 @@ and makes "which agent am I talking to?" un-ambiguous.
 
 ## Status
 
-Revisited for the subagent-manager redesign: this ADR supersedes its earlier tab-only consequence
+Revisited for the subagent-roster redesign: this ADR supersedes its earlier tab-only consequence
 (focused pane full-frame plus tab bar, with true side-by-side split deferred) while keeping the
 original single-input invariant.
 
@@ -24,7 +24,7 @@ original single-input invariant.
 - Subagent observation views may be presented as either focused tabs or side-by-side split panes.
   Both placements preserve the same invariant: only the visible main-agent Prompt composer accepts
   user input. Subagent focus controls observation actions such as scroll, close, cycle, split/tab
-  placement, and manager navigation; it never buffers or submits prompt text.
+  placement, and roster navigation; it never buffers or submits prompt text.
 - Escape in an observation view returns focus to the main view and restores the Prompt composer;
   closing an observation view remains an explicit close action.
 - **Navigation (current shipped keymap):** Escape returns to the main view; `<leader>w` (`pane_close`)
@@ -40,10 +40,12 @@ original single-input invariant.
 - Permission and question prompts raised by subagents remain global main-owned modals. Observation
   views may show blocked status, but they never host answer/input controls.
 - Opening a new tab or split is a two-step commit through the same Subagent selector. Ctrl+X O
-  opens the Subagent manager; inside it, Enter opens the selected subagent as a tab, `v` opens a
-  vertical left/right split, and `s` opens a horizontal top/bottom split. Cancel or an empty live
-  Roster leaves the current layout unchanged; an observation view closes only when an explicit
-  terminal team lifecycle event marks that observed subagent finished.
+  (`pane.roster`) opens the **Subagent roster** dialog (title
+  `Subagent roster - Tab|Vertical|Horizontal`); inside it, Enter opens the selected row with the
+  dialog's placement, `v` opens a vertical left/right split, `s` opens a horizontal top/bottom
+  split, and on a fetch error `r` retries the tree load. Cancel or an empty live Roster leaves
+  the current layout unchanged; an observation view closes only when an explicit terminal team
+  lifecycle event marks that observed subagent finished.
 - Direct commands open the same selector with placement preselected, then commit only after a live
   subagent row is selected: Ctrl+X Shift+T for tab, Ctrl+X Shift+V for vertical left/right split,
   and Ctrl+X Shift+S for horizontal top/bottom split, preserving existing lowercase leader chords.
@@ -60,12 +62,15 @@ original single-input invariant.
   earlier draft of this ADR assumed one; it was not implemented).
 - A live subagent handle owns at most one observation view. Selecting an already-open subagent focuses
   that view and moves it to the requested placement when the action asked for a different tab/split.
-- Manager rows show handle, agent type, status, current task, and an open/focused marker when an
-  observation view already exists for that handle.
-- The Subagent manager presents the current Team Roster as a tree/indented list when parent-child
-  spawn relationships are known. `main` may appear as a non-selectable root row; only non-main live
-  subagents can open observation views. This is presentation only; Roster remains the team-scoped
-  directory of live agents.
+- Roster rows show handle, agent type, **lifecycle label** (from
+  `resolveLifecyclePresentation`: Working / Finished / Failed / Cancelled / Idle), current task,
+  a spinner while Working, and an open/focused marker when an observation view already exists for
+  that handle.
+- The **Subagent roster** presents the current Team Roster as a tree/indented list when parent-child
+  spawn relationships are known. Depth-0 **Main** is **selectable**
+  (`flattenRunTree`: `selectable: node.session !== undefined`) so the roster can return focus to
+  Main after a split; only non-main rows open observation views. This is presentation only; Roster
+  remains the team-scoped directory of live agents.
 - This implementation keeps one visible observation view active at a time. Multiple opened
   observations are modeled as tabs; a requested split shows the selected observation beside the
   main view rather than introducing a nested split tree.
@@ -73,24 +78,28 @@ original single-input invariant.
   opened observation is selected by the existing cycle/focus controls.
 - The main agent view is globally unique and lives in the main tab. Other tabs/splits may observe
   subagents, but they do not duplicate the main Prompt composer or main transcript viewport.
-- The manager overlay rebuilds from the current Team projection while open. If the selected row is
+- The roster overlay rebuilds from the current Team projection while open. If the selected row is
   absent from a refreshed item set, selection falls back through the dialog's normal clamped
   position.
 - If no row is selected at commit, no observation view is created.
 - Observation layout state is scoped to the active main Session. Switching/resuming another main
   Session closes existing observation views and resets to that Session's main tab.
 - Observation layout state is not persisted. Restarting the TUI or resuming a Session starts at the
-  main tab; users reopen live subagent observation views through the manager when needed.
-- Ctrl+X O replaces the existing Team Roster overlay with the Subagent manager: same live Roster
-  projection, extended with open-as-tab/open-as-split actions. Escape closes it; confirming a
-  selection opens/focuses the requested observation view and returns to the Session screen.
-- The Subagent manager is observe-only: it opens, focuses, and closes observation views and filters
+  main tab; users reopen live subagent observation views through the roster when needed.
+- Ctrl+X O (`pane.roster`) opens the Subagent roster overlay: same live Roster projection, extended
+  with open-as-tab/open-as-split actions and error-state retry (`r`). Escape closes it; confirming a
+  selection opens/focuses the requested observation view (or Main) and returns to the Session screen.
+- The Subagent roster is observe-only: it opens, focuses, and closes observation views and filters
   the Roster. It does not kill, restart, reassign, or send work to subagents.
-- If no live subagents are selectable, Ctrl+X O still opens the manager with a clear empty state;
+- If no live subagents are selectable, Ctrl+X O still opens the roster with a clear empty state;
   no tab or split is created until a live subagent is selected.
-- The main view remains quiet by default but exposes a compact status/count indicator when live
-  subagents exist or need attention, showing total live subagents plus attention counts such as
-  blocked/permission/question states; Ctrl+X O is the path from that indicator to details.
-- The manager supports `/`-entered filtering over handle, agent type, and current task while
-  preserving arrow/page navigation through the filtered rows. Outside filter mode, `Enter`, `v`, and
-  `s` are placement actions; Escape exits filter mode first, then closes the manager.
+- The session route does **not** render a compact live-subagent/attention count badge. When task UI
+  is present it shows a single hint line with the `pane.roster` shortcut label ("subagent roster")
+  and, when experimental background subagents are available and a non-background task is running,
+  a `session.background` shortcut hint — not blocked/permission/question totals. Ctrl+X O remains
+  the path to the roster. *(An earlier draft of this ADR promised a status/count indicator; it was
+  not implemented.)*
+- The roster supports `/`-entered filtering over handle, agent type, and current task while
+  preserving arrow/page navigation through the filtered rows. Outside filter mode, `Enter`, `v`,
+  and `s` are placement actions (plus `r` on error); Escape exits filter mode first, then closes
+  the roster.

@@ -47,18 +47,51 @@ dispatches to global hooks (`HookDispatcher::dispatch_event`), then activation
 
 ### `AgentSpec`
 
-`AgentSpec` is the resolved agent for one turn: `name`, `model`,
-`system_prompt`, `workdir`, and optional `reasoning` effort. It is what a
-`TurnBinding`'s agent resolution produces and what the server holds as its
-process-level default for new sessions.
+`AgentSpec` is the resolved agent for one turn
+([`crates/hya-core/src/engine.rs`](../../crates/hya-core/src/engine.rs)). It is
+what a `TurnBinding`'s agent resolution produces and what the server holds as
+its process-level default for new sessions:
+
+| Field | Type | Role |
+| --- | --- | --- |
+| `name` | `AgentName` | Agent display / catalog name |
+| `model` | `ModelRef` | Model route for completions |
+| `system_prompt` | `String` | System prompt base before guidance/skills composition |
+| `workdir` | `PathBuf` | Filesystem workdir for tools and path resolution |
+| `reasoning` | `Option<ReasoningEffort>` | Optional reasoning effort for capable models |
+
+Note: `AgentSpec.workdir` is a **`PathBuf`**. Event payloads that record the
+session workdir (`SessionCreated`, `SessionMoved`) use **`String`** on the wire
+— same concept, different type at the two seams.
 
 ### `RuntimeCatalogRefresh`
 
-`RuntimeCatalogRefresh` is the trait hook `bind_root_runtime` calls before a
-**root** turn binds its snapshot. `hya-app` implements it so the installed
-bundle catalog can refresh when the registry generation changed. It fires only
-on root binds; child/bound turns reuse the parent's pinned `TurnBinding` and
-never consult the registry.
+Optional app-owned hook that `SessionEngine::bind_root_runtime` calls **before**
+binding a root turn snapshot. Child/bound turns reuse the parent's pinned
+`TurnBinding` and never consult the registry. `hya-app` implements it so the
+installed bundle catalog can refresh when the registry generation changed.
+
+```rust
+#[async_trait]
+pub trait RuntimeCatalogRefresh: Send + Sync {
+    async fn refresh_if_changed(
+        &self,
+        runtime: &RuntimeRegistry,
+    ) -> Result<bool, CoreError>;
+}
+```
+
+**Return contract** (rustdoc at `engine.rs`):
+
+| Result | Meaning |
+| --- | --- |
+| `Ok(true)` | A new generation was published |
+| `Ok(false)` | Nothing changed |
+| `Err(_)` | Discovery/publication failed; **`bind_root_runtime` aborts** and does not bind |
+
+The engine discards the `bool` after success (`let _ = refresh…await?`) and always
+proceeds to `runtime.bind_turn(workdir)` when the result is `Ok`. Implementors own
+MCP/plugin discovery I/O; the engine only rebinds after a successful refresh.
 
 ## Session Creation
 
