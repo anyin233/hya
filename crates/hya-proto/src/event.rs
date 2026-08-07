@@ -591,6 +591,7 @@ impl Event {
     }
 }
 
+
 /// An ordered, replayable event: the unit shipped over SSE and stored in the log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
