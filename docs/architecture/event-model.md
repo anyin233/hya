@@ -168,10 +168,10 @@ the root.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String`, `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry by handle |
+| `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String` (the agent's **leaf** name), `parent: Option<String>` (default absent = team root), `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry keyed by **canonical path** `{parent}/{handle}`; a root registration (`agent_session == session`) keys as `main`. See [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
 | `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; idle/terminal clears in-flight resident work and advances durable cursor |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
-| `mail_sent` | `session`, `from: String`, `to: MailEndpoint`, `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)) |
+| `mail_sent` | `session`, `from: String` (canonical path), `to: MailEndpoint` (a canonical path, or a unit-qualified channel key `{unit}#{name}`), `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)). Addresses are resolved to canonical form at **send** time, not fold time; see [ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md) |
 | `channel_joined` | `session`, `channel: String`, `member: String` | Fold: add subscriber |
 | `channel_left` | `session`, `channel`, `member` | Fold: remove subscriber |
 

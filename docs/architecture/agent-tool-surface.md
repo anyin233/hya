@@ -31,7 +31,7 @@ filtering. The inventory below is complete for that constructor.
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `shell`, `bash` | Two advertised names backed by the same shell implementation. |
 | Human/session interaction | `question`, `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask structured or simple questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
-| Agents and teams | `skill`, `list_agents`, `task`, `send`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, and use team mail/channels. |
+| Agents and teams | `skill`, `list_agents`, `task`, `send`, `announce`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, and use unit mail/channels ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
 ### Question and ask_user
@@ -126,20 +126,35 @@ resolved sender handle (`from`), the normalized recipient address (`to`), and th
 `recipients` count.
 ([crates/hya-tool/src/mailbox.rs:250-312](../../crates/hya-tool/src/mailbox.rs#L250-L312))
 
-**`roster`**: no parameters; returns one row per live teammate with `handle`,
-agent type, session id, scheduling mode, `status` (`idle` | `busy` | `done` |
-`failed`, folded in from `AgentActivityChanged` by the resident supervisor), and
-`current_task`. Registered `ToolPermission::ReadOnly`, so it allows without
-prompting under `default`.
+**`roster`**: no parameters; returns the acting agent's `self` path plus rows
+grouped by relation — `parent`, `peers` (same parent), and `reports` (agents it
+leads). Nobody outside the agent's unit is listed, because it cannot message
+them ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). Each row carries
+`handle` (canonical path), `name` (the short name used to address it),
+`relation`, agent type, session id, scheduling mode, `status` (`idle` | `busy` |
+`done` | `failed`, folded in from `AgentActivityChanged` by the resident
+supervisor), and `current_task`. Empty groups are omitted. Registered
+`ToolPermission::ReadOnly`, so it allows without prompting under `default`.
+
+**`announce`**: takes `body`; posts a one-way announcement to the agents the
+caller **directly** leads, and no further. Rejected when the caller leads nobody.
+Subordinates do not reply on this path — they answer with ordinary `send` mail to
+their parent.
 ([crates/hya-tool/src/mailbox.rs:314-390](../../crates/hya-tool/src/mailbox.rs#L314-L390))
 
-**`channels`**: no parameters; lists every mail channel of the acting agent's team
-with its member list and message count. Registered `ToolPermission::ReadOnly`.
+**`channels`**: no parameters; lists the channels the acting agent can use — its
+home unit's, plus its own unit's when it leads one — with the owning `unit`,
+member list, and message count. A channel belongs to exactly one unit, so the
+same name in another unit is a different channel. The reserved `#announce`
+channels are hidden. Registered `ToolPermission::ReadOnly`.
 ([crates/hya-tool/src/mailbox.rs:393-437](../../crates/hya-tool/src/mailbox.rs#L393-L437))
 
 **`join`**: takes a channel name; the leading `#` is optional (`#build` and
-`build` are the same channel). It subscribes the acting agent and **creates** the
-channel if it does not exist — there is no separate create-channel tool.
+`build` are the same channel). It subscribes the acting agent **within its own
+unit** and **creates** the channel if it does not exist — there is no separate
+create-channel tool. An agent that leads a unit resolves a bare name to the unit
+it leads, and `^name` to its parent's unit; for an agent that leads nobody a bare
+name is its home unit and `^` is an error.
 Registered `ToolPermission::Tool`, so it asks under `default`.
 ([crates/hya-tool/src/mailbox.rs:439-473](../../crates/hya-tool/src/mailbox.rs#L439-L473))
 

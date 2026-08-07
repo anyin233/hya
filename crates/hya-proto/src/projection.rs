@@ -213,6 +213,56 @@ impl std::fmt::Display for ChannelResolveError {
 }
 
 impl TeamProjection {
+    /// Resolve a handle as written on the wire to its canonical path.
+    ///
+    /// New emitters always write canonical paths, so this is the identity for
+    /// any log written after scoping landed. The remaining branches exist purely
+    /// to replay **pre-scoping** logs, which carry bare leaf names:
+    ///
+    /// 1. anything containing a `/` is already canonical;
+    /// 2. anything that is already a roster key is canonical (this is what
+    ///    matches the root, whose path `main` has no separator);
+    /// 3. otherwise resolve the leaf against the roster, which is unambiguous in
+    ///    a flat legacy team;
+    /// 4. failing that, attach it to the root, matching how a legacy
+    ///    `AgentRegistered` with no `parent` folds.
+    ///
+    /// Step 4 also covers ordering: a `MailSent` folded before the recipient's
+    /// `AgentRegistered` still lands under the same key that registration will
+    /// later produce, so replay does not depend on event order.
+    ///
+    /// Public because the reducer is not the only reader of a raw address: the
+    /// resident supervisor resolves a live `MailSent`'s recipients against this
+    /// same roster, and the two must agree or a delivered message would fail to
+    /// wake its recipient.
+    #[must_use]
+    pub fn canonical_member(&self, raw: &str) -> String {
+        if raw.contains(scope::PATH_SEPARATOR) || self.roster.contains_key(raw) {
+            return raw.to_string();
+        }
+        let mut matches = self.roster.keys().filter(|key| scope::leaf(key) == raw);
+        match (matches.next(), matches.next()) {
+            // Exactly one roster entry carries this leaf.
+            (Some(only), None) => only.clone(),
+            // Unknown, or ambiguous across units: fall back to the legacy
+            // interpretation rather than guessing which unit was meant.
+            _ => scope::join_path(scope::ROOT_HANDLE, raw),
+        }
+    }
+
+    /// Resolve a channel name as written on the wire to its unit-qualified key.
+    ///
+    /// New emitters write qualified keys (`main/lead-1#build`). A pre-scoping log
+    /// carries a bare name, which belongs to the root's unit because a legacy
+    /// team is one flat unit under `main`.
+    #[must_use]
+    pub fn canonical_channel(&self, raw: &str) -> String {
+        if raw.contains(scope::CHANNEL_SEPARATOR) {
+            return raw.to_string();
+        }
+        scope::qualify_channel(scope::ROOT_HANDLE, raw)
+    }
+
     /// Whether `path` leads a unit — that is, whether any roster entry is its
     /// direct child.
     #[must_use]
@@ -956,51 +1006,12 @@ impl Projection {
         }
     }
 
-    /// Resolve a handle as written on the wire to its canonical path.
-    ///
-    /// New emitters always write canonical paths, so this is the identity for
-    /// any log written after scoping landed. The remaining branches exist purely
-    /// to replay **pre-scoping** logs, which carry bare leaf names:
-    ///
-    /// 1. anything containing a `/` is already canonical;
-    /// 2. anything that is already a roster key is canonical (this is what
-    ///    matches the root, whose path `main` has no separator);
-    /// 3. otherwise resolve the leaf against the roster, which is unambiguous in
-    ///    a flat legacy team;
-    /// 4. failing that, attach it to the root, matching how a legacy
-    ///    `AgentRegistered` with no `parent` folds.
-    ///
-    /// Step 4 also covers ordering: a `MailSent` folded before the recipient's
-    /// `AgentRegistered` still lands under the same key that registration will
-    /// later produce, so replay does not depend on event order.
     fn canonical_member(&self, raw: &str) -> String {
-        if raw.contains(scope::PATH_SEPARATOR) || self.team.roster.contains_key(raw) {
-            return raw.to_string();
-        }
-        let mut matches = self
-            .team
-            .roster
-            .keys()
-            .filter(|key| scope::leaf(key) == raw);
-        match (matches.next(), matches.next()) {
-            // Exactly one roster entry carries this leaf.
-            (Some(only), None) => only.clone(),
-            // Unknown, or ambiguous across units: fall back to the legacy
-            // interpretation rather than guessing which unit was meant.
-            _ => scope::join_path(scope::ROOT_HANDLE, raw),
-        }
+        self.team.canonical_member(raw)
     }
 
-    /// Resolve a channel name as written on the wire to its unit-qualified key.
-    ///
-    /// New emitters write qualified keys (`main/lead-1#build`). A pre-scoping log
-    /// carries a bare name, which belongs to the root's unit because a legacy
-    /// team is one flat unit under `main`.
     fn canonical_channel(&self, raw: &str) -> String {
-        if raw.contains(scope::CHANNEL_SEPARATOR) {
-            return raw.to_string();
-        }
-        scope::qualify_channel(scope::ROOT_HANDLE, raw)
+        self.team.canonical_channel(raw)
     }
 
     /// Get or insert the member projection for `member`.

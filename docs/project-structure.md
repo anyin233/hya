@@ -67,7 +67,8 @@ Important modules:
 | [`ids.rs`](../crates/hya-proto/src/ids.rs) | Strongly typed ids: new sessions use `hysec_...`; messages, parts, and tool calls keep UUID-backed display prefixes such as `msg_` and `tc_`. |
 | [`message.rs`](../crates/hya-proto/src/message.rs) | `Message`, `Part`, role, finish reason, token and cost structs. |
 | [`model.rs`](../crates/hya-proto/src/model.rs) | String newtypes for agents, models, tools, and model-facing tool schemas. |
-| [`projection.rs`](../crates/hya-proto/src/projection.rs) | Idempotent reducer from envelopes to `Projection`. |
+| [`projection.rs`](../crates/hya-proto/src/projection.rs) | Idempotent reducer from envelopes to `Projection`, plus the roster-aware address/channel resolution the store gate and engine reader share. |
+| [`scope.rs`](../crates/hya-proto/src/scope.rs) | Canonical agent paths, the parent/sibling/report scope rule, and unit-qualified channel keys ([ADR-0011](adr/0011-hierarchy-scoped-mailbox.md)). |
 
 The reducer ignores duplicate or older envelopes by comparing `Envelope.seq` to
 `Projection.last_seq`, which makes replay and SSE reconnect logic use the same
@@ -131,7 +132,7 @@ Builtins currently include:
 | `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
 | `roster`, `channels` | `ReadOnly` | Team roster and channel list; allow without prompting under `default`. |
-| `send`, `join`, `leave` | `Tool` | Team mailbox send and channel join/leave; ask under `default`. |
+| `send`, `announce`, `join`, `leave` | `Tool` | Unit-scoped mailbox send, one-way announce to direct reports, and channel join/leave; ask under `default`. |
 | `invalid` | `Tool` | Structured response for unknown tool calls. |
 
 Successful tool output is capped at **5000 characters** for model consumption
@@ -204,7 +205,7 @@ Important modules:
 | [`loop_mode.rs`](../crates/hya-core/src/loop_mode.rs) | Planner/verifier loop mode with budget, no-progress, and repeated-directive gates. |
 | [`subagent.rs`](../crates/hya-core/src/subagent.rs) | Supervised child-session member runs and bounded team evidence projection. |
 | [`mailbox.rs`](../crates/hya-core/src/mailbox.rs) | Mailbox service loop draining `MailboxRequest`. |
-| [`engine/mailbox.rs`](../crates/hya-core/src/engine/mailbox.rs) | Team-root mail delivery, roster/channel queries, `MAIN_HANDLE`. |
+| [`engine/mailbox.rs`](../crates/hya-core/src/engine/mailbox.rs) | Team-root mail delivery, announce, scope-filtered roster/channel queries, `MAIN_HANDLE`. |
 | [`resident.rs`](../crates/hya-core/src/resident.rs) | `ResidentSupervisor`, team state, per-team lock and quiescence. |
 | [`orchestrator.rs`](../crates/hya-core/src/orchestrator.rs) | `SubagentLimits`, `SubagentGovernor`, stream permits, per-team budgets. |
 | [`runtime_registry.rs`](../crates/hya-core/src/runtime_registry.rs) | `RuntimeRegistry`, `TurnBinding`, config-generation publication. |

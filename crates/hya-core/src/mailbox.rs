@@ -43,6 +43,18 @@ pub async fn run_mailbox_service(
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
+                MailboxRequest::Announce {
+                    from,
+                    actor_claim,
+                    body,
+                    reply,
+                } => {
+                    let result = engine
+                        .mail_announce_for_actor(from, body, actor_claim.as_ref())
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
                 MailboxRequest::Join {
                     session,
                     actor_claim,

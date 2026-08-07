@@ -10584,7 +10584,7 @@ You are the runtime-installed agent.
                     session: queued_root,
                     agent_session: queued_actor,
                     handle: "queued-1".to_string(),
-                    parent: None,
+                    parent: Some("main".to_string()),
                     agent_type: agent.name.clone(),
                     mode: SubagentMode::Resident,
                 }],
@@ -10597,7 +10597,7 @@ You are the runtime-installed agent.
                 &Event::MailSent {
                     session: queued_root,
                     from: "main".to_string(),
-                    to: MailEndpoint::Handle("queued-1".to_string()),
+                    to: MailEndpoint::Handle("main/queued-1".to_string()),
                     kind: MailKind::Message,
                     body: "resume me".to_string(),
                 },
@@ -10618,14 +10618,14 @@ You are the runtime-installed agent.
                         session: running_root,
                         agent_session: running_actor,
                         handle: "running-1".to_string(),
-                        parent: None,
+                        parent: Some("main".to_string()),
                         agent_type: agent.name.clone(),
                         mode: SubagentMode::Resident,
                     },
                     Event::ResidentWorkStarted {
                         session: running_root,
                         actor_session: running_actor,
-                        handle: "running-1".to_string(),
+                        handle: "main/running-1".to_string(),
                         epoch: running_claim.epoch,
                         inbox_through: 0,
                     },
@@ -10656,14 +10656,14 @@ You are the runtime-installed agent.
         let _built = built;
 
         let running = store.read_projection(running_root).await.unwrap();
-        let running_entry = running.team.roster.get("running-1").unwrap();
+        let running_entry = running.team.roster.get("main/running-1").unwrap();
         assert_eq!(running_entry.status, RosterStatus::Failed);
         assert!(running_entry.resident_work.is_none());
 
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let queued = store.read_projection(queued_root).await.unwrap();
-                let entry = queued.team.roster.get("queued-1").unwrap();
+                let entry = queued.team.roster.get("main/queued-1").unwrap();
                 if entry.resident_cursor == 1 || entry.resident_work.is_some() {
                     break;
                 }
@@ -10801,7 +10801,7 @@ You are the installed resident agent.
                     session: root,
                     agent_session: actor,
                     handle: "installed-resident-1".to_string(),
-                    parent: None,
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new(stable_id),
                     mode: SubagentMode::Resident,
                 }],
@@ -10814,7 +10814,7 @@ You are the installed resident agent.
                 &Event::MailSent {
                     session: root,
                     from: "main".to_string(),
-                    to: MailEndpoint::Handle("installed-resident-1".to_string()),
+                    to: MailEndpoint::Handle("main/installed-resident-1".to_string()),
                     kind: MailKind::Message,
                     body: "startup recovery executable mail".to_string(),
                 },
@@ -10842,7 +10842,7 @@ You are the installed resident agent.
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let projection = observed_store.read_projection(root).await.unwrap();
-                let Some(entry) = projection.team.roster.get("installed-resident-1") else {
+                let Some(entry) = projection.team.roster.get("main/installed-resident-1") else {
                     tokio::task::yield_now().await;
                     continue;
                 };

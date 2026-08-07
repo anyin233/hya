@@ -357,7 +357,7 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
         }
     );
     let projection = store.read_projection(running_root).await.unwrap();
-    let entry = projection.team.roster.get("running-1").unwrap();
+    let entry = projection.team.roster.get("main/running-1").unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.resident_cursor, 1);
     assert!(entry.resident_work.is_none());

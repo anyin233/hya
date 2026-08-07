@@ -259,6 +259,26 @@ reducer); `plan-executor-heavy` if the conformance test exposes a reducer defect
 - Whether any consumer outside the listed files string-matches a roster handle.
   Grep before Phase 6; anything found is added to Phase 8.
 
+## Decisions taken during implementation
+
+- **Resolution lives on `TeamProjection`, not in `scope`.** `scope` stays pure
+  path arithmetic; anything needing the roster (`resolve_in_scope`,
+  `resolve_channel`, `scoped_roster`, `scoped_channels`, `leads_a_unit`) is a
+  method on `TeamProjection`. Both the store gate and the engine reader call the
+  same methods, so there is one definition of each rule.
+- **Unknown and out-of-scope are indistinguishable.** `resolve_in_scope` returns
+  `None` for both, and the store's rejection message covers both. Otherwise a
+  sender could probe whether an out-of-scope agent existed by reading which
+  rejection came back.
+- **`parent_agent_path` falls back to the team root.** The public
+  `register_existing_resident*` entry points take a handle but no parent, so the
+  unit is re-derived from the session's own lineage. When the parent is unknown or
+  itself unregistered, the agent is placed at the root — the pre-scoping flat
+  arrangement — rather than failing the spawn and stranding it.
+- **`spawn_resident` now returns a canonical path**, not a bare leaf, so callers
+  that hold a handle (stop, activity records) carry the same identity the roster
+  uses.
+
 ## Resolved during implementation
 
 - **`MailEndpoint` variant compat** — RESOLVED before Phase 1. `MailEndpoint` is
