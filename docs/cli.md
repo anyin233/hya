@@ -24,8 +24,10 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 
 `--print-logs`, `--log-level`, and `--pure` exist only so Compat/OpenCode command
 lines are accepted unchanged. They are never read after clap parse. hya-backend
-does not expose a CLI switch for verbose tracing today; operational notices
-(warnings, readiness lines) go to stderr.
+does not expose a CLI switch for verbose tracing today. Many operational notices
+go to stderr; the serve readiness line
+`hya server listening on <url>` is printed on **stdout** (see
+[`serve`](#hya-backend-serve)).
 
 ### `--db` empty-string semantics
 
@@ -155,29 +157,38 @@ and default binding.
 In addition to the frontend-registered slash commands above, the backend serves
 a built-in command catalog from
 [`command_catalog.rs`](../crates/hya-server/src/compat/command_catalog.rs) over
-`GET /api/command` (and the Compat `/command` surface). Expandable templates are
-expanded server-side.
+`GET /api/command` (and the Compat `/command` surface).
 
-| Command | Description | Expansion |
+**Expandability.** Every built-in is constructed with `expandable: false`.
+Server-side `expand_prompt` only expands entries with `expandable: true`
+(user-defined commands and skills). For the seven built-ins below, admitting a
+slash command therefore uses the literal admitted text
+`/<name>` or `/<name> <arguments>` — **not** the stored AGENTS.md / review
+template body. Catalog construction still substitutes the current workdir for
+`${path}` inside the *stored* init/review template strings, but that body is not
+applied by `expand_prompt` while `expandable` remains false.
+
+| Command | Description | Catalog notes |
 | --- | --- | --- |
-| `/init` | Guided AGENTS.md setup | Expandable template; supports `$ARGUMENTS`. The server substitutes the current workdir for `${path}` before the template is used. |
-| `/review` | Review changes `[commit\|branch\|pr]`, defaults to uncommitted | Expandable; runs as a subtask (`subtask: true`) in a child session. Also substitutes `${path}` with the workdir. |
-| `/help` | Show help | Non-expandable; template is the literal `/help`. |
-| `/model $ARGUMENTS` | Switch the active model | Non-expandable literal template with `$ARGUMENTS`. |
-| `/clear` | Start a fresh session | Non-expandable literal `/clear`. |
-| `/sessions` | Switch session | Non-expandable literal `/sessions`. |
-| `/think $ARGUMENTS` | Set reasoning effort | Non-expandable literal template with `$ARGUMENTS`. |
+| `/init` | Guided AGENTS.md setup | Built-in, **not** expandable. Stored template includes `${path}` → workdir at list time; admission still falls back to literal `/init` + args. |
+| `/review` | Review changes `[commit\|branch\|pr]`, defaults to uncommitted | Built-in, **not** expandable. Catalog sets `subtask: true` metadata. Same literal-admission rule as `/init`. |
+| `/help` | Show help | Built-in, not expandable; template is the literal `/help`. |
+| `/model $ARGUMENTS` | Switch the active model | Built-in, not expandable; template is `/model $ARGUMENTS`. |
+| `/clear` | Start a fresh session | Built-in, not expandable; template is `/clear`. |
+| `/sessions` | Switch session | Built-in, not expandable; template is `/sessions`. |
+| `/think $ARGUMENTS` | Set reasoning effort | Built-in, not expandable; template is `/think $ARGUMENTS`. |
 
 User-defined commands from config and on-disk command sources are merged with
 this list via upsert: a user-defined command with the same name **overrides** the
-built-in of that name.
+built-in of that name (and may set `expandable: true` so the template is
+expanded server-side).
 
 ### Keybindings
 
-The frontend ships a large named keybind registry in
+The frontend ships a named keybind registry in
 [`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
-(`Definitions`: on the order of 300 named entries including leader and chord
-defaults). Each registry entry is `{ default, description }`.
+(`Definitions`: **173** named entries including `leader` and chord defaults).
+Each registry entry is `{ default, description }`.
 
 - The special entry `leader` defaults to `ctrl+x`. Bindings written as
   `<leader>x` are leader chords.

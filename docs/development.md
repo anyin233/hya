@@ -93,25 +93,28 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
   `util/epilogue-art.data.ts` from the 8-bit Hya wordmark PNG. Only needed when
   the wordmark asset changes (see script header for `uv run` invocation).
 
-## Dev tasks (`cargo xtask`)
+## Dev tasks (`xtask` package)
 
-`crates/xtask` is **dev-only tooling** and is not part of any shipped binary. It
-uses a hand-rolled positional dispatcher (not clap): the first positional
-argument selects the task and every remaining argument is forwarded verbatim. An
-unrecognized task prints
-`usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check>` and exits 0.
+`crates/xtask` is **dev-only tooling** and is not part of any shipped binary.
+There is **no** Cargo alias named `xtask` in this workspace: invoke it as
+`cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
+dispatcher (not clap): the first positional argument selects the task and every
+remaining argument is forwarded verbatim. An unrecognized task prints
+`usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check>` (usage
+text only — the working invocation is still `cargo run -p xtask -- …`) and
+exits 0.
 
 | Task | Role |
 | --- | --- |
-| `sync-compat` | Import providers/models/MCP/skills from an OpenCode/Compat config. See the recipe in [Configuration](configuration.md). |
+| `sync-compat` | Import **supported MCP servers and skills** from an OpenCode/Compat config into hya config / skill roots (symlinks + MCP merge). Does **not** import providers or models — use `hya --import compat` for those (see [Configuration](configuration.md)). |
 | `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 
 ```sh
-cargo xtask sync-compat --help   # args after the task name are forwarded
-cargo xtask matrix-check
-cargo xtask startup-bench
+cargo run -p xtask -- sync-compat --help   # args after the task name are forwarded
+cargo run -p xtask -- matrix-check
+cargo run -p xtask -- startup-bench
 ```
 
 ### Example-only environment
