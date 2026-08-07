@@ -12,7 +12,7 @@
   "assignee": "cydia2001",
   "createdAt": "2026-08-07",
   "completedAt": null,
-  "branch": null,
+  "branch": "feat/context-observability",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
