@@ -375,6 +375,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::Error { .. }
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
+            | Event::ContextEvicted { .. }
             | Event::Unknown => {}
         }
     }
@@ -438,6 +439,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::Error { .. }
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
+            | Event::ContextEvicted { .. }
             | Event::Unknown => {}
         }
     }

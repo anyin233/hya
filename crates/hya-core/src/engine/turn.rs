@@ -597,16 +597,48 @@ impl SessionEngine {
                 &self.compaction,
                 self.providers.capabilities(&model).map(|c| c.max_context),
             );
-            if crate::compaction::needs_compaction_at(
-                &messages,
-                &self.compaction,
-                resolved_threshold,
-            ) {
+            // One running token count for the whole reduction sequence. It starts
+            // from the provider-measured value when available, then tracks
+            // request-local edits by delta — re-measuring after an edit would
+            // return the stale pre-edit number and hide the saving.
+            let mut tokens = crate::compaction::tokens_in_use(&messages);
+            let over_threshold = |tokens: usize, messages: &[_]| {
+                messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
+            };
+
+            // Cheapest reduction first: drop stale tool outputs. Only if that is
+            // not enough do we pay a summarizer call and lose whole turns to prose.
+            if over_threshold(tokens, &messages) {
+                let estimate_before = crate::compaction::estimate_tokens(&messages);
+                let evicted = crate::compaction::evict_stale_tool_outputs(
+                    &mut messages,
+                    self.compaction.keep_recent,
+                );
+                if evicted > 0 {
+                    let saved = estimate_before
+                        .saturating_sub(crate::compaction::estimate_tokens(&messages));
+                    let before = tokens;
+                    tokens = tokens.saturating_sub(saved);
+                    if !over_threshold(tokens, &messages) {
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::ContextEvicted {
+                                session,
+                                evicted_parts: evicted,
+                                tokens_before: u64::try_from(before).unwrap_or(u64::MAX),
+                                tokens_after: u64::try_from(tokens).unwrap_or(u64::MAX),
+                                threshold: u64::try_from(resolved_threshold).unwrap_or(u64::MAX),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            if over_threshold(tokens, &messages) {
                 // Snapshot what tripped the threshold before the transcript is
                 // replaced, so the ContextCompacted record explains why it ran.
-                // Prefer provider-reported usage over the chars/4 estimate.
-                let input_tokens_est =
-                    u64::try_from(crate::compaction::tokens_in_use(&messages)).unwrap_or(u64::MAX);
+                let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
                 let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
                 // Exact-resolve fixed Compaction once before any compact provider
                 // call (native or local). Missing definition fails closed here.
@@ -660,10 +692,9 @@ impl SessionEngine {
                             let options = summarize_options_from_definition(definition);
                             // Provider failures stay soft (prior behavior); missing
                             // definition already failed closed above.
-                            if let Ok(Some(plan)) = crate::compaction::plan_compaction_at(
+                            if let Ok(Some(plan)) = crate::compaction::fold_prefix(
                                 &messages,
                                 &self.compaction,
-                                resolved_threshold,
                                 summarizer.as_ref(),
                                 options,
                             )

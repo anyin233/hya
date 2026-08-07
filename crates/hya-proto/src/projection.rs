@@ -732,6 +732,7 @@ impl Projection {
             // stay in the log and the marker System message carries the output.
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
+            | Event::ContextEvicted { .. }
             | Event::Unknown => {}
         }
     }
