@@ -3,7 +3,7 @@
   "name": "remove-rust-tui",
   "title": "Remove retained Rust TUI crates",
   "description": "Delete hya-tui, hya-tui-lib, and hya-parity; keep only packages/hya-tui-ts as the interactive frontend.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,

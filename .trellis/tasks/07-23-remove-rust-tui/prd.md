@@ -16,11 +16,11 @@ source of truth is `packages/hya-tui-ts` (via `hya` → `hya-ts` → Bun).
 
 ## Acceptance Criteria
 
-- [ ] The three crates are gone from the tree.
-- [ ] Guard test asserts their absence and no Cargo dep on them.
-- [ ] Live docs / `AGENTS.md` describe a single TS frontend only.
-- [ ] Version + changelog updated.
-- [ ] Rust workspace fmt/clippy/test and entrypoint builds pass.
+- [x] The three crates are gone from the tree.
+- [x] Guard test asserts their absence and no Cargo dep on them.
+- [x] Live docs / `AGENTS.md` describe a single TS frontend only.
+- [x] Version + changelog updated.
+- [x] Rust workspace fmt/clippy/test and entrypoint builds pass.
 
 ## Out of Scope
 

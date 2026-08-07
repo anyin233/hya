@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Provides the provider compatibility and full verification contracts to review."}
+{"file":".trellis/tasks/07-21-grok-build-provider/research/grok-api.md","reason":"Provides the evidence boundary for rejecting speculative Grok behavior during review."}

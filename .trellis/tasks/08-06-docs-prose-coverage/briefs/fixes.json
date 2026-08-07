@@ -1,0 +1,425 @@
+{
+ "docs/configuration.md": {
+  "open": [
+   {
+    "feature": "User-defined slash commands from config maps (`command:` / `commands:` in opencode.json / opencode.jsonc)",
+    "source": "crates/hya-server/src/compat/command_sources.rs:30-43,60,100-107; crates/hya-proto/src/api.rs:41-49; crates/hya-server/src/compat/session_legacy.rs:94-133",
+    "status": "contradicted",
+    "target_doc": "docs/configuration.md",
+    "why": "The gap's own items ARE now covered (both `command` and `commands` maps are read, all four config paths listed, `template` marked required, upsert-over-builtins explained, and `subtask` correctly demoted to 'no runtime consumer'). But the same field table at docs/configuration.md:1291-1297 still claims `agent` = 'Agent override.' and `model` = 'Model override.' The server's `CommandRequest` (hya-proto/src/api.rs:41-49) only carries `command`, `arguments`, `text`; the `/command` handlers destructure exactly those three and then run the turn with `session_agent_with_guidance` (the session's own agent). Nothing in hya-server or the TUI ever reads a command entry's `agent`/`model` \u2014 they are serialized into the `/api/command` listing and dropped, exactly like `subtask`. A reader following this table will configure a per-command agent/model that silently never takes effect.",
+    "axis": "cli"
+   },
+   {
+    "feature": "User-defined slash commands from disk \u2014 discovery directories and the `subtask` frontmatter key",
+    "source": "crates/hya-server/src/compat/command_sources.rs:45-71; crates/hya-proto/src/api.rs:41-49; packages/hya-tui-ts/src/upstream/component/prompt/index.tsx:1010-1028",
+    "status": "contradicted",
+    "target_doc": "docs/configuration.md",
+    "why": "The originally-contradicted claims were properly DELETED, not supplemented: the two roots are now exactly `.opencode/command` / `.opencode/commands`, the nested-path naming rule (`git/commit.md` -> `/git/commit`) replaced the old 'file stem' claim, and `subtask` was rewritten from 'runs in a child session' to 'no runtime consumer'. However the same frontmatter table (docs/configuration.md:1262-1267) keeps `agent` = 'Switch to this agent profile before the turn' and `model` = 'Switch the submitted turn to this model', and the prose at line 1282-1283 asserts 'If `agent` names a built-in TUI profile, hya applies that profile before the turn starts.' No such code path exists: the TUI sends the *currently selected* agent (`agent: agent.name`, prompt/index.tsx:1024) and the server drops any agent/model on `CommandRequest`. This is the identical defect the writers correctly fixed for `subtask` but left standing for its two neighbouring rows.",
+    "axis": "cli"
+   }
+  ],
+  "new": [
+   {
+    "doc": "docs/configuration.md",
+    "claim": "Disk markdown command frontmatter: '`agent` | Switch to this agent profile before the turn.' and '`model` | Switch the submitted turn to this model.', reinforced by 'If `agent` names a built-in TUI profile, hya applies that profile before the turn starts.'",
+    "reality": "No consumer exists. `CommandRequest` carries only `command`, `arguments`, `text`; both `/command` handlers (session_legacy.rs:111-133, session_prompt.rs:156-178) destructure exactly those and then call `session_agent_with_guidance`, i.e. the session's existing agent. The frontmatter `agent`/`model` reach only `CommandInfo::bootstrap_summary` for the `/api/command` listing. Grepping `subtask|agent|model` off the command path shows the only non-test references are the catalog and a skill template. These rows should read like the corrected `subtask` row.",
+    "source": "crates/hya-proto/src/api.rs:41-49; crates/hya-server/src/compat/session_legacy.rs:94-133; crates/hya-server/src/compat/session_prompt.rs:144-181; crates/hya-server/src/compat/command_catalog.rs:180-196",
+    "axis": "cli"
+   },
+   {
+    "doc": "docs/configuration.md",
+    "claim": "Inline config commands table: '`agent` | no | Agent override.' and '`model` | no | Model override.'",
+    "reality": "Same defect as the disk table. `InlineCommand` parses `agent`/`model` and `CommandInfo::command` stores them, but they are only ever serialized into the `/api/command` listing; no server or TUI code reads them to change the agent or model for the turn. The TUI's submit path hard-codes the currently selected agent and model into `session.command`, and the server ignores both fields.",
+    "source": "crates/hya-server/src/compat/command_sources.rs:23-28,110-125; packages/hya-tui-ts/src/upstream/component/prompt/index.tsx:1021-1028",
+    "axis": "cli"
+   },
+   {
+    "doc": "docs/configuration.md",
+    "claim": "`HYA_STARTUP_TRACE` emits marks shaped `{\"hya_startup\":true,\"mark\":\"<mark>\",\"wall_ms\":\u2026,\"detail\":\u2026}` (`detail` omitted when none).",
+    "reality": "Accurate for the Rust emitters (hya-ts/src/main.rs:292-295, hya-backend/src/serve.rs:123-126), but the TUI emitter always adds a `mono_ms` field the documented shape does not mention. Harmless for JSON parsers, wrong for anyone matching the line exactly.",
+    "source": "packages/hya-tui-ts/src/hya/startup-trace.ts:41-49",
+    "axis": "cli"
+   },
+   {
+    "doc": "docs/configuration.md",
+    "claim": "Environment Variables table, line 695: \"`HYA_MODEL` | Active model id when `--model` is not passed and no `default_model` resolves. | Default: `default_model`, else a `sonnet` model, else the first model, else `offline`.\" This states config.yaml `default_model` wins over the env var.",
+    "reality": "HYA_MODEL takes precedence OVER config.yaml `default_model`. `resolve_runtime` computes `default_model` from `cfg.default_model` first, then does `model_override.or_else(|| std::env::var(\"HYA_MODEL\").ok()).unwrap_or(default_model)` \u2014 so an exported HYA_MODEL overrides a configured `default_model`. The row also contradicts the same file's own Model Selection list (lines 541-548: 1. --model, 2. HYA_MODEL, 3. default_model) and the sample-config comment at line 109 (\"Model used when neither `--model` nor `HYA_MODEL` is set\"). Practical effect: a user who sets `default_model: claude-sonnet-4-6` and also has a stale `HYA_MODEL` exported gets the env model, not the configured one, contrary to this row.",
+    "source": "crates/hya-app/src/runtime.rs:1280-1282 (resolve_runtime); crates/hya-app/src/config.rs:1457-1470 (choose_default)",
+    "axis": "config"
+   },
+   {
+    "doc": "docs/configuration.md",
+    "claim": "Directory manifests, lines 1017-1019: \"A subdirectory whose `plugin.toml` is unreadable or unparseable is **skipped** with a notice on stderr rather than failing startup.\"",
+    "reality": "Only an UNPARSEABLE manifest prints a notice. An unreadable or missing `plugin.toml` is skipped completely silently: `let Ok(contents) = std::fs::read_to_string(&path) else { continue; };` runs before `Manifest::parse`, and only the parse error arm calls `eprintln!(\"hya: skipping plugin manifest ...\")`. A user whose `.hya/plugins/foo/plugin.toml` has wrong permissions or a typo'd filename will see no stderr message at all, contrary to this sentence.",
+    "source": "crates/hya-app/src/plugins.rs:131-147 (scan_manifests)",
+    "axis": "config"
+   }
+  ],
+  "critic": []
+ },
+ "docs/architecture/agent-tool-surface.md": {
+  "open": [
+   {
+    "feature": "[tool] apply_patch (alias patch) \u2014 patch envelope format",
+    "source": "crates/hya-tool/src/apply_patch/parse.rs:40-152 (and apply_patch/mod.rs:16-46)",
+    "target_doc": "docs/architecture/agent-tool-surface.md",
+    "status": "thin",
+    "why": "The new `## APPLY_PATCH` section (agent-tool-surface.md:501-522) names the parameter `patchText`, the alias `patch`, the four hunk kinds, the relative-path rule, the all-paths-checked-before-write ordering, and the post-edit formatter/BOM/LSP step \u2014 but it describes the payload only as \"a Codex/Compat-style patch envelope\". That is a bare mention of the format's name. The envelope grammar exists nowhere in docs/: `*** Begin Patch` / `*** End Patch` sentinels (both required, Begin must precede End), `*** Add File: <path>` whose body lines must every one start with `+` (any other prefix is the input error `add file lines must start with '+'`), `*** Delete File: <path>`, `*** Update File: <path>` optionally followed on the very next line by `*** Move to: <path>`, `@@` chunk headers with optional trailing context text, chunk body lines prefixed with a space (context), `-` (removed) or `+` (added), and the `*** End of File` chunk terminator. CRLF is normalised to LF before parsing, and a `patchText` containing no recognised header parses to zero hunks, which the tool rejects as `patch rejected: empty patch`. A reader cannot construct a valid `patchText` from what is written \u2014 the tool's single parameter is effectively undocumented. `apply_patch` is also the ONLY file-mutation tool advertised to gpt-* models (edit/write are filtered out by `include_tool`), so this is the primary write path for that model family.",
+    "axis": "tools-permissions"
+   }
+  ],
+  "new": [
+   {
+    "doc": "docs/architecture/agent-tool-surface.md:410-414",
+    "claim": "Under `## WRITE` \u2192 \"Schema and validation\": \"Runtime deserialization stores the path in one optional field and accepts `filePath` as an alias (`path` is runtime-only).\"",
+    "reality": "`path` is NOT runtime-only: `WriteTool::schema` advertises it in the model-facing input schema under `properties` alongside `filePath` (only `required` is limited to `filePath` and `content`). The parenthetical also contradicts the sentence immediately before it in the same paragraph (\"it also lists `path` for compatibility\") and contradicts docs/architecture/tools-and-permissions.md:20-23 and :29, which correctly state that short spellings such as `path` appear under schema `properties`. Note the field direction is also inverted relative to READ's identical wording: in write.rs the serde field is `path` with `#[serde(alias = \"filePath\")]`, i.e. `filePath` is the alias of `path`, not the other way round.",
+    "source": "crates/hya-tool/src/write.rs:15-19 (serde field `path`, alias `filePath`), crates/hya-tool/src/write.rs:33-41 (input_schema properties list `filePath` AND `path`; required = [\"filePath\", \"content\"])",
+    "axis": "tools-permissions"
+   }
+  ],
+  "critic": []
+ },
+ "docs/architecture/server-client.md": {
+  "open": [
+   {
+    "feature": "ApiError status mapping (404 not_found and 503 service_unavailable)",
+    "target_doc": "docs/architecture/server-client.md",
+    "status": "contradicted",
+    "why": "The 404/503 rows themselves are correct, but the status table now carries a fabricated claim about the one error it singles out. Row 49 says 'Native turn paths do not map engine \"session not found\" here' and row 52 says 500 covers 'engine Invalid(\"session not found\") on native admit/turn when the session is missing'. Neither is true. `Invalid(\"session not found\")` is produced ONLY by crates/hya-core/src/engine/summary.rs:29 and :54 (summarize_session / summary_messages). The native prompt/command/shell handlers (crates/hya-server/src/lib.rs:160-210) call admit_user_prompt -> run_turn, and admit_user_prompt (crates/hya-core/src/engine/admission.rs:372-448) has no session-existence check at all \u2014 it just emits into the log \u2014 so no such error can reach a native turn route. Where the error IS raised, Compat translates it to 404, not 500 (crates/hya-server/src/compat/session_summarize.rs:98 -> ApiError::not_found; crates/hya-server/src/compat/session_wait.rs:40 -> session_not_found). A reader using this table to predict status codes gets the opposite answer.",
+    "source": "crates/hya-server/src/lib.rs:54",
+    "axis": "runtime-events"
+   }
+  ],
+  "new": [
+   {
+    "doc": "docs/architecture/server-client.md:52",
+    "claim": "500 Internal Server Error covers 'engine Invalid(\"session not found\") on native admit/turn when the session is missing' (and :49 claims native turn paths do not map that error to 404).",
+    "reality": "Native admit/turn never produces Invalid(\"session not found\") \u2014 admit_user_prompt has no existence check. Only summarize_session/summary_messages raise it, and the Compat routes map it to 404 (session_summarize.rs:98) / a session_not_found response (session_wait.rs:40), never 500.",
+    "source": "crates/hya-core/src/engine/summary.rs:29, crates/hya-server/src/compat/session_summarize.rs:93-101, crates/hya-server/src/compat/session_wait.rs:35-43, crates/hya-core/src/engine/admission.rs:372-448",
+    "axis": "runtime-events"
+   },
+   {
+    "doc": "docs/architecture/server-client.md:96-104",
+    "claim": "PromptResponse is shown as `\"message\": \"<user MessageId>\"` and is labelled '(also returned by command and shell)'.",
+    "reality": "True for /prompt and /command (both return admit_user_prompt / admit_command_prompt's USER message id), but /sessions/:id/shell returns run_shell's ASSISTANT message id. One shape, two different message identities \u2014 the '<user MessageId>' annotation is wrong for the shell route. (The rustdoc on api.rs:61 is wrong in the opposite direction, calling it the assistant id for all three.)",
+    "source": "crates/hya-server/src/lib.rs:196-211, crates/hya-core/src/engine/shell.rs:30-113, crates/hya-proto/src/api.rs:58-65",
+    "axis": "runtime-events"
+   }
+  ],
+  "critic": [
+   {
+    "feature": "SSE `permission.asked` / `permission.replied` / `question.asked` / `question.replied` / `question.rejected` frames on `/event`, `/api/event`, and `/global/event`",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/pending/permission.rs:448-480 (`permission_asked_event`, `permission_replied_event`); /chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/pending/question.rs:204-226,264-275 (`publish_replied`, `publish_rejected`, `question_asked_event`); merged into all three SSE routes at /chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/event.rs:53-68, 111-133, 141-217",
+    "why_it_matters": "These are the only signal an HTTP integrator gets that the agent is blocked waiting for a permission decision or a `question`/`ask_user` answer. A client that does not handle them will hang forever mid-turn with no visible cause. The frame shapes are also non-obvious: `permission.asked` carries a `LegacyPermissionRequestView`, `permission.replied` carries `{sessionID, requestID, reply}` where `reply` is `once|always|reject`, `question.asked` carries `{id, sessionID, questions[]}` with per-question `{question, header, options[], multiple, custom}`, and `question.replied` carries `answers: string[][]` (one array per question). Nothing in docs/** states any of this. `docs/compat-parity.md:108` enumerates the session/message/part frames and omits the permission/question family entirely; `permission.asked` and `question.asked` appear in docs/** only in the attention-sound table at docs/tui-reference.md:499-500, which is about TUI notification sounds, not the wire contract; `permission.replied`, `question.replied`, and `question.rejected` appear nowhere in docs/**.",
+    "suggested_doc": "docs/architecture/server-client.md \u2014 add an \"SSE event catalog\" section under the existing Permissions (line ~215) and event-route discussion (line ~156), listing each frame type with its `properties` shape and pairing it with the reply routes already documented at lines 220-237."
+   },
+   {
+    "feature": "`session.next.step.started` / `session.next.step.ended` frames emitted on `/api/event` and `/global/event`",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/event.rs:485-495 (`api_envelope_payload` maps `Event::StepStarted`/`StepFinished`) and 542-579 (`step_started_event_payload`, `step_ended_event_payload`); wired at event.rs:101 (`/api/event`) and event.rs:174 (`/global/event`)",
+    "why_it_matters": "The same engine event is rendered differently on the two SSE surfaces: legacy `/event` turns `StepStarted`/`StepFinished` into `message.part.updated` step parts (event.rs:315-333), while `/api/event` and `/global/event` turn them into `session.next.step.started` / `session.next.step.ended`. An integrator that ports a client from one stream to the other silently loses turn boundaries. Worse, the only doc sentence touching this asserts the opposite: docs/compat-parity.md:108 ends with \"...before hya implemented any durable `session.next.*` stream\", which reads as \"hya emits no `session.next.*` frames\". The payloads are also undocumented: `started` carries `{timestamp, sessionID, assistantMessageID, agent, model}`, `ended` carries `{timestamp, sessionID, assistantMessageID, finish, cost, tokens}`. `docs/project-structure.md:265` names the `session.next.*` family only as a label for hya-sdk's reducer module, and `hya_sdk::reducer::V2Event` is a public `#[non_exhaustive]` enum with ~29 variants of which hya's server emits exactly these two \u2014 an integrator has no way to learn which are live.",
+    "suggested_doc": "docs/architecture/server-client.md \u2014 in the same SSE catalog section, add a per-route column showing which frame each engine event becomes on `/event` vs `/api/event` vs `/global/event`; and correct the trailing clause of docs/compat-parity.md:108."
+   },
+   {
+    "feature": "Pending permission/question queues are replayed as a snapshot on `/global/event` connect, and re-snapshotted on broadcast lag \u2014 but are silently dropped on legacy `/event`",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/event.rs:143-164 (`snapshot_asked()` chained after the `server.connected` frame) and 182-215 with `recover_pending` at 220-232; contrast /chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/event.rs:53-65 where legacy `/event` has no connect snapshot and maps `Err(_lagged) => None`",
+    "why_it_matters": "This decides whether a client can safely reconnect. On `/global/event` a late or reconnecting client receives every currently-pending `permission.asked`/`question.asked` immediately after `server.connected`, and a lagged consumer gets the full pending set re-emitted instead of a gap \u2014 so reconnect is lossless and the client must expect duplicate `asked` frames and dedupe by `requestID`. On legacy `/event` neither happens: a client that connects after a permission was raised, or that falls behind the broadcast buffer, never sees the prompt and the session appears to hang with no recovery path other than polling `GET /permission`. Nothing in docs/** describes either behavior or the divergence.",
+    "suggested_doc": "docs/architecture/server-client.md \u2014 reconnect/idempotency subsection of the SSE event catalog, cross-linked from the Permissions table at lines 220-237."
+   },
+   {
+    "feature": "`resync` SSE frame is also emitted by the Compat streams `/event`, `/api/event`, and `/global/event`",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/event.rs:49, 105, 178 \u2014 each live-envelope stream maps `Err(_lagged)` to `SseEvent::default().event(\"resync\")`",
+    "why_it_matters": "`resync` is documented only for the native route: docs/architecture/server-client.md:143-146 scopes it to `GET /sessions/:id/stream`, and docs/troubleshooting.md:175-177 repeats that scope. An integrator building on the Compat streams (which is what hya-sdk and the TUI use) will receive an SSE event with no `data` field and an unrecognized event name, and \u2014 per the documented native contract \u2014 has no equivalent catch-up endpoint, since `?since_seq=` exists only on `/sessions/:id/events`. The doc needs to say `resync` appears on the Compat streams too and state how to recover there.",
+    "suggested_doc": "docs/architecture/server-client.md:143-146 \u2014 widen the `resync` paragraph beyond Native Events, and mirror the correction in docs/troubleshooting.md:175-177."
+   }
+  ]
+ },
+ "docs/architecture/storage.md": {
+  "open": [
+   {
+    "feature": "decode_session_key (BLOB key -> SessionId)",
+    "target_doc": "docs/architecture/storage.md",
+    "status": "contradicted",
+    "why": "storage.md:163 states the read rule as 'First try UTF-8 parse as SessionId (hysec_, ses_<uuid>, or raw uuid text); **only if that fails**, interpret the 16 bytes as a legacy raw UUID', then asserts at :165 'That ordering is what lets both encodings coexist in one session_id column.' The source (crates/hya-store/src/lib.rs:258-263) returns EARLY on any successful UTF-8 decode: `if let Ok(raw) = std::str::from_utf8(key) { return raw.parse().ok(); }` \u2014 the UUID fallback runs only when the bytes are NOT valid UTF-8, never when the parse fails. A 16-byte legacy UUID whose bytes happen to be valid UTF-8 (all bytes < 0x80) decodes to None instead of a SessionId. Anyone implementing a compatible decoder from this prose writes the wrong control flow.",
+    "source": "crates/hya-store/src/lib.rs:229",
+    "axis": "runtime-events"
+   }
+  ],
+  "new": [
+   {
+    "doc": "docs/architecture/storage.md:163-165",
+    "claim": "decode_session_key falls back to the 16-byte legacy UUID interpretation whenever the UTF-8 SessionId parse fails; 'that ordering is what lets both encodings coexist'.",
+    "reality": "The fallback is gated on UTF-8 decoding failing, not on parsing failing. Valid-UTF-8 bytes that do not parse as a SessionId return None with no UUID attempt.",
+    "source": "crates/hya-store/src/lib.rs:258-263",
+    "axis": "runtime-events"
+   }
+  ],
+  "critic": []
+ },
+ "docs/agent-bundle-authoring.md": {
+  "open": [
+   {
+    "feature": "bundle agent fields description, color, model_policy, workdir (items 90,92,94,95)",
+    "source": "crates/hya-bundle/src/source.rs:147, crates/hya-bundle/src/model.rs:128",
+    "target_doc": "docs/agent-bundle-authoring.md ('### Per-agent fields' table)",
+    "status": "thin",
+    "why": "Three of the four fields are now properly documented (description, color, model_policy) and I confirmed color reaches the wire via crates/hya-server/src/compat/bound_agent_metadata.rs:97 and model_policy is applied in crates/hya-core/src/engine.rs:828 and crates/hya-app/src/runtime.rs:2134. `workdir` is not. The table says only '`workdir` | no | Optional working-directory hint on the prepared agent.' I searched every crate for a reader of `PreparedAgent::workdir`: there is none \u2014 hya-app/hya-server/hya-backend hits are all on the unrelated `st.agent.workdir` / `turn.agent.workdir` (AgentConfig), and hya-core has zero hits. The field is parsed by SourceAgent, copied at prepare.rs:878, serialized into the prepared catalog, and then never applied to anything. An author who writes `workdir: subdir` gets silent no-op behavior. The doc gives the field the same weight as the working fields; it needs the same 'parsed and stored, currently not applied' treatment the same rewrite correctly gave to SKILL.md `allowed-tools` and `model` in docs/skills.md:58-59.",
+    "axis": "extensibility"
+   }
+  ],
+  "new": [],
+  "critic": []
+ },
+ "docs/project-structure.md": {
+  "open": [
+   {
+    "feature": "hya-native embedding API (items 177,178): HyaNativeTransport / HyaNativeClient in-process transport and spawn_event_bridge SSE bridge",
+    "source": "crates/hya-native/src/transport.rs:96, crates/hya-native/src/lib.rs:12",
+    "target_doc": "docs/project-structure.md ('### hya-native' subsection, line 273) and AGENTS.md (crate row, line 85)",
+    "status": "thin",
+    "why": "The crate row was added to both docs and the spawn_event_bridge half is now fully documented (undecodable frames skipped, 50 ms re-subscribe backoff, stops on receiver drop \u2014 all verified against crates/hya-native/src/events.rs). The transport half stops one step short of usable: the docs name only `HyaNativeTransport`, and `HyaNativeClient` \u2014 the exported type alias `pub type HyaNativeClient = ApiClient<HyaNativeTransport>` (transport.rs:96, re-exported at lib.rs:12) \u2014 appears nowhere in docs/ (grep: zero hits outside crates/). Since the section explicitly frames itself as 'the supported way to embed hya inside another Rust process', a reader gets a Transport with no documented route to a callable client; they must find `ApiClient` in hya-sdk on their own.",
+    "axis": "extensibility"
+   }
+  ],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Native (non-Compat) HTTP route list",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/lib.rs:60",
+    "why_it_matters": "docs/project-structure.md:232-239 introduces \"The native hya routes are:\" and lists only four: `POST /sessions`, `POST /sessions/:id/prompt`, `GET /sessions/:id/events`, `GET /sessions/:id/stream`. docs/architecture/server-client.md:31-36 lists six, additionally `POST /sessions/:id/command` and `POST /sessions/:id/shell` (with full CommandRequest/ShellRequest DTO documentation). The router registers all six, so project-structure.md presents an incomplete list as the complete native surface.",
+    "suggested_doc": "docs/project-structure.md"
+   },
+   {
+    "feature": "Permission class of list_agents / roster / channels",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/tool.rs:626",
+    "why_it_matters": "docs/project-structure.md:129 and :133 put `list_agents` and `send, roster, channels, join, leave` all under permission action `Tool` (which asks by default). docs/architecture/agent-tool-surface.md:627 says \"READ, LS, GLOB, FIND, GREP, LSP, SKILL, LIST_AGENTS, ROSTER, and CHANNELS are `ReadOnly`\" (allow without prompting), and :132 / :137 repeat that roster and channels are `ToolPermission::ReadOnly`; docs/configuration.md:667 also lists the default auto-allow read-only set as \"read, ls, glob, find, grep, lsp, skill, list_agents, roster, and channels\". `builtin_permission()` maps exactly that set to `ToolPermission::ReadOnly`, so project-structure.md is the outlier and wrongly implies those three prompt.",
+    "suggested_doc": "docs/project-structure.md"
+   }
+  ]
+ },
+ "docs/tui-reference.md": {
+  "open": [
+   {
+    "feature": "Shell mode (`!` at column 0)",
+    "source": "packages/hya-tui-ts/src/upstream/component/prompt/index.tsx:800",
+    "target_doc": "docs/tui-reference.md",
+    "status": "thin",
+    "why": "The 'Shell mode' section documents only how to ENTER and EXIT the mode and its cosmetic effects (agent label becomes `Shell`, shell placeholder set, `esc exit shell mode` hint, Escape/Backspace-at-offset-0 to leave). It never says what the mode actually DOES: submitting in shell mode calls `sdk.client.session.shell({ sessionID, agent, model, command: inputText })` (prompt/index.tsx:999-1008) \u2014 the buffer is run as a shell command against the session instead of being sent to the model \u2014 and the prompt then auto-resets to `normal` mode (`setStore(\"mode\", \"normal\")`) after the submit. Neither the shell-execution semantics nor the auto-reset appear anywhere in docs/tui-reference.md, docs/tui-keybindings.md, or docs/cli.md. A reader cannot tell from the current prose whether `!` prefixes a message, runs a command, or just re-themes the prompt.",
+    "axis": "tui"
+   }
+  ],
+  "new": [
+   {
+    "doc": "docs/tui-reference.md",
+    "claim": "Permission prompt section: \"**Reject** (for child sessions, or via the reject path) can open a free-text **Reject permission** editor: Return confirms with the message, Escape cancels back.\"",
+    "reality": "The free-text reject editor is gated solely on the session being a child: `if (option === \"reject\") { if (session()?.parentID) { setStore(\"stage\", \"reject\"); return } ... }` \u2014 for a root session Reject immediately calls `permission.reply({ reply: \"reject\" })` with no message editor and no second stage. The trailing \"or via the reject path\" implies a second, non-child route to the editor that does not exist.",
+    "source": "packages/hya-tui-ts/src/upstream/routes/session/permission.tsx:411-426",
+    "axis": "tui"
+   }
+  ],
+  "critic": [
+   {
+    "feature": "Whether the shell/bash tool carries a model-authored `description`",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/shell.rs:27",
+    "why_it_matters": "docs/tui-reference.md:281-286 documents the transcript Shell block as rendering `# <description>[ in <workdir>]`, and :192 says the bash permission title is \"tool `description` or `Shell command`\". docs/compat-parity.md:84 states \"Shell now follows current Compat command-titled output and no longer exposes or records a model-authored `description`\", and both docs/architecture/tools-and-permissions.md:36 and docs/architecture/agent-tool-surface.md:156-161 give the shell schema as `{command, timeout, workdir, env}` with no `description`. `ShellInput` / `ShellTool::schema()` confirm there is no `description` field, so for hya's own shell calls the renderer always falls back to the literal \"Shell\" \u2014 tui-reference.md describes a field the backend can never populate.",
+    "suggested_doc": "docs/tui-reference.md"
+   }
+  ]
+ },
+ "docs/cli.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/cli.md",
+    "claim": "\u00a7Keybindings: 'Override any binding by name in TUI config `keybinds`, or unbind it by setting the value to `false` or the string `\"none\"`.' \u2014 stated with no caveat.",
+    "reality": "The shipped launcher supplies `resolve({}, { terminalSuspend: \u2026 })` and loads no on-disk TUI config, so a user has no way to supply a `keybinds` map; backend `config.yaml` has no `tui`/`keybinds` key. docs/tui-keybindings.md:7-14 and docs/configuration.md:1407-1409 both state this plainly, so cli.md is the one page that tells a reader to do something that does not work. The schema facts themselves (`false` / `\"none\"` disable literals, Definition-name keys) are correct.",
+    "source": "packages/hya-tui-ts/src/main.tsx:53; packages/hya-tui-ts/src/upstream/config/keybind.ts:28-33",
+    "axis": "cli"
+   }
+  ],
+  "critic": []
+ },
+ "docs/architecture/tools-and-permissions.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/architecture/tools-and-permissions.md:210-215",
+    "claim": "Under \"Plugin permission bridge\", bullet 2 \"**Cache invalidation**\": \"remembered plugin-mediated decisions are keyed by a domain-separated SHA-256 digest over the literal domain string `b\"hya.plugin.permission-bridge.semantic-identity/v1\"` plus, per participating plugin, its id, its canonical initialize declaration, and its effective `permission.ask` posture. Adding, removing, or changing any permission plugin automatically invalidates previously cached decisions.\"",
+    "reality": "There is no cache of plugin-mediated permission decisions, and nothing is keyed by that digest. `PermissionPlane::apply_decision` (crates/hya-tool/src/permission.rs) stores an allow-always as either `Rule(action, \"*\", Allow)` pushed onto the `persistent` rule list (legacy scope) or an `ExactSubject` inserted into the `native_grants` HashSet (native scope) \u2014 neither is keyed by, or consulted against, any digest, and neither is ever invalidated when the plugin set changes. The bridge digest (crates/hya-plugin/src/permission_bridge.rs:54-84) is only returned from `PermissionInterceptor::semantic_identity_v1`, which is mixed into `PermissionPlane::semantic_identity_v1` (permission.rs:596-620) and from there into `TurnBinding::semantic_fingerprint_v1` (crates/hya-core/src/runtime_registry.rs:596-635). That is a runtime-view fingerprint used to detect policy change across refreshes \u2014 it is not a decision-cache key, and changing a plugin does not clear any remembered grant. This text was introduced by the doc pass (commit 4ba8d5a5), so it is a newly-added false claim. It also duplicates and misstates the correct description that already exists in docs/architecture/runtime.md:309-320.",
+    "source": "crates/hya-tool/src/permission.rs:596-620, crates/hya-tool/src/permission.rs (apply_decision, ~line 760-790), crates/hya-plugin/src/permission_bridge.rs:54-84, crates/hya-core/src/runtime_registry.rs:596-635",
+    "axis": "tools-permissions"
+   }
+  ],
+  "critic": []
+ },
+ "docs/architecture/providers.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/architecture/providers.md:117-119",
+    "claim": "\"**Catalog.** `ProviderRouter::catalog` flattens every provider's `catalog()`, sorts by `(provider_id, model_id)`, and dedups identical provider/model pairs. That ordering is what `hya-backend models` and `GET /api/model` expose.\"",
+    "reality": "The `GET /api/model` half is correct (compat/catalog.rs `catalog_models` reads `st.engine.provider_catalog()`), but `hya-backend models` never touches `ProviderRouter::catalog()`. main.rs:369 passes `runtime.models`, which runtime.rs:1296 sets from `cfg.models` \u2014 i.e. `config::model_entries(&authorized)`, built directly from the parsed `providers:` block. models_cmd.rs `model_lines` then formats `\"{provider}/{id}\"` strings and calls `lines.sort()` on the joined strings, with no dedup. Same content in practice, but the stated mechanism and sort key are wrong, so a reader debugging catalog ordering will look in the wrong crate.",
+    "source": "crates/hya-backend/src/main.rs:369, crates/hya-app/src/runtime.rs:1296, crates/hya-app/src/config.rs:1343 (model_entries), crates/hya-backend/src/models_cmd.rs:31-56",
+    "axis": "providers"
+   },
+   {
+    "doc": "docs/architecture/providers.md:81-83",
+    "claim": "\"`DevProvider` claims the same set **minus** `reasoning_request` (left false via `Capabilities::default()`), which is why it accepts any `ModelRef`.\"",
+    "reality": "The capability flags have no bearing on which refs DevProvider accepts. `DevProvider::capabilities(&self, _model: &ModelRef)` returns `Some(dev_capabilities())` unconditionally \u2014 it ignores the model argument entirely. The flag content (including `reasoning_request: false`) is accurate; the causal \"which is why\" clause is not. The same file states it correctly at line 502 (\"It claims every model (`capabilities` always `Some`)\"), so the two passages disagree.",
+    "source": "crates/hya-provider/src/dev.rs:53-70",
+    "axis": "providers"
+   }
+  ],
+  "critic": []
+ },
+ "docs/architecture/runtime.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/architecture/runtime.md:482-484",
+    "claim": "'Contract for clients: a UI that has seen MessageStarted is guaranteed to eventually see MessageFinished, so it never spins forever waiting for a finish event.'",
+    "reality": "The force-emit is gated on `outcome.is_err() && !matches!(&outcome, Err(CoreError::Cancelled))`, so a turn that ends with CoreError::Cancelled and no sidecar-loss token fire emits nothing. Three such paths exist: the round-top activation-hook health gate (turn.rs:547), the post-before-hook health gate (turn.rs:~712), and the resident tool-cancel path (turn.rs:~805, actor_claim.is_some() && ToolError::Cancelled && cancel.is_cancelled()). In each the assistant message stays open. The guarantee holds for the three rows in the table above it, not universally.",
+    "source": "crates/hya-core/src/engine/turn.rs:455-490 (force-emit guards), :546-548, :711-716, :805-810",
+    "axis": "runtime-events"
+   }
+  ],
+  "critic": []
+ },
+ "docs/self-update.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/self-update.md:129 ('Metadata field validation' table)",
+    "claim": "Each artifact `sha256_hex` \u2014 'Exactly **64 lower-hex** characters. Uppercase hex is rejected.'",
+    "reality": "`canonical_metadata_payload` checks `artifact.sha256_hex.len() != 64 || !artifact.sha256_hex.bytes().all(|b| b.is_ascii_hexdigit())`. `is_ascii_hexdigit()` accepts `A-F`, so an uppercase artifact digest passes this validation and signature verification. It only fails much later and with a different error (`ArtifactDigestMismatch` from `verify_artifact_bytes`, which formats the computed digest as `{b:02x}` and string-compares). The neighbouring `trust_roots.json` row IS correct \u2014 `trust.rs:81` has an explicit `is_ascii_uppercase()` rejection \u2014 which is likely where the claim was copied from. As written, an operator reading the table would expect a clear `InvalidMetadata` at signing/verify time and instead gets a confusing per-artifact digest mismatch during staging.",
+    "source": "crates/hya-updater/src/verify.rs:64-66 vs crates/hya-updater/src/trust.rs:81-85",
+    "axis": "extensibility"
+   }
+  ],
+  "critic": []
+ },
+ "docs/plugin-protocol.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/plugin-protocol.md:141-151 ('Hook posture' table) combined with docs/plugin-protocol.md:238-250 ('`permission.ask` (guard)')",
+    "claim": "`permission.ask` is labelled a **guard** with **Default posture: Safe**, and the posture table states Safe means 'Host treats the failure as a **veto** of the action'. A reader concludes that a Safe-posture `permission.ask` plugin that errors or times out denies the request.",
+    "reality": "Posture has zero behavioral effect for `permission.ask`. In `PluginHost::permission_ask` the posture is read only as a registration test (`if conn.posture(HookName::PermissionAsk).is_none() { continue; }`); a serialize failure, an RPC error (`let Ok(reply) = conn.call_hook(...) else { continue; }`), or an undecodable reply all just skip to the next plugin, and all-skipped falls through to the interactive user ask. `GUARD_FAILED_SAFE` exists in dispatcher.rs only on the `tool.execute.before` arm \u2014 it is the sole hook where Safe posture converts a failure into a veto. docs/architecture/tools-and-permissions.md:206-209 states the correct behavior ('or every plugin errors ... falls through'), so the two rewritten docs disagree with each other on a security-relevant point.",
+    "source": "crates/hya-plugin/src/permission_bridge.rs:96-118 and crates/hya-plugin/src/dispatcher.rs:131-145",
+    "axis": "extensibility"
+   },
+   {
+    "doc": "docs/plugin-protocol.md:115 ('Initialize reply' field table)",
+    "claim": "'`plugin.kind` | Wire snake_case: `rust` (default), `compat`, `other`.' \u2014 the '(default)' reads as 'omissible from the initialize reply'.",
+    "reality": "`PluginInfo.kind` carries no `#[serde(default)]`, so `kind` is a REQUIRED field of the initialize reply; omitting it fails deserialization and the handshake aborts. The `#[default] Rust` on `PluginKindWire` only takes effect where a `#[serde(default)]` exists \u2014 `PluginEntry.kind` (config.rs:18) and `Manifest.kind` (manifest.rs:17), i.e. YAML config and `plugin.toml`, not the wire. docs/configuration.md's two tables use '(default)' correctly for those; docs/plugin-protocol.md inherits the wording into a context where it is wrong.",
+    "source": "crates/hya-plugin/src/messages.rs:190-199 (PluginInfo) vs crates/hya-plugin/src/config.rs:17-18 and crates/hya-plugin/src/manifest.rs:16-17",
+    "axis": "extensibility"
+   }
+  ],
+  "critic": []
+ },
+ "docs/tui-keybindings.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/tui-keybindings.md",
+    "claim": "Section 'Binding collisions': \"Two defaults share the same chord\", followed by a table listing only `<leader>q` (session.queued_prompts vs app.exit) and `<leader>h` (session.toggle.conceal vs tips.toggle).",
+    "reality": "Many more default chords are shared across commands in keybind.ts. `ctrl+d` is the default for app_exit, session_delete, stash_delete, input_delete AND dialog.move_session.delete. `ctrl+f` is the default for session_pin_toggle, model_favorite_toggle, permission.prompt.fullscreen AND input_move_right. `ctrl+p` is command_list, dialog.select.prev AND prompt.autocomplete.prev. `escape` is session_interrupt, diff_close AND prompt.autocomplete.hide. `tab` is agent_cycle, diff_switch_focus AND prompt.autocomplete.complete. The two listed pairs are resolved by binding layer exactly the same way as these, so the 'Two' framing is an unsupported completeness claim.",
+    "source": "packages/hya-tui-ts/src/upstream/config/keybind.ts:48-228",
+    "axis": "tui"
+   },
+   {
+    "doc": "docs/tui-keybindings.md",
+    "claim": "Message scrolling table: `session.half.page.up` / `session.half.page.down` = \"Scroll up/down half a page\" \u2014 the same wording already used for `session.page.up` / `session.page.down` (\"Scroll up by half a page (implementation uses half viewport height)\").",
+    "reality": "The two commands scroll different amounts. `session.page.up`/`.down` call `target.scrollBy(-target.height / 2)` / `(target.height / 2)` (index.tsx:889, 900), while `session.half.page.up`/`.down` call `target.scrollBy(-target.height / 4)` / `(target.height / 4)` (index.tsx:931, 942). The half-page commands move a QUARTER of the viewport, i.e. half of what the page commands move. As written the doc gives two distinct commands identical semantics.",
+    "source": "packages/hya-tui-ts/src/upstream/routes/session/index.tsx:884-943",
+    "axis": "tui"
+   }
+  ],
+  "critic": []
+ },
+ "docs/getting-started.md": {
+  "open": [],
+  "new": [
+   {
+    "doc": "docs/getting-started.md",
+    "claim": "Key controls table, Ctrl-D row: \"Exit when the prompt is empty **and** unfocused; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs.\"",
+    "reality": "The `app.exit` binding layer is enabled when the prompt is NOT focused **or** its input is empty: `enabled: () => { const current = promptRef.current; if (!current?.focused) return true; return current.current.input === \"\" }` (app.tsx:847-852). So exit is armed for a focused-but-empty prompt too. The same repo's docs/tui-keybindings.md:43-44 and the Ctrl-C row two lines above in this very table both correctly say \"unfocused **or** empty\"; only this Ctrl-D row states the stricter AND condition.",
+    "source": "packages/hya-tui-ts/src/upstream/app.tsx:845-853",
+    "axis": "tui"
+   }
+  ],
+  "critic": []
+ },
+ "docs/testing/agent-matrix.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Builtin tool count registered by ToolRegistry::builtins()",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/tool.rs:313",
+    "why_it_matters": "docs/architecture/tools-and-permissions.md:16 and docs/architecture/agent-tool-surface.md:24 both say `ToolRegistry::builtins()` installs **26** canonical schema names; docs/testing/agent-matrix.md:58 says it \"registers **25** primary tool names\" and splits them 14 covered / 11 not covered. The constructor inserts 19 tools in the loop, then `shell` + a separately named `bash`, then 5 aliased canonicals (apply_patch, webfetch, websearch, todowrite, plan_exit) = 26 distinct registry names. The matrix table simply omits `bash`, so the coverage ledger silently under-reports one untested canonical tool name.",
+    "suggested_doc": "docs/testing/agent-matrix.md"
+   }
+  ]
+ },
+ "AGENTS.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Rust verification gate command (whether hya-e2e is excluded)",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/.github/workflows/ci.yml:90",
+    "why_it_matters": "AGENTS.md:124 prescribes `cargo test --workspace` as the Rust verification gate. docs/development.md:26 and docs/testing/README.md:30 both prescribe `cargo test --workspace --exclude hya-e2e` and state that the exclusion \"matches CI\" because Track P spawns real backend processes and must not run multi-threaded under the default suite. CI actually runs `cargo test --workspace --jobs 1 --exclude hya-e2e` and then `cargo test -p hya-e2e -- --test-threads=1` separately, so AGENTS.md's command is the one that diverges and will produce flaky/failing local runs.",
+    "suggested_doc": "AGENTS.md"
+   }
+  ]
+ },
+ "docs/FOLLOWUPS.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Interactive OAuth login (device code / PKCE) implementation status",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-app/src/oauth/mod.rs:149",
+    "why_it_matters": "docs/FOLLOWUPS.md:8-14 lists OAuth interactive login under \"Deferred (not yet implemented)\", saying the remaining piece is \"device-authorization request, opening the browser, polling the token endpoint, PKCE code exchange, and refresh-token handling\" and that users must \"paste a token via `hya-backend login`\". docs/configuration.md:310 says \"Interactive OAuth is implemented entirely in Rust\", and docs/cli.md:392-446 plus README.md:68-77 document the shipped `hya oauth login --provider \u2026 --type openai-codex|grok-build`, `--device`/`--loopback`/`--browser` flags, the 1455 loopback port, refresh, and `oauth status`. The source has a full `crates/hya-app/src/oauth/` module (pkce.rs, openai_codex.rs device-code flow, grok_build.rs, callback.rs), so FOLLOWUPS.md is stale.",
+    "suggested_doc": "docs/FOLLOWUPS.md"
+   }
+  ]
+ },
+ "docs/opencode-feature-inventory.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Hot skill reload implementation status",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-core/src/runtime_registry.rs:378",
+    "why_it_matters": "docs/opencode-feature-inventory.md:46 records Hot skill reload as \"missing\" (and :45 Runtime skill registration as \"missing/partial: static discovery and skill tool exist\"). docs/adr/0007-hot-skill-reload-visibility.md is Status: accepted and states it is \"Implemented by the `0.34.5` `RuntimeRegistry`/`TurnBinding` seam\", and docs/architecture/runtime.md:184 says a root turn \"refreshes its skill candidate if the logical view changed\" before capturing the TurnBinding. `RuntimeRegistry::refresh_skills(workdir)` exists and is driven per root turn, so the inventory row contradicts both the ADR and the runtime doc.",
+    "suggested_doc": "docs/opencode-feature-inventory.md"
+   }
+  ]
+ },
+ "docs/hya-pi-compat-comparison.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Whether a \"task board\" is a live multi-agent runtime primitive",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-store/migrations/0001_init.sql:75",
+    "why_it_matters": "docs/hya-pi-compat-comparison.md:16 lists hya's multi-agent support as \"Native runtime primitives: `task` tool, child sessions, team evidence projection, mailbox/task board, and optional worktree allocation\". docs/architecture/storage.md:54 marks the `task_board` table \"**Pre-ADR-0001.** Not on any live read path.\" The identifier appears only in the migration SQL \u2014 no Rust code in `crates/` references `task_board` \u2014 so it is a reserved dead table, not a shipped primitive, and the comparison page overstates the feature set.",
+    "suggested_doc": "docs/hya-pi-compat-comparison.md"
+   }
+  ]
+ },
+ "CONTEXT.md": {
+  "open": [],
+  "new": [],
+  "critic": [
+   {
+    "feature": "Existence of a well-known \"broadcast\" channel",
+    "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-core/src/engine/mailbox.rs:194",
+    "why_it_matters": "CONTEXT.md:195 defines Channel and asserts \"**Broadcast** is a well-known channel everyone joins.\" docs/architecture/agent-tool-surface.md:140-144 says `join` \"subscribes the acting agent and **creates** the channel if it does not exist \u2014 there is no separate create-channel tool\", i.e. channels exist only once an agent explicitly joins. `channel_join` is the only emitter of `Event::ChannelJoined` in the runtime and nothing auto-subscribes members to a broadcast channel, so CONTEXT.md documents a delivery mechanism that does not exist.",
+    "suggested_doc": "CONTEXT.md"
+   }
+  ]
+ }
+}

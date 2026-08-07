@@ -1,0 +1,331 @@
+{
+ "verdict": "FAIL",
+ "totalChecked": 324,
+ "totalClosed": 312,
+ "perAxis": [
+  {
+   "axis": "cli",
+   "checked": 29,
+   "closed": 27,
+   "open": 2
+  },
+  {
+   "axis": "config",
+   "checked": 37,
+   "closed": 36,
+   "open": 1
+  },
+  {
+   "axis": "tools-permissions",
+   "checked": 40,
+   "closed": 38,
+   "open": 2
+  },
+  {
+   "axis": "providers",
+   "checked": 44,
+   "closed": 42,
+   "open": 2
+  },
+  {
+   "axis": "runtime-events",
+   "checked": 71,
+   "closed": 69,
+   "open": 2
+  },
+  {
+   "axis": "extensibility",
+   "checked": 50,
+   "closed": 49,
+   "open": 1
+  },
+  {
+   "axis": "tui",
+   "checked": 53,
+   "closed": 51,
+   "open": 2
+  }
+ ],
+ "stillOpen": [
+  {
+   "feature": "TUI slash-command reference (/sessions \u2026 /diff) \u2014 covers features 100-122; specifically the `/undo` row",
+   "target_doc": "docs/cli.md",
+   "status": "thin",
+   "why": "The 24-row table in docs/cli.md:124-148 and its mirror in docs/tui-keybindings.md:520-544 and docs/tui-reference.md are accurate for 23 of 24 commands, but `/undo` is described only as \"Undo the previous user message\". The real handler (packages/hya-tui-ts/src/upstream/routes/session/index.tsx:747-775) does three things a user must know: (1) it aborts an in-flight turn first when `session_status` is not `idle`; (2) it calls `session.revert` at the last user message *before the current revert point*, so repeated `/undo` walks backwards; (3) it OVERWRITES the prompt buffer with that message's text parts and re-attaches its file parts. Point (3) is a destructive side effect on whatever the user had typed and appears in no doc (grepped `undo` across docs/**). A reader cannot predict what `/undo` will do to their draft from what is written.",
+   "axis": "cli"
+  },
+  {
+   "feature": "env HYA_ROUTE (and HYA_FAST_BOOT)",
+   "target_doc": "docs/testing/process-e2e.md",
+   "status": "thin",
+   "why": "docs/testing/process-e2e.md:165 documents HYA_ROUTE as \"JSON value parsed at TUI startup that overrides the initial route. Malformed JSON throws during boot\" \u2014 it never gives the accepted JSON shape, so a harness author cannot construct a value from this doc. The real contract (packages/hya-tui-ts/src/upstream/context/route.tsx:6-23,43-53) is exactly `{\"type\":\"home\"}`, `{\"type\":\"session\",\"sessionID\":\"<id>\"}`, or `{\"type\":\"plugin\",\"id\":\"<id>\"}`. Worse for a test harness: `initialRoute()` SILENTLY returns undefined and falls back to `{type:\"home\"}` for well-formed JSON of an unrecognised shape (e.g. `{\"type\":\"session\"}` with no sessionID) \u2014 a silent wrong-route pass that the doc's \"malformed JSON throws\" sentence actively leads readers to believe cannot happen. The HYA_FAST_BOOT row on line 166 is complete and correct. (docs/configuration.md:719 and docs/architecture/tui.md:142 hint at the shape, but process-e2e.md does not link to either for this.)",
+   "axis": "cli"
+  },
+  {
+   "feature": "formatter \u2014 map form semantics (and the builtin set it merges over)",
+   "source": "crates/hya-tool/src/formatter_definition.rs:16-17, 78-115; crates/hya-tool/src/formatter_catalog.rs:24-155",
+   "target_doc": "docs/configuration.md",
+   "status": "contradicted",
+   "why": "The two facts the gap asked for ARE now correct (absent => false/Disabled at formatter_config.rs:24-27; a parse error prints `hya: formatter config error (...); formatter status disabled` and returns Disabled without aborting startup at formatter_config.rs:73-86). But the same paragraph adds a NEW wrong claim: 'a mapping supplies fully custom entries' (configuration.md:1126). `FormatterConfig::Custom` is documented in source as 'Merge custom entries over the builtin set', and `custom_definitions()` literally starts from `builtin_definitions()` and then merges/removes per key \u2014 it does not replace. A reader who writes `formatter: {treefmt: {...}}` expecting only treefmt to run will silently get all 26 builtins plus treefmt. The doc's own example (`gofmt: {disabled: true}`) only makes sense under merge semantics, so the prose contradicts both the source and the example under it. Compounding this, the doc never names a single builtin, so a reader cannot know which keys are valid override targets (gofmt, prettier, oxfmt, biome, ruff, uv, rustfmt, shfmt, nixfmt, clang-format, terraform, \u2026 26 total), nor the special-case that disabling `ruff` OR `uv` drops BOTH python formatters (formatter_definition.rs:95-101).",
+   "axis": "config"
+  },
+  {
+   "feature": "[tool] apply_patch (alias patch)",
+   "target_doc": "docs/architecture/agent-tool-surface.md",
+   "status": "thin",
+   "why": "The new `## APPLY_PATCH` section names the parameter (`patchText`, alias `patch`), the hunk kinds, the relative-path rule, the pre-write `Action::Edit` checks and the post-edit step \u2014 but it never documents the value's format, which is the entire payload. The envelope grammar the parser actually requires (`*** Begin Patch` / `*** End Patch` sentinels, `*** Add File:`, `*** Delete File:`, `*** Update File:`, the optional `*** Move to:` line, and `@@` context chunks with +/- lines) appears nowhere in docs/ \u2014 `grep -rn 'Begin Patch' docs/` returns zero hits \u2014 and the advertised schema description is only \"Apply an Compat-style patch envelope to files.\" A reader given this section still cannot construct a single valid `patchText`, and the failure mode is the input error `invalid patch format: missing Begin marker`. Naming the parameter without its grammar is a bare mention of the interface.",
+   "source": "crates/hya-tool/src/apply_patch/parse.rs:39-152",
+   "axis": "tools-permissions"
+  },
+  {
+   "feature": "[behavior] saved permissions (persistent allow-always)",
+   "target_doc": "docs/architecture/storage.md",
+   "status": "thin",
+   "why": "The `## Saved permissions` section documents the row shape (`psv_<requestId>`, `project_id: \"global\"`, lowercase action, resource pattern), the global-scoping consequence, the store API and the two Compat routes \u2014 all correct. What is missing is the only semantic a reader actually needs: whether a saved row grants anything. Nothing outside `hya-server/src/pending/` ever reads these rows \u2014 `grep -rn 'list_saved_permissions|SavedPermission|save_permission' crates/` outside `hya-store/src/permission.rs` hits only `hya-server/src/pending/{permission,saved_permission}.rs` and a store test; `hya-app` and `hya-core` have zero references. `Decision::AllowAlways` is remembered only in the in-process `PermissionPlane` (`self.persistent` rules / `native_grants`), which is rebuilt empty at startup. So an `always` answer does NOT survive restart as a grant, even though the row does. The doc's closing line \"Rows survive server restart because they live in the session SQLite file\" is literally true but leads a reader to the opposite conclusion, and neither this section nor the `## Ask Flow` step 1 in tools-and-permissions.md states that the persisted rows are never re-loaded into the plane.",
+   "source": "crates/hya-tool/src/permission.rs:780-794, crates/hya-server/src/pending/saved_permission.rs:36-52",
+   "axis": "tools-permissions"
+  },
+  {
+   "feature": "ReasoningEffort::parse aliases and resolve_default_reasoning last-used precedence",
+   "source": "crates/hya-provider/src/lib.rs:137, crates/hya-provider/src/lib.rs:209",
+   "target_doc": "docs/configuration.md",
+   "status": "contradicted",
+   "why": "The alias half is now correct and complete (none/off, med/medium, case-insensitive trim, unknown = config error). The precedence half is wrong as user-facing behavior: docs/configuration.md:280 tells the reader that when `reasoning.default` is omitted the effective default is \"the last-used effort, kept when it is none/off or present in the advertised variants\", ahead of the highest-supported rule. `resolve_default_reasoning` has exactly one non-test caller in the whole workspace -- crates/hya-app/src/config.rs:1288 -- and it passes `None` for `last_used`. Nothing in hya-app, hya-core, hya-server, or the TS TUI ever supplies a last-used effort (grep for `last_used`/`lastUsed` returns only lib.rs and its unit tests). So step 2 never fires in shipped behavior; a user who reads this section will expect hya to remember the effort they last picked and it never does. The doc needs to either drop step 2 or mark it as an unreached branch of the helper.",
+   "axis": "providers"
+  },
+  {
+   "feature": "`hya-backend models` unknown-provider error and synthesized fallback entry",
+   "source": "crates/hya-backend/src/models_cmd.rs:51",
+   "target_doc": "docs/cli.md",
+   "status": "contradicted",
+   "why": "docs/cli.md:451-454 correctly documents the offline synthesis for the unfiltered case, then states flatly that \"Filtering with `models <provider>` when that provider has no configured models exits with `Provider not found: <id>`\". `model_lines` (models_cmd.rs:36) guards the synthesis with `provider.is_none_or(|provider| provider == \"hya\")`, so with an empty catalog `hya-backend models hya` prints `hya/<fallback_model>` and exits 0 -- it does not produce `Provider not found: hya`. The documented rule is only true for provider ids other than `hya`.",
+   "axis": "providers"
+  },
+  {
+   "feature": "RuntimeCatalogRefresh trait",
+   "source": "crates/hya-core/src/engine.rs:149",
+   "target_doc": "docs/architecture/runtime.md",
+   "status": "thin",
+   "why": "runtime.md:55-61 is a 5-line prose paragraph that says what the trait is for and when it fires, but never gives the one thing an implementor needs: the method. `async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError>` is absent, as is its return contract (Ok(true) = a new generation was published, Ok(false) = nothing changed, Err aborts the bind entirely \u2014 see the rustdoc at engine.rs:157-171 and the call site `bind_root_runtime` at engine.rs:492-500). A reader cannot implement the trait from the doc; they can only learn the trait exists. That is a name mention plus context, not a usable contract.",
+   "axis": "runtime-events"
+  },
+  {
+   "feature": "AgentSpec field types",
+   "source": "crates/hya-core/src/engine.rs:95",
+   "target_doc": "docs/architecture/runtime.md",
+   "status": "thin",
+   "why": "runtime.md:48-53 names the five fields (`name`, `model`, `system_prompt`, `workdir`, `reasoning`) but gives no types, unlike every comparable struct table elsewhere in the doc set. The omission is load-bearing for `workdir`: on `AgentSpec` it is a `PathBuf`, while the `workdir` on `Event::SessionCreated` / `SessionMoved` that the same doc set documents is a `String`. A reader reconciling the two surfaces gets no signal that they differ. Borderline call \u2014 the field names and purpose are there \u2014 but it falls short of \"parameters and their semantics\".",
+   "axis": "runtime-events"
+  },
+  {
+   "feature": "resource_view reference grammar / ExportKind grammar (gap items 98, 116)",
+   "target_doc": "docs/agent-bundle-authoring.md (section '### Reference grammar' under '## resource_view')",
+   "status": "thin",
+   "why": "The section opens with \"Each `allow` / `deny` entry resolves to a stable id. Accepted forms:\" and then closes with \"The five **ExportKind** namespaces are: `tool`, `skill`, `mcp`, `hook`, `extension`. Resource stable ids use `bundle:<bundle_id>/<kind>/<local_id>`.\" A reader following that grammar will write `bundle:<id>/hook/<local_id>` or `harness:extension/...` in an `allow` list. `resolve_global_reference` (crates/hya-core/src/runtime_registry.rs:1814-1875) hard-whitelists the kind to `tool | skill | mcp` for BOTH the `harness:` and `bundle:` prefixes and returns `BundleError::UnknownResourceReference` for `hook` or `extension`. The doc never states that restriction; hook selection is only possible through the separate `hook_refs` field, and extensions are never referenceable at all. The grammar as written is unusable for two of the five kinds it advertises.",
+   "source": "crates/hya-core/src/runtime_registry.rs:1814 (resolve_global_reference), crates/hya-bundle/src/catalog.rs:11 (ExportKind)",
+   "axis": "extensibility"
+  },
+  {
+   "feature": "Subagent roster dialog and lifecycle labels (gap #11)",
+   "target_doc": "docs/adr/0003-tmux-tui-single-input-readonly-panes.md",
+   "status": "contradicted",
+   "source": "packages/hya-tui-ts/src/upstream/routes/session/subagent-workspace.ts:151, routes/session/dialog-subagent.tsx:47-83",
+   "why": "docs/tui-reference.md now documents the roster correctly (title, v/s/r keys, lifecycle map, selectable Main row). But the entry's original wrong claim lives in ADR-0003 and was NOT corrected: the ADR still says \"`main` may appear as a non-selectable root row\" while `flattenRunTree` sets `selectable: node.session !== undefined` at depth 0 with the comment \"Depth-0 Main is selectable so the roster can return focus to Main after a split\". The ADR also still calls the surface the \"Subagent manager\" (shipped title is `Subagent roster - Tab|Vertical|Horizontal`), never mentions the `r` retry-on-error binding the gap explicitly asked to add, and still promises \"a compact status/count indicator ... showing total live subagents plus attention counts such as blocked/permission/question states\" that the session route does not render (it renders only the `pane.roster` + optional `session.background` hint line at index.tsx:1938-1958). ADR-0003 got historical-note corrections for the two navigation/new-output items but these were left stale.",
+   "axis": "tui"
+  },
+  {
+   "feature": "Transcript rendering: user messages, assistant footer, revert banner (gap #19)",
+   "target_doc": "DESIGN.md",
+   "status": "stale",
+   "source": "packages/hya-tui-ts/src/upstream/routes/session/index.tsx:1720-1800",
+   "why": "docs/tui-reference.md \"Transcript\" section is new and accurate. But the entry was filed as `stale` because DESIGN.md section 5 described the removed Rust rendering, and the gap required updating it. DESIGN.md sections 2 (Light column), 5 \"Prompt Composer\" and 6 (Motion) were all updated, yet section 5 \"Transcript\" is untouched and still reads \"Structure: role label followed by wrapped message lines and compact tool rows.\" `UserMessage` renders no role label at all \u2014 it renders an agent-colored `border=[\"left\"]` box with hover highlight, MIME badges, QUEUED badge and an optional compaction divider. The wrong claim was supplemented in a different file rather than corrected in place.",
+   "axis": "tui"
+  }
+ ],
+ "newProblems": [
+  {
+   "doc": "docs/configuration.md",
+   "claim": "Line 1286, `keybinds` row: \"A value may be `false`, `\"none\"`, a key string, a keystroke object (`event` / `preventDefault` / `fallthrough`), or an array of those.\"",
+   "reality": "The object form is `BindingObject`, whose `key` field is REQUIRED (`Schema.StructWithRest(Schema.Struct({ key: Schema.Union([Schema.String, KeyStroke]), event?, preventDefault?, fallthrough? }), \u2026)`). The doc lists only the three optional fields and omits the required `key`, so a reader who follows it and writes `app_exit: { event: \"press\" }` gets a schema decode failure. The doc also conflates two distinct shapes: `KeyStroke` is `{ name, ctrl?, shift?, meta?, super?, hyper? }` and is a separate union member, never mentioned. Finally, \"or an array of those\" is wrong at the edges \u2014 the array member type is `BindingItem` (string | KeyStroke | BindingObject); `false` and `\"none\"` are top-level-only literals and are rejected inside an array.",
+   "source": "packages/hya-tui-ts/src/upstream/config/keybind.ts:8-33 (KeyStroke, BindingObject, BindingItem, BindingValueSchema)",
+   "axis": "cli"
+  },
+  {
+   "doc": "docs/configuration.md",
+   "claim": "\"When the key is absent, the default is `false` (`FormatterConfig::Disabled`). `true` enables the built-in formatter set; a mapping supplies **fully custom entries**.\" (line 1124-1126, introduced by commit 3e2c1828 \"docs: complete hya configuration reference\" \u2014 the line did not exist before the rewrite)",
+   "reality": "A mapping does NOT supply fully custom entries. `FormatterConfig::Custom(BTreeMap<String, FormatterEntry>)` is doc-commented in source as \"Merge custom entries over the builtin set\", and `custom_definitions(entries)` begins `let mut definitions = builtin_definitions();` then, per key, either removes (`disabled: true`), merges into the existing builtin definition, or appends a new one. All 26 builtins stay active unless individually disabled. Additionally, `disabled: true` on either `ruff` or `uv` removes both.",
+   "source": "crates/hya-tool/src/formatter_definition.rs:10-18 (enum doc comment), :93-115 (custom_definitions); crates/hya-tool/src/formatter_catalog.rs:24-155 (builtin list)",
+   "axis": "config"
+  },
+  {
+   "doc": "docs/architecture/agent-tool-surface.md",
+   "claim": "The `### Websearch` call-parameter table presents `livecrawl` (`fallback` default | `preferred`), `type` (`auto` default | `fast` | `deep`) and `contextMaxCharacters` as the tool's call parameters with those defaults, qualifying only `numResults` with \"(Exa path)\".",
+   "reality": "Those parameters are Exa-only. `parallel_arguments` builds the Parallel request from `{ objective: query, search_queries: [query], session_id? }` and silently drops `numResults`, `livecrawl`, `type` and `contextMaxCharacters` entirely. Because the table explicitly marks `numResults` as Exa-specific and leaves the other three unqualified, a reader configuring `tools.websearch.provider: parallel` will reasonably expect `livecrawl`/`type`/`contextMaxCharacters` to take effect; they are discarded with no error.",
+   "source": "crates/hya-tool/src/websearch.rs:236-258",
+   "axis": "tools-permissions"
+  },
+  {
+   "doc": "docs/architecture/agent-tool-surface.md",
+   "claim": "Most `crates/hya-tool/src/tool.rs` line-range citations in this document (e.g. `tool.rs:237-271` for `builtins()`, `tool.rs:983-1037` for `ask_user`, `tool.rs:130` for `SEARCH_LIMIT`, `tool.rs:539-547` for the registry permission classes, `tool.rs:629-717` for GLOB, `tool.rs:726-755` for GREP, `tool.rs:920-965` for FIND).",
+   "reality": "Every one of these anchors now points at unrelated code. Current locations: `builtins()` 313-345, `AskUserTool` 1059-1128, `SEARCH_LIMIT` 180, `builtin_permission` 626-635, `GlobTool` ~715-800, `GrepTool` ~808-905, `FindTool` ~1004-1055. `permission.rs:339-362` cited for the `*` matcher is also wrong (`glob_match` is at 432). The prose is factually right in each case; the deep links are not, and the sibling doc tools-and-permissions.md cites the correct range (`tool.rs:311-347`) for the same constructor, so the two docs now disagree about where the same code lives.",
+   "source": "crates/hya-tool/src/tool.rs (1129 lines), crates/hya-tool/src/permission.rs:432",
+   "axis": "tools-permissions"
+  },
+  {
+   "doc": "docs/configuration.md:274-282 (Reasoning metadata -> \"Full default resolution\")",
+   "claim": "\"2. Otherwise the last-used effort, kept when it is `none`/`off` or present in the advertised variants.\" -- presented as step 2 of the live default-reasoning precedence chain a user experiences.",
+   "reality": "`resolve_default_reasoning(explicit, last_used, supported)` has a single production caller, crates/hya-app/src/config.rs:1288, which hardcodes `None` as `last_used`. No other crate (hya-core, hya-server, hya-backend) and no TS TUI code passes a last-used effort. The branch is exercised only by unit tests in crates/hya-provider/src/lib.rs:338/351. Effective shipped precedence is: explicit config default, else highest advertised variant.",
+   "source": "crates/hya-provider/src/lib.rs:266-286, crates/hya-app/src/config.rs:1286-1292",
+   "axis": "providers"
+  },
+  {
+   "doc": "docs/cli.md:452-454 (Auth and Catalog Commands -> `models [provider]`)",
+   "claim": "\"Filtering with `models <provider>` when that provider has no configured models exits with `Provider not found: <id>`.\"",
+   "reality": "`model_lines` synthesizes the offline fallback when `provider.is_none_or(|provider| provider == \"hya\")`, so on an empty catalog `hya-backend models hya` prints `hya/<fallback_model>` and succeeds; the `Provider not found` error is only reached for a filter value other than `hya`.",
+   "source": "crates/hya-backend/src/models_cmd.rs:31-57",
+   "axis": "providers"
+  },
+  {
+   "doc": "docs/architecture/event-model.md",
+   "claim": "Line 89-90: the `agent_switched` / `model_switched` rows describe the payload's `message: Option<MessageId>` as an \"optional message anchors transcript position; not stored on the session row\".",
+   "reality": "The engine never anchors these to a transcript position. `SessionEngine::switch_agent` and `switch_model` (crates/hya-core/src/engine/session_state.rs:8-34) both hardcode `message: Some(MessageId::new())` \u2014 a freshly minted id that matches no existing message in the projection. Downstream, `compat/session_context_messages.rs:41-50` uses that id as the identity of a *synthetic* switch pseudo-message it injects into the compat message list. So the field is the id of a synthetic switch row, not a pointer to a real transcript position. A client that tries to look the id up among `SessionProjection.messages` will always miss.",
+   "source": "crates/hya-core/src/engine/session_state.rs:8-34, crates/hya-server/src/compat/session_context_messages.rs:41-50",
+   "axis": "runtime-events"
+  },
+  {
+   "doc": "docs/architecture/event-model.md",
+   "claim": "Line 174: the `mail_sent` reducer row states \"channel -> channel log + fan-out to current subscribers\".",
+   "reality": "The reducer does not fan out to every current subscriber. `Projection::apply_event`'s `MailSent` arm (crates/hya-proto/src/projection.rs:683-704) walks the channel member set and `continue`s past any member whose roster entry is `mode.is_resident()` AND whose status is `Done` or `Failed`. ADR-0001 (docs/adr/0001-...md:21-26) states this correctly and explicitly warns the fan-out \"reaches every current **eligible** subscriber, not literally every subscriber\" \u2014 so the rewritten event-model.md row now contradicts the ADR it sits alongside, and understates a stopped actor's inbox behavior.",
+   "source": "crates/hya-proto/src/projection.rs:683-704",
+   "axis": "runtime-events"
+  },
+  {
+   "doc": "docs/tui-reference.md",
+   "claim": "In \"Copy and clipboard\": mouse-up AND right-click copy the selection, Ctrl+C over a selection copies instead of exiting, Escape clears the selection \u2014 and \"All of the above are disabled when `HYA_DISABLE_COPY_ON_SELECT` is set, and are **always** disabled on `win32`.\"",
+   "reality": "Inverted for three of the four items. `onMouseUp` auto-copy runs only when `!HyaFlag.disableCopyOnSelect`. Right-click copy (`onMouseDown`, `evt.button !== MouseButton.RIGHT` guard) and the Ctrl+C / Escape selection intercept both run only when `HyaFlag.disableCopyOnSelect` IS true \u2014 the code comment says \"Let selection copy/dismiss win ahead of normal bindings when explicit copy is required.\" So setting the variable (or running on win32, where `disableCopyOnSelect` is forced true) turns those three ON, not off. The doc tells win32 users that all TUI copying is unavailable when in fact win32 is exactly the explicit-copy mode.",
+   "source": "packages/hya-tui-ts/src/upstream/app.tsx:399-406 and :915-927; src/hya/platform.ts:41",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/configuration.md",
+   "claim": "TUI environment variables table: \"`HYA_DISABLE_COPY_ON_SELECT` | Disables copy-on-mouse-selection **and the selection key intercept**. Always true on win32.\"",
+   "reality": "Same inversion as above for the second half: the selection key intercept is registered under `if (!HyaFlag.disableCopyOnSelect) return`, so the flag enables it. Only copy-on-mouse-selection is disabled. (docs/architecture/tui.md's row for the same variable says just \"Disable copy-on-select\" and is correct.)",
+   "source": "packages/hya-tui-ts/src/upstream/app.tsx:399-406",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/tui-keybindings.md",
+   "claim": "Header: \"Override bindings with TUI config `keybinds` using the config keys in [Overriding keybinds]\", followed by a whole section with a YAML example (`keybinds:\\n  session_new: \"<leader>N\"`) and a 170-row config-key\u2192command table presented as user-writable configuration.",
+   "reality": "There is no load path for a TUI config in the shipped product. `main.tsx` calls `resolve({}, { terminalSuspend: \u2026 })` \u2014 an empty object, defaults only \u2014 and `crates/hya-app/src/config.rs` has no `tui` / `keybinds` key at all, so nothing a user writes in `config.yaml` reaches `TuiKeybind.parse`. docs/configuration.md states this honestly (\"applies **defaults only** ... does **not** load a separate on-disk TUI config file\"), but tui-keybindings.md never says it and reads as a working how-to. A reader following it gets either silent no-op or a backend config-schema error.",
+   "source": "packages/hya-tui-ts/src/main.tsx:55; crates/hya-app/src/config.rs (no `tui` key)",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/tui-reference.md",
+   "claim": "Themes section: \"Valid files must be a JSON object with a nested `theme` object key; **invalid files are dropped silently**.\"",
+   "reality": "Only true for files that parse as JSON but fail `isTheme`. `discoverThemes` calls `JSON.parse(await readFile(...))` inside the scan loop with no try/catch, so one malformed `.json` file rejects the whole `discover()` promise; `syncCustomThemes()` then hits `.catch(() => setStore(\"active\", \"hya\"))`, which drops **every** custom theme (setCustomThemes is never called) and force-resets the active theme to `hya`. That is a user-visible failure mode the doc says does not happen.",
+   "source": "packages/hya-tui-ts/src/upstream/context/theme.tsx:51-63 and :129-141",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/architecture/tui.md",
+   "claim": "\"Frontend Plugin Host ... static host: **starts all builtin plugins in parallel**\", then lists eleven builtin ids including `which-key` as item 10, with no note that any of them is inactive.",
+   "reality": "`createStaticPluginHost` starts `createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)`, and the which-key plugin ships `enabled: false`. Ten of the eleven start; the which-key panel does not load. docs/tui-keybindings.md calls this out explicitly (\"**Default off**\"), so the two pages disagree about whether the panel is live.",
+   "source": "packages/hya-tui-ts/src/hya/static-host.ts:31; src/upstream/feature-plugins/system/which-key.tsx:602-605",
+   "axis": "tui"
+  },
+  {
+   "doc": "docs/architecture/tui.md",
+   "claim": "\"Startup navigation sequence\" step 2: \"**`--session` without `--fork`** navigates to that session immediately\", presented as an independent step after step 1's invalid-model toast.",
+   "reality": "Steps 1 and 2 run inside the same `batch()` callback, and the invalid-model branch is `return toast.show(...)` \u2014 it returns from that callback. So `hya --model badformat --session <ID>` shows the warning toast and never performs the `--session` navigation; the user lands on Home instead. The documented sequence implies the steps are independent.",
+   "source": "packages/hya-tui-ts/src/upstream/app.tsx:455-474",
+   "axis": "tui"
+  }
+ ],
+ "criticFindings": [
+  {
+   "feature": "Project `references` / `reference` config block (`@alias` reference aliases, git-repo references, and the per-turn external-directory grant they create)",
+   "source": "crates/hya-server/src/compat/reference_entries.rs:5-33 (schema: string shorthand, `{path,description,hidden}`, `{repository,branch,description,hidden}`), reference_entries.rs:57-63 (alias validation), reference_repository.rs:50-57 (branch validation), reference_repository.rs:143-150 (git cache root `$XDG_DATA_HOME/compat/repos`, fallback `~/.local/share/compat/repos`), reference_cache.rs:9-33 (background clone), reference.rs:91-106 (read from the `/config` + `/global/config` bag), reference.rs:108-125 + reference.rs:155-198 (`<available_references>` system-prompt guidance), crates/hya-server/src/compat/session_prompt.rs:115 \u2192 crates/hya-core/src/engine/turn.rs:174-211 (turn-scoped `Action::ExternalDirectory` Allow rules)",
+   "why_it_matters": "This is a complete, live user/integrator feature with no entry point in docs. Docs mention that \"reference aliases\" appear in `@` autocomplete (docs/cli.md:214, docs/tui-reference.md:428) and that the prompt path \"derives the list from the session's reference directories\" (docs/architecture/tools-and-permissions.md:258), but nowhere says where references come from, what keys they take, or that they exist at all as something you configure. Concretely undiscoverable today: (1) the only way to declare them is `PATCH /config` or `PATCH /global/config` with a `references` (or `reference`) object \u2014 there is no `config.yaml` key and no on-disk file, so an integrator building a frontend cannot know to send it; (2) a string value starting with `.`/`/`/`~` is a local path while any other string is parsed as a git repository that hya background-clones into `$XDG_DATA_HOME/compat/repos`; (3) aliases containing `/`, whitespace, backtick or comma are silently dropped; (4) security-relevant \u2014 every reference path is layered onto the turn's permission snapshot as `Rule { action: ExternalDirectory, resource: \"<dir>/*\", mode: Allow }`, so tools read/write/shell outside the session workdir with **no permission prompt** for any directory listed there; (5) references carrying a `description` are injected into the system prompt as `<available_references>`, which changes model behavior. docs/architecture/server-client.md:169-181 actively describes `/config` and `/global/config` as an inert \"bag\" that hya does not consume, which is wrong for this key and steers readers away.",
+   "suggested_doc": "New \"Project references\" section in docs/configuration.md documenting the `references`/`reference` object, both value shapes (local path shorthand + `{path,description,hidden}`, git `{repository,branch,description,hidden}`), alias/branch validation rules, the git cache location, and how references reach the model. Cross-link it from (a) docs/architecture/tools-and-permissions.md \"Per-turn external directories\" with an explicit security note that listed directories bypass the ExternalDirectory prompt for the whole turn, and (b) docs/architecture/server-client.md \"Runtime config bag\", correcting the claim that the bag is purely process-local state hya never reads."
+  },
+  {
+   "feature": "The built-in formatter set enabled by `formatter: true` \u2014 which formatters ship, which file extensions each claims, and the exact argv hya runs on your files",
+   "source": "crates/hya-tool/src/formatter_catalog.rs:21-165 (27 `BuiltinSpec` entries: gofmt, mix, prettier, oxfmt, biome, zig, clang-format, ktlint, ruff, rubocop, standardrb, dart, rustfmt, terraform, latexindent, gleam, shfmt, ormolu, cljfmt, dfmt, htmlbeautifier, nixfmt, air, uv, ocamlformat, pint, \u2026, each with an `extensions` list and a `CheckKind` availability probe), crates/hya-tool/src/formatter_command.rs:113-131 (per-formatter argv, e.g. `gofmt -w $FILE`, `rubocop --autocorrect $FILE`, `ktlint -F $FILE`, `terraform fmt $FILE`), crates/hya-tool/src/formatter_definition.rs",
+   "why_it_matters": "docs/configuration.md:1118-1155 documents that `formatter: true` \"enables the built-in formatter set\" and that formatting runs after every successful `write`, `edit`, and `apply_patch` \u2014 but never says what that set is. A user who flips the flag has no way to learn from the docs that hya will invoke third-party binaries (`prettier`, `ruff`, `rustfmt`, `rubocop --autocorrect`, `terraform fmt`, `clang-format`, `shfmt`, `nixfmt`, `ktlint -F`, \u2026) that mutate their source files in place after every agent edit. They cannot answer basic questions: which binaries must be on PATH for the flag to do anything; why `.ts` files are being reformatted (prettier, oxfmt and biome all claim `.ts`, so precedence matters); which formatters gate on a local config file or `node_modules` rather than a bare PATH lookup; or which formatter to `disabled: true` to stop an unwanted rewrite. The only formatter names in docs are `gofmt` and `treefmt`, both appearing incidentally inside custom-entry examples.",
+   "suggested_doc": "Extend the \"Formatter\" section of docs/configuration.md with a built-in catalog table (formatter name | extensions claimed | availability check | command run), note the first-match/precedence rule for extensions claimed by more than one built-in, and state that `disabled: true` on a built-in name is how you opt one out."
+  },
+  {
+   "feature": "Pasting a local file path or `file://` URL into the prompt attaches that file as a media part (the terminal drag-and-drop flow), for a fixed set of image/PDF types",
+   "source": "packages/hya-tui-ts/src/upstream/component/prompt/index.tsx:70-79 (`pastedFilepath`: strips surrounding quotes, converts `file://` URLs, unescapes shell-escaped spaces on non-win32), index.tsx:1119-1140 (`pasteInputText`: skips http(s) URLs, otherwise tries `readLocalAttachment` before falling back to plain text), packages/hya-tui-ts/src/upstream/component/prompt/local-attachment.ts:25-47 (extension\u2192MIME map and the binary/text split)",
+   "why_it_matters": "This is how a user attaches an existing file on disk to a prompt \u2014 the behavior you get when you drag a file onto the terminal, or paste a path. docs/tui-reference.md:436 documents only the clipboard branch (\"inserts clipboard text or attaches a clipboard image as a `clipboard` file part\"), so the on-disk path branch is invisible in docs. The undocumented specifics matter in practice: only `.avif`, `.gif`, `.jpeg`, `.jpg`, `.pdf`, `.png`, `.svg`, `.webp` attach \u2014 every other path, including `.txt`/`.md`/source files, is silently pasted as literal text rather than attached, which reads as a bug; `.svg` is special-cased to be inserted as inline text behind an `[SVG: <name>]` placeholder instead of a binary attachment; `file://` URLs work but `http(s)://` URLs are deliberately never fetched; and quoting/backslash-escaping applied by the terminal on drop is stripped, which is why a path with spaces works at all.",
+   "suggested_doc": "Extend the \"Attachments, paste, history, stash\" subsection of docs/tui-reference.md with the on-disk path/`file://` branch: the supported extension list, the SVG-as-text exception, the silent text fallback for unsupported types, and the fact that http(s) URLs are pasted as text and never fetched."
+  },
+  {
+   "feature": "Headless permission behaviour (exec / run / goal / rpc / serve)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-app/src/permission.rs:11-14 (`spawn_reject_responder` replies `Decision::Reject { feedback: None }` to every `AskRequest`), wired at /chivier-disk/yanweiye/Projects/yaca/crates/hya-backend/src/main.rs:96,159,233",
+   "why_it_matters": "`docs/troubleshooting.md:143-149` says \"Headless `exec`, `run`, goal mode, `rpc`, and `serve` install an automatic permission responder. By default it allows reads, globs, grep, shell, MCP, and edits that stay inside the active workdir after symlink-aware resolution.\" `docs/configuration.md:666-667` and `docs/architecture/tools-and-permissions.md:198-199` say the opposite: \"Headless `exec`, RPC, and goal modes reject unresolved asks\" / \"answer residual asks with `Reject`\". The source installs a pure reject responder \u2014 nothing is auto-allowed. troubleshooting.md also claims \"symlink-aware resolution\", while tools-and-permissions.md:220-224 documents the path boundary as purely lexical with symlinks deliberately NOT canonicalized. It also lists `serve` as headless, while configuration.md:666 says server mode forwards asks to its endpoint.",
+   "suggested_doc": "docs/troubleshooting.md"
+  },
+  {
+   "feature": "Permission Action raised by lsp / skill / task / todowrite",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/lsp.rs:70 (`Action::Lsp`), skill.rs:122 (`Action::Skill`), todo.rs:118 (`Action::TodoWrite`), task.rs:268 (`Action::Task`)",
+   "why_it_matters": "`docs/project-structure.md:127-132` lists the \"Permission action\" for `lsp`, `skill`, `list_agents`, `task`, `todowrite`, `plan_exit`, and the mailbox tools all as `Tool`. `docs/architecture/tools-and-permissions.md:121-127` maps the same tools to distinct actions: `task`\u2192`Task`, `webfetch`\u2192`WebFetch`, `websearch`\u2192`WebSearch`, `todowrite`\u2192`TodoWrite`, `skill`\u2192`Skill`, `lsp`\u2192`Lsp`. Since the same table already uses real Action names (`Read`, `Edit`, `Glob`, `Grep`, `Bash`) for the other rows, readers writing `permission.rules` will target the wrong action and their rule will silently never match.",
+   "suggested_doc": "docs/project-structure.md"
+  },
+  {
+   "feature": "Roster sidebar in the TUI",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/packages/hya-tui-ts/src/upstream/feature-plugins/builtins.ts:20-31 (BUILTINS = HomeFooter, HomeTips, SidebarContext, SidebarMcp, SidebarLsp, SidebarTodo, SidebarFiles, SidebarFooter, Notifications, WhichKey, DiffViewer \u2014 no roster plugin)",
+   "why_it_matters": "`CONTEXT.md:215-218` defines **Roster sidebar** as \"An always-visible Session-screen sidebar block that summarizes live Roster entries for the current Team.\" `docs/tui-reference.md:90-91` states \"There is **no roster section** in the sidebar; subagents use panes and the roster dialog instead\", and `docs/adr/0006-tui-session-reset-and-subagent-visibility.md` records the same ('The sidebar has no roster section. Its feature plugins are Context, MCP, LSP, Todo, Modified Files, and a footer.'). CONTEXT.md is the ubiquitous-language glossary, so a stale term there propagates into every other doc and PRD that reuses the vocabulary.",
+   "suggested_doc": "CONTEXT.md"
+  },
+  {
+   "feature": "Where Agent definitions come from (agent catalog authority)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-backend/src/agent_cmd.rs:50-57 (\"adds ordinary agents from the build-embedded catalog only \u2014 never inspects `.hya`/`.claude`/`.opencode`/config agent files\"); no agent-file discovery exists anywhere in hya-app/hya-core",
+   "why_it_matters": "`CONTEXT.md:120-123` defines **Agent** as \"sourced from a built-in (\\\"native\\\") agent or a user-authored markdown file\", and `CONTEXT.md:125-127` defines **Agent catalog** as \"The disk- and config-discovered set of Agent definitions\". `docs/agent-bundle-authoring.md:492` says \"Legacy definitions are not parsed, migrated, or used as a fallback\" and there is \"no legacy agent-file discovery\"; `docs/cli.md:459-463` says `agent list` \"**never** inspects on-disk agent files under `.hya/`, `.claude/`, or `.opencode/`, nor config-declared agents\"; `docs/architecture/agent-tool-surface.md:682-684` names `BundleCatalog` on `RuntimeSnapshot`/`TurnBinding` as the single authority. CONTEXT.md still describes the removed markdown-agent-file model.",
+   "suggested_doc": "CONTEXT.md"
+  },
+  {
+   "feature": "Whether dynamic MCP HTTP routes can add tools to a running engine",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-app/src/runtime.rs:4054-4055 (`RuntimeReconciler` + `RuntimeMcpControl` publish a complete candidate through `RuntimeRegistry`), route mounted at /chivier-disk/yanweiye/Projects/yaca/crates/hya-server/src/compat/mcp.rs:19",
+   "why_it_matters": "`docs/hya-pi-compat-comparison.md:74-77` says the Compat MCP HTTP routes \"do not durably rewrite `config.yaml` **or hot-plug new tools into an already-running engine**\". `docs/configuration.md:804-813` and `docs/compat-parity.md:91` say the opposite for the tool half: \"A complete successful observation is published atomically for the next turn\" / \"HTTP add/connect/disconnect changes next-turn tool callability atomically\", and configuration.md:820-887 even ships a runnable POST /mcp + connect/disconnect walkthrough. Only the `config.yaml` half of the comparison-doc claim is still true.",
+   "suggested_doc": "docs/hya-pi-compat-comparison.md"
+  },
+  {
+   "feature": "which-key builtin TUI plugin (loaded vs. shipped disabled)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/packages/hya-tui-ts/src/hya/static-host.ts:30 (`createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)`) and /chivier-disk/yanweiye/Projects/yaca/packages/hya-tui-ts/src/upstream/feature-plugins/system/which-key.tsx:604 (`enabled: false`)",
+   "why_it_matters": "`docs/architecture/tui.md:307-324` says the static host \"starts **all** builtin plugins in parallel\" and lists eleven ids including `which-key`, with no mention of the enabled filter. `docs/tui-keybindings.md:506-509` says \"**Default off:** the shipped which-key plugin sets `enabled: false` and is filtered out of the static builtin host \u2026 the panel does not load unless that plugin is re-enabled\", and `docs/FOLLOWUPS.md:74-78` records the same as a confirmed defect. Only ten of the eleven declared builtins actually start.",
+   "suggested_doc": "docs/architecture/tui.md"
+  },
+  {
+   "feature": "Standard Rust quality-gate command",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/.github/workflows/ci.yml:90 (`cargo test --workspace --jobs 1 --exclude hya-e2e`) and :96 (`cargo test -p hya-e2e -- --test-threads=1`)",
+   "why_it_matters": "`docs/development.md:23-27` gives the \"standard gate\" as `cargo fmt --all --check` / `cargo clippy \u2026` / `cargo test --workspace` (no exclusion). `docs/testing/README.md:26-32` gives the \"Default quality gate\" as `cargo test --workspace --exclude hya-e2e` and explicitly says \"`--exclude hya-e2e` matches CI: Track P spawns real backend processes and is run separately below with `--test-threads=1`.\" Following development.md runs the process-E2E suite multi-threaded and produces spurious port/process failures. `AGENTS.md:120-123` repeats the un-excluded form too.",
+   "suggested_doc": "docs/development.md"
+  },
+  {
+   "feature": "Theme token field names for custom theme JSON files",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/packages/hya-tui-ts/src/upstream/theme/index.ts:45-48 (`readonly textMuted`, `readonly backgroundPanel`) and packages/hya-tui-ts/src/upstream/theme/assets/hya.json (keys `backgroundPanel`, `backgroundElement`, `borderActive`, `borderSubtle`, `textMuted`)",
+   "why_it_matters": "`DESIGN.md:19-35` names the tokens in snake_case \u2014 `background_panel`, `background_element`, `border_active`, `border_subtle`, `text_muted` \u2014 and instructs \"Use only semantic theme fields from `Theme`\". `docs/tui-reference.md:527-536` tells authors to drop a JSON object with \"a nested `theme` object key\" into `~/.config/hya/themes/*.json`, and every shipped asset plus the `Theme` type uses camelCase. There is no snake_case\u2192camelCase normalization in the loader, so a theme written from DESIGN.md's table silently loses those five tokens. (The hex values in DESIGN.md are correct.)",
+   "suggested_doc": "DESIGN.md"
+  },
+  {
+   "feature": "Documentation index completeness (orphaned architecture page)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/docs/README.md:64-94 (Docs Map) and :48-62 (codebase reading path)",
+   "why_it_matters": "`docs/architecture/agent-tool-surface.md` is a 771-line architecture reference and is linked from **zero** other markdown files \u2014 it appears in neither the docs/README.md Docs Map nor the \"understand the codebase\" reading path, while `docs/architecture/tools-and-permissions.md` (which covers a subset of the same ground) is listed. `docs/compat-parity.md` is likewise absent from the Docs Map even though root `README.md:118` links it and docs/README.md claims to be the index. Two docs now describe the builtin-tool surface and only one is reachable.",
+   "suggested_doc": "docs/README.md"
+  },
+  {
+   "feature": "Crate component map (hya-app and hya-bundle)",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/Cargo.toml:5 (`members = [\"crates/*\"]`); crates/hya-app/src/lib.rs and crates/hya-bundle/src/lib.rs exist",
+   "why_it_matters": "`AGENTS.md:69-93` presents a \"Component Map\" of every crate but omits `crates/hya-app` and `crates/hya-bundle`, and folds hya-app's responsibilities into the `crates/hya-backend` row (\"plugin loading, MCP setup, permission policy\"). `docs/project-structure.md:52-53` documents both as first-class crates \u2014 hya-app as \"Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh\" and hya-bundle as the AgentBundle prepare/validate/catalog layer. Since AGENTS.md is the file agents read first for crate routing, work targeting runtime composition or bundles gets routed to hya-backend.",
+   "suggested_doc": "AGENTS.md"
+  },
+  {
+   "feature": "Canonical builtin tool names vs hidden aliases",
+   "source": "/chivier-disk/yanweiye/Projects/yaca/crates/hya-tool/src/tool.rs:341-345 (`insert_aliased_builtin(\"apply_patch\", \"patch\", \u2026)` etc. \u2014 first argument is canonical/advertised, second is the hidden alias)",
+   "why_it_matters": "`docs/compat-parity.md:84` writes \"\u2026 plus `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit` **aliases** matching Compat names.\" `docs/architecture/tools-and-permissions.md:53-54`, `docs/architecture/agent-tool-surface.md:197-214`, and `docs/project-structure.md:124` all state that those five are the **canonical advertised** schema names and that the five hidden, non-advertised aliases are `patch`, `fetch`, `search`, `todo`, `plan`. Readers of compat-parity.md will look for the canonical name elsewhere.",
+   "suggested_doc": "docs/compat-parity.md"
+  }
+ ]
+}

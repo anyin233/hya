@@ -1,0 +1,30 @@
+{
+  "id": "docs-100-percent-coverage",
+  "name": "docs-100-percent-coverage",
+  "title": "Documentation coverage to 100% across features, rustdoc, and TS package",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-08-06",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-06-docs-prose-coverage",
+    "08-06-docs-rustdoc-coverage",
+    "08-06-docs-ts-package"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
