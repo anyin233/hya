@@ -68,6 +68,7 @@ pub fn spawn_event_bridge(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use hya_app::{HyaRuntime, RuntimeOptions};
     use std::time::Duration;

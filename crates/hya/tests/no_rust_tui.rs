@@ -1,6 +1,8 @@
 //! Guardrail: the workspace must not retain a Rust interactive TUI crate.
 //! The only interactive frontend is `packages/hya-tui-ts`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 
 fn workspace_root() -> PathBuf {

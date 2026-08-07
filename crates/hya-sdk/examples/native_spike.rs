@@ -8,9 +8,11 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `main` already returns a Result, so report the missing variable through it
+    // rather than panicking — the crate denies `expect` outside test modules.
     let pkg = std::env::var("HYA_BACKEND_DIR")
         .map(PathBuf::from)
-        .expect("set HYA_BACKEND_DIR to the backend package dir");
+        .map_err(|_| "set HYA_BACKEND_DIR to the backend package dir")?;
     let workdir = std::env::current_dir()?.display().to_string();
 
     println!("SPAWNING bridge from {}", pkg.display());
