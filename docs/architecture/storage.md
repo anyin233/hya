@@ -160,9 +160,12 @@ SQLite assigns the global autoincrement `seq`, which becomes `Envelope.seq`.
 | Direction | Rule |
 | --- | --- |
 | **Write** (`SessionId::storage_key`) | `hysec_...` ASCII bytes for new sessions; 16-byte UUID for legacy |
-| **Read** (`decode_session_key`) | First try UTF-8 parse as `SessionId` (`hysec_`, `ses_<uuid>`, or raw uuid text); **only if that fails**, interpret the 16 bytes as a legacy raw UUID |
+| **Read** (`decode_session_key`) | If the blob is **valid UTF-8**, parse as `SessionId` text (`hysec_`, `ses_<uuid>`, or raw uuid text) and **return that result** (`Some` or `None`) — **no** binary UUID fallback after a failed parse. Only when the blob is **not** valid UTF-8, interpret exactly 16 bytes as a legacy raw UUID. |
 
-That ordering is what lets both encodings coexist in one `session_id` column.
+Compatible readers must mirror that control flow: a 16-byte legacy UUID whose
+bytes happen to be valid UTF-8 (all `< 0x80`) will **not** be recovered by the
+binary branch; production legacy keys are raw UUID bytes (not text), so they
+take the non-UTF-8 path.
 
 This is a full replay log, not a rendered transcript cache. Persisted events can
 include prompts, tool-call inputs, tool outputs, reasoning deltas, command
