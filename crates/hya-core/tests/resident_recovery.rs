@@ -269,6 +269,8 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             subagent_type: AgentName::new("child"),
             description: "running child".to_string(),
             depth: 2,
+            directive: String::new(),
+            tool_call: None,
         },
         Event::MemberStatusChanged {
             session: running_actor,

@@ -71,6 +71,12 @@ pub struct MemberProjection {
     /// Bounded finish summary (never the full child transcript).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    /// Verbatim parent directive that defines this member's purpose.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub directive: String,
+    /// Tool call that caused this spawn, when it came from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<ToolCallId>,
 }
 
 /// One message row in a folded session transcript.
@@ -539,6 +545,8 @@ impl Projection {
                 subagent_type,
                 description,
                 depth,
+                directive,
+                tool_call,
                 ..
             } => {
                 let entry = self.member_mut(*member);
@@ -547,6 +555,14 @@ impl Projection {
                 entry.description = description.clone();
                 entry.depth = *depth;
                 entry.status = MemberRunStatus::Spawning;
+                // A resume re-emits MemberSpawned for the same member; keep the
+                // original purpose rather than blanking it from a thinner re-emit.
+                if !directive.is_empty() {
+                    entry.directive = directive.clone();
+                }
+                if tool_call.is_some() {
+                    entry.tool_call = *tool_call;
+                }
             }
             Event::MemberStatusChanged { member, status, .. } => {
                 self.member_mut(*member).status = *status;
@@ -732,6 +748,8 @@ impl Projection {
             depth: 0,
             status: MemberRunStatus::Spawning,
             summary: String::new(),
+            directive: String::new(),
+            tool_call: None,
         });
         let last = self.session.members.len() - 1;
         &mut self.session.members[last]
@@ -768,6 +786,8 @@ mod member_tests {
                 subagent_type: AgentName::new("explore"),
                 description: "scan routing".to_string(),
                 depth: 1,
+                directive: "Scan the routing layer and report every handler".to_string(),
+                tool_call: Some(ToolCallId::new()),
             },
         ));
         p.apply(&env(
@@ -785,6 +805,12 @@ mod member_tests {
             p.session.members[0].subagent_type,
             AgentName::new("explore")
         );
+        // The spawn edge carries the member's purpose and its originating call.
+        assert_eq!(
+            p.session.members[0].directive,
+            "Scan the routing layer and report every handler"
+        );
+        assert!(p.session.members[0].tool_call.is_some());
 
         p.apply(&env(
             3,

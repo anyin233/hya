@@ -22,7 +22,7 @@ use hya_core::{
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId,
-    ModelRef, PartProjection, Role, RosterStatus, SessionId, ToolName, ToolSchema,
+    ModelRef, PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -1167,6 +1167,87 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
     (engine, agent)
 }
 
+/// AC5 + AC6: the spawn edge must carry the member's purpose verbatim and the
+/// tool call that produced it, for a fresh spawn and for a resumed session.
+#[tokio::test]
+async fn member_spawn_records_directive_verbatim_and_originating_tool_call() {
+    let workdir = support::TestDir::new("spawn-records-directive");
+    let (engine, mut agent) = engine().await;
+    agent.workdir = workdir.path().to_path_buf();
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    // A long, structured directive: the purpose must survive intact, not be
+    // truncated to the short UI description the way `summary` is.
+    let directive = "Audit every provider route for retry handling. \
+                     Report each file, the retry policy it uses, and any route \
+                     that silently swallows a transport error."
+        .to_string();
+    let call = ToolCallId::new();
+    let mut spec = member(&engine, &agent, &directive);
+    spec.description = "audit retries".to_string();
+    spec.tool_call = Some(call);
+
+    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    assert_eq!(evidence.len(), 1);
+
+    let projection = engine.read_projection(lead).await.unwrap();
+    let member = &projection.session.members[0];
+    assert_eq!(
+        member.directive, directive,
+        "the directive must be recorded verbatim, not truncated"
+    );
+    assert_eq!(
+        member.tool_call,
+        Some(call),
+        "the spawn edge must anchor to its originating tool call"
+    );
+    // The short UI label stays separate from the full purpose.
+    assert_eq!(member.description, "audit retries");
+
+    // A resume re-emits MemberSpawned for the same member; the purpose recorded
+    // by the original spawn must not be blanked by a thinner re-emit.
+    let child = member.child.unwrap();
+    let mut resumed = member_spec_for_resume(&engine, &agent, child);
+    resumed.id = member.member;
+    let _ = run_team(
+        engine.clone(),
+        lead,
+        vec![resumed],
+        CancellationToken::new(),
+    )
+    .await;
+    let after = engine.read_projection(lead).await.unwrap();
+    let member = after
+        .session
+        .members
+        .iter()
+        .find(|m| m.child == Some(child))
+        .expect("resumed member row");
+    assert_eq!(
+        member.directive, directive,
+        "a resume must not erase the original purpose"
+    );
+}
+
+/// A resume spec: same child session, empty directive (the child already has it).
+fn member_spec_for_resume(
+    engine: &SessionEngine,
+    agent: &AgentSpec,
+    child: SessionId,
+) -> MemberSpec {
+    let mut spec = member(engine, agent, "");
+    spec.session = Some(child);
+    spec
+}
+
 #[tokio::test]
 async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
     let workdir = support::TestDir::new("pre-admitted-nested-spawn");
@@ -1240,6 +1321,7 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
         description: "member task".to_string(),
         session: None,
         sidecar_factory: None,
+        tool_call: None,
     };
     let operation = ToolOperation::from_tool_call(hya_proto::ToolCallId::new());
     let admission = AdmissionMemberIdentity {
@@ -1479,6 +1561,7 @@ fn member(engine: &SessionEngine, agent: &AgentSpec, directive: &str) -> MemberS
         description: String::new(),
         session: None,
         sidecar_factory: None,
+        tool_call: None,
     }
 }
 
@@ -1635,6 +1718,7 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
         description: "sidecar permission".to_string(),
         session: None,
         sidecar_factory: Some(factory),
+        tool_call: None,
     };
 
     let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
@@ -1732,6 +1816,7 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
         description: "activation hooks".to_string(),
         session: None,
         sidecar_factory: Some(factory),
+        tool_call: None,
     };
 
     let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
@@ -5455,6 +5540,7 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
             description: String::new(),
             session: None,
             sidecar_factory: None,
+            tool_call: None,
         },
         MemberSpec {
             id: MemberId::new(),
@@ -5467,6 +5553,7 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
             description: String::new(),
             session: None,
             sidecar_factory: None,
+            tool_call: None,
         },
     ];
     let evidence = run_team(engine.clone(), lead, specs, CancellationToken::new()).await;
@@ -5531,6 +5618,7 @@ async fn run_team_can_resume_existing_member_session() {
             description: String::new(),
             session: Some(child),
             sidecar_factory: None,
+            tool_call: None,
         }],
         CancellationToken::new(),
     )
@@ -5580,6 +5668,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
             description: String::new(),
             session: Some(child),
             sidecar_factory: None,
+            tool_call: None,
         }],
         CancellationToken::new(),
     )
@@ -5625,6 +5714,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
             description: String::new(),
             session: Some(child),
             sidecar_factory: None,
+            tool_call: None,
         }],
         CancellationToken::new(),
     )
@@ -5711,6 +5801,7 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             },
             MemberSpec {
                 id: failed_id,
@@ -5723,6 +5814,7 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             },
         ],
         CancellationToken::new(),
@@ -5780,6 +5872,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             },
             MemberSpec {
                 id: second,
@@ -5792,6 +5885,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             },
             MemberSpec {
                 id: third,
@@ -5804,6 +5898,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             },
         ],
         CancellationToken::new(),

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use hya_proto::{
     Event, FinishReason, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId,
-    SubagentMode,
+    SubagentMode, ToolCallId,
 };
 use hya_store::ActorClaim;
 use hya_tool::AgentDef;
@@ -150,6 +150,12 @@ pub struct MemberSpec {
     pub guidance: Option<Arc<str>>,
     /// Full task prompt for the child turn.
     pub directive: String,
+    /// Tool call that caused this spawn, when it came from one.
+    ///
+    /// Recorded on `MemberSpawned` so an offline graph can anchor the spawn edge
+    /// to an exact point in the parent's trajectory instead of inferring it from
+    /// event ordering. `None` for supervisor-started resident members.
+    pub tool_call: Option<ToolCallId>,
     /// Short UI label from the task tool (3–5 words). Empty falls back to a
     /// truncated directive so observers still get a readable row title.
     pub description: String,
@@ -247,6 +253,9 @@ async fn run_member(
                 subagent_type: spec.agent.name.clone(),
                 description,
                 depth,
+                // Cloned: `spec.directive` is moved into the child prompt below.
+                directive: spec.directive.clone(),
+                tool_call: spec.tool_call,
             },
         )
         .await?;

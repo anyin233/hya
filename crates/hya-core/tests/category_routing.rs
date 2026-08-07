@@ -204,6 +204,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
                 description: String::new(),
                 session: None,
                 sidecar_factory: None,
+                tool_call: None,
             }
         })
         .collect();

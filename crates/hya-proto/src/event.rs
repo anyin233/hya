@@ -399,6 +399,19 @@ pub enum Event {
         description: String,
         /// Depth in the subagent tree (root children are 1).
         depth: u32,
+        /// Verbatim parent directive that defines this member's purpose.
+        ///
+        /// Recorded on the edge because the child's first user message is not a
+        /// reliable substitute: a resumed session receives the directive as a
+        /// later message, and a resident agent also receives mail as user
+        /// prompts. Offline viewers summarize this; the engine never does.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        directive: String,
+        /// Tool call that caused this spawn, when it came from one.
+        ///
+        /// `None` for members the resident supervisor starts without a tool call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call: Option<ToolCallId>,
     },
     /// Member status update on the parent log.
     MemberStatusChanged {
