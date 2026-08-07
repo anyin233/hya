@@ -64,6 +64,7 @@ impl TextPartAccumulator {
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
+            | Event::ContextCompacted { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

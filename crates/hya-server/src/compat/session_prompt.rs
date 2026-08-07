@@ -274,6 +274,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
             | Event::Error { .. }
+            | Event::ContextCompacted { .. }
             | Event::Unknown => None,
         })
         .ok_or_else(|| ApiError::internal("admitted prompt event missing"))

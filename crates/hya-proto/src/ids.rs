@@ -236,8 +236,16 @@ fn fill_os_random(dest: &mut [u8]) {
 }
 
 uuid_id!(MessageId, "msg", "Transcript message id (`msg_` + UUIDv7).");
-uuid_id!(PartId, "part", "Content part id within a message (`part_` + UUIDv7).");
-uuid_id!(ToolCallId, "tc", "Tool-call correlation id (`tc_` + UUIDv7).");
+uuid_id!(
+    PartId,
+    "part",
+    "Content part id within a message (`part_` + UUIDv7)."
+);
+uuid_id!(
+    ToolCallId,
+    "tc",
+    "Tool-call correlation id (`tc_` + UUIDv7)."
+);
 
 /// Monotonic identity of one immutable runtime configuration snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -396,11 +404,23 @@ impl std::fmt::Display for OperationId {
 }
 
 uuid_id!(TeamRunId, "team", "Team-run identity (`team_` + UUIDv7).");
-uuid_id!(MemberId, "mbr", "Subagent member id on a parent log (`mbr_` + UUIDv7).");
+uuid_id!(
+    MemberId,
+    "mbr",
+    "Subagent member id on a parent log (`mbr_` + UUIDv7)."
+);
 uuid_id!(GoalId, "goal", "Goal-mode run id (`goal_` + UUIDv7).");
 uuid_id!(LoopRunId, "loop", "Loop-mode run id (`loop_` + UUIDv7).");
-uuid_id!(PermissionRequestId, "perm", "Pending permission request id (`perm_` + UUIDv7).");
-uuid_id!(QuestionRequestId, "q", "Pending user-question request id (`q_` + UUIDv7).");
+uuid_id!(
+    PermissionRequestId,
+    "perm",
+    "Pending permission request id (`perm_` + UUIDv7)."
+);
+uuid_id!(
+    QuestionRequestId,
+    "q",
+    "Pending user-question request id (`q_` + UUIDv7)."
+);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

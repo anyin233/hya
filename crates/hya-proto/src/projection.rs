@@ -712,6 +712,9 @@ impl Projection {
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::Error { .. }
+            // Observability record, not a state transition: the folded messages
+            // stay in the log and the marker System message carries the output.
+            | Event::ContextCompacted { .. }
             | Event::Unknown => {}
         }
     }

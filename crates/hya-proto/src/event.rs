@@ -511,6 +511,37 @@ pub enum Event {
         member: String,
     },
 
+    // -------- context observability --------
+    /// A compaction folded part of this session's transcript.
+    ///
+    /// Appended to the log of the session that compacted; there is no parent
+    /// mirror, because `event_log.seq` already orders every agent's events on one
+    /// global timeline. Reducer no-op: this is a record, not a state transition.
+    ///
+    /// The folded input is a **pointer**, not a copy. Compaction never deletes,
+    /// so `from_message..=to_message` plus the log reconstructs exactly what the
+    /// summarizer saw. Range semantics differ by strategy: `Native` folds the
+    /// whole input window, `LocalSummarizer` folds the prefix before the
+    /// retained recent messages.
+    ContextCompacted {
+        /// Session whose context was compacted.
+        session: SessionId,
+        /// System message carrying the compaction marker: the output.
+        message: MessageId,
+        /// Which compaction path produced it.
+        strategy: CompactionStrategy,
+        /// First message folded into the summary.
+        from_message: MessageId,
+        /// Last message folded into the summary.
+        to_message: MessageId,
+        /// Number of messages folded.
+        folded_count: u32,
+        /// Estimated input tokens that tripped the threshold.
+        input_tokens_est: u64,
+        /// Threshold in force when it tripped.
+        threshold: u64,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors; reducer no-op.
     Error {
@@ -535,6 +566,17 @@ pub enum Event {
 
 fn default_step_finish_reason() -> FinishReason {
     FinishReason::Stop
+}
+
+/// Which compaction path produced a [`Event::ContextCompacted`] record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    /// Provider-native compaction (OpenAI `/responses/compact`).
+    Native,
+    /// Local model summarizer fallback.
+    #[default]
+    LocalSummarizer,
 }
 
 impl Event {
@@ -585,12 +627,12 @@ impl Event {
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. } => Some(*session),
+            Event::ContextCompacted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
     }
 }
-
 
 /// An ordered, replayable event: the unit shipped over SSE and stored in the log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -724,5 +766,87 @@ mod tests {
             let back: Event = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(event, back, "mailbox event must round-trip: {json}");
         }
+    }
+
+    fn context_compacted(session: SessionId) -> Event {
+        Event::ContextCompacted {
+            session,
+            message: MessageId::new(),
+            strategy: CompactionStrategy::LocalSummarizer,
+            from_message: MessageId::new(),
+            to_message: MessageId::new(),
+            folded_count: 34,
+            input_tokens_est: 120_000,
+            threshold: 100_000,
+        }
+    }
+
+    #[test]
+    fn context_compacted_round_trips_and_reports_its_session() {
+        let session = SessionId::new();
+        let event = context_compacted(session);
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, back, "context_compacted must round-trip: {json}");
+        assert_eq!(back.session(), Some(session));
+    }
+
+    #[test]
+    fn compaction_strategy_round_trips_both_variants() {
+        for strategy in [
+            CompactionStrategy::Native,
+            CompactionStrategy::LocalSummarizer,
+        ] {
+            let json = serde_json::to_string(&strategy).expect("serialize");
+            let back: CompactionStrategy = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(strategy, back, "strategy must round-trip: {json}");
+        }
+        assert_eq!(
+            serde_json::to_string(&CompactionStrategy::LocalSummarizer).expect("serialize"),
+            "\"local_summarizer\"",
+            "strategy uses snake_case on the wire"
+        );
+    }
+
+    #[test]
+    fn context_compacted_is_a_record_and_does_not_change_the_projection() {
+        let session = SessionId::new();
+        let base = [Envelope {
+            seq: EventSeq(1),
+            ts_millis: 1,
+            event: Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("m"),
+                workdir: "/w".to_string(),
+            },
+        }];
+        let mut with_record = base.to_vec();
+        with_record.push(Envelope {
+            seq: EventSeq(2),
+            ts_millis: 2,
+            event: context_compacted(session),
+        });
+
+        let before = crate::Projection::from_events(&base);
+        let after = crate::Projection::from_events(&with_record);
+        // `last_seq` advances for every appended event; the reduced state must not.
+        assert_eq!(
+            before.session, after.session,
+            "ContextCompacted is an observability record, not a state transition"
+        );
+        assert_eq!(before.team, after.team, "no team state may change");
+        assert_eq!(after.last_seq, 2, "the record still advances seq");
+    }
+
+    #[test]
+    fn unknown_event_type_still_folds_for_older_binaries() {
+        // Forward compatibility: a binary predating ContextCompacted must not
+        // fail to replay a log that contains it.
+        let decoded: Event = serde_json::from_str(r#"{"type":"some_future_event"}"#)
+            .expect("unknown event type must decode as Unknown");
+        assert_eq!(decoded, Event::Unknown);
+        assert_eq!(decoded.session(), None);
     }
 }
