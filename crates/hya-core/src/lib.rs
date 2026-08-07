@@ -56,8 +56,9 @@ pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, build_member_agent, inject_skills,
 };
 pub use compaction::{
-    CompactionConfig, CompactionPlan, ModelSummarizer, SummarizeOptions, Summarizer, compact_with,
-    estimate_tokens, measured_tokens, needs_compaction, plan_compaction, tokens_in_use,
+    CompactionConfig, CompactionPlan, MIN_RESOLVED_THRESHOLD, ModelSummarizer, SummarizeOptions,
+    Summarizer, compact_with, estimate_tokens, measured_tokens, needs_compaction,
+    needs_compaction_at, plan_compaction, plan_compaction_at, resolved_threshold, tokens_in_use,
 };
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,

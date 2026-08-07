@@ -39,6 +39,7 @@ async fn state_with_session() -> (AppState, String) {
             CompactionConfig {
                 token_threshold: 1,
                 keep_recent: 1,
+                context_fraction: 0.75,
             },
         ),
     );

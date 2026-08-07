@@ -586,23 +586,33 @@ impl SessionEngine {
             let mut messages = projection_to_messages(agent, &projection);
             // Context protection: prefer provider `/responses/compact` when the
             // route supports it; otherwise fall back to the local model summarizer.
-            if crate::compaction::needs_compaction(&messages, &self.compaction) {
+            // Active route for this turn. Its advertised context window scales the
+            // compaction threshold, so resolve it before deciding.
+            let model = projection
+                .session
+                .model
+                .clone()
+                .unwrap_or_else(|| agent.model.clone());
+            let resolved_threshold = crate::compaction::resolved_threshold(
+                &self.compaction,
+                self.providers.capabilities(&model).map(|c| c.max_context),
+            );
+            if crate::compaction::needs_compaction_at(
+                &messages,
+                &self.compaction,
+                resolved_threshold,
+            ) {
                 // Snapshot what tripped the threshold before the transcript is
                 // replaced, so the ContextCompacted record explains why it ran.
-                let input_tokens_est = u64::try_from(crate::compaction::estimate_tokens(&messages))
-                    .unwrap_or(u64::MAX);
-                let threshold = u64::try_from(self.compaction.token_threshold).unwrap_or(u64::MAX);
+                // Prefer provider-reported usage over the chars/4 estimate.
+                let input_tokens_est =
+                    u64::try_from(crate::compaction::tokens_in_use(&messages)).unwrap_or(u64::MAX);
+                let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
                 // Exact-resolve fixed Compaction once before any compact provider
                 // call (native or local). Missing definition fails closed here.
                 // Reuse the turn's captured binding; never re-bind or open a second catalog.
                 let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
                 let compaction_prompt = definition.prompt.as_deref();
-                // Native compact resolves the active session provider/model route.
-                let model = projection
-                    .session
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| agent.model.clone());
                 match self
                     .providers
                     .compact_if_supported(&model, &messages, compaction_prompt)
@@ -650,9 +660,10 @@ impl SessionEngine {
                             let options = summarize_options_from_definition(definition);
                             // Provider failures stay soft (prior behavior); missing
                             // definition already failed closed above.
-                            if let Ok(Some(plan)) = crate::compaction::plan_compaction(
+                            if let Ok(Some(plan)) = crate::compaction::plan_compaction_at(
                                 &messages,
                                 &self.compaction,
+                                resolved_threshold,
                                 summarizer.as_ref(),
                                 options,
                             )
