@@ -1,5 +1,13 @@
 # Event-sourced mailbox and channels
 
+> **Superseded in part by [ADR-0011](0011-hierarchy-scoped-mailbox.md).** The
+> event-sourced single-log design below still holds in full. What changed is
+> *who may address whom*: mail is no longer team-wide. An agent may address only
+> its parent, its same-parent siblings, and its direct reports; handles are
+> canonical paths (`main/lead-1/worker-2`); and channels are keyed by owning unit
+> (`main/lead-1#build`). The Delivery rules below gain a scope gate that runs
+> **before** the eligibility checks — see the note at the end of each section.
+
 Inter-agent communication (direct mail by handle, named `#channels`, broadcast) is implemented as
 first-class `Event`s (`MailSent`, `ChannelJoined`, `ChannelLeft`, `AgentRegistered`) appended to
 the **team-root** session's log and folded by the shared `hya-proto::Projection` into per-agent
@@ -35,14 +43,21 @@ Mail is written under the SQLite writer lock in `hya-store` (`append_direct_mail
 1. `BEGIN IMMEDIATE`
 2. Optional `ActorClaim` fence when the sender is a resident
 3. Replay the team-root projection inside the transaction
-4. **Reject** with `StoreError::MailboxRejected` when:
+4. **Resolve the address in scope** (ADR-0011) — a relative leaf or a full path,
+   matched only against agents the sender may address. This runs **before** every
+   check below, so an out-of-scope address fails exactly like an unknown one and
+   cannot be used to probe whether a teammate exists or is alive.
+5. **Reject** with `StoreError::MailboxRejected` when:
+   - the address is **not addressable from the sender** (out of scope, unknown,
+     or ambiguous)
    - the target handle is **unknown** (not in the roster)
    - the target is a **transient non-root** member (`session != root` and `mode == Transient`)
    - the target is a **non-root** resident that fails eligibility
      (`session != root` and `mode == Resident` and not
      `resident_member_is_eligible` — stopped/terminal or no active claim)
-5. Append `Event::MailSent { to: Handle(...) }`
-6. Commit and return the envelope
+6. Append `Event::MailSent { to: Handle(...) }` — carrying the **resolved
+   canonical path**, not the string the sender typed
+7. Commit and return the envelope
 
 **Root-session handle:** when the roster entry's `session == root`, neither the
 transient reject nor the resident eligibility check runs. Mail to the team-root
@@ -53,6 +68,10 @@ handle is accepted regardless of that entry's `RosterStatus` or claim row.
 Same writer-lock discipline and optional claim fence, then:
 
 1. Replay the root projection
+1. **Resolve the channel to a unit-qualified key** (ADR-0011): `#name` addresses
+   the unit the sender leads if it leads one, otherwise its home unit; `#^name`
+   addresses its home unit and is an error for an agent that leads nobody.
+   `#announce` is reserved and refused here — see ADR-0011's announce path.
 2. **Count** eligible subscribers on the channel (does not reject the send when zero are
    eligible — the `MailSent` is still appended)
 3. Append `Event::MailSent { to: Channel(...) }`

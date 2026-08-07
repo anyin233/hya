@@ -139,13 +139,38 @@ impl TeamProjection {
         }
     }
 
+    /// Resolve a handle written on the wire to its canonical path. Mirrors
+    /// `hya_proto::TeamProjection::canonical_member` branch for branch; the two
+    /// must agree or the TUI would key an inbox differently from the backend.
+    fn canonical_member(&self, raw: &str) -> String {
+        if raw.contains(PATH_SEPARATOR) || self.roster.contains_key(raw) {
+            return raw.to_owned();
+        }
+        let mut matches = self.roster.keys().filter(|key| leaf(key) == raw);
+        match (matches.next(), matches.next()) {
+            (Some(only), None) => only.clone(),
+            _ => format!("{ROOT_HANDLE}{PATH_SEPARATOR}{raw}"),
+        }
+    }
+
     fn apply_agent_registered(&mut self, event: &Value) -> bool {
-        let Some(handle) = str_field(event, "handle") else {
+        let Some(leaf) = str_field(event, "handle") else {
             return false;
         };
         let session = str_field(event, "agent_session")
             .unwrap_or_default()
             .to_owned();
+        // Canonical path, derived exactly as the backend reducer derives it: the
+        // root registers itself (`agent_session == session`) as `main`; everyone
+        // else hangs off `parent`, which a pre-scoping log omits entirely.
+        let log_session = str_field(event, "session").unwrap_or_default();
+        let handle = if !session.is_empty() && session == log_session {
+            ROOT_HANDLE.to_owned()
+        } else {
+            let parent = str_field(event, "parent").unwrap_or(ROOT_HANDLE);
+            format!("{parent}{PATH_SEPARATOR}{leaf}")
+        };
+        let handle = handle.as_str();
         let agent_type = str_field(event, "agent_type")
             .unwrap_or_default()
             .to_owned();
@@ -173,7 +198,8 @@ impl TeamProjection {
         let Some(handle) = str_field(event, "handle") else {
             return false;
         };
-        let Some(entry) = self.roster.get_mut(handle) else {
+        let handle = self.canonical_member(handle);
+        let Some(entry) = self.roster.get_mut(&handle) else {
             return false;
         };
         if let Some(status) = str_field(event, "status") {
@@ -192,11 +218,9 @@ impl TeamProjection {
         else {
             return false;
         };
-        self.channels
-            .entry(channel.to_owned())
-            .or_default()
-            .members
-            .insert(member.to_owned());
+        let key = canonical_channel(channel);
+        let member = self.canonical_member(member);
+        self.channels.entry(key).or_default().members.insert(member);
         true
     }
 
@@ -206,8 +230,10 @@ impl TeamProjection {
         else {
             return false;
         };
-        if let Some(ch) = self.channels.get_mut(channel) {
-            ch.members.remove(member);
+        let key = canonical_channel(channel);
+        let member = self.canonical_member(member);
+        if let Some(ch) = self.channels.get_mut(&key) {
+            ch.members.remove(&member);
         }
         true
     }
@@ -221,8 +247,14 @@ impl TeamProjection {
         };
         let kind = str_field(event, "kind").unwrap_or("message").to_owned();
         let body = str_field(event, "body").unwrap_or_default().to_owned();
+        // Canonicalize both endpoints, as the backend reducer does, so every
+        // handle in this mirror is a path and every channel key is qualified.
+        let to = match &to {
+            MailEndpoint::Handle(handle) => MailEndpoint::Handle(self.canonical_member(handle)),
+            MailEndpoint::Channel(channel) => MailEndpoint::Channel(canonical_channel(channel)),
+        };
         let message = MailMessage {
-            from: from.to_owned(),
+            from: self.canonical_member(from),
             to: to.clone(),
             kind,
             body,
@@ -241,6 +273,16 @@ impl TeamProjection {
                 // so the inbox borrow does not alias the channel.
                 let members: Vec<String> = channel_state.members.iter().cloned().collect();
                 for member in members {
+                    // Skip a resident that has reached a terminal status, so a
+                    // stopped actor's inbox stops growing (ADR-0001). The backend
+                    // reducer has always applied this; the mirror did not, which
+                    // left the TUI showing a stopped agent still receiving mail.
+                    if self.roster.get(&member).is_some_and(|entry| {
+                        entry.mode == "resident"
+                            && (entry.status == "done" || entry.status == "failed")
+                    }) {
+                        continue;
+                    }
                     self.inboxes
                         .entry(member)
                         .or_default()
@@ -254,6 +296,32 @@ impl TeamProjection {
 
 fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
+}
+
+/// Canonical handle of a team's root agent. Mirrors `hya_proto::scope`.
+const ROOT_HANDLE: &str = "main";
+/// Separator between canonical path segments. Mirrors `hya_proto::scope`.
+const PATH_SEPARATOR: char = '/';
+/// Separator between a unit path and a channel name. Mirrors `hya_proto::scope`.
+const CHANNEL_SEPARATOR: char = '#';
+
+/// Qualify a channel name written on the wire. Mirrors
+/// `hya_proto::TeamProjection::canonical_channel`: a name already carrying a
+/// qualifier is left alone; a bare name comes from a pre-scoping log and belongs
+/// to the root's unit.
+fn canonical_channel(raw: &str) -> String {
+    if raw.contains(CHANNEL_SEPARATOR) {
+        return raw.to_owned();
+    }
+    format!("{ROOT_HANDLE}{CHANNEL_SEPARATOR}{raw}")
+}
+
+/// The last `/`-separated segment of a canonical path.
+fn leaf(path: &str) -> &str {
+    match path.rsplit_once(PATH_SEPARATOR) {
+        Some((_, leaf)) => leaf,
+        None => path,
+    }
 }
 
 #[cfg(test)]
@@ -277,7 +345,7 @@ mod tests {
             "agent_type": "reviewer",
             "mode": "resident",
         }))));
-        let entry = team.roster.get("reviewer-3").expect("roster entry");
+        let entry = team.roster.get("main/reviewer-3").expect("roster entry");
         assert_eq!(entry.session, "ses_child");
         assert_eq!(entry.agent_type, "reviewer");
         assert_eq!(entry.mode, "resident");
@@ -295,15 +363,21 @@ mod tests {
             "type": "agent_activity_changed", "session": "ses_root",
             "handle": "r1", "status": "busy", "current_task": "reviewing",
         }));
-        assert_eq!(team.roster["r1"].status, "busy");
-        assert_eq!(team.roster["r1"].current_task.as_deref(), Some("reviewing"));
+        assert_eq!(team.roster["main/r1"].status, "busy");
+        assert_eq!(
+            team.roster["main/r1"].current_task.as_deref(),
+            Some("reviewing")
+        );
         // Re-registering keeps live status/current_task.
         team.apply_event(&json!({
             "type": "agent_registered", "session": "ses_root",
             "agent_session": "ses_child", "handle": "r1", "agent_type": "reviewer", "mode": "resident",
         }));
-        assert_eq!(team.roster["r1"].status, "busy");
-        assert_eq!(team.roster["r1"].current_task.as_deref(), Some("reviewing"));
+        assert_eq!(team.roster["main/r1"].status, "busy");
+        assert_eq!(
+            team.roster["main/r1"].current_task.as_deref(),
+            Some("reviewing")
+        );
     }
 
     #[test]
@@ -315,11 +389,11 @@ mod tests {
             "type": "mail_sent", "session": "ses_root", "from": "a",
             "to": { "kind": "channel", "id": "build" }, "kind": "announcement", "body": "ship it",
         })));
-        assert_eq!(team.channels["build"].log.len(), 1);
-        assert_eq!(team.inboxes["a"].len(), 1);
-        assert_eq!(team.inboxes["b"].len(), 1);
-        assert_eq!(team.inboxes["b"][0].body, "ship it");
-        assert_eq!(team.inboxes["b"][0].kind, "announcement");
+        assert_eq!(team.channels["main#build"].log.len(), 1);
+        assert_eq!(team.inboxes["main/a"].len(), 1);
+        assert_eq!(team.inboxes["main/b"].len(), 1);
+        assert_eq!(team.inboxes["main/b"][0].body, "ship it");
+        assert_eq!(team.inboxes["main/b"][0].kind, "announcement");
     }
 
     #[test]
@@ -329,9 +403,9 @@ mod tests {
             "type": "mail_sent", "session": "ses_root", "from": "a",
             "to": { "kind": "handle", "id": "b" }, "body": "hi",
         })));
-        assert_eq!(team.inboxes["b"].len(), 1);
-        assert_eq!(team.inboxes["b"][0].kind, "message");
-        assert!(!team.inboxes.contains_key("a"));
+        assert_eq!(team.inboxes["main/b"].len(), 1);
+        assert_eq!(team.inboxes["main/b"][0].kind, "message");
+        assert!(!team.inboxes.contains_key("main/a"));
     }
 
     #[test]
@@ -344,12 +418,12 @@ mod tests {
             "to": { "kind": "channel", "id": "build" }, "body": "hello",
         }));
         assert_eq!(
-            team.channels["build"].log.len(),
+            team.channels["main#build"].log.len(),
             1,
             "channel log keeps the post"
         );
         assert!(
-            !team.inboxes.contains_key("a"),
+            !team.inboxes.contains_key("main/a"),
             "unsubscribed member gets no fanout"
         );
     }

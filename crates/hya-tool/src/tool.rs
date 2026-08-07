@@ -19,7 +19,9 @@ use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::mailbox::{ChannelsTool, JoinTool, LeaveTool, MailboxPlane, RosterTool, SendTool};
+use crate::mailbox::{
+    AnnounceTool, ChannelsTool, JoinTool, LeaveTool, MailboxPlane, RosterTool, SendTool,
+};
 use crate::permission::{
     Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
 };
@@ -328,6 +330,7 @@ impl ToolRegistry {
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
             Arc::new(SendTool),
+            Arc::new(AnnounceTool),
             Arc::new(RosterTool),
             Arc::new(ChannelsTool),
             Arc::new(JoinTool),

@@ -15,5 +15,13 @@ eventsource-stream = "0.2"
 futures-util = "0.3"
 libc = "0.2"
 
+# `hya-sdk` deliberately does NOT depend on `hya-proto` at runtime: the TUI
+# client stays dependency-light, which is why `team.rs` is a hand-written mirror
+# of the backend reducer rather than a shared type. A DEV-only dependency lets
+# the conformance test fold one event stream through both and assert they agree,
+# without putting `hya-proto` into the shipped graph.
+[dev-dependencies]
+hya-proto = { path = "../hya-proto" }
+
 [lints]
 workspace = true

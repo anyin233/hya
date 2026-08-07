@@ -47,8 +47,21 @@ the leader of its led unit. Every other agent belongs to exactly one.
 
 - A leaf name must be unique among its siblings.
 - A leaf name must differ from its parent's leaf.
-- A registration that breaks either rule is **rejected at spawn time**, loudly.
 - Consequence: within any scope, a relative leaf is never ambiguous.
+
+**Revised during implementation.** The original wording said a colliding
+registration is *rejected at spawn time, loudly*. What shipped is stronger: the
+handle minter makes a collision **impossible by construction** — it skips any
+ordinal that duplicates a sibling or equals the parent's leaf, so there is no
+failure for a caller to handle. Rejecting would have turned an avoidable name
+clash into a failed spawn for no gain.
+
+Two guards back it up:
+
+- `assign_handles` / `assign_handle` never emit a colliding leaf (tested).
+- `TeamProjection::resolve_in_scope` **fails closed** on an ambiguous leaf, so a
+  log that predates or violates the rule refuses to deliver rather than silently
+  picking a recipient.
 
 ### R3 — Direct-mail scope gate
 
@@ -133,8 +146,11 @@ each channel with the unit that owns it.
       root log shows **no** `MailSent` for the rejected send.
 - [ ] **AC2** Full-path and relative-leaf addressing of the same in-scope agent
       produce identical delivery.
-- [ ] **AC3** Registering a sibling whose leaf duplicates an existing sibling, or
-      equals the parent's leaf, fails at spawn with a typed error.
+- [x] **AC3** The handle minter never produces a leaf that duplicates a sibling
+      or equals the parent's leaf — including a batch spawned at once — and
+      `resolve_in_scope` refuses to deliver on an ambiguous leaf.
+      *(Revised: prevention by construction rather than a spawn-time rejection —
+      see R2.)*
 - [ ] **AC4** Two units each own a `#build`. A post in one unit lands in that
       unit's subscribers only, and the other `#build` log is untouched.
 - [ ] **AC5** A leader's `join("#build")` targets its led unit and
