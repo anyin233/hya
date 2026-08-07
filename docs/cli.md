@@ -137,7 +137,7 @@ Common slash commands (aliases in parentheses):
 | `/timeline` | | Jump-to-message dialog |
 | `/fork` | | Fork from a selected message |
 | `/compact` | `/summarize` | Compact / summarize the session |
-| `/undo` | | Undo the previous user message |
+| `/undo` | | Abort an in-flight turn if the session is not idle, then revert at the last user message before the current revert point (repeatable walks backwards). **Overwrites the prompt buffer** with that message’s text parts and re-attaches its file parts (any draft text already typed is lost). |
 | `/redo` | | Redo after a revert |
 | `/timestamps` | `/toggle-timestamps` | Toggle message timestamps |
 | `/thinking` | `/toggle-thinking` | Cycle thinking-block visibility |
@@ -447,11 +447,12 @@ OAuth credentials it also prints a ready-to-copy re-login line
 
 **`models [provider]`.** Prints sorted `provider/model` ids from the configured
 catalog. With `--verbose`, each id is followed by a JSON line
-`{"id":…,"provider":…}`. If the configured model list is empty (offline),
-`models` with no provider filter synthesizes and prints a single
-`hya/<fallback_model>` entry rather than printing nothing. Filtering with
-`models <provider>` when that provider has no configured models exits with
-`Provider not found: <id>`.
+`{"id":…,"provider":…}`. If the configured model list is empty (offline):
+
+- no filter, or filter `hya` → synthesizes and prints `hya/<fallback_model>`
+  (exit success)
+- any other filter (for example `models openai` with no openai models) → exits
+  with `Provider not found: <id>`
 
 **`agent list`.** Default output is Compat-parity: only the built-in primary
 agent, printed as `build (primary)` followed by its permission rules as

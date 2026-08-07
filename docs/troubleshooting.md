@@ -140,13 +140,19 @@ or acceptable trailing whitespace.
 
 ## Mutating Tools Fail in Headless Mode
 
-Headless `exec`, `run`, goal mode, `rpc`, and `serve` install an automatic
-permission responder. By default it allows reads, globs, grep, shell, MCP, and
-edits that stay inside the active workdir after symlink-aware resolution. Edits
-outside the workdir are rejected.
+Headless **`exec`**, **`run`**, **goal mode** (`-p`), and **`rpc`** install
+`spawn_reject_responder`: every residual permission **ask** is answered with
+`Decision::Reject` and no feedback. Nothing is auto-approved by that responder.
+Tools that still need an interactive allow/ask decision will fail closed.
 
-Use `--yolo` only when you intentionally want to auto-approve all tool actions,
-including edits outside the workdir.
+**`serve`** does **not** install that reject responder. Unresolved asks are
+forwarded on the server permission endpoint for a connected client (or the
+interactive frontend) to answer. Listing `serve` as “headless auto-allow” is
+wrong.
+
+Use `--yolo` only when you intentionally want `PermissionModel::Danger`
+(auto-approve **all** tool actions). That is an RCE risk on `serve` for any
+client that can drive tools.
 
 ## Shell Output Is Truncated
 
