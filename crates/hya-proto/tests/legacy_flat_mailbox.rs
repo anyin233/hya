@@ -175,11 +175,7 @@ fn legacy_log_synthesizes_no_extra_channel() {
 /// every member a DIRECT child of the root, hence every agent a sibling of every
 /// other, hence mutually addressable. This is the property that keeps a
 /// pre-existing swarm working unchanged (AC8).
-///
-/// Ignored until Phase 3 lands the canonical-path fold. Before then every handle
-/// is a bare name at depth 0, so there is no hierarchy to assert.
 #[test]
-#[ignore = "Phase 3: un-ignore when the reducer derives canonical paths"]
 fn legacy_log_is_one_flat_unit() {
     let projection = legacy_projection();
 
@@ -193,5 +189,28 @@ fn legacy_log_is_one_flat_unit() {
              deeper nesting to recover, so anything else means the fallback \
              invented a hierarchy that was never in the log"
         );
+    }
+}
+
+/// The consequence that actually matters for a pre-existing swarm: under the new
+/// scope rule, every agent in a legacy log can still address every other. If any
+/// pair fell out of scope, upgrading would silently sever a working swarm's
+/// communication (AC8).
+#[test]
+fn every_legacy_pair_stays_mutually_addressable() {
+    let projection = legacy_projection();
+    let paths: Vec<&str> = projection.team.roster.keys().map(String::as_str).collect();
+    assert_eq!(paths.len(), 3);
+
+    for from in &paths {
+        for to in &paths {
+            if from == to {
+                continue;
+            }
+            assert!(
+                hya_proto::in_scope(from, to),
+                "{from} must still be able to address {to} after the upgrade"
+            );
+        }
     }
 }
