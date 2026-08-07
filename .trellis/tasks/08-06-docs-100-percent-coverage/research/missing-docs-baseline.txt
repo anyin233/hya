@@ -1,0 +1,959 @@
+warning: missing documentation for a variant
+ --> crates/hya-updater/src/error.rs:7:5
+--
+warning: missing documentation for a struct field
+ --> crates/hya-updater/src/error.rs:7:24
+--
+warning: missing documentation for a variant
+ --> crates/hya-updater/src/error.rs:9:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:11:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:13:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:13:29
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:13:44
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:15:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:15:24
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:15:37
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:17:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:19:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:21:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:21:27
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:21:37
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:23:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:23:21
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:23:35
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:25:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/error.rs:25:30
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:27:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:29:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:31:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/error.rs:33:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/fetch.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/fetch.rs:17:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/journal.rs:15:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-updater/src/journal.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/journal.rs:24:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/journal.rs:25:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/journal.rs:26:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/journal.rs:32:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/journal.rs:33:5
+--
+warning: missing documentation for a function
+   --> crates/hya-updater/src/journal.rs:193:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:14:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:15:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:17:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:18:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/layout.rs:19:5
+--
+warning: missing documentation for a struct field
+ --> crates/hya-updater/src/metadata.rs:6:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:14:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:20:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:21:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:33:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:34:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:35:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:48:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:56:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:57:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:58:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:59:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:60:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:61:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/metadata.rs:62:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:25:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:26:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:27:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:28:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:34:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:35:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:38:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:41:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/pipeline.rs:44:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/stage.rs:13:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-updater/src/stage.rs:14:5
+--
+warning: missing documentation for a method
+  --> crates/hya-updater/src/stage.rs:18:5
+--
+warning: missing documentation for a module
+ --> crates/hya-provider/src/lib.rs:6:1
+--
+warning: missing documentation for a module
+ --> crates/hya-provider/src/lib.rs:8:1
+--
+warning: missing documentation for a module
+ --> crates/hya-provider/src/lib.rs:9:1
+--
+warning: missing documentation for a module
+  --> crates/hya-provider/src/lib.rs:11:1
+--
+warning: missing documentation for a module
+  --> crates/hya-provider/src/lib.rs:12:1
+--
+warning: missing documentation for a type alias
+  --> crates/hya-provider/src/lib.rs:43:1
+--
+warning: missing documentation for an enum
+  --> crates/hya-provider/src/lib.rs:46:1
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/lib.rs:48:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/lib.rs:50:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/lib.rs:52:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/lib.rs:54:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/lib.rs:56:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:59:19
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:59:37
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/lib.rs:63:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:64:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:65:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:66:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:67:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:68:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:69:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/lib.rs:70:5
+--
+warning: missing documentation for a struct
+   --> crates/hya-provider/src/lib.rs:117:1
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:118:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:119:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:120:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:121:5
+--
+warning: missing documentation for an enum
+   --> crates/hya-provider/src/lib.rs:125:1
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:126:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:127:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:128:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:129:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:130:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:131:5
+--
+warning: missing documentation for a variant
+   --> crates/hya-provider/src/lib.rs:132:5
+--
+warning: missing documentation for an associated function
+   --> crates/hya-provider/src/lib.rs:137:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:151:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:164:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:176:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:188:5
+--
+warning: missing documentation for a struct
+   --> crates/hya-provider/src/lib.rs:322:1
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:323:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:324:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:325:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:326:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:327:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:328:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:329:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-provider/src/lib.rs:330:5
+--
+warning: missing documentation for a trait
+   --> crates/hya-provider/src/lib.rs:341:1
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:342:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:343:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:351:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:354:5
+--
+warning: missing documentation for a trait
+   --> crates/hya-provider/src/lib.rs:374:1
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:375:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:376:5
+--
+warning: missing documentation for a trait
+   --> crates/hya-provider/src/lib.rs:379:1
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:380:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/lib.rs:381:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/anthropic.rs:11:1
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/anthropic/decoder.rs:24:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/anthropic/decoder.rs:35:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/dev.rs:15:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/dev.rs:19:5
+--
+warning: missing documentation for an enum
+  --> crates/hya-provider/src/fake.rs:13:1
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/fake.rs:14:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/fake.rs:15:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/fake.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/fake.rs:17:9
+--
+warning: missing documentation for a struct field
+  --> crates/hya-provider/src/fake.rs:18:9
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/fake.rs:20:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/fake.rs:21:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/fake.rs:24:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/fake.rs:32:5
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/fake.rs:49:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/google.rs:11:1
+--
+warning: missing documentation for a struct
+   --> crates/hya-provider/src/google.rs:200:1
+--
+warning: missing documentation for an associated function
+   --> crates/hya-provider/src/google.rs:211:5
+--
+warning: missing documentation for an enum
+  --> crates/hya-provider/src/http.rs:31:1
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/http.rs:32:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/http.rs:33:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/http.rs:36:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/http.rs:37:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-provider/src/http.rs:38:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/http.rs:43:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/http.rs:80:1
+--
+warning: missing documentation for an associated function
+   --> crates/hya-provider/src/http.rs:109:5
+--
+warning: missing documentation for a method
+   --> crates/hya-provider/src/http.rs:235:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/openai.rs:19:1
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/openai/decoder.rs:30:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/openai/decoder.rs:42:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/openai/response_decoder.rs:51:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/openai/response_decoder.rs:65:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/openai/responses.rs:16:1
+--
+warning: missing documentation for a struct
+  --> crates/hya-provider/src/router.rs:10:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-provider/src/router.rs:16:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:21:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:26:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:39:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:45:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:53:5
+--
+warning: missing documentation for a method
+  --> crates/hya-provider/src/router.rs:64:5
+--
+warning: missing documentation for the crate
+ --> crates/hya-mcp/src/lib.rs:1:1
+--
+warning: missing documentation for a module
+ --> crates/hya-mcp/src/lib.rs:1:1
+--
+warning: missing documentation for a module
+ --> crates/hya-mcp/src/lib.rs:2:1
+--
+warning: missing documentation for a module
+ --> crates/hya-mcp/src/lib.rs:3:1
+--
+warning: missing documentation for a module
+ --> crates/hya-mcp/src/lib.rs:4:1
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/bridge.rs:14:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-mcp/src/bridge.rs:22:5
+--
+warning: missing documentation for a function
+  --> crates/hya-mcp/src/bridge.rs:47:1
+--
+warning: missing documentation for a constant
+  --> crates/hya-mcp/src/client.rs:15:1
+--
+warning: missing documentation for a constant
+  --> crates/hya-mcp/src/client.rs:16:1
+--
+warning: missing documentation for an enum
+  --> crates/hya-mcp/src/client.rs:22:1
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:24:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:26:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:28:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:30:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:32:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/client.rs:32:11
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/client.rs:32:22
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:34:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/client.rs:34:15
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:36:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/client.rs:38:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/client.rs:42:1
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/client.rs:52:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-mcp/src/client.rs:92:5
+--
+warning: missing documentation for an associated function
+   --> crates/hya-mcp/src/client.rs:108:5
+--
+warning: missing documentation for a method
+   --> crates/hya-mcp/src/client.rs:133:5
+--
+warning: missing documentation for a method
+   --> crates/hya-mcp/src/client.rs:168:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/manager.rs:14:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:18:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:20:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:22:5
+--
+warning: missing documentation for an enum
+  --> crates/hya-mcp/src/manager.rs:27:1
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/manager.rs:30:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/manager.rs:31:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/manager.rs:32:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:33:9
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/manager.rs:35:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-mcp/src/manager.rs:36:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/manager.rs:37:9
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/manager.rs:54:1
+--
+warning: missing documentation for a method
+  --> crates/hya-mcp/src/manager.rs:64:5
+--
+warning: missing documentation for a method
+  --> crates/hya-mcp/src/manager.rs:69:5
+--
+warning: missing documentation for a method
+  --> crates/hya-mcp/src/manager.rs:74:5
+--
+warning: missing documentation for a function
+  --> crates/hya-mcp/src/manager.rs:79:1
+--
+warning: missing documentation for a method
+   --> crates/hya-mcp/src/manager.rs:155:5
+--
+warning: missing documentation for a method
+   --> crates/hya-mcp/src/manager.rs:164:5
+--
+warning: missing documentation for a method
+   --> crates/hya-mcp/src/manager.rs:169:5
+--
+warning: missing documentation for a struct
+ --> crates/hya-mcp/src/protocol.rs:5:1
+--
+warning: missing documentation for a struct field
+ --> crates/hya-mcp/src/protocol.rs:6:5
+--
+warning: missing documentation for a struct field
+ --> crates/hya-mcp/src/protocol.rs:7:5
+--
+warning: missing documentation for a struct field
+ --> crates/hya-mcp/src/protocol.rs:8:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:10:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/protocol.rs:14:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:15:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:18:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:20:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/protocol.rs:24:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:25:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:26:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:28:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/protocol.rs:33:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:34:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:36:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:37:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/protocol.rs:41:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:42:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-mcp/src/protocol.rs:47:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:48:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-mcp/src/protocol.rs:50:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:22:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:23:5
+--
+warning: missing documentation for an associated function
+  --> crates/hya-e2e/src/backend.rs:52:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:70:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:71:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:72:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:73:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/backend.rs:76:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/backend.rs:261:5
+--
+warning: missing documentation for a variant
+ --> crates/hya-e2e/src/error.rs:7:5
+--
+warning: missing documentation for a variant
+ --> crates/hya-e2e/src/error.rs:9:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-e2e/src/error.rs:11:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-e2e/src/error.rs:13:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-e2e/src/error.rs:15:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-e2e/src/error.rs:17:5
+--
+warning: missing documentation for a variant
+  --> crates/hya-e2e/src/error.rs:19:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-e2e/src/fake_llm.rs:29:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/fake_llm.rs:30:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-e2e/src/fake_llm.rs:31:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/fake_llm.rs:106:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/fake_llm.rs:119:5
+--
+warning: missing documentation for a function
+   --> crates/hya-e2e/src/fake_llm.rs:324:1
+--
+warning: missing documentation for a function
+   --> crates/hya-e2e/src/fake_llm.rs:331:1
+--
+warning: missing documentation for an associated function
+  --> crates/hya-e2e/src/scenario.rs:73:5
+--
+warning: missing documentation for a method
+  --> crates/hya-e2e/src/scenario.rs:78:5
+--
+warning: missing documentation for a method
+  --> crates/hya-e2e/src/scenario.rs:95:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:101:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:107:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:113:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:119:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:132:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:138:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:144:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:149:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:182:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:183:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:184:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:185:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:186:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-e2e/src/scenario.rs:187:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:191:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:195:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:208:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:219:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:227:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:232:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:236:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:252:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:271:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:279:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:283:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:291:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:295:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:299:5
+--
+warning: missing documentation for a method
+   --> crates/hya-e2e/src/scenario.rs:418:5
+--
+warning: missing documentation for a struct
+  --> crates/hya-ts/src/lib.rs:10:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:16:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:18:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:20:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:22:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:24:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:32:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:34:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:36:5
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:38:5
+--
+warning: missing documentation for a function
+  --> crates/hya-ts/src/lib.rs:41:1
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:58:9
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:63:9
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:76:9
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:84:15
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:88:17
+--
+warning: missing documentation for a struct field
+  --> crates/hya-ts/src/lib.rs:92:9
+--
+warning: missing documentation for a struct field
+   --> crates/hya-ts/src/lib.rs:100:9
+--
+warning: missing documentation for a struct
+   --> crates/hya-ts/src/lib.rs:275:1
+--
+warning: missing documentation for a struct field
+   --> crates/hya-ts/src/lib.rs:276:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-ts/src/lib.rs:277:5
+--
+warning: missing documentation for a struct field
+   --> crates/hya-ts/src/lib.rs:278:5
+--
+warning: missing documentation for the crate
+   --> crates/hya-ts/src/main.rs:1:1

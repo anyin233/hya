@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines provider protocol boundaries, Responses encoding/replay contracts, errors, and required tests."}
+{"file":".trellis/tasks/07-21-grok-build-provider/research/grok-api.md","reason":"Pins the Grok request, effort, SSE, terminal, and credential-handling evidence for implementation."}
