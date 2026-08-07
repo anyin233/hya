@@ -333,10 +333,12 @@ On success hya:
    it). Secrets are **not** written into `config.yaml`. If the catalog fetch
    fails, hya still saves credentials and writes a single default model.
 
-**Catalog filter:** before writing models into `config.yaml`, any model id
-containing `imagine`, `image`, or `video` is dropped (media-generation models the
-agent catalog cannot use). Add those by hand under `providers.<id>.models` if
-needed.
+**Catalog filter (Grok / OpenAI-compatible list only):** when the catalog comes
+from `GET {base}/models` (the `grok-build` path), any model id containing
+`imagine`, `image`, or `video` is dropped before write. The **Codex** catalog
+path (`models[].slug`) does **not** apply this filter — those ids are written as
+returned. Add media models by hand under `providers.<id>.models` if you need
+them on a filtered catalog.
 
 **`default_model` side-effect:** overwritten only when it is missing, empty, or
 literally `offline` — an existing real default is preserved.
@@ -741,14 +743,25 @@ Read by the bundled Compat plugin adapter
 | --- | --- | --- |
 | `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
 | `EDITOR` / `VISUAL` | External editor for the TUI `/editor` slash command (`<leader>e`). `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
-| `SHELL` | Shell program for PTY sessions on Compat PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when unset or empty for PTY spawn. | `crates/hya-server/src/compat/pty_payload.rs`, `pty_shell.rs` |
+| `SHELL` | Shell program for PTY sessions on Compat PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/compat/pty_payload.rs`, `pty_shell.rs` |
 | `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/compat/reference_repository.rs` |
 | `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/compat/pty_state.rs` |
 
-The frontend also probes `TERM_PROGRAM`, `TMUX`, `STY`, `ZED_TERM`, `DISPLAY`,
-`WAYLAND_DISPLAY`, `OPENCODE_EDITOR_SSE_PORT`, `OPENCODE_ZED_DB`, and
-`CLAUDE_CODE_SSE_PORT` for editor/terminal integration. None of those are
-hya-specific settings.
+**Editor integration probes** (see also [Editor context integration](#editor-context-integration)
+and [TUI architecture](architecture/tui.md)): `OPENCODE_EDITOR_SSE_PORT` /
+`CLAUDE_CODE_SSE_PORT` (live editor SSE), `OPENCODE_ZED_DB` (Zed selection DB
+path), `ZED_TERM` / `TERM_PROGRAM` (Zed detection). These are not hya-owned
+settings; accepted values and precedence are defined by the host environment and
+the TUI discovery code.
+
+**Terminal / clipboard probes** (not editor integration):
+
+| Variable | Effect |
+| --- | --- |
+| `TMUX` | When set, OSC-52 copy uses the tmux DCS passthrough wrap; terminal environment reports `multiplexer: "tmux"`. |
+| `STY` | When set (and not already tmux), multiplexer reports `"screen"`. |
+| `WAYLAND_DISPLAY` | Selects Wayland display-server labeling and prefers `wl-copy` for native clipboard write when present. |
+| `DISPLAY` | Used with other probes to classify the display server (e.g. X11) when Wayland is absent. |
 
 ## MCP Servers
 
@@ -870,8 +883,8 @@ curl -sS -X POST http://127.0.0.1:8080/mcp/live-demo/connect
 ```
 
 `disconnect` is the current remove-from-effective-view operation. There is no
-general MCP config-delete route in `0.34.6`, and dynamic changes are not written
-back to `config.yaml`.
+general MCP config-delete route, and dynamic changes are not written back to
+`config.yaml`.
 
 ### Compat migration into hya
 
@@ -1038,8 +1051,9 @@ From [`hya_plugin::config::merge`](../crates/hya-plugin/src/config.rs):
 2. Manifests are appended only if their id was **not** already claimed by a
    config entry **and** the manifest itself is enabled.
 
-Consequences: config always beats a same-id manifest; config order determines
-hook-chain fold order; setting `enabled: false` in config does **not** re-open
+Consequences: config always beats a same-id manifest; config `plugins` is a
+`BTreeMap`, so config-declared plugins fold in **lexicographic plugin-id order**
+(not YAML source order); setting `enabled: false` in config does **not** re-open
 the id for a manifest to claim — the plugin is simply absent.
 
 For `kind: compat` entries without `command`, hya uses the bundled Bun
@@ -1064,9 +1078,16 @@ Default posture when the plugin omits one: **Safe** for `permission.ask` and
 | `tool.execute.before` | Safe |
 | `tool.execute.after` | Open |
 | `permission.ask` | Safe |
-| `goal.evaluate` | Open |
-| `loop.verifier` | Open |
-| `loop.planner` | Open |
+
+These three names also parse and may appear in `plugin.toml` / initialize, but
+the host **never dispatches** them (dead hooks — see
+[Plugin protocol](plugin-protocol.md)):
+
+| Hook name | Default posture | Status |
+| --- | --- | --- |
+| `goal.evaluate` | Open | Registered only; no dispatcher arm |
+| `loop.verifier` | Open | Registered only; no dispatcher arm |
+| `loop.planner` | Open | Registered only; no dispatcher arm |
 
 **AgentBundle sidecars** may select only the three bundle-legal IDs: `event`,
 `tool.execute.before`, and `tool.execute.after`. The wider list applies to
@@ -1092,9 +1113,8 @@ must match the handshake ID. If a crashed plugin respawns, hya compares a
 deterministic encoding of the complete initialize declaration (plugin metadata,
 tools, hooks including command/permission hooks, and workspace adapters). A
 changed declaration closes the replacement process and future calls fail
-closed. Version `0.34.6` does not add plugin watching, hot add/remove, or a
-plugin reload command; existing hook and `PermissionPlane` behavior is
-unchanged.
+closed. There is no plugin watching, hot add/remove, or plugin reload command;
+existing hook and `PermissionPlane` behavior is unchanged.
 
 ## Formatter
 
@@ -1172,8 +1192,11 @@ hya scans exactly two project-local roots
 1. `<workdir>/.opencode/command/**/*.md`
 2. `<workdir>/.opencode/commands/**/*.md`
 
-Files are collected **recursively** and sorted by path. The file stem becomes the
-slash-command name. There is **no** user/home tier and no `.hya/prompts` path.
+Files are collected **recursively** and sorted by path. The slash-command name is
+the path **relative to the discovery root**, with path segments joined by `/` and
+the `.md` suffix stripped — e.g. `.opencode/command/git/commit.md` becomes
+`/git/commit`, not `/commit`. There is **no** user/home tier and no
+`.hya/prompts` path.
 
 Optional YAML frontmatter:
 
@@ -1182,7 +1205,7 @@ Optional YAML frontmatter:
 | `description` | Shown in the command list. |
 | `agent` | Switch to this agent profile before the turn. |
 | `model` | Switch the submitted turn to this model. |
-| `subtask` | When `true`, run the command in a **child session**. |
+| `subtask` | Optional boolean parsed into the `/api/command` wire payload. **No runtime consumer** currently reads it (the TUI and engine do not open a child session from this flag). |
 
 ```markdown
 ---
@@ -1212,7 +1235,7 @@ keyed by command name:
 | `description` | no | List description. |
 | `agent` | no | Agent override. |
 | `model` | no | Model override. |
-| `subtask` | no | `true` → child session. |
+| `subtask` | no | Optional boolean on the command API; **not** used to spawn a child session today. |
 
 These are upserted over the backend built-ins, so an entry named `review`
 replaces the built-in `/review`.
@@ -1232,11 +1255,10 @@ replaces the built-in `/review`.
 
 ## Skills
 
-Skill discovery directories, first-wins name resolution, and `SKILL.md`
-frontmatter (`name`, `description`, `allowed-tools`, `model`, `disable`,
-`license`, body) are documented in the dedicated Skills reference batch (see
-[`crates/hya-tool/src/skill_catalog.rs`](../crates/hya-tool/src/skill_catalog.rs)
-for the current source of truth until that document lands).
+Skill discovery (ten-directory first-wins search path), `SKILL.md` frontmatter
+(`name`, `description`, `allowed-tools`, `model`, `disable`, `license`), silent
+skip rules, and built-in fallback skills are documented in
+[Skills](skills.md).
 
 ## Project Context (`AGENTS.md`)
 
@@ -1261,7 +1283,7 @@ host supplies a non-empty object (or when defaults apply).
 | Key | Default / range | Meaning |
 | --- | --- | --- |
 | `theme` | `hya` | Theme name. |
-| `keybinds` | factory defaults | Per-command overrides. Unknown keys throw `Unrecognized keybind(s): …`. A value may be `false`, `"none"`, a key string, a keystroke object (`event` / `preventDefault` / `fallthrough`), or an array of those. Full command table: [TUI Keybindings](tui-keybindings.md). |
+| `keybinds` | factory defaults | Overrides keyed by **Definition names** from `keybind.ts` (e.g. `app_exit`, `session_new`, `command_list`, `editor_open`, `status_view`, plus dotted keys such as `dialog.select.*` and `prompt.autocomplete.*`). **Not** the dotted command names from the palette (`session.new`, `app.exit` — those throw `Unrecognized keybind(s): …`). A value may be `false`, `"none"`, a key string, a keystroke object (`event` / `preventDefault` / `fallthrough`), or an array of those. Default **bindings** (keys users press) are listed in [TUI Keybindings](tui-keybindings.md); that table’s Command column is not the override vocabulary. |
 | `leader_timeout` | `2000` (positive int, ms) | Leader chord timeout. |
 | `attention.enabled` | `false` | Master switch for notifications/sounds. |
 | `attention.notifications` | `true` | Desktop notifications when attention is enabled. |
@@ -1302,8 +1324,10 @@ Example object (when a host loads it):
 | `XDG_CONFIG_HOME` | `…/hya` (fallback `~/.config/hya`) | Config dir (shared naming with backend) |
 | `XDG_STATE_HOME` | `…/hya` (fallback `~/.local/state/hya`) | `model.json` (recent + favorite models), session pin list for nine quick-switch slots, other KV |
 
-Invalid `model.json` entries toast a warning rather than failing startup. Stale
-pins whose session no longer exists are filtered out on read.
+Invalid or unreadable `model.json` content is discarded on load (no startup
+toast). Warnings appear only when a **selected** model is not served by any
+configured provider. Stale pins whose session no longer exists are filtered out
+on read.
 
 ### Editor context integration
 
