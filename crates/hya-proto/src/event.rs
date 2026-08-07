@@ -555,6 +555,25 @@ pub enum Event {
         threshold: u64,
     },
 
+    /// A session was forked from another session.
+    ///
+    /// Deliberately **not** `SessionCreated.parent`: `parent` means subagent
+    /// lineage and drives depth accounting, governor budgets, and the team root,
+    /// so reusing it would make a fork masquerade as a subagent child. The run
+    /// tree derives from spawn edges only; a fork is a separate edge type.
+    ///
+    /// Appended to the forked session's own log. Copied messages get fresh ids,
+    /// so the correspondence to the source is positional via `before_message`.
+    SessionForked {
+        /// The new forked session.
+        session: SessionId,
+        /// Session it was forked from.
+        source: SessionId,
+        /// Cut point: messages strictly before this id were copied. `None` copied all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_message: Option<MessageId>,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors; reducer no-op.
     Error {
@@ -640,7 +659,9 @@ impl Event {
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. } => Some(*session),
-            Event::ContextCompacted { session, .. } => Some(*session),
+            Event::ContextCompacted { session, .. } | Event::SessionForked { session, .. } => {
+                Some(*session)
+            }
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
@@ -851,6 +872,69 @@ mod tests {
         );
         assert_eq!(before.team, after.team, "no team state may change");
         assert_eq!(after.last_seq, 2, "the record still advances seq");
+    }
+
+    /// AC8: a log written before this task must still replay. `MemberSpawned`
+    /// predates `directive` / `tool_call`, so both must default rather than fail.
+    #[test]
+    fn pre_change_member_spawned_still_decodes_and_folds() {
+        let session = SessionId::new();
+        let child = SessionId::new();
+        // Both new fields are `skip_serializing_if`, so an event with empty
+        // values encodes byte-for-byte like a log written before this task.
+        let legacy = serde_json::to_string(&Event::MemberSpawned {
+            session,
+            member: MemberId::new(),
+            child: Some(child),
+            subagent_type: AgentName::new("explore"),
+            description: "scan".to_string(),
+            depth: 1,
+            directive: String::new(),
+            tool_call: None,
+        })
+        .expect("serialize");
+        assert!(
+            !legacy.contains("directive") && !legacy.contains("tool_call"),
+            "empty additions must not appear on the wire: {legacy}"
+        );
+        let decoded: Event =
+            serde_json::from_str(&legacy).expect("a pre-change log must still decode");
+        let Event::MemberSpawned {
+            directive,
+            tool_call,
+            ..
+        } = &decoded
+        else {
+            panic!("expected MemberSpawned, got {decoded:?}");
+        };
+        assert!(directive.is_empty(), "absent directive defaults to empty");
+        assert!(tool_call.is_none(), "absent tool call defaults to none");
+
+        // And it still folds into a member row exactly as before.
+        let projection = crate::Projection::from_events(&[Envelope {
+            seq: EventSeq(1),
+            ts_millis: 1,
+            event: decoded,
+        }]);
+        assert_eq!(projection.session.members.len(), 1);
+        assert_eq!(projection.session.members[0].child, Some(child));
+        assert!(projection.session.members[0].directive.is_empty());
+    }
+
+    #[test]
+    fn session_forked_round_trips_with_and_without_a_cut_point() {
+        let session = SessionId::new();
+        for before_message in [None, Some(MessageId::new())] {
+            let event = Event::SessionForked {
+                session,
+                source: SessionId::new(),
+                before_message,
+            };
+            let json = serde_json::to_string(&event).expect("serialize");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(event, back, "session_forked must round-trip: {json}");
+            assert_eq!(back.session(), Some(session));
+        }
     }
 
     #[test]

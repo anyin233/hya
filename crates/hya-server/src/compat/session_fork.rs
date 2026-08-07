@@ -44,6 +44,12 @@ pub(super) async fn fork(
             workdir: st.agent.workdir.to_string_lossy().into_owned(),
         })
         .await?;
+    // Record provenance before any message is copied. Without this a fork is an
+    // orphan in the call graph: `parent` is deliberately None (it means subagent
+    // lineage), and `copy_messages_to_session` re-emits messages with fresh ids.
+    st.engine
+        .record_session_forked(target, source, before)
+        .await?;
     st.engine
         .set_title(target, forked_title(source_info.title()))
         .await?;

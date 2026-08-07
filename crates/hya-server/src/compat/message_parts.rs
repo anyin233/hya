@@ -212,6 +212,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::ChannelLeft { .. }
             | Event::Error { .. }
             | Event::ContextCompacted { .. }
+            | Event::SessionForked { .. }
             | Event::Unknown => {}
         }
     }
@@ -370,6 +371,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::ChannelLeft { .. }
             | Event::Error { .. }
             | Event::ContextCompacted { .. }
+            | Event::SessionForked { .. }
             | Event::Unknown => {}
         }
     }

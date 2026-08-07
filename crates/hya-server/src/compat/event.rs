@@ -536,6 +536,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::ChannelJoined { .. }
         | Event::ChannelLeft { .. }
         | Event::ContextCompacted { .. }
+        | Event::SessionForked { .. }
         | Event::Unknown => envelope_payload(st, envelope).await,
     }
 }

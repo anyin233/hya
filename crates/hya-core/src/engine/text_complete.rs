@@ -65,6 +65,7 @@ impl TextPartAccumulator {
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
             | Event::ContextCompacted { .. }
+            | Event::SessionForked { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

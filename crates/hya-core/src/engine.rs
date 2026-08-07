@@ -56,6 +56,7 @@ mod admission;
 mod fork;
 mod mailbox;
 mod members;
+pub(crate) use members::MemberSpawnRecord;
 mod session_cleanup;
 mod session_state;
 mod session_title;
