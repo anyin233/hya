@@ -59,6 +59,16 @@ Commands:
   --smoke smoke.sh \
   --owner-authorized-activation
 
+# Optional: verify against trust roots outside <root>/trust_roots.json
+# (e.g. read-only media or a staged key set during rotation)
+./target/debug/hya-updater apply \
+  --root /var/lib/hya/updater \
+  --metadata ./release.metadata.json \
+  --package ./package-dir \
+  --platform x86_64-unknown-linux-gnu \
+  --trust-roots /secure/media/trust_roots.json \
+  --owner-authorized-activation
+
 # Discard a staged-but-not-accepted candidate
 ./target/debug/hya-updater discard --root /var/lib/hya/updater --sequence 42
 ```
@@ -117,6 +127,18 @@ Before signing or verifying the canonical payload
 | `artifacts` | Non-empty list. |
 | Each artifact `name` | Non-empty. |
 | Each artifact `sha256_hex` | Exactly **64 lower-hex** characters. Uppercase hex is rejected. |
+
+### `apply` flags
+
+| Flag | Role |
+| --- | --- |
+| `--root` | Updater root directory (control files + `releases/`). |
+| `--metadata` | Path to signed release metadata JSON. |
+| `--package` | Local package directory (or `file://` URL) with named artifacts. |
+| `--platform` | Host platform triple; must match `metadata.platform`. |
+| `--smoke` | Optional relative smoke command under the staged release. |
+| `--owner-authorized-activation` | Required to advance the selector and accepted floor. |
+| `--trust-roots <PATH>` | Override path to `trust_roots.json` (default: `<root>/trust_roots.json`). Use when keys live on separate/read-only media or when verifying against a staged key set during rotation. |
 
 ### Verification gate chain (`apply`)
 
