@@ -162,7 +162,7 @@ the supported user configuration surface. Source:
 
 | Variable | Behaviour |
 | --- | --- |
-| `HYA_ROUTE` | JSON value parsed at TUI startup that overrides the initial route. Malformed JSON throws during boot — quote carefully in harnesses. |
+| `HYA_ROUTE` | JSON string parsed with `JSON.parse` at TUI boot (`app.tsx`), then validated as an initial route. **Malformed JSON throws** during boot. Accepted shapes only: `{"type":"home"}`, `{"type":"session","sessionID":"<id>"}`, `{"type":"plugin","id":"<id>"}` (see `route.tsx` `initialRoute`). Well-formed JSON that is not one of those shapes (for example `{"type":"session"}` without `sessionID`) is **silently ignored** and the TUI falls back to `{type:"home"}` — harnesses can green on the wrong route if they do not assert the path. |
 | `HYA_FAST_BOOT` | Any non-empty value (`Boolean(process.env.HYA_FAST_BOOT)`, so even `0` counts as on) skips the TUI's initial loading screen, which makes deterministic screen assertions possible. |
 
 ## Related
