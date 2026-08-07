@@ -35,8 +35,9 @@ If you want to package a public AgentBundle:
    [transient Bun example](examples/bun-transient/), the
    [resident Bun example](examples/bun-resident/), the
    [disjoint Bun example](examples/bun-disjoint/), or the
-   [built-in `bundle.yaml` layout](../bundles/builtin/hya-core-agents/bundle.yaml),
-   and use the [bundle CLI reference](cli.md#bundle-commands).
+   [directory `bundle.yaml` layout](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml),
+   and use the [bundle CLI reference](cli.md#bundle-commands). A bundle defines
+   exactly one agent; built-in agents are compiled in, not bundles.
 
 If you want the independent self-update path (0.34.13+):
 

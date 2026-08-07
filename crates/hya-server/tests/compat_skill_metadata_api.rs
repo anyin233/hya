@@ -317,7 +317,7 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
         ("referenced", "referenced archive entries"),
         ("closure", "archive closure validation"),
         (
-            "The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
+            "The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
             "the self-contained public JS profile",
         ),
         (

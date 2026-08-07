@@ -1,6 +1,6 @@
-# AgentBundle Authoring (0.34.11)
+# AgentBundle Authoring
 
-Author and install a public `AgentBundle`. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `AgentBundle`. **A bundle defines exactly one agent.** Install one bundle per specialist agent; the bundle system is how you define subagents. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Examples:
 
@@ -8,7 +8,8 @@ Examples:
 - Transient Bun example: [`examples/bun-transient/`](examples/bun-transient/)
 - Resident Bun example: [`examples/bun-resident/`](examples/bun-resident/)
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
-- Shipped built-in directory form: [`bundles/builtin/hya-core-agents/bundle.yaml`](../bundles/builtin/hya-core-agents/bundle.yaml)
+
+Built-in agents (`build`, `plan`, `explore`, `general`, the reserved `compaction` / `summary` / `title`, and the `hya-*` development agents) are **not** bundles. They are compiled into the binary in [`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/) and run on the full Harness tool plane. Everything below describes installed bundles only.
 
 ## Runtime boundary
 
@@ -16,7 +17,7 @@ Harness is the sole agent, model, task, mailbox, event, `MemberOutcome`, and rec
 
 Harness's `SessionEngine` remains the only agent runtime. The sidecar never receives task/prompt/transcript or returns `MemberOutcome`; each executable activation owns one per-activation process.
 
-Bun Compat is the sole executable sidecar implementation supported in 0.34.11. Static-only Bundles remain process-free.
+Bun Compat is the sole executable sidecar implementation. Static-only Bundles remain process-free.
 
 ---
 
@@ -38,12 +39,11 @@ Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 ### `bundle.hya.md` constraints
 
 - Requires a leading `---` YAML frontmatter fence; missing frontmatter fails preparation.
-- A **nonempty** markdown body becomes the prompt for **exactly one** agent; that agent must **not** also set `prompt:` to a file path.
-- An **empty** body plus an explicit per-agent `prompt:` path is allowed for multi-agent sources only when **every** agent names a prompt file (then the body is not used as a prompt).
-- If the body is nonempty, the source must have exactly one agent without a `prompt` path.
+- A **nonempty** markdown body becomes the agent's prompt. The agent must **not** also set `prompt:` to a file path.
+- An **empty** body plus an explicit `prompt:` path is allowed: the body is "absent", not "an empty prompt", so the named file wins.
 
-An empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents;
-every agent in that form needs an explicit prompt path.
+Because a bundle defines exactly one agent, the body is unambiguously that
+agent's prompt — there is nothing to disambiguate.
 
 The archive rules are: undeclared directory files are ignored; unreferenced archive files
 are rejected.
@@ -51,8 +51,8 @@ are rejected.
 ### `bundle.yaml` constraints
 
 - Plain YAML only (no markdown body).
-- Required whenever agents use `prompt: path/to/file.md` (or other multi-agent layouts that do not carry a body prompt).
-- Real example: [`bundles/builtin/hya-core-agents/bundle.yaml`](../bundles/builtin/hya-core-agents/bundle.yaml).
+- Required whenever the agent uses `prompt: path/to/file.md` instead of a body prompt.
+- Real example: [`crates/hya-bundle/tests/fixtures/directory/bundle.yaml`](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml).
 
 A public archive contains the root manifest (`bundle.hya.md` or the prepared closure equivalent) plus exactly the normalized paths represented by the v1 agent prompt/resource/Extension contract, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
 
@@ -97,12 +97,16 @@ kind: AgentBundle
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `api_version` | yes | Must be `hya.agent-bundle/v1`. |
 | `kind` | yes | Must be `AgentBundle`. |
 | `identity` | yes | Bundle identity block (see below). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
 | `extensions` | no | `js`, `rust` extension lists. |
-| `agents` | yes | Non-empty list of agent definitions. |
+| `agent` | yes | The single agent this bundle defines. |
+
+**Removed keys.** `api_version` and per-agent `harness_access` no longer exist,
+and `agents:` (a list) is replaced by `agent:` (a map). A manifest that still
+carries any of them is rejected by name with `RemovedManifestKey`, which says
+what to write instead.
 
 **Unsupported in the current release** (declared but rejected at prepare):
 `resources.mcp`, `extensions.rust`, and per-agent `resource_profile`.
@@ -113,7 +117,7 @@ Required object with **`deny_unknown_fields`**. Structural checks never establis
 
 | Field | Rules |
 | --- | --- |
-| `id` | Required. Must contain at least one `/` and may use only `[A-Za-z0-9/-_.]`. Canonical form: `<publisher>/<name>` (e.g. `hya/core-agents`). |
+| `id` | Required. Must contain at least one `/` and may use only `[A-Za-z0-9/-_.]`. Canonical form: `<publisher>/<name>` (e.g. `acme/reviewer`). |
 | `version` | Required, non-empty after trim. |
 | `publisher` | Required string. |
 
@@ -161,8 +165,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `local_id` | yes | Bundle-local agent id. |
-| `stable_id` | yes | Public `AgentName` bytes (events, projection, resume). |
+| `id` | yes | Stable agent id: the public `AgentName` bytes (events, projection, resume) and the selector name. Also addressable as `bundle:<bundle_id>/agent/<id>`. |
 | `description` | no | Human/model-facing text in selectors and spawn menus; omitting it leaves the agent unlabeled in pickers. |
 | `role` | yes | `main` (TUI-selectable) or `subagent` (hidden from direct selector). Selector only — spawn uses `can_spawn`. |
 | `color` | no | Optional display color on the prepared agent. |
@@ -171,9 +174,8 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `workdir` | no | Optional working-directory string on the prepared agent. **Parsed and stored** on `PreparedAgent` and serialized into the prepared catalog. **Not applied** by the runtime today — no reader uses `PreparedAgent::workdir` to set session or tool workdirs; authors who set `workdir: subdir` get silent no-op behavior. |
 | `spawn_lifecycle` | no | `transient` (default) or `resident`. |
 | `resource_profile` | no | **Unsupported** if present — prepare fails. |
-| `harness_access` | yes | `none` \| `basic` \| `full` (see below). |
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
-| `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. |
+| `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. Targets are **not** resolved at prepare time — a bundle may name an agent from a bundle that is not installed yet. |
 | `hook_refs` | no | Bundle-local hook resource references only (not `harness:hook/*`). |
 
 Example agent with `model_policy`:
@@ -194,20 +196,36 @@ agent:
 
 ---
 
-## `harness_access`
+## Tool plane
 
-Chooses the Harness-owned candidate tool set before `resource_view` narrows it
-([`collect_harness_tool_candidates`](../crates/hya-core/src/runtime_registry.rs)):
+A bundle agent's tool plane is **derived from its origin, not declared**. There
+is no manifest field that widens it.
 
-| Value | Exposure |
-| --- | --- |
-| `none` | No Harness tools. The agent sees only Bundle-local tools (and other non-tool resources the view selects). |
-| `basic` | Only the **original builtin tool snapshot** captured when the runtime registry was constructed — **not** tools later contributed by MCP servers or plugins. |
-| `full` | Builtins plus MCP- and plugin-contributed tools present in the live registry snapshot. |
+| Origin | Tools | Skills | MCP |
+| --- | --- | --- | --- |
+| Built-in agent | the live registry snapshot, including MCP- and plugin-contributed tools | Harness skills, including project and user skills discovered in the workdir | Harness MCP exports |
+| **Installed bundle agent** | the **internal public** tool snapshot captured when the runtime registry was built — never a tool contributed later by an MCP server or plugin | **none** from the Harness; only the bundle's own `resources.skills` | **none** from the Harness; only the bundle's own `resources.mcp` |
 
-**MCP is its own resource kind.** Even under `full`, MCP exports are **excluded**
-from the `tool` candidate partition (they are selected as `mcp` references, not
-as `tool` references).
+So an installed bundle agent sees exactly: the internal public tools, plus the
+resources its own bundle ships. It cannot see a tool installed at the main-agent
+level, a tool installed into hya directly, an MCP server's exports, or a project
+or user skill.
+
+Two consequences worth stating plainly:
+
+- A `resource_view` entry naming `harness:skill/…` or `harness:mcp/…` fails with
+  `ResourceNotInPlane`. That error means "outside your plane", not "misspelled".
+- A `bundle:<other-bundle>/…` reference fails the same way. A bundle selects only
+  its own resources.
+
+**The clamp is not a sandbox.** `can_spawn` may name a built-in, and a spawned
+built-in runs on *its* own full plane. The clamp bounds what a bundle agent does
+directly, not what it can reach by delegating. Treat a bundle as a capability
+declaration, not a security boundary.
+
+**MCP is its own resource kind.** Even on the full plane, MCP exports are
+**excluded** from the `tool` candidate partition (they are selected as `mcp`
+references, not as `tool` references).
 
 ---
 
@@ -320,6 +338,11 @@ A `task` call resolves `subagent_type` against the turn’s bound agent definiti
 | Id does not exist in the bound catalog | `UNKNOWN_AGENT_ID: <id>` (type `unknown_agent_id`) |
 | Id exists but is outside the caller’s `can_spawn` allowlist | `AGENT_SPAWN_NOT_ALLOWED: <caller> cannot spawn <id>` (type `agent_spawn_not_allowed`) |
 
+A `can_spawn` target that names an agent from a bundle that is not installed is
+**skipped when the roster is built**, so one missing bundle never makes the
+caller unusable; an actual spawn of that id still fails with
+`UNKNOWN_AGENT_ID`.
+
 Both surface to the model as **tool errors**, not permission prompts. Widening
 `can_spawn` is the only fix; a permission rule cannot grant the spawn. Catalog
 lookup does not rewrite an unknown `subagent_type` to `general`.
@@ -367,7 +390,7 @@ Each selected Tool or Hook source path must exact-path match exactly one JavaScr
 
 Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
 
-The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
+The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
 ---
 
@@ -415,48 +438,22 @@ limit. A malformed response or timeout taints and terminates the sidecar.
 
 ---
 
-## Built-in bundles
+## Built-in agents are not bundles
 
-Two bundles are prepared at **compile time** and embedded into `hya-app`
-([`crates/hya-app/build.rs`](../crates/hya-app/build.rs)):
+Built-in agents are compiled into the binary as Rust constants in
+[`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/),
+with prompt bodies pulled in by `include_str!`. Editing one requires a rebuild.
 
-### `hya/core-agents`
+They differ from bundle agents in three ways:
 
-Source: [`bundles/builtin/hya-core-agents/`](../bundles/builtin/hya-core-agents/).
-
-| Agent | Role (selector) | Notes |
-| --- | --- | --- |
-| `build` | main | Default agent |
-| `plan` | main | Plan mode |
-| `explore` | subagent | Codebase exploration |
-| `general` | subagent | Multi-step general work |
-| `compaction` | subagent | Prompt under `prompts/` |
-| `summary` | subagent | Prompt under `prompts/` |
-| `title` | subagent | Prompt under `prompts/` |
-
-Ordinary agents share a `can_spawn` anchor listing all ordinary agent ids
-(including `hya/*` development agents).
-
-### `hya/development`
-
-Source: [`bundles/builtin/hya-development/`](../bundles/builtin/hya-development/).
-
-| Agent |
-| --- |
-| `hya-main` (main) |
-| `hya-planner`, `hya-implementer`, `hya-reviewer`, `hya-tester`, `hya-docs`, `hya-explorer`, `hya-release` (subagents) |
-
-Prompts live under `prompts/`.
-
-### Embedding and fail-closed load
-
-- `build.rs` prepares both source dirs into `OUT_DIR/builtin-bundles.json` plus a
-  `.sha256` digest, with `cargo:rerun-if-changed` on both trees — **editing a
-  builtin requires a rebuild**, not a process restart.
-- `builtin_catalog()` decodes and validates the embedded artifact **exactly once**
-  in a `OnceLock` and caches **both success and failure**. A tampered or invalid
-  artifact leaves the process **without any builtin agents** for its whole
-  lifetime (no silent retry).
+- They run on the full Harness plane and own no bundle resources, so they never
+  have a sidecar.
+- Their ids are reserved: installing a bundle whose agent claims one is rejected
+  at install with `BUNDLE_AGENT_ID_RESERVED`.
+- An ordinary built-in spawns the **whole ordinary set**, so installing a bundle
+  makes its agent spawnable immediately, with no edit to any built-in. The
+  reserved system agents `compaction`, `summary`, and `title` are never
+  selectable and never an ordinary spawn target.
 
 ---
 
@@ -486,9 +483,11 @@ Prepared catalogs use **`PREPARED_FORMAT_VERSION = 1`** and the document shape:
 
 **Catalog semantic identity v1** is a domain-separated encoding over
 `b"hya.bundle-catalog.semantic-identity/v1"` plus sorted per-catalog records of
-`{ catalog digest, and each bundle’s id / version / publisher / origin /
-immutable / digest }`. Installing or removing any bundle changes the catalog
-identity.
+`{ catalog digest, and each bundle’s id / version / publisher / digest }`.
+Installing or removing any bundle changes the catalog identity. The runtime
+fingerprint folds this together with a digest over the compiled-in built-in
+roster, so editing a built-in prompt (which requires a rebuild) is visible in
+identity too.
 
 ---
 
@@ -504,10 +503,12 @@ hya bundle info <bundle-id>
 hya bundle uninstall <bundle-id>
 ```
 
-`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. Built-ins are merged read-only and cannot be replaced or uninstalled.
+`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding.
+
+A bundle installed by an older binary cannot decode. Such a row is **skipped with a named warning** rather than wedging the runtime, and `hya bundle list` marks it `unreadable (reinstall)`. Reinstall it to restore the agent.
 
 ---
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation in 0.34.11. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.
+Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.
