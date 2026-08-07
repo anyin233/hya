@@ -1,0 +1,29 @@
+{
+  "id": "context-management",
+  "name": "context-management",
+  "title": "Context management: observability and efficiency",
+  "description": "Parent task. Make the event log a sufficient statistic for offline reconstruction of the agent call graph, per-agent trajectories, and compaction history; then use those numbers to fix context-efficiency gaps.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-08-07",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-07-context-observability",
+    "08-07-context-efficiency"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
