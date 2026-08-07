@@ -271,6 +271,14 @@ Compat HTTP:
 - `DELETE /api/permission/saved/:id`
 
 Rows survive server restart because they live in the session SQLite file.
+**That does not make the grant survive restart.** An `always` answer updates the
+**in-process** `PermissionPlane` (`persistent` rules / `native_grants`) for the
+current process only; that plane is empty at startup. Nothing outside
+`hya-server/src/pending/` reads these rows into the plane — `list_saved_permissions`
+feeds the Compat list/delete APIs and store tests, not turn-time authorization.
+After restart the user is asked again for the same action until they answer
+`always` in the new process (which both re-grants in memory and may insert
+another row via `INSERT OR IGNORE`).
 
 ## Sync store API
 

@@ -86,8 +86,8 @@ Reducer effects:
 | `session_archived` | `session`, `archived: Number` | Fold: archived stamp |
 | `session_share_set` | `session`, `url: String` | Fold: share url |
 | `session_share_cleared` | `session` | Fold: share → `None` |
-| `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent (optional message anchors transcript position; not stored on the session row) |
-| `model_switched` | `session`, `message: Option<MessageId>`, `model: ModelRef` | Fold: session model |
+| `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent only (`message` is **not** stored on the session row). Engine emit always sets `message: Some(MessageId::new())` — a **fresh** id that is **not** a pointer into existing `SessionProjection.messages`. Compat uses that id as the identity of a **synthetic** switch pseudo-message in the message list (`session_context_messages`), not as a transcript anchor. |
+| `model_switched` | `session`, `message: Option<MessageId>`, `model: ModelRef` | Fold: session model only. Same `message` semantics as `agent_switched` (fresh synthetic id on emit). |
 | `session_status` | `session`, `status: Value` | **no-op** — free-form status ping; bridged to compat `session.status` |
 | `command_executed` | `session`, `command: String`, `arguments: String`, `message: MessageId` | **no-op** — records that a `/slash` command produced that user message; bridged to compat `command.executed` |
 
@@ -171,7 +171,7 @@ the root.
 | `agent_registered` | `session` (team root), `agent_session: SessionId`, `handle: String`, `agent_type: AgentName` (default empty), `mode: SubagentMode` (default `transient`) | Fold: roster entry by handle |
 | `agent_activity_changed` | `session`, `handle`, `status: RosterStatus`, `current_task: Option<String>` | Fold: roster activity; idle/terminal clears in-flight resident work and advances durable cursor |
 | `resident_work_started` | `session`, `actor_session`, `handle`, `epoch: ActorEpoch`, `inbox_through: u64` | Fold: marks fenced resident work on roster before tool/child/provider dispatch |
-| `mail_sent` | `session`, `from: String`, `to: MailEndpoint`, `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current subscribers |
+| `mail_sent` | `session`, `from: String`, `to: MailEndpoint`, `kind: MailKind` (default), `body: String` | Fold: direct → recipient inbox; channel → channel log + fan-out to current **eligible** subscribers (skips any member whose roster entry is `mode.is_resident()` **and** status is `Done` or `Failed`; see [ADR-0001](../adr/0001-event-sourced-mailbox-and-channels.md)) |
 | `channel_joined` | `session`, `channel: String`, `member: String` | Fold: add subscriber |
 | `channel_left` | `session`, `channel`, `member` | Fold: remove subscriber |
 
