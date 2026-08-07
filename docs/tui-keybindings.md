@@ -3,8 +3,9 @@
 This is the canonical reference for keyboard shortcuts, slash commands, and the
 which-key panel in the TypeScript TUI (`packages/hya-tui-ts`). Defaults come from
 [`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts).
-Override any binding through TUI config `keybinds` (see
-[Configuration](configuration.md)).
+Override bindings with TUI config `keybinds` using the **config keys** in
+[Overriding keybinds](#overriding-keybinds) (not palette command names). See also
+[Configuration](configuration.md).
 
 For screens, dialogs, transcript, and prompt behavior, see
 [TUI Reference](tui-reference.md).
@@ -28,7 +29,7 @@ The leader key itself is not a command; it only prefixes multi-key chords such a
 
 | Column | Meaning |
 | --- | --- |
-| **Command** | Internal command name (palette / binding map). |
+| **Command** | Internal command name (palette / binding map). **Not** the `keybinds` config key—see [Overriding keybinds](#overriding-keybinds). |
 | **Default binding** | Factory default. `unbound` means the default is `none` (no keys until you bind one). Multiple alternatives are comma-separated. |
 | **Slash name** | Built-in slash command, if any. Parentheses list aliases. |
 | **Meaning** | What the command does. |
@@ -38,6 +39,206 @@ empty. `terminal.suspend` is disabled on Windows (`win32`); on those platforms
 `ctrl+z` is reassigned to input undo when suspend is unavailable.
 `prompt.paste` uses `preventDefault: false` so the terminal’s native paste can
 still run alongside the handler.
+
+## Overriding keybinds
+
+Config `keybinds` uses the **`Definitions` keys** from
+`packages/hya-tui-ts/src/upstream/config/keybind.ts`, **not** the palette
+command names shown in the tables below.
+
+| You write in config | What it is |
+| --- | --- |
+| `session_new` | Config key (snake_case or dotted) accepted by `TuiKeybind.parse` |
+| `session.new` | Palette / binding **command** name — **rejected** if used as a `keybinds` key |
+| `dialog.select.prev` | Config key that is already dotted; used as-is for both config and binding lookup |
+| `leader` | Leader key only (not a command) |
+
+Unknown keys throw `Unrecognized keybind(s): …`. Example:
+
+```yaml
+keybinds:
+  session_new: "<leader>N"
+  command_list: "ctrl+shift+p"
+  dialog.select.prev: "up"
+```
+
+Map of every accepted config key to the command (or role) it drives:
+
+| Config key | Command / role | Default |
+| --- | --- | --- |
+| `leader` | —(leader key) | `ctrl+x` |
+| `app_exit` | `app.exit` | `ctrl+c,ctrl+d,<leader>q` |
+| `app_debug` | `app.debug` | `unbound` |
+| `app_heap_snapshot` | `app.heap_snapshot` | `unbound` |
+| `app_toggle_animations` | `app.toggle.animations` | `unbound` |
+| `app_toggle_file_context` | `app.toggle.file_context` | `unbound` |
+| `app_toggle_diffwrap` | `app.toggle.diffwrap` | `unbound` |
+| `app_toggle_paste_summary` | `app.toggle.paste_summary` | `unbound` |
+| `app_toggle_session_directory_filter` | `app.toggle.session_directory_filter` | `unbound` |
+| `command_list` | `command.palette.show` | `ctrl+p` |
+| `help_show` | `help.show` | `unbound` |
+| `diff_close` | `diff.close` | `escape,q` |
+| `diff_toggle` | `diff.toggle` | `enter,space` |
+| `diff_expand` | `diff.expand` | `right` |
+| `diff_expand_all` | `diff.expand_all` | `E` |
+| `diff_collapse` | `diff.collapse` | `left` |
+| `diff_switch_focus` | `diff.switch_focus` | `tab` |
+| `diff_next_hunk` | `diff.next_hunk` | `]` |
+| `diff_previous_hunk` | `diff.previous_hunk` | `[` |
+| `diff_next_file` | `diff.next_file` | `n` |
+| `diff_previous_file` | `diff.previous_file` | `p` |
+| `diff_toggle_file_tree` | `diff.toggle_file_tree` | `b` |
+| `diff_single_patch` | `diff.single_patch` | `s` |
+| `diff_switch_source` | `diff.switch_source` | `d` |
+| `diff_toggle_view` | `diff.toggle_view` | `v` |
+| `diff_help` | `diff.help` | `?` |
+| `editor_open` | `prompt.editor` | `<leader>e` |
+| `theme_list` | `theme.switch` | `<leader>t` |
+| `theme_switch_mode` | `theme.switch_mode` | `unbound` |
+| `theme_mode_lock` | `theme.mode.lock` | `unbound` |
+| `sidebar_toggle` | `session.sidebar.toggle` | `<leader>b` |
+| `scrollbar_toggle` | `session.toggle.scrollbar` | `unbound` |
+| `status_view` | `hya.status` | `<leader>s` |
+| `session_export` | `session.export` | `<leader>x` |
+| `session_copy` | `session.copy` | `unbound` |
+| `session_new` | `session.new` | `<leader>n` |
+| `session_list` | `session.list` | `<leader>l` |
+| `session_timeline` | `session.timeline` | `<leader>g` |
+| `session_fork` | `session.fork` | `unbound` |
+| `session_rename` | `session.rename` | `ctrl+r` |
+| `session_delete` | `session.delete` | `ctrl+d` |
+| `session_interrupt` | `session.interrupt` | `escape` |
+| `session_background` | `session.background` | `ctrl+b` |
+| `session_compact` | `session.compact` | `<leader>c` |
+| `session_toggle_timestamps` | `session.toggle.timestamps` | `unbound` |
+| `session_toggle_generic_tool_output` | `session.toggle.generic_tool_output` | `unbound` |
+| `session_queued_prompts` | `session.queued_prompts` | `<leader>q` |
+| `pane_roster` | `pane.roster` | `<leader>o` |
+| `pane_open_tab` | `pane.open.tab` | `<leader>T` |
+| `pane_open_vertical` | `pane.open.vertical` | `<leader>V` |
+| `pane_open_horizontal` | `pane.open.horizontal` | `<leader>S` |
+| `pane_close` | `pane.close` | `<leader>w` |
+| `pane_cycle` | `pane.cycle` | `<leader>.,<leader>right` |
+| `pane_cycle_reverse` | `pane.cycle.reverse` | `<leader>left` |
+| `pane_focus_main` | `pane.focus.main` | `<leader>0` |
+| `session_pin_toggle` | `session.pin.toggle` | `ctrl+f` |
+| `session_quick_switch_1` | `session.quick_switch.1` | `<leader>1` |
+| `session_quick_switch_2` | `session.quick_switch.2` | `<leader>2` |
+| `session_quick_switch_3` | `session.quick_switch.3` | `<leader>3` |
+| `session_quick_switch_4` | `session.quick_switch.4` | `<leader>4` |
+| `session_quick_switch_5` | `session.quick_switch.5` | `<leader>5` |
+| `session_quick_switch_6` | `session.quick_switch.6` | `<leader>6` |
+| `session_quick_switch_7` | `session.quick_switch.7` | `<leader>7` |
+| `session_quick_switch_8` | `session.quick_switch.8` | `<leader>8` |
+| `session_quick_switch_9` | `session.quick_switch.9` | `<leader>9` |
+| `stash_delete` | `stash.delete` | `ctrl+d` |
+| `model_favorite_toggle` | `model.dialog.favorite` | `ctrl+f` |
+| `model_list` | `model.list` | `<leader>m` |
+| `model_cycle_recent` | `model.cycle_recent` | `f2` |
+| `model_cycle_recent_reverse` | `model.cycle_recent_reverse` | `shift+f2` |
+| `model_cycle_favorite` | `model.cycle_favorite` | `unbound` |
+| `model_cycle_favorite_reverse` | `model.cycle_favorite_reverse` | `unbound` |
+| `mcp_list` | `mcp.list` | `unbound` |
+| `agent_list` | `agent.list` | `<leader>a` |
+| `agent_cycle` | `agent.cycle` | `tab` |
+| `agent_cycle_reverse` | `agent.cycle.reverse` | `shift+tab` |
+| `variant_cycle` | `variant.cycle` | `ctrl+t` |
+| `variant_list` | `variant.list` | `unbound` |
+| `messages_page_up` | `session.page.up` | `pageup,ctrl+alt+b` |
+| `messages_page_down` | `session.page.down` | `pagedown,ctrl+alt+f` |
+| `messages_line_up` | `session.line.up` | `ctrl+alt+y` |
+| `messages_line_down` | `session.line.down` | `ctrl+alt+e` |
+| `messages_half_page_up` | `session.half.page.up` | `ctrl+alt+u` |
+| `messages_half_page_down` | `session.half.page.down` | `ctrl+alt+d` |
+| `messages_first` | `session.first` | `ctrl+g,home` |
+| `messages_last` | `session.last` | `ctrl+alt+g,end` |
+| `messages_next` | `session.message.next` | `unbound` |
+| `messages_previous` | `session.message.previous` | `unbound` |
+| `messages_last_user` | `session.messages_last_user` | `unbound` |
+| `messages_copy` | `messages.copy` | `<leader>y` |
+| `messages_undo` | `session.undo` | `<leader>u` |
+| `messages_redo` | `session.redo` | `<leader>r` |
+| `messages_toggle_conceal` | `session.toggle.conceal` | `<leader>h` |
+| `tool_details` | `session.toggle.actions` | `unbound` |
+| `display_thinking` | `session.toggle.thinking` | `unbound` |
+| `prompt_submit` | `prompt.submit` | `unbound` |
+| `prompt_editor_context_clear` | `prompt.editor_context.clear` | `unbound` |
+| `prompt_skills` | `prompt.skills` | `unbound` |
+| `prompt_stash` | `prompt.stash` | `unbound` |
+| `prompt_stash_pop` | `prompt.stash.pop` | `unbound` |
+| `prompt_stash_list` | `prompt.stash.list` | `unbound` |
+| `input_clear` | `prompt.clear` | `ctrl+c` |
+| `input_paste` | `prompt.paste` | `object (see keybind.ts)` |
+| `input_submit` | `input.submit` | `return` |
+| `input_newline` | `input.newline` | `shift+return,ctrl+return,alt+return,ctrl+j` |
+| `input_move_left` | `input.move.left` | `left,ctrl+b` |
+| `input_move_right` | `input.move.right` | `right,ctrl+f` |
+| `input_move_up` | `input.move.up` | `up` |
+| `input_move_down` | `input.move.down` | `down` |
+| `input_select_left` | `input.select.left` | `shift+left` |
+| `input_select_right` | `input.select.right` | `shift+right` |
+| `input_select_up` | `input.select.up` | `shift+up` |
+| `input_select_down` | `input.select.down` | `shift+down` |
+| `input_line_home` | `input.line.home` | `ctrl+a` |
+| `input_line_end` | `input.line.end` | `ctrl+e` |
+| `input_select_line_home` | `input.select.line.home` | `ctrl+shift+a` |
+| `input_select_line_end` | `input.select.line.end` | `ctrl+shift+e` |
+| `input_visual_line_home` | `input.visual.line.home` | `alt+a` |
+| `input_visual_line_end` | `input.visual.line.end` | `alt+e` |
+| `input_select_visual_line_home` | `input.select.visual.line.home` | `alt+shift+a` |
+| `input_select_visual_line_end` | `input.select.visual.line.end` | `alt+shift+e` |
+| `input_buffer_home` | `input.buffer.home` | `home` |
+| `input_buffer_end` | `input.buffer.end` | `end` |
+| `input_select_buffer_home` | `input.select.buffer.home` | `shift+home` |
+| `input_select_buffer_end` | `input.select.buffer.end` | `shift+end` |
+| `input_delete_line` | `input.delete.line` | `ctrl+shift+d` |
+| `input_delete_to_line_end` | `input.delete.to.line.end` | `ctrl+k` |
+| `input_delete_to_line_start` | `input.delete.to.line.start` | `ctrl+u` |
+| `input_backspace` | `input.backspace` | `backspace,shift+backspace` |
+| `input_delete` | `input.delete` | `ctrl+d,delete,shift+delete` |
+| `input_undo` | `input.undo` | `ctrl+-,super+z` |
+| `input_redo` | `input.redo` | `ctrl+.,super+shift+z` |
+| `input_word_forward` | `input.word.forward` | `alt+f,alt+right,ctrl+right` |
+| `input_word_backward` | `input.word.backward` | `alt+b,alt+left,ctrl+left` |
+| `input_select_word_forward` | `input.select.word.forward` | `alt+shift+f,alt+shift+right` |
+| `input_select_word_backward` | `input.select.word.backward` | `alt+shift+b,alt+shift+left` |
+| `input_delete_word_forward` | `input.delete.word.forward` | `alt+d,alt+delete,ctrl+delete` |
+| `input_delete_word_backward` | `input.delete.word.backward` | `ctrl+w,ctrl+backspace,alt+backspace` |
+| `input_select_all` | `input.select.all` | `super+a` |
+| `history_previous` | `prompt.history.previous` | `up` |
+| `history_next` | `prompt.history.next` | `down` |
+| `dialog.select.prev` | `dialog.select.prev` (binding name = key) | `up,ctrl+p` |
+| `dialog.select.next` | `dialog.select.next` (binding name = key) | `down,ctrl+n` |
+| `dialog.select.page_up` | `dialog.select.page_up` (binding name = key) | `pageup` |
+| `dialog.select.page_down` | `dialog.select.page_down` (binding name = key) | `pagedown` |
+| `dialog.select.home` | `dialog.select.home` (binding name = key) | `home` |
+| `dialog.select.end` | `dialog.select.end` (binding name = key) | `end` |
+| `dialog.select.submit` | `dialog.select.submit` (binding name = key) | `return` |
+| `dialog.prompt.submit` | `dialog.prompt.submit` (binding name = key) | `return` |
+| `dialog.mcp.toggle` | `dialog.mcp.toggle` (binding name = key) | `space` |
+| `dialog.move_session.new` | `dialog.move_session.new` (binding name = key) | `ctrl+m` |
+| `dialog.move_session.delete` | `dialog.move_session.delete` (binding name = key) | `ctrl+d` |
+| `dialog.move_session.refresh` | `dialog.move_session.refresh` (binding name = key) | `ctrl+r` |
+| `prompt.autocomplete.prev` | `prompt.autocomplete.prev` (binding name = key) | `up,ctrl+p` |
+| `prompt.autocomplete.next` | `prompt.autocomplete.next` (binding name = key) | `down,ctrl+n` |
+| `prompt.autocomplete.hide` | `prompt.autocomplete.hide` (binding name = key) | `escape` |
+| `prompt.autocomplete.select` | `prompt.autocomplete.select` (binding name = key) | `return` |
+| `prompt.autocomplete.complete` | `prompt.autocomplete.complete` (binding name = key) | `tab` |
+| `permission.prompt.fullscreen` | `permission.prompt.fullscreen` (binding name = key) | `ctrl+f` |
+| `terminal_suspend` | `terminal.suspend` | `ctrl+z` |
+| `terminal_title_toggle` | `terminal.title.toggle` | `unbound` |
+| `tips_toggle` | `tips.toggle` | `<leader>h` |
+| `which_key_toggle` | `which-key.toggle` | `ctrl+alt+k` |
+| `which_key_layout_toggle` | `which-key.layout.toggle` | `ctrl+alt+shift+k` |
+| `which_key_pending_toggle` | `which-key.pending.toggle` | `ctrl+alt+shift+p` |
+| `which_key_group_previous` | `which-key.group.previous` | `ctrl+alt+left,ctrl+alt+[` |
+| `which_key_group_next` | `which-key.group.next` | `ctrl+alt+right,ctrl+alt+]` |
+| `which_key_scroll_up` | `which-key.scroll.up` | `ctrl+alt+up,ctrl+alt+p` |
+| `which_key_scroll_down` | `which-key.scroll.down` | `ctrl+alt+down,ctrl+alt+n` |
+| `which_key_page_up` | `which-key.page.up` | `ctrl+alt+pageup` |
+| `which_key_page_down` | `which-key.page.down` | `ctrl+alt+pagedown` |
+| `which_key_home` | `which-key.home` | `ctrl+alt+home` |
+| `which_key_end` | `which-key.end` | `ctrl+alt+end` |
 
 ## Binding collisions
 

@@ -189,8 +189,10 @@ Inline three-way prompt titled **Permission required** with **Allow once** /
 | Escape | Reject |
 | `permission.prompt.fullscreen` (`ctrl+f`) | Toggle fullscreen |
 
-Tool-specific titles cover Edit, Read, Glob, Grep, List, WebFetch, WebSearch,
-Task, external-directory access, repeated failure, and a generic tool call.
+Tool-specific titles cover **bash** (icon `#`, title = tool `description` or
+`Shell command`, body `$ <command>`), Edit, Read, Glob, Grep, List, WebFetch,
+WebSearch, Task, external-directory access, repeated failure, and a generic tool
+call.
 
 **Allow always** opens a Confirm/Cancel stage warning that the patterns will be
 allowed until hya is restarted. **Reject** (for child sessions, or via the
@@ -200,10 +202,25 @@ with the message, Escape cancels back.
 ### Question prompt
 
 Multi-question flow with a tab strip (`←`/`h`, `→`/`l`, Tab), an option list
-(`↑`/`k`, `↓`/`j`, numeric `1`–`N`), Return to select/submit, and Escape to
-reject. Multi-select options use `[✓]` checkboxes with a
-`(select all that apply)` hint. A **Type your own answer** free-text row is
-available when custom answers are allowed.
+(`↑`/`k`, `↓`/`j`, numeric `1`–`N`), and Escape to reject.
+
+**When Return submits vs toggles:**
+
+| Case | Return on an option |
+| --- | --- |
+| Single question, not multi-select (`multiple !== true`) | Selects the option and **submits** immediately (no Confirm tab) |
+| Multi-select question (`multiple === true`) | **Toggles** the option (`[✓]` checkbox); does **not** submit |
+| Multi-question (more than one question), single-select | Selects and advances to the next tab |
+
+When there is more than one question **or** the current flow is multi-select,
+the tab strip includes a trailing **Confirm** tab (`questions.length + 1`). Move
+to Confirm with Tab / `→` / `l`, then press Return on Confirm to submit all
+answers. Footer hints show `toggle` while multi-selecting and `submit` on the
+Confirm tab.
+
+Multi-select options use `[✓]` checkboxes with a `(select all that apply)`
+hint. A **Type your own answer** free-text row is available when custom answers
+are allowed.
 
 ### Prompts aggregate across the subagent tree
 
@@ -360,10 +377,14 @@ filtered on read.
 
 ### Model recents and favorites
 
-Persisted to `<state>/model.json`. Invalid entries toast a warning rather than
-failing the load. Cycle recent with `f2` / `shift+f2`. Cycle favorite is unbound
-by default and toasts **Add a favorite model to use this shortcut** when no
-favorites exist.
+Persisted to `<state>/model.json` (`recent`, `favorite`, and per-model
+`variant`). Load is best-effort: a missing file, non-object JSON, or non-array
+`recent`/`favorite` is ignored with **no toast** (errors are swallowed). The
+**Model …/… is not valid** warning toast fires when you **select** or
+**favorite** a model the provider catalog does not serve—not when loading the
+file. Cycle recent with `f2` / `shift+f2`. Cycle favorite is unbound by default
+and toasts **Add a favorite model to use this shortcut** when no favorites
+exist.
 
 ---
 
@@ -394,10 +415,11 @@ interrupt. Inert while autocomplete is open or the prompt is unfocused.
 
 ### Shell mode
 
-Typing `!` at column 0 of an empty prompt in normal mode switches to shell mode:
-the agent label becomes `Shell`, placeholders switch to the shell set, and an
-`esc exit shell mode` hint appears. Escape or Backspace at offset 0 returns to
-normal mode.
+Typing `!` when the visual cursor is at **offset 0** in normal mode (autocomplete
+closed, prompt not disabled) switches to shell mode—even if the buffer already
+has text. The agent label becomes `Shell`, placeholders switch to the shell set,
+and an `esc exit shell mode` hint appears. Escape or Backspace at offset 0
+returns to normal mode.
 
 ### Prompt autocomplete
 
@@ -497,9 +519,35 @@ is off until you turn it on.
 
 plus a generated **`system`** theme derived from the terminal.
 
-**Precedence:** defaults &lt; plugin installs &lt; custom files &lt; system.
-Default theme is `hya`. `theme.switch` (`<leader>t`) live-previews and reverts on
-dismiss. `theme.switch_mode` and `theme.mode.lock` flip or pin light/dark.
+**Precedence** when resolving the active theme name:
+defaults &lt; plugin installs &lt; custom files &lt; generated `system`.
+A custom file whose basename matches a shipped theme (for example `hya.json`)
+**replaces** that default entry.
+
+**Custom theme files on disk** (no rebuild required):
+
+| Location | Path |
+| --- | --- |
+| User config | `$XDG_CONFIG_HOME/hya/themes/*.json` (fallback `~/.config/hya/themes/`) |
+| Project / ancestors | From `cwd` up to filesystem root: `<dir>/.hya/themes/*.json` |
+
+The JSON basename (without `.json`) is the theme name and appears in `/themes`
+and as a valid `theme` config value. Valid files must be a JSON object with a
+nested `theme` object key; invalid files are dropped silently.
+
+Discovery order is config dir first, then each `.hya` from cwd to root. Within
+that scan, **later directories overwrite earlier names**, so a root-most
+ancestor’s `.hya/themes` wins over the current project’s file of the same name
+(opposite of nearest-wins).
+
+Default theme is `hya`. `theme.switch` (`<leader>t`) live-previews and reverts
+on dismiss. `theme.switch_mode` and `theme.mode.lock` flip or pin light/dark.
+
+**Live reload:** send `SIGUSR2` to the TUI process (`kill -USR2 <pid>`) to
+re-detect the terminal light/dark palette and re-scan custom theme files. The
+handler runs on a short delay ladder (250 ms, then 1000 ms); the custom-file
+rescan runs only on the **last** tick, so a brief wait after the signal is
+expected.
 
 ### Session epilogue on exit
 
