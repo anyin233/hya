@@ -105,10 +105,48 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
     chars / 4
 }
 
+/// Provider-reported prompt size, plus an estimate of everything appended since.
+///
+/// The most recent assistant message that reported usage tells us exactly how
+/// many tokens the provider counted for that request; only the messages after it
+/// still need estimating. Returns `None` when no usage was ever reported (for
+/// example a route with `usage_reporting: false`), so callers fall back to
+/// [`estimate_tokens`] over the whole transcript.
+///
+/// Window occupancy counts `input + cache_read`: cached prompt tokens still take
+/// up the window, and providers disagree on whether `input` already includes
+/// them. Summing can only over-count, which fails safe — compacting slightly
+/// early rather than overflowing.
+#[must_use]
+pub fn measured_tokens(messages: &[Message]) -> Option<usize> {
+    let (index, usage) = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, m)| match m {
+            Message::Assistant {
+                tokens: Some(usage),
+                ..
+            } if !usage.is_zero() => Some((i, usage)),
+            _ => None,
+        })?;
+    let measured =
+        usize::try_from(usage.input.saturating_add(usage.cache_read)).unwrap_or(usize::MAX);
+    let appended = estimate_tokens(messages.get(index + 1..).unwrap_or(&[]));
+    Some(measured.saturating_add(appended))
+}
+
+/// Best available token count for `messages`: measured when the provider has
+/// reported usage, estimated otherwise.
+#[must_use]
+pub fn tokens_in_use(messages: &[Message]) -> usize {
+    measured_tokens(messages).unwrap_or_else(|| estimate_tokens(messages))
+}
+
 /// Whether `messages` exceeds keep_recent and the token threshold.
 #[must_use]
 pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
-    messages.len() > cfg.keep_recent && estimate_tokens(messages) > cfg.token_threshold
+    messages.len() > cfg.keep_recent && tokens_in_use(messages) > cfg.token_threshold
 }
 
 /// Produces a summary string for older transcript segments.
@@ -371,6 +409,74 @@ mod tests {
             assert!(content.contains("CONDENSED"));
             assert!(content.contains("4 earlier"));
         }
+    }
+
+    fn assistant_with_usage(usage: Option<hya_proto::TokenUsage>) -> Message {
+        Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts: Vec::new(),
+            finish: None,
+            tokens: usage,
+        }
+    }
+
+    #[test]
+    fn measured_tokens_uses_reported_usage_plus_the_delta_since() {
+        let usage = hya_proto::TokenUsage {
+            input: 1000,
+            output: 50,
+            reasoning: 0,
+            cache_read: 200,
+            cache_write: 0,
+        };
+        let msgs = vec![
+            user(&"a".repeat(4000)), // would estimate to 1000 on its own
+            assistant_with_usage(Some(usage)),
+            user(&"b".repeat(400)), // appended after: estimates to 100
+        ];
+        // 1000 input + 200 cache_read + 100 estimated delta.
+        assert_eq!(measured_tokens(&msgs), Some(1300));
+        assert_eq!(tokens_in_use(&msgs), 1300);
+    }
+
+    #[test]
+    fn measured_tokens_ignores_empty_usage_and_falls_back_to_the_estimator() {
+        // A route with usage_reporting: false never populates tokens; behaviour
+        // must be byte-identical to the pre-change estimator path.
+        let msgs = vec![user(&"a".repeat(4000)), assistant_with_usage(None)];
+        assert_eq!(measured_tokens(&msgs), None);
+        assert_eq!(tokens_in_use(&msgs), estimate_tokens(&msgs));
+
+        let zeroed = vec![
+            user(&"a".repeat(4000)),
+            assistant_with_usage(Some(hya_proto::TokenUsage::default())),
+        ];
+        assert_eq!(
+            measured_tokens(&zeroed),
+            None,
+            "all-zero usage is not a measurement"
+        );
+        assert_eq!(tokens_in_use(&zeroed), estimate_tokens(&zeroed));
+    }
+
+    #[test]
+    fn measured_tokens_prefers_the_most_recent_report() {
+        let old = hya_proto::TokenUsage {
+            input: 100,
+            ..Default::default()
+        };
+        let new = hya_proto::TokenUsage {
+            input: 900,
+            ..Default::default()
+        };
+        let msgs = vec![
+            assistant_with_usage(Some(old)),
+            user("x"),
+            assistant_with_usage(Some(new)),
+        ];
+        assert_eq!(measured_tokens(&msgs), Some(900));
     }
 
     #[tokio::test]

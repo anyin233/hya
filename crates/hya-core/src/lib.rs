@@ -57,7 +57,7 @@ pub use category::{
 };
 pub use compaction::{
     CompactionConfig, CompactionPlan, ModelSummarizer, SummarizeOptions, Summarizer, compact_with,
-    estimate_tokens, needs_compaction, plan_compaction,
+    estimate_tokens, measured_tokens, needs_compaction, plan_compaction, tokens_in_use,
 };
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
