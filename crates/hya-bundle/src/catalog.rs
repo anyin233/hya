@@ -53,9 +53,6 @@ impl BundleCatalog {
     /// ids are validated. Does **not** set semantic-identity provenance; use
     /// [`Self::from_verified_catalogs`] when digest-backed identity is required.
     pub fn from_prepared(bundles: &[PreparedBundle]) -> Result<Self, BundleError> {
-        if bundles.is_empty() {
-            return Err(BundleError::EmptyPreparedCatalog);
-        }
         let mut catalog = Self {
             bundles: bundles.to_vec(),
             agents: BTreeMap::new(),

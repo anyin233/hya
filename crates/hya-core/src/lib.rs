@@ -13,6 +13,10 @@
 //! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
 //! crate stays free of terminal UI and HTTP routing.
 
+/// Built-ins plus installed bundles resolved as one agent namespace.
+pub mod agent_catalog;
+/// Compiled-in agent definitions (not AgentBundles).
+pub mod builtin_agents;
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
 /// Model category resolution and member-agent construction.
@@ -51,6 +55,8 @@ pub mod workspace;
 #[cfg(test)]
 mod test_support;
 
+pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
+pub use builtin_agents::{BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent, is_builtin_id};
 pub use bus::EventBus;
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, build_member_agent, inject_skills,

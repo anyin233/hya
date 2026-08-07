@@ -101,6 +101,20 @@ pub enum BundleError {
         /// Requested spawn target stable id.
         agent_id: String,
     },
+    /// An installed bundle claims an agent id reserved by a built-in agent.
+    ///
+    /// Built-ins run on the full Harness plane; an installed bundle agent runs
+    /// on the clamped internal-public plane. Letting a bundle claim a built-in
+    /// id would make the plane of a well-known id depend on install order.
+    #[error(
+        "bundle `{bundle_id}` declares agent `{agent_id}`, which is a reserved built-in agent id"
+    )]
+    BuiltinAgentIdShadowed {
+        /// Bundle identity id.
+        bundle_id: String,
+        /// Conflicting agent id.
+        agent_id: String,
+    },
     /// Two agents in one bundle share the same `local_id`.
     #[error("duplicate local agent id `{local_id}` in bundle `{bundle_id}`")]
     DuplicateLocalAgentId {
@@ -195,9 +209,6 @@ pub enum BundleError {
     /// Bundles/index not in the required deterministic order.
     #[error("prepared catalog is not canonically ordered")]
     NonCanonicalPreparedCatalog,
-    /// Catalog contains zero bundles after prepare/merge.
-    #[error("prepared catalog contains no bundles")]
-    EmptyPreparedCatalog,
     /// Bytes do not start with a known public or private package magic.
     #[error("invalid bundle package format")]
     InvalidPackageFormat,

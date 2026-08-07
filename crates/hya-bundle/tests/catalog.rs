@@ -105,15 +105,16 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 #[test]
-fn empty_prepared_catalog_is_rejected() {
-    assert_eq!(
-        BundleCatalog::from_prepared(&[]).err(),
-        Some(BundleError::EmptyPreparedCatalog)
-    );
+fn empty_prepared_catalog_is_accepted() {
+    // Built-in agents no longer live in bundles, so a fresh install has zero
+    // installed bundles and must still produce a usable catalog.
+    let catalog = BundleCatalog::from_prepared(&[]).expect("empty catalog");
+    assert!(catalog.bundles().is_empty());
+    assert!(catalog.resolve_agent("anything").is_none());
 }
 
 #[test]
-fn zero_bundle_prepared_document_never_yields_empty_catalog() {
+fn zero_bundle_prepared_document_yields_an_empty_catalog() {
     // Canonical empty prepared document: matching digest, valid shape, zero bundles.
     let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
     let expected_digest = digest(bytes);
@@ -125,11 +126,9 @@ fn zero_bundle_prepared_document_never_yields_empty_catalog() {
         prepared.bundles().is_empty(),
         "fixture must remain a zero-bundle prepared document"
     );
-    assert_eq!(
-        BundleCatalog::from_prepared(prepared.bundles()).err(),
-        Some(BundleError::EmptyPreparedCatalog),
-        "zero bundles must never become an empty BundleCatalog"
-    );
+    let catalog =
+        BundleCatalog::from_prepared(prepared.bundles()).expect("zero bundles is a valid catalog");
+    assert!(catalog.bundles().is_empty());
 }
 
 #[test]
