@@ -15,16 +15,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, 
-    AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus, HookDispatcher,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, RuntimeRegistry, SessionEngine,
-    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, TurnBinding,
+use hya_core::{
+    AgentCatalog, AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome,
+    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus,
+    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, RuntimeRegistry,
+    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, TurnBinding,
 };
 use hya_proto::{AgentName, ConfigGeneration, Event, FinishReason, ModelRef, Role};
 use hya_provider::{
@@ -643,23 +643,23 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             },
             digest: format!("test-only-{}", agent.stable_id),
             agent: PreparedAgent {
-            id: AgentName::new(&agent.stable_id),
-            description: None,
-            role: AgentRole::Main,
-            color: None,
-            prompt: agent.prompt.clone(),
-            prompt_source: None,
-            prompt_digest: None,
-            model_policy: ModelPolicy {
-                model: agent.model.clone(),
-                category: agent.category.clone(),
-                reasoning: agent.reasoning.clone(),
-            },
-            workdir: agent.workdir.clone(),
-            spawn_lifecycle: SpawnLifecycle::Transient,
-            resource_view: ResourceView::default(),
-            can_spawn: Vec::new(),
-            hook_refs: Vec::new(),
+                id: AgentName::new(&agent.stable_id),
+                description: None,
+                role: AgentRole::Main,
+                color: None,
+                prompt: agent.prompt.clone(),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy {
+                    model: agent.model.clone(),
+                    category: agent.category.clone(),
+                    reasoning: agent.reasoning.clone(),
+                },
+                workdir: agent.workdir.clone(),
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                resource_view: ResourceView::default(),
+                can_spawn: Vec::new(),
+                hook_refs: Vec::new(),
             },
             tools: Vec::new(),
             skills: Vec::new(),
@@ -2172,10 +2172,4 @@ async fn root_sidecar_cancel_while_factory_start_is_pending_stops_before_model_p
     assert_eq!(resolver_calls.load(Ordering::SeqCst), 1);
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     assert_eq!(handle_calls.load(Ordering::SeqCst), 0);
-}
-
-/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
-    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }

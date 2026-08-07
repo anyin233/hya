@@ -86,7 +86,7 @@ fn list_text_for(_workdir: &std::path::Path, all: bool) -> anyhow::Result<String
         text.push_str(agent.stable_id);
         text.push_str(" (");
         text.push_str(agent.selector_mode());
-        text.push_str(")");
+        text.push(')');
         text.push_str(match agent.origin {
             hya_core::AgentOrigin::Builtin => " [builtin]\n",
             hya_core::AgentOrigin::Bundle { .. } => " [bundle]\n",

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! `AgentCatalog` joins compiled-in built-ins with installed AgentBundles.
 //!
 //! Call sites resolve through one seam and read the origin off the result;
@@ -6,7 +8,8 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
+    PreparedBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, AgentOrigin};
 use hya_proto::AgentName;

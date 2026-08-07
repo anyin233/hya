@@ -6,8 +6,9 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const LIST_HEADER: &str = "NAME VERSION ORIGIN FORMAT STATE IMMUTABLE";
-const BUNDLE_ID: &str = "hya/public-fixture";
+const LIST_HEADER: &str = "NAME VERSION AGENT STATE";
+const BUNDLE_ID: &str = "hya/valid-public";
+const BUNDLE_AGENT_ID: &str = "valid-public-lead";
 
 /// Creates and returns a data root that no other test in this binary can share.
 ///
@@ -82,14 +83,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
     let installed_row = list_lines.find(|line| line.split_whitespace().next() == Some(BUNDLE_ID));
     assert_eq!(
         installed_row.map(|line| line.split_whitespace().collect::<Vec<_>>()),
-        Some(vec![
-            BUNDLE_ID,
-            "1.0.0",
-            "installed",
-            "public-v1",
-            "active",
-            "false",
-        ]),
+        Some(vec![BUNDLE_ID, "1.0.0", BUNDLE_AGENT_ID, "active"]),
         "bundle list omitted the installed row:\n{list_stdout}"
     );
 
@@ -99,16 +93,16 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
     assert_success("info", &info);
     let info_stdout = String::from_utf8(info.stdout)?;
     for expected in [
-        "name=hya/public-fixture",
+        "name=hya/valid-public",
         "version=1.0.0",
         "publisher=hya",
         "origin=installed",
         "format=public-v1",
         "state=active",
         "immutable=false",
-        "source_digest=e622dbe1b0fab92a009516f8c887a3ebcacd54b0fe170518fa8b0d4b919aac6c",
-        "prepared_digest=57edac60c4b049ef5b1d5402b80789bf5365afc3cf5b72b02601c570f70fd6e8",
-        "agent=public-fixture-lead",
+        "source_digest=df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
+        "prepared_digest=1d36ac29eab07335cdf89dff96a3e142b8fcd3c9ef71d80d9af3a2f043e3aa39",
+        "agent=valid-public-lead",
     ] {
         assert!(
             info_stdout.lines().any(|line| line == expected),
@@ -219,8 +213,10 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
 }
 
 #[test]
-fn builtins_list_and_info_without_registry_and_are_immutable()
+fn bundle_list_is_empty_without_a_registry_and_creates_none()
 -> Result<(), Box<dyn std::error::Error>> {
+    // Built-in agents are compiled in, not bundles, so a fresh install lists no
+    // bundles at all and a read-only command must not create a registry.
     let data_root = unique_data_root()?;
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
     assert!(!registry_path.exists());
@@ -228,57 +224,28 @@ fn builtins_list_and_info_without_registry_and_are_immutable()
     let list = bundle_command(&data_root)
         .args(["bundle", "list"])
         .output()?;
-    assert_success("builtin list", &list);
+    assert_success("empty list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
     assert_eq!(
         list_stdout.lines().collect::<Vec<_>>(),
-        vec![
-            LIST_HEADER,
-            "hya/core-agents 0.34.8 builtin builtin-v1 active true",
-            "hya/development 0.34.8 builtin builtin-v1 active true",
-        ],
-        "unexpected builtin bundle list:\n{list_stdout}"
+        vec![LIST_HEADER],
+        "unexpected bundle list:\n{list_stdout}"
     );
     assert!(
         !registry_path.exists(),
-        "read-only builtin list created a bundle registry"
+        "read-only bundle list created a bundle registry"
     );
 
-    let catalog = hya_app::builtin_catalog()?;
-    let core_bundle = catalog
-        .bundles()
-        .iter()
-        .find(|bundle| bundle.identity.id == "hya/core-agents")
-        .ok_or_else(|| std::io::Error::other("embedded core-agents bundle is missing"))?;
     let info = bundle_command(&data_root)
         .args(["bundle", "info", "hya/core-agents"])
         .output()?;
-    assert_success("builtin info", &info);
-    let info_stdout = String::from_utf8(info.stdout)?;
-    assert_eq!(
-        info_stdout.lines().map(str::to_string).collect::<Vec<_>>(),
-        vec![
-            "name=hya/core-agents".to_string(),
-            "version=0.34.8".to_string(),
-            "publisher=hya".to_string(),
-            "origin=builtin".to_string(),
-            "format=builtin-v1".to_string(),
-            "state=active".to_string(),
-            "immutable=true".to_string(),
-            format!("bundle_digest={}", core_bundle.digest),
-            "agent=build".to_string(),
-            "agent=compaction".to_string(),
-            "agent=explore".to_string(),
-            "agent=general".to_string(),
-            "agent=plan".to_string(),
-            "agent=summary".to_string(),
-            "agent=title".to_string(),
-        ],
-        "unexpected builtin bundle info:\n{info_stdout}"
+    assert!(
+        !info.status.success(),
+        "info for a never-installed bundle unexpectedly succeeded"
     );
     assert!(
         !registry_path.exists(),
-        "read-only builtin info created a bundle registry"
+        "read-only bundle info created a bundle registry"
     );
 
     let uninstall = bundle_command(&data_root)
@@ -286,18 +253,7 @@ fn builtins_list_and_info_without_registry_and_are_immutable()
         .output()?;
     assert!(
         !uninstall.status.success(),
-        "builtin bundle uninstall unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&uninstall.stdout),
-        String::from_utf8_lossy(&uninstall.stderr),
-    );
-    let uninstall_stderr = String::from_utf8(uninstall.stderr)?;
-    assert!(
-        uninstall_stderr.contains("BUNDLE_IMMUTABLE"),
-        "builtin uninstall omitted typed error:\n{uninstall_stderr}"
-    );
-    assert!(
-        !registry_path.exists(),
-        "builtin uninstall created a bundle registry"
+        "uninstall of a never-installed bundle unexpectedly succeeded"
     );
 
     fs::remove_dir_all(&data_root)?;
@@ -324,15 +280,15 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
         stdout.lines().collect::<Vec<_>>(),
         vec![
             "format: public-v1",
-            "name: hya/public-fixture",
+            "name: hya/valid-public",
             "version: 1.0.0",
             "publisher: hya",
             "origin: package",
             "state: inspected",
             "immutable: false",
-            "source_digest: e622dbe1b0fab92a009516f8c887a3ebcacd54b0fe170518fa8b0d4b919aac6c",
-            "prepared_digest: 57edac60c4b049ef5b1d5402b80789bf5365afc3cf5b72b02601c570f70fd6e8",
-            "agent: public-fixture-lead",
+            "source_digest: df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
+            "prepared_digest: 1d36ac29eab07335cdf89dff96a3e142b8fcd3c9ef71d80d9af3a2f043e3aa39",
+            "agent: valid-public-lead",
         ],
         "unexpected public package info:\n{stdout}"
     );
@@ -434,10 +390,9 @@ You are the resource info lead.
     ))?;
     let registry_path_string = registry_path.to_string_lossy().into_owned();
     let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
-    let builtins = hya_app::builtin_catalog()?;
     let installed = registry
         .install(
-            builtins.bundles(),
+            &[],
             hya_store::BundleInstallCandidate {
                 source_digest: [0x52; 32],
                 prepared_digest: prepared.digest().to_owned(),
@@ -514,8 +469,7 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
         return Err("prepared bundle is missing".into());
     };
     assert_eq!(bundle.identity.id, "hya/archive-js");
-    assert_eq!(bundle.agents.len(), 1);
-    assert_eq!(bundle.agent.stable_id.as_str(), "archive-js-lead");
+    assert_eq!(bundle.agent.id.as_str(), "archive-js-lead");
     assert_eq!(bundle.tools.len(), 1);
     assert_eq!(bundle.hooks.len(), 1);
     assert_eq!(bundle.extensions.len(), 1);

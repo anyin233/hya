@@ -32,11 +32,7 @@ agent:
     )
 }
 
-fn installed_duplicate_package_source(
-    root: &str,
-    local_agent_id: &str,
-    stable_agent_id: &str,
-) -> BundleSource {
+fn installed_duplicate_package_source(root: &str, stable_agent_id: &str) -> BundleSource {
     let manifest = format!(
         r#"kind: AgentBundle
 identity:
@@ -69,7 +65,10 @@ fn digest(bytes: &[u8]) -> String {
 fn empty_prepared_catalog_is_accepted() {
     // Built-in agents no longer live in bundles, so a fresh install has zero
     // installed bundles and must still produce a usable catalog.
-    let catalog = BundleCatalog::from_prepared(&[]).expect("empty catalog");
+    let catalog = BundleCatalog::from_prepared(&[]);
+    let Ok(catalog) = catalog else {
+        panic!("empty catalog must be valid: {catalog:?}");
+    };
     assert!(catalog.bundles().is_empty());
     assert!(catalog.resolve_agent("anything").is_none());
 }
@@ -87,8 +86,10 @@ fn zero_bundle_prepared_document_yields_an_empty_catalog() {
         prepared.bundles().is_empty(),
         "fixture must remain a zero-bundle prepared document"
     );
-    let catalog =
-        BundleCatalog::from_prepared(prepared.bundles()).expect("zero bundles is a valid catalog");
+    let catalog = BundleCatalog::from_prepared(prepared.bundles());
+    let Ok(catalog) = catalog else {
+        panic!("zero bundles must be a valid catalog: {catalog:?}");
+    };
     assert!(catalog.bundles().is_empty());
 }
 
@@ -259,7 +260,6 @@ agent:
 fn catalog_rejects_duplicate_bundle_identity_with_disjoint_exports() {
     let alpha = prepare_package(installed_duplicate_package_source(
         "duplicate-package-alpha",
-        "alpha",
         "duplicate-alpha",
     ));
     let Ok(alpha) = alpha else {
@@ -267,7 +267,6 @@ fn catalog_rejects_duplicate_bundle_identity_with_disjoint_exports() {
     };
     let beta = prepare_package(installed_duplicate_package_source(
         "duplicate-package-beta",
-        "beta",
         "duplicate-beta",
     ));
     let Ok(beta) = beta else {

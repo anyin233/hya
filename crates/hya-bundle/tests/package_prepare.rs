@@ -33,7 +33,6 @@ fn public_package_source_reuses_v1_preparer_as_installed_mutable_origin() {
         panic!("public package preparation failed: {prepared:?}");
     };
     assert_eq!(prepared.bundles().len(), 1);
-    let bundle = &prepared.bundles()[0];
 }
 
 #[test]
@@ -47,5 +46,4 @@ fn installed_prepared_catalog_round_trips_canonically() {
         panic!("installed prepared catalog decode failed: {decoded:?}");
     };
     assert_eq!(decoded.bundles().len(), 1);
-    let bundle = &decoded.bundles()[0];
 }

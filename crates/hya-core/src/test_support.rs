@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
 use hya_proto::AgentName;
 use hya_tool::ToolRegistry;
 
-use crate::agent_catalog::AgentCatalog;
 use crate::RuntimeRegistry;
+use crate::agent_catalog::AgentCatalog;
 
 pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
     // `build`, `general`, and the reserved system agents are compiled-in

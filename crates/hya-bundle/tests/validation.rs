@@ -5,13 +5,7 @@ use hya_bundle::{
     prepare_package,
 };
 
-fn agent_source(
-    root: &str,
-    bundle_id: &str,
-    local_id: &str,
-    stable_id: &str,
-    can_spawn: &[&str],
-) -> BundleSource {
+fn agent_source(root: &str, bundle_id: &str, stable_id: &str, can_spawn: &[&str]) -> BundleSource {
     let can_spawn = if can_spawn.is_empty() {
         "      []".to_string()
     } else {
@@ -90,7 +84,6 @@ fn can_spawn_targets_are_recorded_verbatim_and_resolved_later() {
     let prepared = prepare_package(agent_source(
         "alpha",
         "hya/alpha",
-        "lead",
         "alpha-lead",
         &["missing-agent", "beta-worker", "missing-agent"],
     ));
@@ -113,13 +106,16 @@ fn stable_agent_id_cannot_shadow_a_qualified_catalog_id() {
     let intruder = prepare_package(agent_source(
         "alpha",
         "hya/alpha",
-        "intruder",
         "bundle:hya/beta/agent/beta-worker",
         &[],
-    ))
-    .expect("intruder package prepares on its own");
-    let beta = prepare_package(agent_source("beta", "hya/beta", "worker", "beta-worker", &[]))
-        .expect("beta package prepares");
+    ));
+    let Ok(intruder) = intruder else {
+        panic!("intruder package must prepare on its own: {intruder:?}");
+    };
+    let beta = prepare_package(agent_source("beta", "hya/beta", "beta-worker", &[]));
+    let Ok(beta) = beta else {
+        panic!("beta package must prepare: {beta:?}");
+    };
     // The clash only exists once both bundles are in one catalog.
     let result =
         BundleCatalog::from_prepared(&[intruder.bundles(), beta.bundles()].concat()).map(|_| ());
@@ -987,10 +983,14 @@ agent:
 fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
     // Two independently prepared packages may each carry `same`; the clash is
     // detected when they meet in one catalog.
-    let first = prepare_package(agent_source("a", "hya/a", "lead", "same", &[]))
-        .expect("first package prepares");
-    let second = prepare_package(agent_source("b", "hya/b", "lead", "same", &[]))
-        .expect("second package prepares");
+    let first = prepare_package(agent_source("a", "hya/a", "same", &[]));
+    let Ok(first) = first else {
+        panic!("first package must prepare: {first:?}");
+    };
+    let second = prepare_package(agent_source("b", "hya/b", "same", &[]));
+    let Ok(second) = second else {
+        panic!("second package must prepare: {second:?}");
+    };
     let duplicate =
         BundleCatalog::from_prepared(&[first.bundles(), second.bundles()].concat()).map(|_| ());
     assert_eq!(

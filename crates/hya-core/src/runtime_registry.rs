@@ -735,7 +735,9 @@ impl TurnBinding {
         &self,
         requested: Option<&str>,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        self.snapshot.catalog.require(requested.unwrap_or("general"))
+        self.snapshot
+            .catalog
+            .require(requested.unwrap_or("general"))
     }
 
     /// Resolve whether `caller` may spawn `target`.
@@ -2307,8 +2309,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
-        PreparedBundle, PreparedResource, SourceFile, SpawnLifecycle, prepare_package,
+        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedBundle,
+        PreparedResource, SourceFile, SpawnLifecycle, prepare_package,
     };
     use hya_proto::{AgentName, ToolName};
     use hya_tool::{
@@ -2421,7 +2423,7 @@ mod tests {
                 publisher: "hya-tests".to_string(),
             },
             digest: "test-only".to_string(),
-            agent: agent,
+            agent,
             tools: Vec::new(),
             skills,
             mcp: Vec::new(),
@@ -2461,7 +2463,9 @@ mod tests {
         let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let workdir = PathBuf::from("/tmp/hya-resource-view-pin");
         let binding = registry.bind_turn(&workdir).unwrap();
-        let policy = binding.agent_resource_policy_on_plane("pin-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("pin-agent", AgentToolPlane::Full)
+            .unwrap();
         let before = binding.compile_agent_resources(&policy).unwrap();
         assert!(before.resolve_tool("read").is_some());
         assert!(before.resolve_tool("dynamic_marker").is_none());
@@ -2489,9 +2493,7 @@ mod tests {
                 let catalog = Arc::new(
                     TestCatalog::from_prepared(&[bundle_with_agent(
                         "hya/source-identity",
-                        agent(
-                            "source-identity", ResourceView::default(),
-                        ),
+                        agent("source-identity", ResourceView::default()),
                         Vec::new(),
                     )])
                     .unwrap(),
@@ -3194,7 +3196,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-miss",
                 agent(
-                    "alias-miss", ResourceView {
+                    "alias-miss",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -3230,7 +3233,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-denied",
                 agent(
-                    "alias-denied", ResourceView {
+                    "alias-denied",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: vec!["harness:tool/read".to_string()],
                         aliases: BTreeMap::from([(
@@ -3248,7 +3252,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-denied"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("alias-denied", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("alias-denied", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::UnknownResourceReference { .. }) => {}
             Ok(_) => panic!("expected denied alias target to fail"),
@@ -3262,7 +3268,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-qualified",
                 agent(
-                    "alias-qualified", ResourceView {
+                    "alias-qualified",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -3280,7 +3287,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-qualified"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("alias-qualified", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("alias-qualified", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::AliasCollision { name, .. }) => {
                 assert_eq!(name, "harness:tool/read");
@@ -3296,7 +3305,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-collide",
                 agent(
-                    "alias-collide", ResourceView {
+                    "alias-collide",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -3314,7 +3324,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-collide"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("alias-collide", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("alias-collide", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::AliasCollision { bundle_id, name }) => {
                 assert_eq!(bundle_id, "hya/alias-collide");
@@ -3346,7 +3358,9 @@ agent:
         let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let workdir = tempfile_skill_workdir("shared", "HARNESS");
         let binding = registry.bind_turn(&workdir).unwrap();
-        let policy = binding.agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full)
+            .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         let names = compiled
             .skills()
@@ -3366,7 +3380,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/skill-collision",
                 agent(
-                    "skill-agent", ResourceView {
+                    "skill-agent",
+                    ResourceView {
                         allow: vec![
                             "harness:skill/shared".to_string(),
                             "harness:tool/skill".to_string(),
@@ -3419,7 +3434,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/schema-dispatch",
                 agent(
-                    "sd-agent", ResourceView {
+                    "sd-agent",
+                    ResourceView {
                         allow: vec![
                             "harness:tool/read".to_string(),
                             "harness:tool/write".to_string(),
@@ -3440,7 +3456,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-schema-dispatch"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("sd-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("sd-agent", AgentToolPlane::Full)
+            .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         let schema_names = compiled
             .tool_schemas()
@@ -3559,7 +3577,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/qualified-map",
                 agent(
-                    "q-agent", ResourceView {
+                    "q-agent",
+                    ResourceView {
                         allow: vec![
                             "harness:tool/read".to_string(),
                             "harness:tool/write".to_string(),
@@ -3581,7 +3600,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-qualified-map"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("q-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("q-agent", AgentToolPlane::Full)
+            .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         let schema_names = compiled
             .tool_schemas()
@@ -3638,7 +3659,8 @@ agent:
                 bundle_with_agent(
                     "hya/mcp-allow",
                     agent(
-                        "allow-mcp", ResourceView {
+                        "allow-mcp",
+                        ResourceView {
                             allow: vec!["harness:mcp/mcp__fixture__ping".to_string()],
                             deny: Vec::new(),
                             aliases: BTreeMap::new(),
@@ -3650,7 +3672,8 @@ agent:
                 bundle_with_agent(
                     "hya/mcp-deny",
                     agent(
-                        "deny-mcp", ResourceView {
+                        "deny-mcp",
+                        ResourceView {
                             allow: Vec::new(),
                             deny: vec!["harness:mcp/mcp__fixture__ping".to_string()],
                             aliases: BTreeMap::new(),
@@ -3683,7 +3706,11 @@ agent:
         let binding = registry.bind_turn(workdir).unwrap();
 
         let full = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(full.resolve_tool("mcp__fixture__ping").is_some());
         assert!(
@@ -3707,13 +3734,21 @@ agent:
         );
 
         let allowed = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("allow-mcp", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("allow-mcp", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(allowed.resolve_tool("mcp__fixture__ping").is_some());
         assert!(allowed.resolve_tool("read").is_none());
 
         let denied = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("deny-mcp", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("deny-mcp", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(denied.resolve_tool("mcp__fixture__ping").is_none());
         assert!(denied.resolve_tool("read").is_some());
@@ -3728,7 +3763,11 @@ agent:
             })
             .unwrap();
         let pinned = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(
             pinned.resolve_tool("mcp__fixture__ping").is_some(),
@@ -3736,7 +3775,11 @@ agent:
         );
         let fresh = registry.bind_turn(workdir).unwrap();
         let after = fresh
-            .compile_agent_resources(&fresh.agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &fresh
+                    .agent_resource_policy_on_plane("full-mcp", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(after.resolve_tool("mcp__fixture__ping").is_none());
     }
@@ -3755,7 +3798,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/global-ref",
                 agent(
-                    "wrong-kind", ResourceView {
+                    "wrong-kind",
+                    ResourceView {
                         allow: vec!["harness:skill/read".to_string()],
                         deny: Vec::new(),
                         aliases: BTreeMap::new(),
@@ -3770,7 +3814,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-global-wrong-kind"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("wrong-kind", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("wrong-kind", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::UnknownResourceReference { reference, .. }) => {
                 assert_eq!(reference, "harness:skill/read");
@@ -3783,7 +3829,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/global-ref",
                 agent(
-                    "ambiguous", ResourceView {
+                    "ambiguous",
+                    ResourceView {
                         allow: vec!["shared".to_string()],
                         deny: Vec::new(),
                         aliases: BTreeMap::new(),
@@ -3802,7 +3849,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-global-ambiguous"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("ambiguous", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("ambiguous", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::NamespaceCollision { name, .. }) => {
                 assert_eq!(name, "shared");
@@ -3818,7 +3867,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-self",
                 agent(
-                    "alias-self", ResourceView {
+                    "alias-self",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -3836,7 +3886,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-self"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("alias-self", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("alias-self", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::AliasCollision { name, .. }) => {
                 assert_eq!(name, "read");
@@ -3860,7 +3912,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/cross-kind-ok",
                 agent(
-                    "cross-ok", ResourceView {
+                    "cross-ok",
+                    ResourceView {
                         allow: vec![
                             "harness:tool/read".to_string(),
                             "bundle:hya/cross-kind-ok/skill/read".to_string(),
@@ -3878,7 +3931,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-cross-kind-ok"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("cross-ok", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("cross-ok", AgentToolPlane::Full)
+            .unwrap();
         let compiled = binding
             .compile_agent_resources(&policy)
             .expect("tool and skill may share public spelling `read`");
@@ -3901,7 +3956,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/tool-mcp-collide",
                 agent(
-                    "collide", ResourceView {
+                    "collide",
+                    ResourceView {
                         allow: vec![
                             "harness:tool/read".to_string(),
                             "harness:mcp/mcp__fixture__ping".to_string(),
@@ -3939,7 +3995,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-tool-mcp-collide"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("collide", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("collide", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::NamespaceCollision { name, .. })
             | Err(BundleError::AliasCollision { name, .. }) => {
@@ -3964,7 +4022,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/alias-ambiguous",
                 agent(
-                    "alias-amb", ResourceView {
+                    "alias-amb",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([("marker".to_string(), "shared".to_string())]),
@@ -3982,7 +4041,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-ambiguous"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("alias-amb", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("alias-amb", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::NamespaceCollision { name, .. }) => {
                 assert_eq!(name, "shared");
@@ -4053,7 +4114,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/view-alias-suppress",
                 agent(
-                    "suppress-agent", ResourceView {
+                    "suppress-agent",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -4072,7 +4134,11 @@ agent:
             .bind_turn(Path::new("/tmp/hya-view-alias-suppress"))
             .unwrap();
         let compiled = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("suppress-agent", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("suppress-agent", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .expect("explicit view alias of apply_patch must compile");
 
         assert!(
@@ -4116,7 +4182,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/view-alias-candidate-collide",
                 agent(
-                    "collide-agent", ResourceView {
+                    "collide-agent",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -4134,7 +4201,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-view-alias-candidate-collide"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("collide-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("collide-agent", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::AliasCollision { name, .. }) => {
                 assert_eq!(name, "patch");
@@ -4163,7 +4232,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/mcp-skill-ok",
                 agent(
-                    "mcp-skill-ok", ResourceView {
+                    "mcp-skill-ok",
+                    ResourceView {
                         allow: vec![
                             "harness:mcp/mcp__fixture__ping".to_string(),
                             "bundle:hya/mcp-skill-ok/skill/pingy".to_string(),
@@ -4198,7 +4268,11 @@ agent:
             .bind_turn(Path::new("/tmp/hya-mcp-skill-ok"))
             .unwrap();
         let compiled = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("mcp-skill-ok", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("mcp-skill-ok", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .expect("MCP and skill may share public spelling `pingy`");
         let mcp = compiled
             .resolve_tool("pingy")
@@ -4242,7 +4316,11 @@ agent:
             .unwrap();
         let binding = registry.bind_turn(Path::new("/tmp/hya-mcp-alias")).unwrap();
         let compiled = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("mcp-alias", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("mcp-alias", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(compiled.resolve_tool("mcp__fixture__ping").is_some());
         assert!(
@@ -4313,7 +4391,8 @@ agent:
                 bundle_with_agent(
                     "hya/allow-alias",
                     agent(
-                        "allow-alias", ResourceView {
+                        "allow-alias",
+                        ResourceView {
                             allow: vec!["patch".to_string()],
                             deny: Vec::new(),
                             aliases: BTreeMap::new(),
@@ -4325,7 +4404,8 @@ agent:
                 bundle_with_agent(
                     "hya/deny-alias",
                     agent(
-                        "deny-alias", ResourceView {
+                        "deny-alias",
+                        ResourceView {
                             allow: Vec::new(),
                             deny: vec!["patch".to_string()],
                             aliases: BTreeMap::new(),
@@ -4359,7 +4439,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/filtered-stable",
                 agent(
-                    "filtered-stable", ResourceView {
+                    "filtered-stable",
+                    ResourceView {
                         allow: vec!["harness:tool/read".to_string()],
                         deny: Vec::new(),
                         aliases: BTreeMap::from([(
@@ -4377,7 +4458,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-filtered-stable"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("filtered-stable", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("filtered-stable", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::AliasCollision { name, .. }) => {
                 assert_eq!(name, "write");
@@ -4401,7 +4484,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/facade-alias",
                 agent(
-                    "facade-alias", ResourceView {
+                    "facade-alias",
+                    ResourceView {
                         allow: vec![
                             "harness:tool/skill".to_string(),
                             "bundle:hya/facade-alias/skill/bundle-skill".to_string(),
@@ -4423,7 +4507,11 @@ agent:
             .bind_turn(Path::new("/tmp/hya-facade-alias"))
             .unwrap();
         let compiled = binding
-            .compile_agent_resources(&binding.agent_resource_policy_on_plane("facade-alias", AgentToolPlane::Full).unwrap())
+            .compile_agent_resources(
+                &binding
+                    .agent_resource_policy_on_plane("facade-alias", AgentToolPlane::Full)
+                    .unwrap(),
+            )
             .unwrap();
         assert!(compiled.resolve_tool("load_skill").is_some());
         assert!(
@@ -4498,7 +4586,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/no-facade",
                 agent(
-                    "no-facade", ResourceView {
+                    "no-facade",
+                    ResourceView {
                         allow: Vec::new(),
                         deny: vec!["harness:tool/skill".to_string()],
                         aliases: BTreeMap::new(),
@@ -4512,7 +4601,9 @@ agent:
         let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let workdir = tempfile_skill_workdir("workdir-only", "MUST_NOT_INLINE");
         let binding = registry.bind_turn(&workdir).unwrap();
-        let policy = binding.agent_resource_policy_on_plane("no-facade", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("no-facade", AgentToolPlane::Full)
+            .unwrap();
         match binding.compile_agent_resources(&policy) {
             Err(BundleError::InvalidManifest { detail, .. }) => {
                 assert!(
@@ -4546,7 +4637,8 @@ agent:
             TestCatalog::from_prepared(&[bundle_with_agent(
                 bundle_id,
                 agent(
-                    "nested-agent", ResourceView {
+                    "nested-agent",
+                    ResourceView {
                         allow: vec![format!("bundle:{bundle_id}/skill/docs")],
                         deny: Vec::new(),
                         aliases: BTreeMap::new(),
@@ -4583,9 +4675,7 @@ agent:
         let bundle_id = "hya/sidecar-map";
         let mut bundle = bundle_with_agent(
             bundle_id,
-            agent(
-                "sidecar-agent", ResourceView::default(),
-            ),
+            agent("sidecar-agent", ResourceView::default()),
             Vec::new(),
         );
         bundle.tools.push(PreparedResource {
@@ -4606,7 +4696,9 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-sidecar-tool-map"))
             .unwrap();
-        let policy = binding.agent_resource_policy_on_plane("sidecar-agent", AgentToolPlane::Full).unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("sidecar-agent", AgentToolPlane::Full)
+            .unwrap();
         let sidecar_tool = ResolvedTool {
             tool: Arc::new(NoopTool::new(format!("bundle:{bundle_id}/tool/echo"))),
             permission: ToolPermission::Tool,
@@ -4649,7 +4741,8 @@ agent:
         let beta_hook_id = format!("bundle:{beta_bundle_id}/hook/tool.execute.before");
 
         let mut alpha = agent(
-            "alpha-agent", ResourceView {
+            "alpha-agent",
+            ResourceView {
                 allow: vec![alpha_tool_id.clone()],
                 deny: Vec::new(),
                 aliases: BTreeMap::new(),
@@ -4659,7 +4752,8 @@ agent:
         alpha.hook_refs = vec![alpha_hook_id.clone()];
 
         let mut beta = agent(
-            "beta-agent", ResourceView {
+            "beta-agent",
+            ResourceView {
                 allow: vec![beta_tool_id.clone()],
                 deny: Vec::new(),
                 aliases: BTreeMap::new(),
@@ -4704,8 +4798,7 @@ agent:
             aliases: Vec::new(),
         }];
 
-        let catalog =
-            Arc::new(TestCatalog::from_prepared(&[alpha_bundle, beta_bundle]).unwrap());
+        let catalog = Arc::new(TestCatalog::from_prepared(&[alpha_bundle, beta_bundle]).unwrap());
         let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-disjoint-sidecars"))

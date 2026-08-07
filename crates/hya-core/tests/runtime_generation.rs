@@ -98,10 +98,7 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
     let binding = registry.bind_turn(workdir.path()).unwrap();
 
     assert_eq!(
-        binding
-            .resolve_requested_agent(None)
-            .unwrap()
-            .stable_id,
+        binding.resolve_requested_agent(None).unwrap().stable_id,
         "general"
     );
     assert!(matches!(
