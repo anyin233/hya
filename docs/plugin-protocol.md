@@ -64,9 +64,10 @@ use the literal prefix `hook/` plus the wire name, for example
 
 Guard refusal on the wire is normally a **successful** result with
 `"outcome": "veto"` (see `tool.execute.before`). A JSON-RPC error from a
-**Safe**-posture guard is also treated as a veto by the host (see
-[Hook posture](#hook-posture)). Code `1` is the reserved app error constant for
-an explicit veto-style RPC error.
+**Safe**-posture `tool.execute.before` plugin is also treated as a veto by the
+host (see [Hook posture](#hook-posture)). That conversion does **not** apply to
+`permission.ask`. Code `1` is the reserved app error constant for an explicit
+veto-style RPC error.
 
 ---
 
@@ -112,7 +113,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `protocol_version` | Must be `1` (`PROTOCOL_VERSION`) or the host aborts with protocol mismatch. |
 | `plugin.id` | **Must** equal the configured / manifest id or the host aborts with `IdentityMismatch`. |
 | `plugin.version` | Free-form version string. |
-| `plugin.kind` | Wire snake_case: `rust` (default), `compat`, `other`. Alias `opencode` is accepted for `compat`. |
+| `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `compat`, `other`. Alias `opencode` is accepted for `compat`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Optional per-hook `posture`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
 | `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |
@@ -140,7 +141,7 @@ Posture is the **per-hook failure policy**. Wire values (serde snake_case):
 
 | Posture | On hook call failure or timeout |
 | --- | --- |
-| **Safe** | Host treats the failure as a **veto** of the action (for guard hooks such as `tool.execute.before`). |
+| **Safe** | For **`tool.execute.before` only**, the host converts transport/parse failure into a **veto** (`guard failed safe: …`). Other hooks that declare Safe (including `permission.ask`) do **not** get that conversion — see each hook. |
 | **Open** | Failure is logged / skipped; the pipeline continues with the prior input. |
 
 **Defaults** (`HookName::default_posture`):
@@ -235,7 +236,7 @@ the wire method, params, outcomes, and default posture.
 - **Role:** enrichment
 - **Default posture:** Open
 
-### `permission.ask` (guard)
+### `permission.ask` (permission chain — not a Safe-veto guard)
 
 - **Method:** `hook/permission.ask`
 - **Params:** `{ "session"?, "action", "resource" }`
@@ -247,7 +248,15 @@ the wire method, params, outcomes, and default posture.
   - `defer` (try next plugin / fall through to user ask)
 - **Role:** first non-`defer` answer decides
   ([`permission_bridge.rs`](../crates/hya-plugin/src/permission_bridge.rs))
-- **Default posture:** Safe
+- **Default posture:** Safe (registration default only)
+- **Failure policy:** posture is **not** a veto switch here. The host only
+  skips plugins with no registered posture; serialize failure, RPC error, or
+  undecodable reply all `continue` to the next plugin. If every plugin defers
+  or errors, the interceptor returns `None` and the session falls through to
+  the interactive user ask. Contrast `tool.execute.before`, the sole hook
+  where Safe posture turns a call failure into a veto
+  (`GUARD_FAILED_SAFE` in
+  [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)).
 
 ### Dead hooks (registered but never dispatched)
 
@@ -277,7 +286,7 @@ handshake timing.
 | --- | --- |
 | **Enrichment** (`command.execute.before`, `message.user.before`, `experimental.text.complete`, `chat.params`, `tool.execute.after`) | **Fold:** plugin *N*’s output becomes plugin *N+1*’s input. A failing Open-posture plugin is skipped; its input is passed through. |
 | **Guard** (`tool.execute.before`) | **Short-circuit:** first `veto` returns immediately. Safe-posture failures become `guard failed safe: <plugin> (<error>)`. |
-| **`permission.ask`** | First non-`defer` outcome wins; all-defer falls through to the normal user-ask path. |
+| **`permission.ask`** | First non-`defer` outcome wins. Serialize/RPC/decode failures **skip** that plugin (no Safe veto). All-defer **or** all-error falls through to the normal user-ask path. |
 
 ---
 

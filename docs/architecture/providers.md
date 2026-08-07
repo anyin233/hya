@@ -79,7 +79,9 @@ the same caps for every model it serves. The context window surfaced by
 default, not the model's real limit.
 
 `DevProvider` claims the same set **minus** `reasoning_request` (left false via
-`Capabilities::default()`), which is why it accepts any `ModelRef`.
+`Capabilities::default()`). It accepts any `ModelRef` because
+`capabilities(&self, _model)` always returns `Some(dev_capabilities())` and
+ignores the model argument — not because of the capability flag set.
 `FakeProvider` uses the same pattern as Dev for tool/usage/context flags and also
 leaves `reasoning_request` false.
 
@@ -116,7 +118,13 @@ parameter, so no unsupported field is sent upstream.
 
 **Catalog.** `ProviderRouter::catalog` flattens every provider's `catalog()`,
 sorts by `(provider_id, model_id)`, and dedups identical provider/model pairs.
-That ordering is what `hya-backend models` and `GET /api/model` expose.
+`GET /api/model` (and related Compat catalog views) expose that router catalog
+via `provider_catalog()`. **`hya-backend models` does not** call
+`ProviderRouter::catalog`: it lists `RuntimeConfig.models` built from the parsed
+`providers:` block (`config::model_entries`), formats each as
+`{provider}/{id}`, then `sort()`s the joined strings with **no** dedup
+([`models_cmd.rs`](../../crates/hya-backend/src/models_cmd.rs)). Content often
+overlaps in practice; the mechanism and sort key differ.
 
 **Identities.** `configured_identities_v1` aggregates per-provider fingerprints
 in insertion order, or returns `None` if **any** provider returns `None` or an

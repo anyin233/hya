@@ -408,10 +408,12 @@ only `File not found`. The behavior is covered by a focused suggestion test.
 ### Schema and validation
 
 The advertised WRITE schema requires `filePath` and `content`; it also lists
-`path` for compatibility. Runtime deserialization stores the path in one optional
-field and accepts `filePath` as an alias (`path` is runtime-only). Provider-side
-schema validation can require `filePath`.
-([crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96))
+`path` under `properties` for compatibility (not runtime-only). Runtime
+deserialization stores a single optional path field named `path` with
+`#[serde(alias = "filePath")]` — so **`filePath` is the serde alias of `path`**,
+while the model-facing `required` array still names `filePath` and `content`.
+([crates/hya-tool/src/write.rs:15-41](../../crates/hya-tool/src/write.rs#L15-L41),
+[crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96))
 
 Paths use the same lexical workdir resolution as READ. An outside path requires
 `Action::ExternalDirectory` on its parent wildcard (`<parent>/*`) before
@@ -500,23 +502,61 @@ does not apply a local size cap to the diff or output.
 
 ## APPLY_PATCH
 
-The parameter is `patchText` (runtime alias `patch`) carrying a Codex/Compat-style
+The parameter is `patchText` (serde alias `patch`) carrying a Codex/Compat-style
 patch envelope. Supported hunk kinds are **add**, **update**, **delete**, and
-**move**.
-([crates/hya-tool/src/apply_patch/mod.rs:16-23](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L23),
+**move** (move is an update header plus an optional move line).
+([crates/hya-tool/src/apply_patch/mod.rs:16-55](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L55),
+[crates/hya-tool/src/apply_patch/parse.rs](../../crates/hya-tool/src/apply_patch/parse.rs),
 [crates/hya-tool/src/apply_patch/apply.rs:59-121](../../crates/hya-tool/src/apply_patch/apply.rs#L59-L121))
+
+### Patch envelope grammar
+
+Parsed by `parse_patch` after CRLF → LF normalization:
+
+1. **Sentinels (required):** a line whose trim is exactly `*** Begin Patch`, then
+   later a line whose trim is exactly `*** End Patch`. Begin must precede End;
+   missing either is an input error (`invalid patch format: …`).
+2. **Between the sentinels**, file operations are introduced by headers:
+   - `*** Add File: <path>` — body lines until the next file header must **each**
+     start with `+` (any other prefix → `add file lines must start with '+'`).
+     The `+` is stripped; lines are joined with `\n` and a trailing newline when
+     non-empty.
+   - `*** Delete File: <path>` — no body.
+   - `*** Update File: <path>` — optionally the **very next** line may be
+     `*** Move to: <path>` (move destination). Then zero or more update chunks.
+3. **Update chunks** start with a line beginning `@@` (optional trailing context
+   text after `@@`). Chunk body lines use a one-character prefix:
+   - leading space — context (present in both old and new)
+   - `-` — removed line
+   - `+` — added line  
+   A line exactly `*** End of File` ends the chunk and marks end-of-file matching.
+4. **Empty / unrecognized body:** if no recognized headers appear between Begin
+   and End, the parser returns zero hunks; the tool then rejects with
+   `patch rejected: empty patch`.
+
+Example:
+
+```text
+*** Begin Patch
+*** Add File: notes/hello.txt
++hello
+*** Update File: src/main.rs
+@@ fn main
+-old
++new
+*** Delete File: obsolete.txt
+*** End Patch
+```
 
 Every path in the envelope must be relative and must not escape the session
 workdir: an absolute path or a `..` component is an **input error**. Every
 touched path (and move destination) is permission-checked as `Action::Edit`
 **before** any file is written, so a denial leaves the whole patch unapplied.
-([crates/hya-tool/src/apply_patch/mod.rs:16-23](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L23),
-[crates/hya-tool/src/apply_patch/mod.rs:16-23](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L23))
+([crates/hya-tool/src/apply_patch/mod.rs](../../crates/hya-tool/src/apply_patch/mod.rs))
 
 The result is a Compat-style title plus an aggregate diff and per-file metadata.
 After application, the same post-edit formatter + BOM re-sync + LSP-diagnostics
 step as write/edit runs for non-delete paths.
-([crates/hya-tool/src/apply_patch/mod.rs:16-23](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L23))
 
 As noted under advertisement, `apply_patch` is the only file-mutation tool
 advertised to gpt-* models under the `use_patch` filter.
