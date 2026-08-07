@@ -1,4 +1,8 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 /// Process-local environment facts rendered into the Harness prompt layer.
 pub struct PromptEnv {
@@ -30,6 +34,43 @@ pub fn today() -> String {
 /// callers re-export rather than reimplement walk order.
 #[must_use]
 pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
+    let chain = context_chain(workdir);
+    let stamps: Vec<_> = chain.iter().map(file_stamp).collect();
+
+    // Serve from cache only when the chain is identical AND every file's
+    // (mtime, len) is unchanged. The chain walk is re-run every call — it is
+    // cheap `is_file()` probes — because a NEWLY added AGENTS.md higher up must
+    // invalidate, and validating only previously-seen files would miss it.
+    if let Some(cache) = context_cache().lock().ok()
+        && let Some(entry) = cache.get(&chain)
+        && entry.stamps == stamps
+    {
+        return entry.files.clone();
+    }
+
+    let mut files = Vec::new();
+    for path in &chain {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            CONTEXT_FILE_READS.fetch_add(1, Ordering::Relaxed);
+            files.push((path.to_string_lossy().into_owned(), content));
+        }
+    }
+    if let Ok(mut cache) = context_cache().lock() {
+        // Unbounded growth is not a concern: keys are workdir chains, of which a
+        // process sees a handful. Clear rather than evict if that ever changes.
+        cache.insert(
+            chain,
+            CachedChain {
+                stamps,
+                files: files.clone(),
+            },
+        );
+    }
+    files
+}
+
+/// `AGENTS.md` paths from `workdir` up to `$HOME`, parent-first.
+fn context_chain(workdir: &Path) -> Vec<PathBuf> {
     let start = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut chain: Vec<PathBuf> = Vec::new();
@@ -45,13 +86,39 @@ pub fn discover_context_files(workdir: &Path) -> Vec<(String, String)> {
         dir = d.parent();
     }
     chain.reverse();
-    let mut files = Vec::new();
-    for path in chain {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            files.push((path.to_string_lossy().into_owned(), content));
-        }
+    chain
+}
+
+/// Change-detection stamp for one context file: modified time and length.
+///
+/// Length is included because coarse mtime granularity can hide a same-second
+/// rewrite.
+fn file_stamp(path: &PathBuf) -> (Option<SystemTime>, u64) {
+    match std::fs::metadata(path) {
+        Ok(meta) => (meta.modified().ok(), meta.len()),
+        Err(_) => (None, 0),
     }
-    files
+}
+
+struct CachedChain {
+    stamps: Vec<(Option<SystemTime>, u64)>,
+    files: Vec<(String, String)>,
+}
+
+fn context_cache() -> &'static Mutex<HashMap<Vec<PathBuf>, CachedChain>> {
+    static CACHE: OnceLock<Mutex<HashMap<Vec<PathBuf>, CachedChain>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static CONTEXT_FILE_READS: AtomicU64 = AtomicU64::new(0);
+
+/// Total `AGENTS.md` reads performed by [`discover_context_files`] this process.
+///
+/// Exposed so tests can prove the cache actually avoids filesystem reads; a
+/// content-equality assertion alone cannot distinguish a cache from a re-read.
+#[must_use]
+pub fn context_file_reads() -> u64 {
+    CONTEXT_FILE_READS.load(Ordering::Relaxed)
 }
 
 /// Render Environment + project-context sections without an agent base.
@@ -105,6 +172,16 @@ mod tests {
         }
     }
 
+    /// Serializes every test that calls `discover_context_files`.
+    ///
+    /// `context_file_reads()` is a process-global counter, so a concurrent test
+    /// doing its own discovery would inflate the delta and make the cache-hit
+    /// assertion pass or fail by luck.
+    fn discovery_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn tempdir(label: &str) -> PathBuf {
         let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else {
@@ -154,7 +231,90 @@ mod tests {
     }
 
     #[test]
+    fn repeat_discovery_does_not_re_read_unchanged_files() {
+        let _guard = discovery_guard();
+        let root = tempdir("cache-reads");
+        assert!(std::fs::write(root.join("AGENTS.md"), "READ_COUNT_BODY").is_ok());
+
+        let _ = discover_context_files(&root);
+        let after_first = context_file_reads();
+        let _ = discover_context_files(&root);
+        let after_second = context_file_reads();
+
+        assert_eq!(
+            after_first, after_second,
+            "an unchanged chain must be served from cache without re-reading"
+        );
+    }
+
+    #[test]
+    fn cached_discovery_returns_the_same_content_on_repeat() {
+        let _guard = discovery_guard();
+        let root = tempdir("cache-hit");
+        let file = root.join("AGENTS.md");
+        assert!(std::fs::write(&file, "CACHE_BODY_ONE").is_ok());
+
+        let first = discover_context_files(&root);
+        let second = discover_context_files(&root);
+        assert_eq!(first, second, "a repeat walk must return identical content");
+        assert!(
+            first
+                .iter()
+                .any(|(_, body)| body.contains("CACHE_BODY_ONE")),
+            "fixture body must be discovered: {first:?}"
+        );
+    }
+
+    #[test]
+    fn editing_a_context_file_invalidates_the_cache() {
+        let _guard = discovery_guard();
+        let root = tempdir("cache-edit");
+        let file = root.join("AGENTS.md");
+        assert!(std::fs::write(&file, "BEFORE_EDIT_BODY").is_ok());
+        let before = discover_context_files(&root);
+        assert!(before.iter().any(|(_, b)| b.contains("BEFORE_EDIT_BODY")));
+
+        // Rewrite with a different length so mtime-granularity cannot mask it.
+        assert!(std::fs::write(&file, "AFTER_EDIT_BODY_THAT_IS_LONGER").is_ok());
+        let after = discover_context_files(&root);
+        assert!(
+            after.iter().any(|(_, b)| b.contains("AFTER_EDIT_BODY")),
+            "an edited AGENTS.md must not serve stale cached content: {after:?}"
+        );
+        assert!(
+            !after.iter().any(|(_, b)| b.contains("BEFORE_EDIT_BODY")),
+            "stale body must be gone: {after:?}"
+        );
+    }
+
+    #[test]
+    fn adding_a_context_file_to_the_chain_invalidates_the_cache() {
+        let _guard = discovery_guard();
+        let root = tempdir("cache-add");
+        let child = root.join("nested");
+        assert!(std::fs::create_dir_all(&child).is_ok());
+        assert!(std::fs::write(child.join("AGENTS.md"), "CHILD_ONLY_BODY").is_ok());
+        let before = discover_context_files(&child);
+        let before_count = before.len();
+
+        // A NEW file appearing higher in the chain must be picked up: validating
+        // only the previously-seen files would miss this.
+        assert!(std::fs::write(root.join("AGENTS.md"), "NEWLY_ADDED_PARENT").is_ok());
+        let after = discover_context_files(&child);
+        assert!(
+            after.iter().any(|(_, b)| b.contains("NEWLY_ADDED_PARENT")),
+            "a newly added AGENTS.md must invalidate the cache: {after:?}"
+        );
+        assert_eq!(
+            after.len(),
+            before_count + 1,
+            "exactly one new entry expected: {after:?}"
+        );
+    }
+
+    #[test]
     fn discover_context_files_parent_before_child_with_project_separators() {
+        let _guard = discovery_guard();
         // No process-global HOME mutation. Unrelated ancestor AGENTS.md may appear;
         // assert only the relative order of the two fixture entries.
         let root = tempdir("discover");
