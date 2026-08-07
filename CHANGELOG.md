@@ -1,15 +1,23 @@
-# 0.34.14
+# 0.35.0
 
-- `hya-backend serve` now drains on `SIGTERM`, `SIGINT`, and `SIGHUP` instead of
-  dying by signal. The HTTP accept loop stops, the spawn supervisor shuts down,
-  and the process exits `0`. Supervisors and wrapper scripts that previously
-  observed a signal death now observe a normal exit status.
-- The agent process E2E harness (Track P) stops backends with `SIGTERM` to the
-  child's process group, waits a bounded period for a clean exit, and escalates
-  to `SIGKILL` only if that expires — preserving the no-orphan guarantee while
-  letting atexit handlers run.
-- Added `HYA_E2E_BACKEND_BIN` so an E2E run can point at an alternate backend
-  binary instead of overwriting `target/debug/hya-backend`.
-- Fixed three flaky tests: `bundle_cli` temp-path collisions, `frontend_cli`
-  `ETXTBSY` when exec'ing a freshly written binary, and admission fixtures that
-  raced a concurrent `HOME` change while recomputing a runtime fingerprint.
+- **Breaking: an `AgentBundle` now defines exactly one agent.** The manifest key
+  `agents:` (a list) becomes `agent:` (a map), `local_id` + `stable_id` collapse
+  to a single `id`, and `api_version` and `harness_access` are removed. A
+  manifest that still carries any of them is rejected by name. **Every installed
+  bundle must be reinstalled after upgrading**; a row written by an older binary
+  is skipped with a warning and shown as `unreadable (reinstall)` by
+  `hya bundle list`.
+- **A bundle agent's tool plane is host-controlled.** It is derived from the
+  agent's origin instead of declared by the author: an installed bundle agent
+  sees the internal public tool snapshot plus its own bundle resources, and
+  never a tool installed at the main-agent level, a tool installed into hya
+  directly, an MCP server's exports, or a project or user skill. Note that this
+  bounds direct use only — a bundle agent may still spawn a built-in, which runs
+  on its own full plane.
+- Fixed a cross-bundle leak: a bundle could name `bundle:<other>/tool/x` in its
+  `resource_view` and pull in another bundle's tool. Such a reference is now
+  refused.
+- Built-in agents left the bundle system. They are compiled into the binary, so
+  `bundles/builtin/` and the `hya-app` build-time prepare step are gone, their
+  ids are reserved against installed bundles, and an ordinary built-in can spawn
+  any installed bundle agent without a configuration edit.

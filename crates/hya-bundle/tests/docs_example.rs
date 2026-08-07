@@ -122,10 +122,12 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         ("tool-only", "tool-only reports zero hooks"),
         ("hook-only", "hook-only reports zero tools"),
+        ("one agent per bundle", "A bundle defines exactly one agent"),
         (
-            "multi-agent Markdown prompts",
-            "empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents",
+            "host-controlled tool plane",
+            "derived from its origin, not declared",
         ),
+        ("clamp is not a sandbox", "The clamp is not a sandbox."),
         ("bun-disjoint link/name", "bun-disjoint"),
         (
             "generic superset modules",
@@ -133,7 +135,7 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         (
             "self-contained public JS profile",
-            "The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
+            "The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
         ),
         (
             "external single-file bundling",
