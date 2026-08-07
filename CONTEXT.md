@@ -192,8 +192,9 @@ A named (`#name`) multi-subscriber endpoint. Sending to a channel fans out to ev
 **eligible** subscriber's inbox: the channel log still receives the message, but a **resident**
 subscriber whose roster status is `Done` or `Failed` is skipped so a stopped actor's inbox stops
 growing. Writer-side delivery also requires an `active` `resident_actor_claim` for residents (see
-ADR-0001 delivery rules). **Broadcast** is a well-known channel everyone joins. One delivery
-mechanism underlies both direct mail and channels.
+ADR-0001 delivery rules). There is **no** well-known auto-joined broadcast
+channel: a channel exists only after an agent `join`s it (creating it if needed).
+One delivery mechanism underlies both direct mail and channels.
 _Avoid_: room, topic, group chat
 
 **Roster**:

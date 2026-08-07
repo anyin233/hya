@@ -169,7 +169,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `color` | no | Optional display color on the prepared agent. |
 | `prompt` | conditional | Path to prompt file, or omitted when `bundle.hya.md` body supplies the prompt. |
 | `model_policy` | no | Optional `{ model, category, reasoning }` (all optional sub-fields; `deny_unknown_fields`). Per-agent model preference. |
-| `workdir` | no | Optional working-directory hint on the prepared agent. |
+| `workdir` | no | Optional working-directory string on the prepared agent. **Parsed and stored** on `PreparedAgent` and serialized into the prepared catalog. **Not applied** by the runtime today — no reader uses `PreparedAgent::workdir` to set session or tool workdirs; authors who set `workdir: subdir` get silent no-op behavior. |
 | `spawn_lifecycle` | no | `transient` (default) or `resident`. |
 | `resource_profile` | no | **Unsupported** if present — prepare fails. |
 | `harness_access` | yes | `none` \| `basic` \| `full` (see below). |

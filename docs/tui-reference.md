@@ -189,15 +189,18 @@ Inline three-way prompt titled **Permission required** with **Allow once** /
 | Escape | Reject |
 | `permission.prompt.fullscreen` (`ctrl+f`) | Toggle fullscreen |
 
-Tool-specific titles cover **bash** (icon `#`, title = tool `description` or
-`Shell command`, body `$ <command>`), Edit, Read, Glob, Grep, List, WebFetch,
-WebSearch, Task, external-directory access, repeated failure, and a generic tool
-call.
+Tool-specific titles cover **bash** (icon `#`, title falls back to
+`Shell command` when the permission payload has no `description` string — hya's
+own `shell`/`bash` tool schema has no `description` field, so native shell asks
+always use that fallback; body `$ <command>`), Edit, Read, Glob, Grep, List,
+WebFetch, WebSearch, Task, external-directory access, repeated failure, and a
+generic tool call.
 
 **Allow always** opens a Confirm/Cancel stage warning that the patterns will be
-allowed until hya is restarted. **Reject** (for child sessions, or via the
-reject path) can open a free-text **Reject permission** editor: Return confirms
-with the message, Escape cancels back.
+allowed until hya is restarted. **Reject** on a **child** session (session has
+`parentID`) opens a free-text **Reject permission** editor: Return confirms with
+the message, Escape cancels back. On a **root** session, Reject replies
+immediately with `reply: "reject"` and no message editor.
 
 ### Question prompt
 
@@ -281,12 +284,16 @@ Dedicated renderers exist for: `bash` (Shell UI), `glob`, `read`, `grep`,
 **Shell block:**
 
 ```text
-# <description>[ in <workdir>]
+# <title>[ in <workdir>]
 $ <command>
 ```
 
-ANSI is stripped from output; output is collapsed to 10 lines with click-to-expand
-and a running spinner while active.
+The title is `input.description` when present, otherwise the literal `Shell`.
+hya's `shell`/`bash` tool schema is `{command, timeout, workdir, env}` only — no
+model-authored `description` — so native shell rows render as `# Shell` (plus
+` in <workdir>` when `workdir` is set and not `.`). ANSI is stripped from
+output; output is collapsed to 10 lines with click-to-expand and a running
+spinner while active.
 
 **Generic tool:** when `session.toggle.generic_tool_output` is on, prints
 `# <tool> [k=v,…]` with output collapsed to 3 lines; otherwise a single
@@ -420,6 +427,12 @@ closed, prompt not disabled) switches to shell mode—even if the buffer already
 has text. The agent label becomes `Shell`, placeholders switch to the shell set,
 and an `esc exit shell mode` hint appears. Escape or Backspace at offset 0
 returns to normal mode.
+
+**Submit semantics:** while mode is `shell`, submitting the prompt does **not**
+send the buffer to the model. It calls `session.shell` with the buffer as
+`command` (plus current session, agent, and model), then **auto-resets** the
+prompt to `normal` mode. So `!` is an alternate submit path that runs a shell
+turn, not a cosmetic re-theme of a normal prompt.
 
 ### Prompt autocomplete
 

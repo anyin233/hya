@@ -126,11 +126,12 @@ Builtins currently include:
 | `question`, `ask_user` | `Tool` | Ask the human a select or free-text question (interaction plane). |
 | `lsp` | `Lsp` | Dispatch workspace-symbol/diagnostic-style LSP operations. |
 | `skill` | `Skill` | Load and expose local `SKILL.md` content. |
-| `list_agents` | `Tool` | List spawnable agents for the model. |
+| `list_agents` | `ReadOnly` | List spawnable agents for the model; allows without prompting under `default`. |
 | `task` | `Task` | Start foreground/background subagent member work (spawner plane). |
 | `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
-| `send`, `roster`, `channels`, `join`, `leave` | `Tool` | Team mailbox / roster / channel tools. |
+| `roster`, `channels` | `ReadOnly` | Team roster and channel list; allow without prompting under `default`. |
+| `send`, `join`, `leave` | `Tool` | Team mailbox send and channel join/leave; ask under `default`. |
 | `invalid` | `Tool` | Structured response for unknown tool calls. |
 
 Successful tool output is capped at **5000 characters** for model consumption
@@ -235,6 +236,8 @@ event folds and `last_seq` advances.
 | --- | --- |
 | `POST /sessions` | Create a session. |
 | `POST /sessions/:id/prompt` | Admit a user prompt and run one turn. |
+| `POST /sessions/:id/command` | Run a command/template turn. |
+| `POST /sessions/:id/shell` | Run a shell tool turn. |
 | `GET /sessions/:id/events` | Replay envelopes, optionally after `since_seq`. |
 | `GET /sessions/:id/stream` | Stream live envelopes as SSE. |
 
@@ -277,6 +280,12 @@ drives the hya axum `Router` with tower `oneshot` — **no TCP, no reqwest** —
 injecting the directory header on every request. This is the Rust analogue of
 the Compat adapter’s in-process `app.fetch` and the supported way to embed hya
 inside another Rust process.
+
+Callers use the exported type alias
+[`HyaNativeClient`](../crates/hya-native/src/transport.rs)
+(`pub type HyaNativeClient = ApiClient<HyaNativeTransport>`), re-exported from
+`hya_native`. That is the same typed `Client` surface as the HTTP SDK client,
+backed by the in-process transport instead of reqwest.
 
 [`spawn_event_bridge`](../crates/hya-native/src/events.rs) subscribes to
 in-process `GET /global/event` SSE, decodes frames into

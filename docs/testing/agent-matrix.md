@@ -55,12 +55,14 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 
 ### Built-in tool coverage
 
-`ToolRegistry::builtins()` registers **25** primary tool names. Track P now
-exercises **14**:
+`ToolRegistry::builtins()` registers **26** primary tool names (19 tools in the
+builtin loop, plus `shell`, the separately named `bash` entry that shares the
+shell implementation, and five aliased canonicals: `apply_patch`, `webfetch`,
+`websearch`, `todowrite`, `plan_exit`). Track P now exercises **14**:
 
-| Covered (14) | Not covered (11) |
+| Covered (14) | Not covered (12) |
 | --- | --- |
-| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid` |
+| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents` | `bash`, `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid` |
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 
