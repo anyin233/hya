@@ -25,11 +25,32 @@ Full gate (Phase 4 onward, and before the final commit):
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p hya-proto -p hya-core -p hya-store -p hya-tool -p hya-app \
+  --all-targets -- -D warnings
 cargo test --workspace --exclude hya-e2e
 cargo build -p hya-backend --bin hya-backend
 cargo test -p hya-e2e -- --test-threads=1
 ```
+
+### Pre-existing gate failures (NOT caused by this task)
+
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all --check` **already fail on `main`**, entirely inside
+`crates/hya-sdk`: 48 clippy errors (`unwrap`/`expect` in
+`reducer.rs`, `server.rs`, `store.rs`, `team.rs`, `types.rs`,
+`examples/native_spike.rs`) and 2 fmt diffs. Verified by checking that crate out
+at `main` and re-running both commands.
+
+Consequences for this task:
+
+- The clippy gate is **scoped to the crates this task touches**, as above.
+  Absorbing 48 unrelated fixes would bury the change under noise it did not
+  cause.
+- `cargo fmt --all` must **not** be run, because it rewrites `hya-sdk` files this
+  task does not otherwise touch. Use `cargo fmt -p <crate>` per crate instead.
+- Phase 8 edits `hya-sdk/src/team.rs`. Only that file is formatted and linted;
+  the crate's other pre-existing failures stay as found and are reported, not
+  silently fixed.
 
 ---
 

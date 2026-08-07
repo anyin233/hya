@@ -262,6 +262,7 @@ async fn run_member(
                 session: root,
                 agent_session: child,
                 handle,
+                parent: None,
                 agent_type: spec.agent.name.clone(),
                 mode: SubagentMode::Transient,
             },

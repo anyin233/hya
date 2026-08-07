@@ -201,7 +201,12 @@ pub struct MailMessage {
 /// Phase 4 replay as transient, idle, and task-less.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RosterEntry {
-    /// Stable team-scoped handle (mail address and UI label).
+    /// Stable **canonical path** (mail address and UI label), e.g.
+    /// `main/lead-1/worker-2`.
+    ///
+    /// There is deliberately no separate `parent` field: the path already
+    /// encodes it (`hya_proto::scope::parent_path`), and storing it twice would
+    /// create a second source of truth that can disagree with this key.
     pub handle: String,
     /// Agent's own session id.
     pub session: SessionId,
@@ -838,6 +843,7 @@ mod team_tests {
                     session: root,
                     agent_session: alice,
                     handle: "reviewer-1".to_string(),
+                    parent: None,
                     agent_type: AgentName::new("reviewer"),
                     mode: SubagentMode::Resident,
                 },
@@ -848,6 +854,7 @@ mod team_tests {
                     session: root,
                     agent_session: bob,
                     handle: "reviewer-2".to_string(),
+                    parent: None,
                     agent_type: AgentName::new("reviewer"),
                     mode: SubagentMode::Resident,
                 },

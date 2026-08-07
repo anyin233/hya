@@ -1834,6 +1834,7 @@ impl ResidentSupervisor {
                     session: root,
                     agent_session: session,
                     handle: handle.clone(),
+                    parent: None,
                     agent_type: agent.name.clone(),
                     mode: SubagentMode::Resident,
                 }],
