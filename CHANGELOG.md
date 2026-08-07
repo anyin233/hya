@@ -21,3 +21,7 @@
   `bundles/builtin/` and the `hya-app` build-time prepare step are gone, their
   ids are reserved against installed bundles, and an ordinary built-in can spawn
   any installed bundle agent without a configuration edit.
+- **The team mailbox is scoped to the hierarchy.** An agent can address its
+  parent, its siblings, and its direct reports; a cross-unit send is refused.
+  Channel keys are unit-qualified and `AgentRegistered` carries the parent path.
+  See ADR 0011.
