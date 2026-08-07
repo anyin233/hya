@@ -107,20 +107,41 @@ The third row is what makes R8 work: a legacy log has no `parent` anywhere, so
 every member becomes a direct child of `main` — one flat unit, which is exactly
 today's behavior.
 
-### `MailEndpoint` gains `Unit`
+### `MailEndpoint` is unchanged — announce is a reserved auto-joined channel
 
-```rust
-pub enum MailEndpoint {
-    Handle(String),   // canonical path
-    Channel(String),  // qualified key, see below
-    Unit(String),     // NEW: the direct children of this leader path
-}
-```
+**Correction to the first draft.** The draft added `MailEndpoint::Unit(String)`.
+That is not wire-safe. `MailEndpoint` is adjacently tagged
+(`#[serde(tag = "kind", content = "id")]`, `mail.rs:18`) and `Event`'s
+`#[serde(other)] Unknown` (`event.rs:532`) only catches an unknown **event
+type** — a `MailSent` carrying an unknown *endpoint* variant is a known type with
+an unparseable field, so an older binary would hard-error on replay instead of
+degrading. That breaks the project's stated additive-wire property.
 
-`Unit` is the announce address (R6). It is a third address form rather than a new
-`Event` variant, so `MailSent` and its whole delivery path are reused unchanged.
-The reducer fans a `Unit(L)` send out to every roster entry whose parent is `L` —
-direct children only, never deeper.
+Announce is therefore modelled with the existing `Channel` variant:
+
+- Every unit has one reserved channel, qualified key `{unit}#announce`.
+- Every agent **auto-joins its parent's announce channel** at registration, via a
+  real `ChannelJoined` event emitted alongside `AgentRegistered`.
+- `announce` is an ordinary `MailSent { to: Channel("{unit}#announce"),
+  kind: Announcement }`.
+- The write gate permits a post to `{unit}#announce` **only from that unit's
+  leader**, which is what makes it one-way (R6).
+- `#announce` is reserved: `join`, `leave`, and ordinary posts to it are refused
+  through the channel tools, and it is hidden from the `channels` listing.
+
+This is strictly better than a new variant:
+
+| Property | `MailEndpoint::Unit` | Reserved auto-joined channel |
+| --- | --- | --- |
+| Old binary reads a new log | **hard deserialize error** | parses; folds correctly |
+| Old binary delivers the announce | no | **yes** — the `ChannelJoined` events are in the log too |
+| New reducer arm needed | yes | no — existing channel fan-out |
+| `MailEndpoint` blast radius | every `match` in the workspace | none |
+
+Auto-join reaches **direct children only**, so the one-level rule of R6 falls out
+of the membership set rather than needing a special fan-out.
+
+Cost: one extra `ChannelJoined` event per agent, and one reserved channel name.
 
 ### Channel keys become unit-qualified
 
@@ -147,7 +168,7 @@ a legacy log is one flat unit under `main`. Deterministic, no store access.
 | --- | --- | --- |
 | Event | `hya-proto/src/event.rs:435` | add `parent` to `AgentRegistered` |
 | Address | `hya-proto/src/mail.rs:19` | add `Unit`; add path/leaf/qualify helpers; forbid `/` and `#` in leaves |
-| Roster | `hya-proto/src/projection.rs:203` | `RosterEntry.handle` becomes the canonical path; add `parent: Option<String>` |
+| Roster | `hya-proto/src/projection.rs:203` | `RosterEntry.handle` becomes the canonical path (no `parent` field — see below) |
 | Reducer | `hya-proto/src/projection.rs:568` | derive canonical paths; qualify channel keys; add the `Unit` fan-out arm |
 | Write gate | `hya-store/src/mailbox.rs:38,85` | resolve + `in_scope` check before the existing liveness checks |
 | Routing | `hya-core/src/engine/mailbox.rs` | scope-filter roster/channels reads; qualify join/leave; add announce |
@@ -208,9 +229,28 @@ relation. Empty groups are omitted at render time (R7).
 
 ## Back-compat matrix
 
+**`RosterEntry` needs no `parent` field.** The canonical path already encodes it:
+`parent_path("main/lead-1/worker-2") == "main/lead-1"`. Storing it separately
+would be a second source of truth that can disagree with the key. The `parent`
+field exists only on the **event**, where the reducer needs it to build the path.
+
+**AC8 restated (correction).** The first draft claimed a legacy log folds to a
+projection *equal* to today's. That is false in the literal sense: the roster,
+inbox, and channel maps are **re-keyed** from bare names to canonical paths
+(`reviewer-1` → `main/reviewer-1`, `build` → `main#build`). What is preserved is
+the **topology and every delivery outcome** — the same agents, the same inbox
+contents in the same order, one flat unit in which every agent may address every
+other. AC8 asserts that, not map equality. The re-keying is:
+
+| Legacy key | Canonical key |
+| --- | --- |
+| roster / inbox `main` | `main` |
+| roster / inbox `reviewer-1` | `main/reviewer-1` |
+| channel `build` | `main#build` |
+
 | Input | Behavior |
 | --- | --- |
-| Legacy log, no `parent` anywhere | Every member becomes a child of `main`. One flat unit. Every agent is every other agent's sibling → **today's behavior exactly**. |
+| Legacy log, no `parent` anywhere | Every member becomes a child of `main`. One flat unit. Every agent is every other agent's sibling → **today's delivery behavior exactly**, under re-keyed map keys. |
 | Legacy `MailSent { to: Handle("reviewer-1") }` | Folded via the leaf fallback: a bare leaf resolves against the roster, which is unique in a flat legacy team. |
 | Legacy `ChannelJoined { channel: "build" }` | Qualifies to `main#build`. |
 | Legacy `AgentActivityChanged { handle: "reviewer-1" }` | Same leaf fallback as mail. |

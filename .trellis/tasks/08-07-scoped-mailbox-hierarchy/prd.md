@@ -99,12 +99,15 @@ reports: main/lead-1/worker-1, main/lead-1/worker-3
 A group that is empty is omitted. `channels` is scoped the same way and labels
 each channel with the unit that owns it.
 
-### R8 — Legacy logs replay unchanged
+### R8 — Legacy logs replay with unchanged behavior
 
 - `Event::AgentRegistered` gains `parent: Option<String>` as
   `#[serde(default)]`. A `None` parent means the team root.
 - Every pre-existing event log therefore replays as **one flat unit under
-  `main`** — byte-identical observable behavior to today.
+  `main`**: the same agents, the same inbox contents in the same order, and every
+  agent still able to address every other. Map **keys** are re-canonicalized
+  (`reviewer-1` → `main/reviewer-1`, channel `build` → `main#build`); delivery
+  behavior is unchanged. See the re-keying table in `design.md`.
 - No config flag. The new behavior is the only behavior for new swarms.
 
 ## Constraints
@@ -141,9 +144,10 @@ each channel with the unit that owns it.
       leader announces in turn.
 - [ ] **AC7** `roster` returns `self`/`parent`/`peers`/`reports`, omits empty
       groups, and never contains an out-of-scope agent.
-- [ ] **AC8** An event log recorded before this change replays to a projection
-      equal to the one today's code produces, and every mailbox operation on it
-      keeps working (one flat unit under `main`).
+- [ ] **AC8** An event log recorded before this change replays to the same team
+      topology and the same delivery outcomes as today (same roster members, same
+      inbox contents in the same order, one flat unit in which every agent may
+      address every other), under canonically re-keyed maps.
 - [ ] **AC9** A cross-unit message delivered by relay through the common ancestor
       arrives, proving R5 leaves a working path.
 - [ ] **AC10** `hya-sdk::TeamProjection` folded over the same envelope stream

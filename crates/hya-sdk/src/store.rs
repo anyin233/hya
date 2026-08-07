@@ -936,8 +936,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/live_session_turn.jsonl"
         );
-        let raw =
-            std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
+        let raw = std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
         let mut store = MessageStore::default();
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
             let event: GlobalEvent = serde_json::from_str(line).expect("parse fixture line");
