@@ -124,11 +124,11 @@ Builtins currently include:
 | `shell`, `bash` | `Bash` | Two **advertised** canonical tool names (`insert_named_builtin` for `bash`) sharing one shell implementation. Not among the five **hidden** aliases (`patch`, `fetch`, `search`, `todo`, `plan`). |
 | `webfetch` (`fetch`), `websearch` (`search`) | `WebFetch` / `WebSearch` | Fetch URLs or query a configured web-search provider. |
 | `question`, `ask_user` | `Tool` | Ask the human a select or free-text question (interaction plane). |
-| `lsp` | `Tool` | Dispatch workspace-symbol/diagnostic-style LSP operations. |
-| `skill` | `Tool` | Load and expose local `SKILL.md` content. |
+| `lsp` | `Lsp` | Dispatch workspace-symbol/diagnostic-style LSP operations. |
+| `skill` | `Skill` | Load and expose local `SKILL.md` content. |
 | `list_agents` | `Tool` | List spawnable agents for the model. |
-| `task` | `Tool` | Start foreground/background subagent member work (spawner plane). |
-| `todowrite` (`todo`) | `Tool` | Store the latest session todo snapshot. |
+| `task` | `Task` | Start foreground/background subagent member work (spawner plane). |
+| `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
 | `send`, `roster`, `channels`, `join`, `leave` | `Tool` | Team mailbox / roster / channel tools. |
 | `invalid` | `Tool` | Structured response for unknown tool calls. |

@@ -72,9 +72,11 @@ Core built-ins include:
 MCP servers are configured in `config.yaml`. Enabled servers start during
 runtime composition; each exposed server tool is registered as
 `mcp__<server>__<tool>` and uses the same permission plane as native tools. The
-Compat-shaped HTTP MCP routes report status and accept compatibility add or
-connect requests, but current docs explicitly say they do not durably rewrite
-`config.yaml` or hot-plug new tools into an already-running engine.
+Compat-shaped HTTP MCP routes (`/mcp` add/connect/disconnect) do **not** durably
+rewrite `config.yaml`, but a successful reconciliation **does** publish a
+complete observation through `RuntimeRegistry` so the **next turn** can call
+newly connected tools (atomic next-turn tool callability). They are not a pure
+status-only façade.
 
 Skills are first-class runtime content. Native runtime discovery reads hya skill
 locations such as `.hya/skills` and user config skill directories, injects an

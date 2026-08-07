@@ -16,16 +16,16 @@ palette.
 
 ### Palette (default dark `hya` theme)
 
-| Role | Token | Example dark | Usage |
+| Role | Token (JSON / `Theme` field) | Example dark | Usage |
 |---|---|---|---|
 | Surface/main | `background` | `#0A0A0A` | Transcript background |
-| Surface/panel | `background_panel` | `#141414` | Header, footer, overlays |
-| Surface/element | `background_element` | `#1E1E1E` | Input row |
+| Surface/panel | `backgroundPanel` | `#141414` | Header, footer, overlays |
+| Surface/element | `backgroundElement` | `#1E1E1E` | Input row |
 | Border/default | `border` | `#484848` | Modal and picker borders |
-| Border/active | `border_active` | `#606060` | Focused borders |
-| Border/subtle | `border_subtle` | `#3C3C3C` | Low emphasis separators |
+| Border/active | `borderActive` | `#606060` | Focused borders |
+| Border/subtle | `borderSubtle` | `#3C3C3C` | Low emphasis separators |
 | Text/primary | `text` | `#EEEEEE` | Main content |
-| Text/muted | `text_muted` | `#808080` | Hints, metadata |
+| Text/muted | `textMuted` | `#808080` | Hints, metadata |
 | Accent/primary | `primary` | `#FAB283` | Selected options |
 | Accent/secondary | `secondary` | `#5C9CF5` | User labels |
 | Accent/support | `accent` | `#9D7CD8` | Tool names, thinking state |
@@ -33,6 +33,13 @@ palette.
 | Status/warning | `warning` | `#F5A742` | Streaming, pending tools |
 | Status/error | `error` | `#E06C75` | Rejections, failed tools |
 | Status/info | `info` | `#56B6C2` | Informational accents |
+
+Token names are **camelCase** — the same keys as `Theme` in
+`packages/hya-tui-ts/src/upstream/theme/index.ts` and as nested keys under
+`"theme"` in shipped assets (`theme/assets/*.json`) and custom
+`~/.config/hya/themes/*.json` files. There is **no** snake_case→camelCase
+normalization; a file using `background_panel` or `text_muted` will not apply
+those tokens.
 
 Light themes supply their own values for the same semantic tokens. Prefer
 semantic `Theme` fields in render code; avoid hard-coding hex outside theme
@@ -42,7 +49,7 @@ assets.
 
 - Use only semantic theme fields from `Theme`; no raw color literals in render code.
 - Accent colors carry meaning and must not be decorative filler.
-- Overlays keep `background_panel`; input keeps `background_element`.
+- Overlays keep `backgroundPanel`; input keeps `backgroundElement`.
 
 ## 3. Typography
 
@@ -104,8 +111,14 @@ Terminal spacing derives from a single cell.
 
 ### Transcript
 
-- **Structure**: role label followed by wrapped message lines and compact tool rows.
-- **Spacing**: 1-column side gutters, blank line between messages.
+- **User messages** (`UserMessage` in `packages/hya-tui-ts`): **no** role-name
+  label. Agent-colored left border (`border=["left"]`), hover highlight on the
+  body panel, optional MIME badges for file parts, optional `QUEUED` badge, and
+  an optional compaction divider — not “role label + wrapped lines.”
+- **Assistant / system / tools**: message body plus compact tool rows; assistant
+  footer/meta and revert banner behavior live in the TypeScript session route
+  (see [TUI Reference](docs/tui-reference.md) Transcript section).
+- **Spacing**: 1-column side gutters, blank line between messages where applicable.
 - **States**: user, assistant, system, tool running, tool completed, tool error.
 - **Accessibility**: tool rows include text status and elapsed time when available.
 
