@@ -11,7 +11,7 @@ model keys are required.
 | `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya-backend serve` on `127.0.0.1:0` |
 | `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` over SSE `/v1/chat/completions` |
 | `src/scenario.rs` | `E2eEnv` / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
-| `tests/p01_*.rs` … `p11_*.rs` | One scenario family per file; run alone with `cargo test -p hya-e2e --test p0N_…` |
+| `tests/p01_*.rs` … `p16_*.rs` | One scenario family per file (`p01`–`p16`, including `p12_context_api` through `p16_swarm_mailbox`); run alone with `cargo test -p hya-e2e --test pNN_…` (two digits, e.g. `p10_agent_roster`) |
 | `matrix.toml` | Machine-readable PR-matrix registry (IDs → paths) |
 
 ## Building an environment

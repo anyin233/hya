@@ -316,7 +316,7 @@ collisions. Examples (not exhaustive):
 | `session.queued_prompts` | `<leader>q` | — | Manage queued prompts. |
 | `session.pin.toggle` | `ctrl+f` | — | Pin or unpin a session in the Sessions dialog. |
 | `session.quick_switch.1` … `session.quick_switch.9` | `<leader>1` … `<leader>9` | — | Switch to the session in quick slot 1–9 (global layer). |
-| `session.undo` | `<leader>u` | `/undo` | Undo (revert) the previous user message. |
+| `session.undo` | `<leader>u` | `/undo` | Abort an in-flight turn if not idle; revert at the last user message before the current revert point (repeatable walks backwards); **overwrites the prompt buffer** with that message’s text and re-attaches its file parts (draft text is lost). |
 | `session.redo` | `<leader>r` | `/redo` | Redo after a revert. |
 | `session.toggle.conceal` | `<leader>h` | — | Toggle code-block concealment in messages. |
 | `session.toggle.actions` | unbound | — | Show or hide completed tool details (`task` parts always stay visible). |
@@ -549,7 +549,7 @@ over both the command title/display and its description.
 | `/timeline` | — | Jump to a user message. |
 | `/fork` | — | Fork from a timeline point. |
 | `/compact` | `/summarize` | Compact / summarize the session. |
-| `/undo` | — | Undo the previous user message. |
+| `/undo` | — | Abort if not idle; revert before current revert point; **overwrites the prompt** with that user message’s text/files (draft lost). |
 | `/redo` | — | Redo after a revert. |
 | `/timestamps` | `/toggle-timestamps` | Toggle message timestamps. |
 | `/thinking` | `/toggle-thinking` | Toggle thinking block expansion. |

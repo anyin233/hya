@@ -180,8 +180,11 @@ applied by `expand_prompt` while `expandable` remains false.
 
 User-defined commands from config and on-disk command sources are merged with
 this list via upsert: a user-defined command with the same name **overrides** the
-built-in of that name (and may set `expandable: true` so the template is
-expanded server-side).
+built-in of that name. Every user-defined command is constructed with
+`expandable: true` **unconditionally** (`CommandInfo::command` hardcodes it);
+frontmatter / inline maps have no `expandable` field — writing `expandable` in
+`opencode.json` or markdown frontmatter is ignored. Server-side `expand_prompt`
+therefore expands those templates.
 
 ### Keybindings
 

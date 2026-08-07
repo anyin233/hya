@@ -241,11 +241,37 @@ include:
 | MCP | `/mcp`, `/mcp/:name/connect`, `/mcp/:name/disconnect`, auth routes | narrow app-supplied reconciliation control handle; one runtime effective registry |
 | PTY | `/pty/*`, `/api/pty/*` | in-process PTY metadata and websocket shell attach lifecycle |
 | VCS/project/worktree | `/vcs/*`, `/project/*`, `/experimental/project/*/copy`, `/experimental/worktree/*` | git commands, project state, git worktree helpers |
-| TUI/global/sync/experimental | `/tui/*`, `/global/*`, `/sync/*`, `/experimental/*` | process-local compatibility queues/state and event-log-backed sync history |
+| TUI/global/sync/experimental | `/tui/*` (including **`GET /tui/bootstrap`** — see below), `/global/*`, `/sync/*`, `/experimental/*` | process-local compatibility queues/state and event-log-backed sync history |
 
 The Compat surface intentionally favors shaped compatibility over pretending
 to be a full Compat superset. Known limits are tracked in
 [`../compat-parity.md`](../compat-parity.md).
+
+### TUI bootstrap (`GET /tui/bootstrap`)
+
+Single-RTT startup aggregate used by the shipped TypeScript TUI
+([`compat/tui.rs`](../../crates/hya-server/src/compat/tui.rs);
+frontend: prefer this path, fall back to multi-call on older backends). One
+`GET` returns a JSON object with these top-level keys:
+
+| Key | Contents (summary) |
+| --- | --- |
+| `config` | Process-local global config bag |
+| `providers` / `provider_list` | Bootstrap provider catalog payload |
+| `capabilities` | e.g. `{ "backgroundSubagents": false }` |
+| `agents` | Bound agent metadata for the request location/workdir |
+| `sessions` | Up to **100** hydrated session infos (empty/unnamed filtered out) |
+| `commands` | Command-catalog bootstrap summaries (no full prompt templates) |
+| `lsp` | LSP plane status for the workdir |
+| `mcp` / `mcp_resource` | MCP control status and resources |
+| `formatter` | Formatter plane status |
+| `session_status` | Run-registry busy map |
+| `vcs` | `{ branch, default_branch }` |
+| `path` | Home / state / config / worktree / directory paths |
+| `project` | Project id + worktree |
+
+Related control routes under `/tui/*` (append/submit prompt, open dialogs,
+control channel, etc.) are separate from this bootstrap payload.
 
 ### Runtime config bag (`/config`, `/global/config`)
 

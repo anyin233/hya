@@ -223,7 +223,7 @@ Deterministically narrows and renames the candidate set for one agent.
 | `allow` | Reference list of candidates to include (sorted and deduped on prepare). |
 | `deny` | Reference list removed after allow selection. |
 | `aliases` | Map of public name → target reference for selected entries. |
-| `namespace` | Optional prefix for public names; default is the bundle id. |
+| `namespace` | Optional segment used **only** for the **bundle-local** qualified public spelling `bundle:<namespace>/<kind>/<short>`. Default when omitted is the **bundle id**. Harness candidates keep their `harness:<kind>/<name>` qualified names; short public names are **never** prefixed. So an allow list of only `harness:tool/*` / `harness:skill/*` entries is unaffected by `namespace`. |
 
 ### Reference grammar
 
@@ -263,7 +263,10 @@ existing tool or skill public name is an **`AliasCollision`**.
    (`selected harness skills require the skill tool facade`), because skill bodies
    are only reachable through that tool.
 
-### Example using deny, aliases, and namespace
+### Example using deny and aliases
+
+Harness-only views do not need `namespace` (it would be a no-op). Short aliases
+and deny still apply:
 
 ```yaml
 agents:
@@ -273,7 +276,6 @@ agents:
     prompt: prompts/explore.md
     harness_access: full
     resource_view:
-      namespace: explore
       allow:
         - harness:tool/read
         - harness:tool/grep
@@ -284,6 +286,28 @@ agents:
         - harness:tool/write
       aliases:
         search: harness:tool/grep
+```
+
+### Example: `namespace` on a bundle-local resource
+
+When the view selects a **bundle-local** tool or skill, `namespace` rewrites only
+that resource’s qualified public name (short name unchanged):
+
+```yaml
+# Bundle id is e.g. hya/docs-probe; a local skill local_id is "probe".
+# With namespace: custom.ns the skill is also addressable as
+# bundle:custom.ns/skill/probe (not bundle:hya/docs-probe/skill/probe).
+agents:
+  - local_id: main
+    stable_id: main
+    role: main
+    prompt: prompts/main.md
+    harness_access: full
+    resource_view:
+      namespace: custom.ns
+      allow:
+        - harness:tool/skill
+        - probe   # bare bundle-local skill id
 ```
 
 ---

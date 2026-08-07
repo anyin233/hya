@@ -233,11 +233,11 @@ by removing `.` and textually popping `..`. Symlinks are **not** canonicalized,
 so a symlink inside the workdir is not classified as external based on its
 target.
 
-For any resolved path **outside** the session workdir, tools run an
-`Action::ExternalDirectory` assert on the containing directory's `<dir>/*`
-pattern **before** the normal Read/Edit/Lsp/… check. Call-level invocation
-grants never satisfy `ExternalDirectory`, so it prompts separately even inside
-an already-approved tool call.
+For tools that **do** enforce the boundary, a resolved path **outside** the
+session workdir triggers an `Action::ExternalDirectory` assert on the
+containing directory's `<dir>/*` pattern **before** the normal Read/Edit/Lsp/…
+check. Call-level invocation grants never satisfy `ExternalDirectory`, so it
+prompts separately even inside an already-approved tool call.
 
 ### Enforcement points
 
@@ -251,7 +251,8 @@ an already-approved tool call.
 | `glob` | Search root directory when outside the workdir. |
 | `grep` | Search root (file or directory) when outside the workdir. |
 | `shell` / `bash` | Optional `workdir` argument when it resolves outside the session workdir (`cwd/*`). |
-| `find` | **Does not** perform the external-directory check (deliberate compatibility gap). |
+| `find` | **Does not** perform the external-directory check (deliberate compatibility gap). Asserts `Action::Glob` only; builds the root with `PathBuf::from(path)` (not workdir-resolved). |
+| `ls` | **Does not** perform the external-directory check either. Asserts only `Action::Read` on the raw path string; builds the directory with `PathBuf::from(path)` (not workdir-resolved). So `ls /etc` outside the workdir never raises `ExternalDirectory`. |
 
 ### Per-turn external directories
 

@@ -162,8 +162,9 @@ replace these.
 
 ## The registry is enforced
 
-`crates/hya-e2e/matrix.toml` is validated by `cargo xtask matrix-check`, which
-runs as a CI gate step. It fails on:
+`crates/hya-e2e/matrix.toml` is validated by
+`cargo run -p xtask -- matrix-check` (there is **no** Cargo alias named
+`xtask` in this workspace), which runs as a CI gate step. It fails on:
 
 - a registered `path` that does not exist;
 - a duplicate or malformed id;
