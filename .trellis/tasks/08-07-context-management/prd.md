@@ -36,7 +36,7 @@ Two goals, agreed in the originating session:
 | Child | Scope | Risk class | Status |
 | --- | --- | --- | --- |
 | `08-07-context-observability` | C1 `ContextCompacted`, C2 persist local compaction, C3 directive on `MemberSpawned`, C4 tool-call link, C5 fork provenance | Record-only, except C2 | **Completed** 2026-08-07, branch `feat/context-observability`, released as 0.34.15 |
-| `08-07-context-efficiency` | `max_context`-relative thresholds, real token counts from `token_ledger`, selective eviction, cross-agent `AGENTS.md` sharing | Changes what the model sees | Planned, not started |
+| `08-07-context-efficiency` | `max_context`-relative thresholds, real token counts, selective eviction, `AGENTS.md` caching | Changes what the model sees | **Completed** 2026-08-07, branch `feat/context-efficiency`, released as 0.34.16 |
 
 ## Ordering
 
@@ -58,10 +58,10 @@ different verification burdens behind one gate.
       *`recorded_observability_never_enters_the_parent_model_input`.*
 - [x] P3 — No new tables or migrations are introduced by either child.
       *Holds for child A; still binding on child B.*
-- [ ] P4 — Compaction decisions are driven by real token counts and the model's
+- [x] P4 — Compaction decisions are driven by real token counts and the model's
       advertised `max_context`, not by `chars / 4` against a flat constant.
-      *Child B. Child A records `input_tokens_est` + `threshold`, which is what
-      makes this measurable.*
+      *Done in child B. `chars / 4` remains only as the fallback for routes that
+      never report usage.*
 - [~] P5 — Full gate green after each child. Child A: `cargo test --workspace
       --exclude hya-e2e` 1323 passing, E2E 30 passing, clippy clean on all five
       crates touched. `cargo fmt --all --check` and workspace clippy still fail

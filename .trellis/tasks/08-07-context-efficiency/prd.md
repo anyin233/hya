@@ -50,12 +50,57 @@ system prompt (`crates/hya-core/src/prompt.rs:32`, `:62`). Share or cache it.
 
 ## Acceptance Criteria
 
-- [ ] TBD at planning time. At minimum, each of E1–E4 must have a test proving
-      the new model input is correct, and a measurement showing the change is an
-      improvement — using the `ContextCompacted` numbers recorded by the sibling
-      task.
+- [x] E1 — The compaction threshold is a share of the route's advertised
+      `max_context`, with the flat threshold as fallback.
+      *`resolved_threshold_scales_to_the_window_and_guards_bad_input` (table:
+      absent / zero / normal / out-of-range / floor clamp) and
+      `compaction_threshold_scales_to_the_advertised_context_window`, verified
+      failing when the window is ignored.*
+- [x] E2 — Compaction uses provider-reported token counts when available.
+      *`measured_tokens_uses_reported_usage_plus_the_delta_since`,
+      `measured_tokens_prefers_the_most_recent_report`, plus the regression
+      `measured_tokens_ignores_empty_usage_and_falls_back_to_the_estimator`
+      proving unchanged behaviour for routes that never report usage.*
+- [x] E3 — Stale tool outputs are evicted before any summarization, and eviction
+      alone can avoid the summarizer entirely.
+      *`eviction_drops_stale_outputs_keeps_inputs_and_respects_keep_recent`,
+      `eviction_is_idempotent`, and
+      `tool_output_eviction_avoids_summarizing_and_preserves_the_log`, verified
+      failing when eviction is disabled.*
+- [x] E4 — `AGENTS.md` discovery is cached and correctly invalidated.
+      *`repeat_discovery_does_not_re_read_unchanged_files` (verified failing
+      without the cache), plus edit- and new-file-invalidation tests.*
+- [x] Observability — eviction is recorded as `Event::ContextEvicted` and is
+      request-local; the log keeps full tool output.
+- [~] Full gate — `cargo test --workspace --exclude hya-e2e` 1337 passing, E2E 30
+      passing, clippy clean on all five crates touched. See residuals R2 and R3.
+
+## Residuals after implementation
+
+- **R1 — E4 was rescoped; the PRD's original claim was wrong.** It said "every
+  subagent re-walks and re-renders the same `AGENTS.md` chain into its own system
+  prompt". Subagents do **not** re-walk: `guidance_at`
+  (`crates/hya-server/src/compat/reference.rs:130`) renders once per top-level
+  turn into an `Arc<str>` that is cloned into `MemberSpec.guidance`. The real cost
+  was one filesystem walk per top-level turn, so E4 became a caching change. Its
+  value is smaller than the PRD implied; the remaining token duplication (each
+  agent's prompt contains the guidance) is semantically required.
+- **R2 — one pre-existing flaky test.**
+  `compat_permission_always_resolves_matching_session_requests`
+  (`crates/hya-server/tests/compat_permission_question_api.rs`) failed once under
+  full parallel load, then passed 4/4 in isolation and across two further full
+  runs. It touches nothing in this task. Not fixed here.
+- **R3 — `crates/hya-sdk` still fails `cargo fmt --all --check` and workspace-wide
+  clippy** (48 errors), untouched by this task and already failing on `main`.
+- **R4 — E2/E3 interaction, found during implementation.** `tokens_in_use` prefers
+  the provider-measured count, which describes the transcript *before* any
+  request-local edit. Naively re-measuring after eviction reported no saving and
+  sent every turn to the summarizer anyway. The turn loop now carries one running
+  count and applies the eviction saving as an estimated delta; `fold_prefix` exists
+  precisely so the already-made decision is not re-derived from a stale measurement.
 
 ## Dependency note
 
 Do not start before `08-07-context-observability` lands. Without `ContextCompacted`
 there is no way to measure whether any change here helps or hurts.
+*Satisfied: that task shipped as 0.34.15.*
