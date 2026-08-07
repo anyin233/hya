@@ -1,6 +1,8 @@
 //! Accept-gate proof: a full session turn against the in-process `hya` backend completes through
 //! the native transport, and OUR PROCESS opens zero network sockets while doing it.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashSet;
 use std::time::Duration;
 

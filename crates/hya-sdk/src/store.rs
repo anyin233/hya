@@ -563,6 +563,7 @@ fn stash_delta(rest: &mut Map<String, Value>, field: &str, delta: &str) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     fn message(id: &str, session_id: &str, role: &str) -> Message {
@@ -768,7 +769,9 @@ mod tests {
         );
         let team = store.team_for("ses_root").expect("scoped team");
         assert_eq!(
-            team.roster.get("main/reviewer-3").map(|e| e.session.as_str()),
+            team.roster
+                .get("main/reviewer-3")
+                .map(|e| e.session.as_str()),
             Some("ses_child"),
             "roster folded from hya.envelope team event"
         );

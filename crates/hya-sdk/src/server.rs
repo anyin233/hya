@@ -308,6 +308,7 @@ fn parse_listen_url(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     /// Serializes the tests that mutate `HYA_DB_ENV`.

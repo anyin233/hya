@@ -553,6 +553,7 @@ fn set_tool_status(data: &mut Data, session_id: &str, part_id: &str, status: &st
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::types::EventPayload;
 

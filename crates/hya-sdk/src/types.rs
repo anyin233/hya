@@ -293,6 +293,7 @@ pub enum SessionMessage {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     /// R-2 serde golden: the EXACT verified `/global/event` first frame must round-trip.

@@ -97,6 +97,7 @@ pub type HyaNativeClient = ApiClient<HyaNativeTransport>;
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use hya_app::{HyaRuntime, RuntimeOptions};
     use hya_sdk::Client;
