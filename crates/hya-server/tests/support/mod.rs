@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
 use hya_core::RuntimeRegistry;
 use hya_proto::AgentName;
@@ -23,6 +23,11 @@ pub struct AgentFixture {
     pub description: Option<&'static str>,
     pub can_spawn: Vec<&'static str>,
     pub prompt: Option<&'static str>,
+    /// Bundle-local skill this agent ships and selects.
+    ///
+    /// A bundle agent is on the clamped plane, so a project/user skill never
+    /// reaches it; its own bundle skill is the only way it gets one.
+    pub bundle_skill: Option<&'static str>,
 }
 
 impl AgentFixture {
@@ -33,6 +38,7 @@ impl AgentFixture {
             description: None,
             can_spawn: Vec::new(),
             prompt: None,
+            bundle_skill: None,
         }
     }
 
@@ -43,6 +49,7 @@ impl AgentFixture {
             description: None,
             can_spawn: Vec::new(),
             prompt: None,
+            bundle_skill: None,
         }
     }
 
@@ -53,6 +60,11 @@ impl AgentFixture {
 
     pub fn description(mut self, description: &'static str) -> Self {
         self.description = Some(description);
+        self
+    }
+
+    pub fn bundle_skill(mut self, name: &'static str) -> Self {
+        self.bundle_skill = Some(name);
         self
     }
 
@@ -67,9 +79,37 @@ pub fn runtime_with_catalog(
     tools: Arc<ToolRegistry>,
     agents: &[AgentFixture],
 ) -> Arc<RuntimeRegistry> {
-    let prepared: Vec<PreparedAgent> = agents
+    // One bundle per agent, over the compiled-in built-ins.
+    let bundles: Vec<PreparedBundle> = agents
         .iter()
-        .map(|agent| PreparedAgent {
+        .filter(|agent| !hya_core::is_builtin_id(agent.stable_id))
+        .map(|agent| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/server-tests-{}", agent.stable_id),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{}", agent.stable_id),
+            skills: agent
+                .bundle_skill
+                .map(|name| {
+                    vec![hya_bundle::PreparedResource {
+                        local_id: name.to_string(),
+                        stable_id: format!(
+                            "bundle:hya/server-tests-{}/skill/{name}",
+                            agent.stable_id
+                        ),
+                        source_path: format!("resources/skills/{name}.md"),
+                        digest: "test-only".to_string(),
+                        content: format!(
+                            "---\nname: {name}\ndescription: bundle skill {name}\n---\n{name} body\n"
+                        ),
+                        aliases: Vec::new(),
+                    }]
+                })
+                .unwrap_or_default(),
+            agent: PreparedAgent {
             id: AgentName::new(agent.stable_id),
             description: agent.description.map(str::to_string),
             role: agent.role,
@@ -86,25 +126,16 @@ pub fn runtime_with_catalog(
                 .iter()
                 .map(|id| AgentName::new(*id))
                 .collect(),
-            hook_refs: Vec::new(),
+                hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
         })
         .collect();
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/server-tests".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        digest: "test-only".to_string(),
-        agents: prepared,
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = BundleCatalog::from_prepared(&[bundle]).expect("server test catalog");
+    let catalog = BundleCatalog::from_prepared(&bundles).expect("server test catalog");
+    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

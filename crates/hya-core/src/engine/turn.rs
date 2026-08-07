@@ -573,7 +573,7 @@ impl SessionEngine {
                 // call (native or local). Missing definition fails closed here.
                 // Reuse the turn's captured binding; never re-bind or open a second catalog.
                 let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
-                let compaction_prompt = definition.prompt.as_deref();
+                let compaction_prompt = definition.prompt;
                 // Native compact resolves the active session provider/model route.
                 let model = projection
                     .session

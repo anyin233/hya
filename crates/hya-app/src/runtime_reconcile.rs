@@ -1077,7 +1077,7 @@ mod tests {
     fn stale_success_is_closed_and_cannot_publish_over_newer_ticket() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
-            crate::runtime::builtin_catalog()?,
+            crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let source = SourceId::mcp("alpha");
@@ -1120,7 +1120,7 @@ mod tests {
     {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
-            crate::runtime::builtin_catalog()?,
+            crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let removed_source = SourceId::mcp("removed");
@@ -1168,7 +1168,7 @@ mod tests {
     fn current_failure_keeps_generation_and_closes_partial_successes() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
-            crate::runtime::builtin_catalog()?,
+            crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let ready_source = SourceId::mcp("ready");
@@ -1222,7 +1222,7 @@ mod tests {
     fn candidate_rejection_records_failure_and_invalidates_attempt() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
-            crate::runtime::builtin_catalog()?,
+            crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let source = SourceId::plugin("collision");
@@ -1275,7 +1275,7 @@ mod tests {
     fn mixed_mcp_plugin_revision_publishes_exactly_once_only_when_complete() -> anyhow::Result<()> {
         let registry = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),
-            crate::runtime::builtin_catalog()?,
+            crate::runtime::builtin_agent_catalog()?,
         ));
         let reconciler = RuntimeReconciler::new(registry.clone());
         let mcp = SourceId::mcp("mixed-mcp");

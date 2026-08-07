@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Built-in agents are Rust-native definitions, not AgentBundles.
 //!
 //! These tests pin the roster that used to live in `bundles/builtin/*/bundle.yaml`
@@ -59,7 +61,9 @@ fn roster_holds_every_builtin_id_in_sorted_order() {
 #[test]
 fn roster_is_strictly_sorted_so_lookup_and_digest_stay_deterministic() {
     assert!(
-        BUILTIN_AGENTS.windows(2).all(|pair| pair[0].id < pair[1].id),
+        BUILTIN_AGENTS
+            .windows(2)
+            .all(|pair| pair[0].id < pair[1].id),
         "BUILTIN_AGENTS must be strictly sorted by id"
     );
 }
@@ -160,7 +164,9 @@ fn descriptions_exist_for_every_selector_visible_agent() {
             continue;
         }
         assert!(
-            agent.description.is_some_and(|text| !text.trim().is_empty()),
+            agent
+                .description
+                .is_some_and(|text| !text.trim().is_empty()),
             "`{}` needs a description",
             agent.id
         );

@@ -263,12 +263,11 @@ impl AgentCatalog {
         if let Some(agent) = builtin_agent(caller) {
             return Ok(CallerScope::Builtin(agent.spawn_scope));
         }
-        let (_, agent) =
-            self.bundles
-                .resolve_agent_entry(caller)
-                .ok_or_else(|| BundleError::UnknownAgentId {
-                    agent_id: caller.to_string(),
-                })?;
+        let (_, agent) = self.bundles.resolve_agent_entry(caller).ok_or_else(|| {
+            BundleError::UnknownAgentId {
+                agent_id: caller.to_string(),
+            }
+        })?;
         Ok(CallerScope::Bundle(&agent.can_spawn))
     }
 }

@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    PreparedAgent, PreparedBundle, PreparedBundleIndex, PreparedCatalog,
-    PreparedDocument, PreparedDocumentOwned, PreparedResource,
+    PreparedAgent, PreparedBundle, PreparedBundleIndex, PreparedCatalog, PreparedDocument,
+    PreparedDocumentOwned, PreparedResource,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceExtensions, SourceFile, SourceManifest,

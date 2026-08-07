@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, 
-    AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer, RuntimeRegistry,
-    SessionEngine, Summarizer,
+use hya_core::{
+    AgentCatalog, AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer,
+    RuntimeRegistry, SessionEngine, Summarizer,
 };
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, PartId, Role};
 use hya_provider::{
@@ -168,27 +168,6 @@ impl AgentFixture {
         }
     }
 
-    fn system(stable_id: impl Into<String>, prompt: impl Into<String>) -> Self {
-        Self {
-            stable_id: stable_id.into(),
-            role: AgentRole::Subagent,
-            prompt: Some(prompt.into()),
-            model: None,
-            reasoning: None,
-            can_spawn: Vec::new(),
-        }
-    }
-
-    fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
-        self
-    }
-
-    fn reasoning(mut self, reasoning: impl Into<String>) -> Self {
-        self.reasoning = Some(reasoning.into());
-        self
-    }
-
     fn can_spawn(mut self, ids: &[&str]) -> Self {
         self.can_spawn = ids.iter().map(|id| (*id).to_string()).collect();
         self
@@ -210,27 +189,27 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
             },
             digest: format!("test-only-{}", agent.stable_id),
             agent: PreparedAgent {
-            id: AgentName::new(&agent.stable_id),
-            description: None,
-            role: agent.role,
-            color: None,
-            prompt: agent.prompt.clone(),
-            prompt_source: None,
-            prompt_digest: None,
-            model_policy: ModelPolicy {
-                model: agent.model.clone(),
-                category: None,
-                reasoning: agent.reasoning.clone(),
-            },
-            workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
-            resource_view: ResourceView::default(),
-            can_spawn: agent
-                .can_spawn
-                .iter()
-                .map(|id| AgentName::new(id.as_str()))
-                .collect(),
-            hook_refs: Vec::new(),
+                id: AgentName::new(&agent.stable_id),
+                description: None,
+                role: agent.role,
+                color: None,
+                prompt: agent.prompt.clone(),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy {
+                    model: agent.model.clone(),
+                    category: None,
+                    reasoning: agent.reasoning.clone(),
+                },
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                resource_view: ResourceView::default(),
+                can_spawn: agent
+                    .can_spawn
+                    .iter()
+                    .map(|id| AgentName::new(id.as_str()))
+                    .collect(),
+                hook_refs: Vec::new(),
             },
             tools: Vec::new(),
             skills: Vec::new(),
@@ -367,9 +346,7 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         provider.clone(),
         false,
     )
@@ -479,9 +456,7 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         provider.clone(),
         true,
     )
@@ -569,9 +544,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
         compact_calls: Mutex::new(Vec::new()),
     });
     let engine = engine_with(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         provider.clone() as Arc<dyn Provider>,
         // Summarizer present only as unused fallback; native compact returns Some.
         true,
@@ -698,9 +671,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let title_engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         title_provider.clone(),
         false,
     )
@@ -738,9 +709,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let summary_engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         summary_provider.clone(),
         true,
     )
@@ -778,9 +747,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let compaction_engine = engine_with_capture(
-        catalog(&[
-            AgentFixture::main("build"),
-        ]),
+        catalog(&[AgentFixture::main("build")]),
         compaction_provider.clone(),
         true,
     )
@@ -827,12 +794,6 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             "compaction must stay on fixed Bundle prompt only"
         );
     }
-}
-
-/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
-    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }
 
 #[tokio::test]

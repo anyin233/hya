@@ -444,7 +444,9 @@ async fn compat_prompt_bundle_prompt_and_reference_guidance_parity() {
     let runtime = runtime_with_catalog(
         tools,
         &[
-            AgentFixture::main("hya-main").prompt(BUNDLE_PROMPT_MARKER),
+            AgentFixture::main("bundle-lead")
+                .prompt(BUNDLE_PROMPT_MARKER)
+                .bundle_skill("lead-skill"),
             AgentFixture::main("build"),
             AgentFixture::subagent("general"),
             AgentFixture::subagent("compaction").prompt("compaction prompt"),
@@ -457,7 +459,7 @@ async fn compat_prompt_bundle_prompt_and_reference_guidance_parity() {
             &workdir,
             Arc::clone(&requests),
             runtime,
-            "hya-main",
+            "bundle-lead",
             BASE_PROMPT_MARKER,
         )
         .await,
@@ -479,7 +481,7 @@ async fn compat_prompt_bundle_prompt_and_reference_guidance_parity() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let session = create_session_with_agent(app.clone(), &workdir, "hya-main").await;
+    let session = create_session_with_agent(app.clone(), &workdir, "bundle-lead").await;
     let (status, _message) = request_json(
         app,
         Method::POST,
@@ -558,7 +560,9 @@ async fn bundle_prompt_replaces_base_but_preserves_guidance_once_and_in_order() 
     let runtime = runtime_with_catalog(
         tools,
         &[
-            AgentFixture::main("hya-main").prompt(BUNDLE_PROMPT_MARKER),
+            AgentFixture::main("bundle-lead")
+                .prompt(BUNDLE_PROMPT_MARKER)
+                .bundle_skill("lead-skill"),
             AgentFixture::main("build"),
             AgentFixture::subagent("general"),
             AgentFixture::subagent("compaction").prompt("compaction prompt"),
@@ -571,7 +575,7 @@ async fn bundle_prompt_replaces_base_but_preserves_guidance_once_and_in_order() 
             &workdir,
             Arc::clone(&requests),
             runtime,
-            "hya-main",
+            "bundle-lead",
             BASE_PROMPT_MARKER,
         )
         .await,
@@ -590,7 +594,7 @@ async fn bundle_prompt_replaces_base_but_preserves_guidance_once_and_in_order() 
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let session = create_session_with_agent(app.clone(), &workdir, "hya-main").await;
+    let session = create_session_with_agent(app.clone(), &workdir, "bundle-lead").await;
     let (status, _message) = request_json(
         app,
         Method::POST,
@@ -645,7 +649,7 @@ async fn bundle_prompt_none_preserves_harness_base_then_guidance() {
     let runtime = runtime_with_catalog(
         tools,
         &[
-            AgentFixture::main("hya-main"),
+            AgentFixture::main("bundle-lead"),
             AgentFixture::main("build"),
             AgentFixture::subagent("general"),
             AgentFixture::subagent("compaction").prompt("compaction prompt"),
@@ -658,7 +662,7 @@ async fn bundle_prompt_none_preserves_harness_base_then_guidance() {
             &workdir,
             Arc::clone(&requests),
             runtime,
-            "hya-main",
+            "bundle-lead",
             BASE_PROMPT_MARKER,
         )
         .await,
@@ -677,7 +681,7 @@ async fn bundle_prompt_none_preserves_harness_base_then_guidance() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let session = create_session_with_agent(app.clone(), &workdir, "hya-main").await;
+    let session = create_session_with_agent(app.clone(), &workdir, "bundle-lead").await;
     let (status, _message) = request_json(
         app,
         Method::POST,
@@ -730,7 +734,9 @@ async fn user_input_is_separate_provider_message() {
     let runtime = runtime_with_catalog(
         tools,
         &[
-            AgentFixture::main("hya-main").prompt(BUNDLE_PROMPT_MARKER),
+            AgentFixture::main("bundle-lead")
+                .prompt(BUNDLE_PROMPT_MARKER)
+                .bundle_skill("lead-skill"),
             AgentFixture::main("build"),
             AgentFixture::subagent("general"),
             AgentFixture::subagent("compaction").prompt("compaction prompt"),
@@ -743,7 +749,7 @@ async fn user_input_is_separate_provider_message() {
             &workdir,
             Arc::clone(&requests),
             runtime,
-            "hya-main",
+            "bundle-lead",
             BASE_PROMPT_MARKER,
         )
         .await,
@@ -762,7 +768,7 @@ async fn user_input_is_separate_provider_message() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let session = create_session_with_agent(app.clone(), &workdir, "hya-main").await;
+    let session = create_session_with_agent(app.clone(), &workdir, "bundle-lead").await;
     let (status, _message) = request_json(
         app,
         Method::POST,
@@ -845,7 +851,9 @@ async fn guidance_captured_once_across_provider_rounds() {
     let runtime = runtime_with_catalog(
         tools,
         &[
-            AgentFixture::main("hya-main").prompt(BUNDLE_PROMPT_MARKER),
+            AgentFixture::main("bundle-lead")
+                .prompt(BUNDLE_PROMPT_MARKER)
+                .bundle_skill("lead-skill"),
             AgentFixture::main("build"),
             AgentFixture::subagent("general"),
             AgentFixture::subagent("compaction").prompt("compaction prompt"),
@@ -857,7 +865,7 @@ async fn guidance_captured_once_across_provider_rounds() {
     let app = router(AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
-            name: AgentName::new("hya-main"),
+            name: AgentName::new("bundle-lead"),
             model: ModelRef::new("fake"),
             system_prompt: BASE_PROMPT_MARKER.to_string(),
             workdir: workdir.clone().into(),
@@ -881,7 +889,7 @@ async fn guidance_captured_once_across_provider_rounds() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let session = create_session_with_agent(app.clone(), &workdir, "hya-main").await;
+    let session = create_session_with_agent(app.clone(), &workdir, "bundle-lead").await;
     let (status, _message) = request_json(
         app,
         Method::POST,

@@ -359,4 +359,3 @@ fn append_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), BundleError> {
     bytes.extend_from_slice(value);
     Ok(())
 }
-

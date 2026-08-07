@@ -7,18 +7,18 @@ mod support;
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    PreparedResource, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, 
-    AdmissionMemberIdentity, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
-    ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError,
-    CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarHandle,
-    SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, TeamEvidenceEnvelope,
-    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope, run_pre_admitted_member,
-    run_team,
+use hya_core::{
+    AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    CoreError, CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus,
+    MessageUserBeforeInput, MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry,
+    SessionEngine, SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits,
+    TeamEvidenceEnvelope, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope,
+    run_pre_admitted_member, run_team,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId,
@@ -1568,10 +1568,8 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
 #[tokio::test]
 async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient))
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -1661,10 +1659,8 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
 #[tokio::test]
 async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient))
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
     let inputs = Arc::new(Mutex::new(Vec::new()));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(HookProbeTool {
@@ -1765,10 +1761,8 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
 #[tokio::test]
 async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident))
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -3603,10 +3597,8 @@ async fn resident_activation_hook_transport_loss_enters_epoch_recovery() {
 
 async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident))
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {

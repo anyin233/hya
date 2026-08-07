@@ -180,7 +180,7 @@ async fn tui_bootstrap_returns_bound_catalog_rows_and_ignores_legacy_agent_files
         .collect();
     assert_eq!(
         selector,
-        vec!["build", "plan"],
+        vec!["build", "hya-main", "plan"],
         "TUI selector set must be role-main / primary only: {selector:?}"
     );
     assert!(

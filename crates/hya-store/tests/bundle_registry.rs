@@ -589,4 +589,3 @@ async fn uninstall_of_a_never_installed_bundle_is_typed_not_found() {
     assert_eq!(snapshot.generation, 0);
     assert!(snapshot.bundles.is_empty());
 }
-

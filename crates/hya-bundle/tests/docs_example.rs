@@ -4,8 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use hya_bundle::{
-    AgentRole, BundleSource, PreparedCatalog, SourceFile, SpawnLifecycle,
-    prepare_package,
+    AgentRole, BundleSource, PreparedCatalog, SourceFile, SpawnLifecycle, prepare_package,
 };
 
 fn repository_root() -> PathBuf {

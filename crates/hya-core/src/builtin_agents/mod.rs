@@ -246,7 +246,6 @@ pub fn builtin_agent(id: &str) -> Option<&'static BuiltinAgent> {
 }
 
 /// Every ordinary (non-reserved) built-in, in roster order.
-#[must_use]
 pub fn ordinary_builtins() -> impl Iterator<Item = &'static BuiltinAgent> {
     BUILTIN_AGENTS.iter().filter(|agent| !agent.system_reserved)
 }

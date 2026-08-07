@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
@@ -392,10 +392,4 @@ async fn forked_historical_session_continue_fails_definition_missing_before_prov
             .map(AgentName::as_str),
         Some(HISTORICAL_BYTES)
     );
-}
-
-/// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
-    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }

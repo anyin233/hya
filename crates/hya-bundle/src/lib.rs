@@ -13,9 +13,8 @@ mod source;
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use model::{
-    AgentRole, BundleIdentity, ModelPolicy, PreparedAgent,
-    PreparedBundle, PreparedBundleIndex, PreparedCatalog, PreparedResource, ResourceView,
-    SpawnLifecycle,
+    AgentRole, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle, PreparedBundleIndex,
+    PreparedCatalog, PreparedResource, ResourceView, SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

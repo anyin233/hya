@@ -822,7 +822,9 @@ fn fixed_system_agent(
 ///
 /// Prepared prompt and explicit reasoning apply when present. Absent Bundle
 /// model leaves `model` unset so the caller/summarizer fallback is preserved.
-pub(crate) fn summarize_options_from_definition(definition: &AgentDefinition<'_>) -> SummarizeOptions {
+pub(crate) fn summarize_options_from_definition(
+    definition: &AgentDefinition<'_>,
+) -> SummarizeOptions {
     SummarizeOptions {
         system: definition.prompt.map(str::to_string),
         model: definition.model_policy.model.as_deref().map(ModelRef::new),

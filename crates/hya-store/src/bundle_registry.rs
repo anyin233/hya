@@ -291,10 +291,7 @@ impl BundleRegistry {
     }
 
     /// Remove an installed bundle after re-validating the remaining catalog.
-    pub async fn uninstall(
-        &self,
-        bundle_id: &str,
-    ) -> Result<BundleUninstallOutcome, StoreError> {
+    pub async fn uninstall(&self, bundle_id: &str) -> Result<BundleUninstallOutcome, StoreError> {
         let mut transaction = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
