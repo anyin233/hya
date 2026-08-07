@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::api::{CreateSessionResponse, PromptResponse};
-use hya_proto::{AgentName, FinishReason, MessageId, ModelRef, PartId, SessionId};
+use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartId, SessionId};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
@@ -1785,6 +1785,67 @@ async fn compat_session_fork_copies_metadata_and_messages() {
     assert_eq!(body.as_array().expect("messages").len(), 2);
     assert_eq!(body[0]["parts"][0]["text"], "hello");
     assert_eq!(body[1]["parts"][0]["text"], "assistant answer");
+}
+
+/// AC7: a fork must not be an orphan in the call graph. `parentID` stays absent
+/// (that means subagent lineage), so `SessionForked` is the only durable trace
+/// of where the fork came from and where it was cut.
+#[tokio::test]
+async fn compat_session_fork_records_source_and_cut_point() {
+    for with_cut_point in [false, true] {
+        let state = state().await;
+        let engine = state.engine.clone();
+        let app = router(state);
+        let session = create_session(app.clone(), None).await;
+        post_prompt(app.clone(), &session).await;
+
+        // Cut before the assistant reply when exercising the cut-point case.
+        let source_id: SessionId = session.parse().expect("session id");
+        let cut = if with_cut_point {
+            let projection = engine.read_projection(source_id).await.unwrap();
+            Some(projection.session.messages[1].id)
+        } else {
+            None
+        };
+        let body = match cut {
+            Some(id) => Body::from(json!({ "messageID": id.to_string() }).to_string()),
+            None => Body::empty(),
+        };
+
+        let fork = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/session/{session}/fork"))
+                    .header("content-type", "application/json")
+                    .body(body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fork.status(), StatusCode::OK);
+        let fork_id: SessionId = body_json(fork).await["id"]
+            .as_str()
+            .expect("fork id")
+            .parse()
+            .expect("fork session id");
+
+        let envelopes = engine.replay(fork_id).await.unwrap();
+        let recorded = envelopes
+            .iter()
+            .find_map(|env| match &env.event {
+                Event::SessionForked {
+                    session,
+                    source,
+                    before_message,
+                } => Some((*session, *source, *before_message)),
+                _ => None,
+            })
+            .expect("fork must record its provenance");
+        assert_eq!(recorded.0, fork_id, "recorded on the forked session's log");
+        assert_eq!(recorded.1, source_id, "source session is recoverable");
+        assert_eq!(recorded.2, cut, "cut point is recoverable");
+    }
 }
 
 #[tokio::test]

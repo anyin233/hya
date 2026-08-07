@@ -1167,6 +1167,165 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
     (engine, agent)
 }
 
+/// Records every provider request together with the session that issued it, so a
+/// test can tell the lead's model input apart from a child's.
+struct PerSessionRecorder {
+    requests: Arc<Mutex<Vec<(SessionId, CompletionRequest)>>>,
+}
+
+#[async_trait]
+impl Provider for PerSessionRecorder {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        (model.as_str() == "fake").then_some(Capabilities {
+            streaming_tool_calls: true,
+            parallel_tool_calls: true,
+            usage_reporting: true,
+            max_context: 200_000,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        self.requests.lock().unwrap().push((session, request));
+        let events = FakeProvider::materialize(
+            &[
+                FakeStep::Text("done".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            session,
+            message,
+        );
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+    }
+}
+
+/// AC9: everything this task records is view-only. A child compacting, and the
+/// directive recorded on the spawn edge, must not add a single byte to the
+/// lead's model input.
+#[tokio::test]
+async fn recorded_observability_never_enters_the_parent_model_input() {
+    let workdir = support::TestDir::new("observability-no-leak");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(PerSessionRecorder {
+        requests: requests.clone(),
+    })));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = Arc::new(
+        SessionEngine::new(
+            store,
+            router,
+            support::test_runtime(tools),
+            perm,
+            EventBus::default(),
+        )
+        // Tuned so ONLY the child crosses the threshold: its directive below is
+        // deliberately long, while the lead's prompt stays short. If the lead
+        // compacted too, its own marker would mask a real leak from the child.
+        .with_compaction(
+            Arc::new(LeakProbeSummarizer),
+            hya_core::CompactionConfig {
+                token_threshold: 50,
+                keep_recent: 0,
+            },
+        ),
+    );
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: workdir.path().to_path_buf(),
+        reasoning: None,
+    };
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    // Long enough to cross the 50-token threshold on the child's first round.
+    let directive = format!(
+        "SECRET_DIRECTIVE_MARKER audit the retry paths. {}",
+        "x".repeat(400)
+    );
+    let mut spec = member(&engine, &agent, &directive);
+    spec.tool_call = Some(ToolCallId::new());
+    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    assert_eq!(evidence.len(), 1);
+
+    // The child really did compact, otherwise this test proves nothing.
+    let child = engine.read_projection(lead).await.unwrap().session.members[0]
+        .child
+        .unwrap();
+    let child_events = engine.store().replay(child).await.unwrap();
+    assert!(
+        child_events
+            .iter()
+            .any(|e| matches!(e.event, Event::ContextCompacted { .. })),
+        "precondition: the child must have compacted"
+    );
+
+    // Run a lead turn AFTER the child finished, so the lead's model input is
+    // built from a log that already contains the spawn edge and the child's work.
+    engine
+        .admit_user_prompt(lead, "what did the member find?".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(lead, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let requests = requests.lock().unwrap();
+    let lead_requests: Vec<_> = requests
+        .iter()
+        .filter(|(session, _)| *session == lead)
+        .collect();
+    assert!(!lead_requests.is_empty(), "the lead must have run a turn");
+    for (_, request) in lead_requests {
+        let rendered = format!("{:?}", request.messages);
+        assert!(
+            !rendered.contains("HYA_COMPACTED_CONTEXT"),
+            "a child's compaction marker leaked into the lead: {rendered}"
+        );
+        assert!(
+            !rendered.contains("LEAK_PROBE_SUMMARY"),
+            "a child's summary leaked into the lead: {rendered}"
+        );
+        assert!(
+            !rendered.contains("SECRET_DIRECTIVE_MARKER"),
+            "the recorded directive leaked into the lead's messages: {rendered}"
+        );
+    }
+}
+
+struct LeakProbeSummarizer;
+
+#[async_trait]
+impl hya_core::Summarizer for LeakProbeSummarizer {
+    async fn summarize(
+        &self,
+        _messages: &[hya_proto::Message],
+        _options: hya_core::SummarizeOptions,
+    ) -> Result<String, hya_core::CoreError> {
+        Ok("LEAK_PROBE_SUMMARY".to_string())
+    }
+}
+
 /// AC5 + AC6: the spawn edge must carry the member's purpose verbatim and the
 /// tool call that produced it, for a fresh spawn and for a resumed session.
 #[tokio::test]
