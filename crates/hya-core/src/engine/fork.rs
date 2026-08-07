@@ -6,6 +6,31 @@ use super::SessionEngine;
 use crate::error::CoreError;
 
 impl SessionEngine {
+    /// Record that `target` was forked from `source` at the `before` cut point.
+    ///
+    /// Call before copying messages. This is the only durable trace of a fork:
+    /// forked sessions carry no `parent` (that means subagent lineage) and copied
+    /// messages get fresh ids, so without this the fork is an orphan root.
+    ///
+    /// # Errors
+    /// Propagates store append failures.
+    pub async fn record_session_forked(
+        &self,
+        target: SessionId,
+        source: SessionId,
+        before: Option<MessageId>,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            target,
+            Event::SessionForked {
+                session: target,
+                source,
+                before_message: before,
+            },
+        )
+        .await
+    }
+
     /// Copy selected messages into a forked session log.
     pub async fn copy_messages_to_session(
         &self,

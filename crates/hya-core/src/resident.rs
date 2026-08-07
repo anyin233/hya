@@ -1717,12 +1717,14 @@ impl ResidentSupervisor {
                 self.engine
                     .record_member_spawned(
                         parent,
-                        member,
-                        Some(session),
-                        agent.name.clone(),
-                        description,
-                        parent_depth.saturating_add(1),
-                        directive.clone(),
+                        crate::engine::MemberSpawnRecord {
+                            member,
+                            child: Some(session),
+                            subagent_type: agent.name.clone(),
+                            description,
+                            depth: parent_depth.saturating_add(1),
+                            directive: directive.clone(),
+                        },
                     )
                     .await?;
             }

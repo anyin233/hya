@@ -9,18 +9,37 @@ use hya_proto::{AgentName, Event, MemberId, MemberRunStatus, SessionId};
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
 
+/// Everything a spawn record carries beyond the parent session it lands on.
+pub(crate) struct MemberSpawnRecord {
+    /// Member id on the parent log.
+    pub member: MemberId,
+    /// Child session when known.
+    pub child: Option<SessionId>,
+    /// Subagent type / agent name for the spawn.
+    pub subagent_type: AgentName,
+    /// Short UI description.
+    pub description: String,
+    /// Depth in the subagent tree.
+    pub depth: u32,
+    /// Verbatim directive defining the member's purpose.
+    pub directive: String,
+}
+
 impl SessionEngine {
     /// Record that a member was spawned under `parent`.
     pub(crate) async fn record_member_spawned(
         &self,
         parent: SessionId,
-        member: MemberId,
-        child: Option<SessionId>,
-        subagent_type: AgentName,
-        description: String,
-        depth: u32,
-        directive: String,
+        record: MemberSpawnRecord,
     ) -> Result<(), CoreError> {
+        let MemberSpawnRecord {
+            member,
+            child,
+            subagent_type,
+            description,
+            depth,
+            directive,
+        } = record;
         self.emit(
             parent,
             Event::MemberSpawned {
