@@ -23,7 +23,7 @@ pub mod projection_tree;
 /// Compat workspace-adapter list entry.
 pub mod workspace;
 
-pub use event::{Envelope, Event};
+pub use event::{CompactionStrategy, Envelope, Event};
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
     OperationId, OwnerRunId, PartId, PermissionRequestId, QuestionRequestId, SessionId, TeamRunId,
