@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use hya_proto::{
     Event, FinishReason, MemberId, MemberRunStatus, PartProjection, Projection, Role, SessionId,
-    SubagentMode,
+    SubagentMode, scope,
 };
 use hya_store::ActorClaim;
 use hya_tool::AgentDef;
@@ -19,23 +19,33 @@ use crate::hooks::scope_activation_hooks;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
-/// Assign a stable, team-scoped handle (`{type}-{ordinal}`) to each member in
-/// input order, continuing the per-type ordinal across earlier spawn batches.
+/// Assign each member its **leaf** name (`{type}-{ordinal}`) within `lead_path`'s
+/// unit, in input order, continuing the per-type ordinal across earlier batches.
 ///
-/// Determinism (required for replay stability): the ordinal is derived only from
-/// the current team roster + the batch's input order — no `rand`, no wall-clock.
+/// Ordinals count **per unit**, not per team, so `main/lead-1/reviewer-1` and
+/// `main/lead-2/reviewer-1` both exist and neither is a collision. That is the
+/// point of scoping: a unit's names are its own.
+///
+/// Two rules from the PRD are enforced here, at spawn time rather than send time:
+/// a leaf must be unique among its siblings, and it must differ from its parent's
+/// leaf. The second one bites in practice — a `lead`-type agent at `main/lead-1`
+/// spawning a `lead`-type child would otherwise mint `lead-1` again, producing
+/// `main/lead-1/lead-1` and making `send("lead-1")` ambiguous. The minter skips
+/// to the next ordinal instead.
+///
+/// Determinism (required for replay stability): every choice is derived from the
+/// current roster and the batch's input order — no `rand`, no wall-clock.
 /// Assigning sequentially here, before the parallel spawn, prevents concurrent
-/// members from racing to the same ordinal. The main/root registration (its
-/// session is the team root) is excluded from the counts so member handles start
-/// at `-1`.
+/// members from racing to the same ordinal.
 ///
 /// Resume path: when a member reuses an existing child session that already has
-/// a roster binding, that handle is returned as-is. Allocating a second handle
-/// for the same session would make the TUI roster list the agent twice and
+/// a roster binding, that leaf is returned as-is. Allocating a second handle for
+/// the same session would make the TUI roster list the agent twice and
 /// multi-highlight both rows (they share one session id as the select value).
 async fn assign_handles(
     engine: &SessionEngine,
     root: SessionId,
+    lead_path: &str,
     specs: &[MemberSpec],
 ) -> Vec<String> {
     let roster = engine
@@ -43,26 +53,40 @@ async fn assign_handles(
         .await
         .map(|p| p.team.roster)
         .unwrap_or_default();
+
+    // Only this unit's existing members shape the ordinals and the taken set.
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-    for entry in roster.values() {
-        if entry.session != root {
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    for (path, entry) in &roster {
+        if scope::parent_path(path) == Some(lead_path) {
             *counts
                 .entry(entry.agent_type.as_str().to_string())
                 .or_insert(0) += 1;
+            taken.insert(scope::leaf(path).to_string());
         }
     }
+    let parent_leaf = scope::leaf(lead_path).to_string();
+
     let mut handles = Vec::with_capacity(specs.len());
     for spec in specs {
         if let Some(session) = spec.session
             && let Some(existing) = roster.values().find(|entry| entry.session == session)
         {
-            handles.push(existing.handle.clone());
+            handles.push(scope::leaf(&existing.handle).to_string());
             continue;
         }
         let agent_type = spec.agent.name.as_str().to_string();
         let ordinal = counts.entry(agent_type.clone()).or_insert(0);
-        *ordinal += 1;
-        handles.push(format!("{agent_type}-{ordinal}"));
+        // Terminates: `taken` is finite and the ordinal only ever grows.
+        let leaf = loop {
+            *ordinal += 1;
+            let candidate = format!("{agent_type}-{ordinal}");
+            if candidate != parent_leaf && !taken.contains(&candidate) {
+                break candidate;
+            }
+        };
+        taken.insert(leaf.clone());
+        handles.push(leaf);
     }
     handles
 }
@@ -193,6 +217,7 @@ struct MemberRunOutcome {
 async fn run_member(
     engine: Arc<SessionEngine>,
     lead: SessionId,
+    lead_path: String,
     spec: MemberSpec,
     handle: String,
     cancel: CancellationToken,
@@ -261,9 +286,26 @@ async fn run_member(
             Event::AgentRegistered {
                 session: root,
                 agent_session: child,
-                handle,
+                handle: handle.clone(),
+                parent: Some(lead_path.clone()),
                 agent_type: spec.agent.name.clone(),
                 mode: SubagentMode::Transient,
+            },
+        )
+        .await?;
+    // Auto-join the unit's reserved announce channel. This is what makes
+    // `announce` reach exactly the leader's DIRECT reports (task 08-07, R6):
+    // the membership set IS the unit, so the existing channel fan-out delivers
+    // one level and no further. Emitting a real event (rather than synthesizing
+    // membership in the reducer) keeps the projection replayable by any binary.
+    engine
+        .emit_for_actor(
+            actor_claim.as_ref(),
+            root,
+            Event::ChannelJoined {
+                session: root,
+                channel: scope::announce_channel_of(&lead_path),
+                member: scope::join_path(&lead_path, &handle),
             },
         )
         .await?;
@@ -551,6 +593,13 @@ async fn run_team_inner(
     let _ = engine
         .ensure_root_registered_for_actor(root, actor_claim.as_ref())
         .await;
+    // The spawning agent's canonical path is the unit these members join. It is
+    // resolved once, before the parallel spawn, so every member in the batch is
+    // registered under the same parent even if the roster changes underneath.
+    let lead_path = engine
+        .resolve_handle(root, lead)
+        .await
+        .unwrap_or_else(|_| scope::ROOT_HANDLE.to_string());
     // Resume (existing child session): reuse member id + roster handle so finish /
     // tree events upsert the original row instead of appending a duplicate.
     let mut specs = specs;
@@ -559,17 +608,26 @@ async fn run_team_inner(
             spec.id = resolve_member_id(&engine, lead, spec.id, session).await;
         }
     }
-    let handles = assign_handles(&engine, root, &specs).await;
+    let handles = assign_handles(&engine, root, &lead_path, &specs).await;
 
     let mut member_tasks = Vec::new();
     for (spec, handle) in specs.into_iter().zip(handles) {
         let engine = engine.clone();
         let child_cancel = cancel.child_token();
         let id = spec.id;
+        let lead_path = lead_path.clone();
         let task = tokio::spawn(async move {
             scope_admission_member(
                 admission,
-                run_member(engine, lead, spec, handle, child_cancel, actor_claim),
+                run_member(
+                    engine,
+                    lead,
+                    lead_path,
+                    spec,
+                    handle,
+                    child_cancel,
+                    actor_claim,
+                ),
             )
             .await
         });
@@ -687,4 +745,174 @@ pub async fn project_envelope_for_actor(
         )
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod handle_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use hya_proto::{AgentName, ModelRef};
+    use hya_provider::ProviderRouter;
+    use hya_store::SessionStore;
+    use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+
+    use super::*;
+    use crate::bus::EventBus;
+
+    async fn engine() -> SessionEngine {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let router = Arc::new(ProviderRouter::new());
+        let runtime = crate::test_support::runtime(ToolRegistry::builtins());
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+        SessionEngine::new(store, router, runtime, permission, EventBus::default())
+    }
+
+    async fn root_team(engine: &SessionEngine) -> SessionId {
+        engine
+            .create(CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap()
+    }
+
+    fn spec(engine: &SessionEngine, agent_type: &str) -> MemberSpec {
+        let workdir = std::path::PathBuf::from(".");
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        MemberSpec {
+            id: MemberId::new(),
+            agent: AgentSpec {
+                name: AgentName::new(agent_type),
+                model: ModelRef::new("fake"),
+                system_prompt: String::new(),
+                workdir,
+                reasoning: None,
+            },
+            binding,
+            agents: Arc::from([]),
+            resources: None,
+            guidance: None,
+            directive: String::new(),
+            description: String::new(),
+            session: None,
+            sidecar_factory: None,
+        }
+    }
+
+    /// Register one agent so later batches see it as an existing sibling.
+    async fn register(engine: &SessionEngine, root: SessionId, parent: &str, leaf: &str, ty: &str) {
+        let session = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: AgentName::new(ty),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: session,
+                    handle: leaf.to_string(),
+                    parent: Some(parent.to_string()),
+                    agent_type: AgentName::new(ty),
+                    mode: SubagentMode::Transient,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Ordinals count per unit, so two units independently start at `-1`. This is
+    /// what lets a unit own its own names (task 08-07, R1).
+    #[tokio::test]
+    async fn ordinals_restart_in_each_unit() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        register(&engine, root, "main", "lead-1", "lead").await;
+        register(&engine, root, "main", "lead-2", "lead").await;
+        register(&engine, root, "main/lead-1", "worker-1", "worker").await;
+
+        // lead-1 already has a worker-1, so its next worker is worker-2 ...
+        let mine = assign_handles(&engine, root, "main/lead-1", &[spec(&engine, "worker")]).await;
+        assert_eq!(mine, vec!["worker-2".to_string()]);
+
+        // ... while lead-2's unit is empty and starts over at worker-1.
+        let theirs = assign_handles(&engine, root, "main/lead-2", &[spec(&engine, "worker")]).await;
+        assert_eq!(theirs, vec!["worker-1".to_string()]);
+    }
+
+    /// A leaf may never equal its parent's leaf, or `send("lead-1")` from a child
+    /// would be ambiguous between its parent and its sibling (R2, AC3).
+    #[tokio::test]
+    async fn a_child_never_takes_its_parents_leaf() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        register(&engine, root, "main", "lead-1", "lead").await;
+
+        // A `lead`-type child of `main/lead-1` would naively mint `lead-1` again.
+        let handles = assign_handles(&engine, root, "main/lead-1", &[spec(&engine, "lead")]).await;
+        assert_eq!(
+            handles,
+            vec!["lead-2".to_string()],
+            "the minter must skip the ordinal that collides with the parent"
+        );
+    }
+
+    /// Every leaf in one batch is distinct, and none collides with an existing
+    /// sibling (R2, AC3).
+    #[tokio::test]
+    async fn a_batch_never_repeats_a_sibling_leaf() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        register(&engine, root, "main", "lead-1", "lead").await;
+        register(&engine, root, "main/lead-1", "worker-1", "worker").await;
+        register(&engine, root, "main/lead-1", "worker-3", "worker").await;
+
+        let batch: Vec<MemberSpec> = (0..3).map(|_| spec(&engine, "worker")).collect();
+        let handles = assign_handles(&engine, root, "main/lead-1", &batch).await;
+
+        let unique: BTreeSet<&String> = handles.iter().collect();
+        assert_eq!(unique.len(), handles.len(), "no duplicate within the batch");
+        for existing in ["worker-1", "worker-3"] {
+            assert!(
+                !handles.iter().any(|handle| handle == existing),
+                "`{existing}` is already taken in this unit, got {handles:?}"
+            );
+        }
+    }
+
+    /// Replay stability depends on this: the same roster and the same batch order
+    /// must always produce the same leaves (AC11).
+    #[tokio::test]
+    async fn assignment_is_deterministic_across_runs() {
+        let engine = engine().await;
+        let root = root_team(&engine).await;
+        register(&engine, root, "main", "lead-1", "lead").await;
+        register(&engine, root, "main/lead-1", "worker-1", "worker").await;
+
+        let batch: Vec<MemberSpec> = vec![
+            spec(&engine, "worker"),
+            spec(&engine, "reviewer"),
+            spec(&engine, "worker"),
+        ];
+        let first = assign_handles(&engine, root, "main/lead-1", &batch).await;
+        let second = assign_handles(&engine, root, "main/lead-1", &batch).await;
+        assert_eq!(first, second, "assignment must not depend on run order");
+        assert_eq!(
+            first,
+            vec![
+                "worker-2".to_string(),
+                "reviewer-1".to_string(),
+                "worker-3".to_string()
+            ]
+        );
+    }
 }

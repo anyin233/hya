@@ -1,7 +1,7 @@
 import { createMemo, Show } from "solid-js"
 import { Spinner } from "../../component/spinner"
 import { DialogSelect } from "../../ui/dialog-select"
-import { flattenRunTree, resolveLifecyclePresentation, type RunTreeResource } from "./subagent-workspace"
+import { flattenRunTree, resolveLifecyclePresentation, rosterLabel, type RunTreeResource } from "./subagent-workspace"
 
 export type SubagentPlacement = "tab" | "vertical" | "horizontal"
 
@@ -25,7 +25,7 @@ export function DialogSubagent(props: {
         row.depth === 0
           ? `Main · ${node.agent ?? "agent"} · ${sessionID ?? "pending"}`
           : [
-              "  ".repeat(row.depth) + (node.roster?.handle ?? (sessionID ? "subagent" : "pending")),
+              "  ".repeat(row.depth) + (rosterLabel(node.roster?.handle) ?? (sessionID ? "subagent" : "pending")),
               node.roster?.agent_type ?? node.member?.subagent_type,
               lifecycle.label,
               node.roster?.current_task ?? node.member?.description,

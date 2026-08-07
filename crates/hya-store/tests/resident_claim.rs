@@ -62,6 +62,7 @@ async fn stop_fixture(path: &str) -> StopFixture {
                 session: root,
                 agent_session: actor,
                 handle: handle.clone(),
+                parent: None,
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -141,7 +142,10 @@ async fn stop_fixture(path: &str) -> StopFixture {
         store,
         root,
         actor,
-        handle,
+        // The fixture carries the CANONICAL path: `AgentRegistered` above records
+        // the leaf, but every emitted event and projection key uses the path, and
+        // `finalize_resident_stop` accepts either form.
+        handle: format!("main/{handle}"),
         claim,
         operation,
     }
@@ -227,6 +231,8 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
     let root = SessionId::new();
     let actor = SessionId::new();
     let handle = "resident-1";
+    // Projection maps are keyed by canonical path; the event carries the leaf.
+    let path = "main/resident-1";
 
     store
         .append_event(
@@ -235,6 +241,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
                 session: root,
                 agent_session: actor,
                 handle: handle.to_string(),
+                parent: None,
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -359,7 +366,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
             handle: event_handle,
             status: RosterStatus::Failed,
             current_task: Some(task),
-        } if *session == root && event_handle == handle && task == "resident stopped"
+        } if *session == root && event_handle == path && task == "resident stopped"
     ));
 
     let failed_events = events
@@ -373,7 +380,7 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
                     status: RosterStatus::Failed,
                     current_task: Some(task),
                 } if *session == root
-                    && event_handle == handle
+                    && event_handle == path
                     && task == "resident stopped"
             )
         })
@@ -384,9 +391,9 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
     assert!(admissions[0].logical_released);
 
     let projection = store.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(handle).unwrap();
+    let entry = projection.team.roster.get(path).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
-    let inbox_len = projection.team.inboxes.get(handle).map_or(0, Vec::len);
+    let inbox_len = projection.team.inboxes.get(path).map_or(0, Vec::len);
     assert_eq!(inbox_len, 1);
     assert_eq!(entry.resident_cursor, inbox_len as u64);
     assert!(!store.active_actor_ids().await.unwrap().contains(&actor));
@@ -435,6 +442,8 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     let root = SessionId::new();
     let actor = SessionId::new();
     let handle = "resident-1";
+    // Projection maps are keyed by canonical path; the event carries the leaf.
+    let path = "main/resident-1";
     store
         .append_event(
             root,
@@ -442,6 +451,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
                 session: root,
                 agent_session: actor,
                 handle: handle.to_string(),
+                parent: None,
                 agent_type: AgentName::new("resident"),
                 mode: SubagentMode::Resident,
             },
@@ -471,7 +481,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
             body,
         } if *session == root
             && from == "main"
-            && recipient == handle
+            && recipient == path
             && body == "epoch independent"
     ));
 
@@ -484,11 +494,8 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     assert!(store.validate_actor_claim(&recovered.claim).await.is_ok());
 
     let projection = store.read_projection(root).await.unwrap();
-    assert_eq!(projection.team.inboxes.get(handle).unwrap().len(), 1);
-    assert_eq!(
-        projection.team.roster.get(handle).unwrap().resident_cursor,
-        0
-    );
+    assert_eq!(projection.team.inboxes.get(path).unwrap().len(), 1);
+    assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 0);
 
     let (events, admissions) = store
         .finalize_resident_stop(&recovered.claim, root, handle)
@@ -506,7 +513,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
                     status: RosterStatus::Failed,
                     current_task: Some(task),
                 } if *session == root
-                    && event_handle == handle
+                    && event_handle == path
                     && task == "resident stopped"
             ))
             .count(),
@@ -519,11 +526,8 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
     ));
 
     let projection = store.read_projection(root).await.unwrap();
-    assert_eq!(projection.team.inboxes.get(handle).unwrap().len(), 1);
-    assert_eq!(
-        projection.team.roster.get(handle).unwrap().resident_cursor,
-        1
-    );
+    assert_eq!(projection.team.inboxes.get(path).unwrap().len(), 1);
+    assert_eq!(projection.team.roster.get(path).unwrap().resident_cursor, 1);
 
     let (events, admissions) = store
         .finalize_resident_stop(&recovered.claim, root, handle)
@@ -544,7 +548,7 @@ async fn resident_mail_remains_epoch_independent_until_explicit_stop() {
                     status: RosterStatus::Failed,
                     current_task: Some(task),
                 } if *session == root
-                    && event_handle == handle
+                    && event_handle == path
                     && task == "resident stopped"
             ))
             .count(),

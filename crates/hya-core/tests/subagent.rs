@@ -1854,7 +1854,7 @@ async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
 
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projection.team.roster.get(&handle).unwrap().status,
+        projection.team.roster.get(handle.as_str()).unwrap().status,
         RosterStatus::Idle
     );
     {
@@ -1957,7 +1957,7 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     );
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
     assert!(supervisor.team_cancel(root).is_none());
@@ -2236,7 +2236,7 @@ async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
     let stop_events = engine
@@ -2627,7 +2627,7 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
     );
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Idle);
     assert_ne!(entry.current_task.as_deref(), Some("resident stopped"));
 }
@@ -2687,7 +2687,7 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
 
     let before_send = primary.read_projection(root).await.unwrap();
     assert_eq!(
-        before_send.team.roster.get(&handle).unwrap().status,
+        before_send.team.roster.get(handle.as_str()).unwrap().status,
         RosterStatus::Idle
     );
 
@@ -2764,7 +2764,7 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
     ));
 
     let projection = primary.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     let inbox_len = projection.team.inboxes.get(&handle).map_or(0, Vec::len);
     assert_eq!(inbox_len, 1);
@@ -2884,7 +2884,7 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert!(
         entry
@@ -3426,7 +3426,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
     assert!(supervisor.team_cancel(root).is_none());
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     let child_projection = engine.read_projection(child).await.unwrap();
     assert!(!child_projection.session.messages.iter().any(|message| {
@@ -3826,7 +3826,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
             .any(|message| matches!(message.role, Role::User))
     );
     let root_projection = engine.read_projection(root).await.unwrap();
-    let worker = root_projection.team.roster.get("worker-1").unwrap();
+    let worker = root_projection.team.roster.get("main/worker-1").unwrap();
     assert_eq!(worker.status, RosterStatus::Idle);
     assert!(!matches!(worker.status, RosterStatus::Busy));
 
@@ -3982,7 +3982,9 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
                 status: RosterStatus::Failed,
                 current_task: Some(task),
             } if *session == root
-                && handle == "worker-1"
+                // Activity events carry the canonical path; only
+                // `AgentRegistered.handle` is still the bare leaf.
+                && handle == "main/worker-1"
                 && task.contains("sidecar ACK rejected")
         ) {
             break;
@@ -4052,7 +4054,9 @@ async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry()
         terminates: terminates.clone(),
         shutdowns: shutdowns.clone(),
     });
-    let handle = "worker-1".to_string();
+    // Canonical path: registration accepts either form, and every event and
+    // roster key now carries the path (task 08-07).
+    let handle = "main/worker-1".to_string();
     supervisor
         .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
         .await
@@ -4211,7 +4215,9 @@ async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempoten
         release: release.clone(),
         terminates: terminates.clone(),
     });
-    let handle = "worker-1".to_string();
+    // Canonical path: registration accepts either form, and every event and
+    // roster key now carries the path (task 08-07).
+    let handle = "main/worker-1".to_string();
     supervisor
         .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
         .await

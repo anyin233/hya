@@ -46,11 +46,20 @@ const SYS_A: &str = "SYS_MARKER_A";
 const SYS_B: &str = "SYS_MARKER_B";
 const SYS_C: &str = "SYS_MARKER_C";
 
-/// `ResidentSupervisor::assign_handle` names members `{agent_type}-{n}` in spawn
-/// order, so position in the `task` batch fixes the handle.
+/// `ResidentSupervisor::assign_handle` names members `{agent_type}-{n}` within
+/// their unit in spawn order, so position in the `task` batch fixes the leaf.
+///
+/// These three are all spawned by the root, so they are peers in one unit and
+/// address each other by leaf. Their canonical paths (below) are what the roster
+/// and every delivery receipt are keyed by.
 const H1: &str = "general-1";
 const H2: &str = "general-2";
 const H3: &str = "general-3";
+
+/// Canonical paths of the same three agents (task 08-07): the roster is keyed by
+/// path, while `send` still accepts the relative leaf a teammate would type.
+const P1: &str = "main/general-1";
+const P2: &str = "main/general-2";
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -150,8 +159,8 @@ async fn t2_4_roster_and_list_agents_report_live_team_from_a_resident() {
     let a = env.route_dump(SYS_A).expect("A dump");
 
     let tree = env.session_tree(&session).await.expect("tree");
-    let b_entry = tree_roster_entry(&tree, H1)
-        .unwrap_or_else(|| panic!("{H1} missing from run tree; tree={tree}"));
+    let b_entry = tree_roster_entry(&tree, P1)
+        .unwrap_or_else(|| panic!("{P1} missing from run tree; tree={tree}"));
     let b_session = b_entry
         .get("session")
         .and_then(Value::as_str)
@@ -161,7 +170,7 @@ async fn t2_4_roster_and_list_agents_report_live_team_from_a_resident() {
     // status, and its real session id. The session id is the load-bearing one:
     // A never supplied it, so it can only come from projected team state.
     for needle in [
-        H1,
+        P1,
         "\\\"type\\\":\\\"general\\\"",
         "\\\"status\\\"",
         b_session,
@@ -174,8 +183,8 @@ async fn t2_4_roster_and_list_agents_report_live_team_from_a_resident() {
         );
     }
     assert!(
-        a.contains(H2),
-        "roster must also list the calling resident {H2}; dump={a}; {}",
+        a.contains(P2),
+        "roster must also list the calling resident {P2}; dump={a}; {}",
         env.diagnostics()
     );
     // `list_agents` is agent *definitions*, not the live roster: a resident must
@@ -229,7 +238,7 @@ async fn t2_5_direct_send_is_delivered_into_the_recipients_next_turn() {
 
     let b = env.route_dump(SYS_B).expect("B dump");
     assert!(
-        b.contains(&format!("[mail from {H2}] {BODY}")),
+        b.contains(&format!("[mail from {P2}] {BODY}")),
         "delivery must arrive attributed to the sender's handle; dump={b}; {}",
         env.diagnostics()
     );
@@ -280,7 +289,7 @@ async fn t2_6_channel_send_reaches_subscribers_and_reports_real_recipients() {
     expect_route_sees(&env, &[SYS_A, SYS_B], SYS_B, BODY).await;
     let b = env.route_dump(SYS_B).expect("B dump");
     assert!(
-        b.contains(&format!("[mail from {H2}] {BODY}")),
+        b.contains(&format!("[mail from {P2}] {BODY}")),
         "channel post must arrive attributed to the sender's handle; dump={b}; {}",
         env.diagnostics()
     );
@@ -293,7 +302,7 @@ async fn t2_6_channel_send_reaches_subscribers_and_reports_real_recipients() {
     // counts real subscribers (`SessionStore::append_channel_mail` walks
     // `channels[squad].members`), and A never joined, so `to #squad
     // (1 recipient)` can only come from B's membership.
-    let channel_receipt = format!("Delivered from {H2} to #squad (1 recipient).");
+    let channel_receipt = format!("Delivered from {P2} to #squad (1 recipient).");
     expect_route_sees(&env, &[SYS_A, SYS_B], SYS_A, &channel_receipt).await;
 }
 
@@ -341,7 +350,7 @@ async fn t2_9_channels_lists_membership_and_message_counts() {
     let a = env.route_dump(SYS_A).expect("A dump");
     // A never named B, so B's handle here can only come from channel membership.
     for needle in [
-        format!("\\\"members\\\":[\\\"{H1}\\\"]"),
+        format!("\\\"members\\\":[\\\"{P1}\\\"]"),
         "\\\"messages\\\":1".to_string(),
     ] {
         assert!(
@@ -515,6 +524,87 @@ async fn t2_11_leave_stops_channel_mail_reaching_the_departed_member() {
     assert!(
         !b.contains(AFTER_LEAVE),
         "channel mail must not reach a member that left the channel; dump={b}; {}",
+        env.diagnostics()
+    );
+}
+
+/// T2.12 — an agent cannot reach another unit, and the payload never crosses
+/// (task 08-07, AC1).
+///
+/// Two levels deep, so there are genuinely two units:
+///
+/// ```text
+/// main
+/// ├── general-1              (B — the root's unit)
+/// └── general-2              (A — the root's unit, and a leader)
+///     └── general-1          (C — A's unit; its own leaf, restarted per unit)
+/// ```
+///
+/// C and B share no parent, so C may not address B. C tries anyway, using B's
+/// full path so the address is unambiguous rather than a leaf that happens to
+/// match nothing.
+///
+/// Two oracles, because a rejection alone would also be produced by a broken
+/// send that silently delivered elsewhere:
+///
+/// 1. C's **own** follow-up request carries the refusal, so the tool really
+///    failed rather than quietly succeeding; and
+/// 2. B's dump never contains the payload — nothing crossed the boundary.
+#[tokio::test]
+async fn t2_12_cross_unit_send_is_refused_and_never_crosses() {
+    const CROSS: &str = "CROSS_UNIT_MARKER_X1";
+    const TO_PARENT: &str = "TO_PARENT_MARKER_X2";
+
+    let env = E2eEnvBuilder::new()
+        .scripts(root_spawn_scripts(vec![
+            resident_member(SYS_B, "B stands by in the root's unit"),
+            resident_member(SYS_A, "A leads its own unit"),
+        ]))
+        .route(
+            SYS_A,
+            vec![
+                // A opens a unit of its own by spawning C.
+                tool_step(
+                    "task",
+                    json!({ "members": [resident_member(SYS_C, "C probes the boundary")] }),
+                ),
+                text_step("A_SPAWNED"),
+                text_step("A_GOT_CHILD_MAIL"),
+            ],
+        )
+        .route(SYS_B, vec![text_step("B_IDLE")])
+        .route(
+            SYS_C,
+            vec![
+                // Out of scope: B is in the ROOT's unit, C is in A's.
+                tool_step("send", json!({ "to": P1, "body": CROSS })),
+                // In scope: C's own parent, addressed by its short name.
+                tool_step("send", json!({ "to": H2, "body": TO_PARENT })),
+                text_step("C_DONE"),
+            ],
+        )
+        .build()
+        .await
+        .expect("e2e env");
+
+    let markers = [SYS_A, SYS_B, SYS_C];
+    let _session = start_team(&env, &markers).await;
+
+    // Control: the in-scope send to C's parent DID arrive, so C's turn really
+    // ran and the refusal below is about scope, not about C never acting.
+    expect_route_sees(&env, &markers, SYS_A, TO_PARENT).await;
+
+    let c = env.route_dump(SYS_C).expect("C dump");
+    assert!(
+        c.contains("not a teammate you can message"),
+        "C's follow-up must carry the scope refusal; dump={c}; {}",
+        env.diagnostics()
+    );
+
+    let b = env.route_dump(SYS_B).expect("B dump");
+    assert!(
+        !b.contains(CROSS),
+        "a cross-unit payload must never reach the other unit; dump={b}; {}",
         env.diagnostics()
     );
 }

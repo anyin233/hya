@@ -11,7 +11,8 @@
 //! mail; this module itself only persists and publishes.
 
 use hya_proto::{
-    AgentName, Event, MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, SubagentMode,
+    AgentName, Event, MailEndpoint, MailKind, RosterStatus, ScopedRoster, SessionId, SubagentMode,
+    scope,
 };
 use hya_tool::{ChannelInfo, MailReceipt};
 
@@ -21,7 +22,11 @@ use crate::error::CoreError;
 /// The handle assigned to a team's root / main agent. Fixed (not derived from an
 /// ordinal) because there is exactly one main agent per team, and a stable,
 /// well-known handle keeps replay deterministic and lets members address it.
-pub(crate) const MAIN_HANDLE: &str = "main";
+///
+/// Aliases [`scope::ROOT_HANDLE`] rather than repeating the literal: the reducer
+/// derives every canonical path from that constant, so a second definition that
+/// drifted would silently split the root into two roster entries.
+pub(crate) const MAIN_HANDLE: &str = scope::ROOT_HANDLE;
 
 impl SessionEngine {
     /// The team-root session for `session` (walks the `parent` chain to the top).
@@ -89,6 +94,7 @@ impl SessionEngine {
                 session: root,
                 agent_session: root,
                 handle: MAIN_HANDLE.to_string(),
+                parent: None,
                 agent_type,
                 mode: SubagentMode::Transient,
             },
@@ -97,10 +103,10 @@ impl SessionEngine {
         Ok(MAIN_HANDLE.to_string())
     }
 
-    /// Resolve the acting `session` to its team-scoped handle. The root falls back
-    /// to lazily-registered [`MAIN_HANDLE`]; any other unregistered session is an
+    /// Resolve the acting `session` to its canonical path. The root falls back to
+    /// lazily-registered [`MAIN_HANDLE`]; any other unregistered session is an
     /// error (only spawned/registered members can act on the mailbox).
-    async fn resolve_handle(
+    pub(crate) async fn resolve_handle(
         &self,
         root: SessionId,
         session: SessionId,
@@ -121,6 +127,28 @@ impl SessionEngine {
             "this agent has no team handle yet; it must be spawned as a team member to use the mailbox"
                 .to_string(),
         ))
+    }
+
+    /// The canonical path of the agent that spawned `session` — the unit
+    /// `session` belongs to.
+    ///
+    /// Derived from `session`'s own lineage so callers that only hold the child
+    /// (the `register_existing_resident*` entry points) need not thread a parent
+    /// path through their signatures.
+    ///
+    /// Falls back to the team root when the parent is unknown or itself
+    /// unregistered. That reproduces the pre-scoping flat arrangement for such a
+    /// session rather than failing its spawn: an agent placed at the root is
+    /// still reachable, whereas a rejected registration would strand it.
+    pub(crate) async fn parent_agent_path(&self, root: SessionId, session: SessionId) -> String {
+        let fallback = scope::ROOT_HANDLE.to_string();
+        let Ok(projection) = self.read_projection(session).await else {
+            return fallback;
+        };
+        let Some(parent) = projection.session.parent else {
+            return fallback;
+        };
+        self.resolve_handle(root, parent).await.unwrap_or(fallback)
     }
 
     /// Send mail from `from_session` to a handle or `#channel`. Appends a single
@@ -191,7 +219,43 @@ impl SessionEngine {
         })
     }
 
-    /// Subscribe the acting agent's handle to `channel`.
+    /// Post a one-way announcement to the unit the acting agent leads (R6).
+    ///
+    /// Reaches direct reports only. A whole-swarm announcement costs one call per
+    /// level, each made deliberately by that level's leader.
+    pub async fn mail_announce(
+        &self,
+        from_session: SessionId,
+        body: String,
+    ) -> Result<MailReceipt, CoreError> {
+        self.mail_announce_for_actor(from_session, body, None).await
+    }
+
+    pub(crate) async fn mail_announce_for_actor(
+        &self,
+        from_session: SessionId,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<MailReceipt, CoreError> {
+        let root = self.team_root(from_session).await?;
+        let from = self.resolve_handle(root, from_session).await?;
+        let (envelope, recipients) = self
+            .store()
+            .append_announce_mail(root, from.clone(), body, actor_claim)
+            .await?;
+        self.publish_envelope(envelope);
+        Ok(MailReceipt {
+            to: MailEndpoint::Channel(scope::announce_channel_of(&from)),
+            from,
+            recipients,
+        })
+    }
+
+    /// Subscribe the acting agent to `channel` within its own unit.
+    ///
+    /// `channel` is the bare name as written (`build`, or `^build` for a leader's
+    /// home unit). Resolution happens against the acting agent's position, so a
+    /// join can never reach another unit's channel of the same name.
     pub(crate) async fn channel_join(
         &self,
         session: SessionId,
@@ -200,6 +264,7 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         let root = self.team_root(session).await?;
         let member = self.resolve_handle(root, session).await?;
+        let channel = self.resolve_channel_key(root, &member, &channel).await?;
         self.emit_for_actor(
             actor_claim,
             root,
@@ -212,7 +277,7 @@ impl SessionEngine {
         .await
     }
 
-    /// Unsubscribe the acting agent's handle from `channel`.
+    /// Unsubscribe the acting agent from `channel` within its own unit.
     pub(crate) async fn channel_leave(
         &self,
         session: SessionId,
@@ -221,6 +286,7 @@ impl SessionEngine {
     ) -> Result<(), CoreError> {
         let root = self.team_root(session).await?;
         let member = self.resolve_handle(root, session).await?;
+        let channel = self.resolve_channel_key(root, &member, &channel).await?;
         self.emit_for_actor(
             actor_claim,
             root,
@@ -233,30 +299,46 @@ impl SessionEngine {
         .await
     }
 
-    /// The live roster for the team `session` belongs to (sorted by handle).
-    pub(crate) async fn team_roster(
+    /// Resolve a bare channel name against the acting agent's unit membership.
+    async fn resolve_channel_key(
         &self,
-        session: SessionId,
-    ) -> Result<Vec<RosterEntry>, CoreError> {
-        let root = self.team_root(session).await?;
+        root: SessionId,
+        member: &str,
+        channel: &str,
+    ) -> Result<String, CoreError> {
         let projection = self.read_projection(root).await?;
-        Ok(projection.team.roster.into_values().collect())
+        projection
+            .team
+            .resolve_channel(member, channel)
+            .map_err(|error| CoreError::Invalid(error.to_string()))
     }
 
-    /// The channels + membership for the team `session` belongs to (sorted by name).
+    /// The roster as the acting agent sees it: its parent, its same-parent peers,
+    /// and its direct reports. Agents in other units are not returned at all.
+    pub(crate) async fn team_roster(&self, session: SessionId) -> Result<ScopedRoster, CoreError> {
+        let root = self.team_root(session).await?;
+        let handle = self.resolve_handle(root, session).await?;
+        let projection = self.read_projection(root).await?;
+        Ok(projection.team.scoped_roster(&handle))
+    }
+
+    /// The channels the acting agent may see: its home unit's and, when it leads
+    /// one, its own unit's. Reserved announce channels are excluded.
     pub(crate) async fn team_channels(
         &self,
         session: SessionId,
     ) -> Result<Vec<ChannelInfo>, CoreError> {
         let root = self.team_root(session).await?;
+        let handle = self.resolve_handle(root, session).await?;
         let projection = self.read_projection(root).await?;
         Ok(projection
             .team
-            .channels
+            .scoped_channels(&handle)
             .into_iter()
-            .map(|(name, channel)| ChannelInfo {
-                name,
-                members: channel.members.into_iter().collect(),
+            .map(|(key, channel)| ChannelInfo {
+                name: scope::channel_name(key).to_string(),
+                unit: scope::channel_unit(key).unwrap_or(key).to_string(),
+                members: channel.members.iter().cloned().collect(),
                 messages: channel.log.len(),
             })
             .collect())
@@ -337,6 +419,7 @@ mod tests {
                     session: root,
                     agent_session: reviewer_1,
                     handle: "reviewer-1".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("reviewer"),
                     mode: SubagentMode::Resident,
                 },
@@ -351,6 +434,7 @@ mod tests {
                     session: root,
                     agent_session: reviewer_2,
                     handle: "reviewer-2".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("reviewer"),
                     mode: SubagentMode::Resident,
                 },
@@ -403,8 +487,8 @@ mod tests {
                 .map(|m| m.iter().map(|x| x.body.clone()).collect::<Vec<_>>())
                 .unwrap_or_default()
         };
-        assert_eq!(body_of("reviewer-1"), vec!["ship it".to_string()]);
-        assert_eq!(body_of("reviewer-2"), vec!["ship it".to_string()]);
+        assert_eq!(body_of("main/reviewer-1"), vec!["ship it".to_string()]);
+        assert_eq!(body_of("main/reviewer-2"), vec!["ship it".to_string()]);
         assert!(
             projection.team.roster.contains_key(MAIN_HANDLE),
             "main is on the roster"
@@ -455,6 +539,7 @@ mod tests {
                     session: root,
                     agent_session: stopped,
                     handle: "stopped-1".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("resident"),
                     mode: SubagentMode::Resident,
                 },
@@ -469,6 +554,7 @@ mod tests {
                     session: root,
                     agent_session: active,
                     handle: "active-1".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("resident"),
                     mode: SubagentMode::Resident,
                 },
@@ -496,7 +582,7 @@ mod tests {
             .unwrap();
         engine
             .store()
-            .finalize_resident_stop(&stopped_claim, root, "stopped-1")
+            .finalize_resident_stop(&stopped_claim, root, "main/stopped-1")
             .await
             .unwrap();
 
@@ -523,8 +609,8 @@ mod tests {
                 .map(|inbox| inbox.iter().filter(|message| message.body == body).count())
                 .unwrap_or_default()
         };
-        assert_eq!(inbox_body("stopped-1"), 0);
-        assert_eq!(inbox_body("active-1"), 1);
+        assert_eq!(inbox_body("main/stopped-1"), 0);
+        assert_eq!(inbox_body("main/active-1"), 1);
 
         let send_first = engine
             .create(CreateSession {
@@ -543,6 +629,7 @@ mod tests {
                     session: root,
                     agent_session: send_first,
                     handle: "send-first-1".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("resident"),
                     mode: SubagentMode::Resident,
                 },
@@ -573,11 +660,11 @@ mod tests {
 
         engine
             .store()
-            .finalize_resident_stop(&send_first_claim, root, "send-first-1")
+            .finalize_resident_stop(&send_first_claim, root, "main/send-first-1")
             .await
             .unwrap();
         let projection = engine.read_projection(root).await.unwrap();
-        let send_first_inbox = projection.team.inboxes.get("send-first-1").unwrap();
+        let send_first_inbox = projection.team.inboxes.get("main/send-first-1").unwrap();
         assert_eq!(
             send_first_inbox
                 .iter()
@@ -589,7 +676,7 @@ mod tests {
             projection
                 .team
                 .roster
-                .get("send-first-1")
+                .get("main/send-first-1")
                 .unwrap()
                 .resident_cursor,
             send_first_inbox.len() as u64
@@ -598,7 +685,7 @@ mod tests {
             projection
                 .team
                 .inboxes
-                .get("active-1")
+                .get("main/active-1")
                 .unwrap()
                 .iter()
                 .filter(|message| message.body == second_body)
@@ -609,7 +696,7 @@ mod tests {
             projection
                 .team
                 .inboxes
-                .get("stopped-1")
+                .get("main/stopped-1")
                 .map(|inbox| {
                     inbox
                         .iter()
@@ -632,7 +719,7 @@ mod tests {
                         to: MailEndpoint::Channel(channel),
                         body: event_body,
                         ..
-                    } if channel == "build" && event_body == &body
+                    } if channel == "main#build" && event_body == &body
                 )
             })
             .count();
@@ -646,7 +733,7 @@ mod tests {
                         to: MailEndpoint::Channel(channel),
                         body: event_body,
                         ..
-                    } if channel == "build" && event_body == &second_body
+                    } if channel == "main#build" && event_body == &second_body
                 )
             })
             .count();
@@ -702,6 +789,7 @@ mod tests {
                     session: root,
                     agent_session: child,
                     handle: "transient-1".to_string(),
+                    parent: Some("main".to_string()),
                     agent_type: AgentName::new("reviewer"),
                     mode: SubagentMode::Transient,
                 },
@@ -845,6 +933,497 @@ mod tests {
             !replay
                 .iter()
                 .any(|envelope| matches!(&envelope.event, Event::MailSent { .. }))
+        );
+    }
+
+    // ---------------- hierarchy-scoped mailbox (task 08-07) ----------------
+
+    /// One agent in a scoped test org: its session, its canonical path, and the
+    /// claim that keeps it eligible to receive direct mail.
+    struct Agent {
+        session: SessionId,
+        path: String,
+        _claim: hya_store::ActorClaim,
+    }
+
+    /// Register a resident child of `parent`, mirroring what the spawn path does:
+    /// an `AgentRegistered` carrying the real parent, plus the auto-join of that
+    /// unit's reserved announce channel.
+    async fn register_child(
+        engine: &SessionEngine,
+        root: SessionId,
+        parent_session: SessionId,
+        parent_path: &str,
+        leaf: &str,
+    ) -> Agent {
+        let session = engine
+            .create(CreateSession {
+                parent: Some(parent_session),
+                agent: AgentName::new("worker"),
+                model: ModelRef::new("fake"),
+                workdir: ".".to_string(),
+            })
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: session,
+                    handle: leaf.to_string(),
+                    parent: Some(parent_path.to_string()),
+                    agent_type: AgentName::new("worker"),
+                    mode: SubagentMode::Resident,
+                },
+            )
+            .await
+            .unwrap();
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::ChannelJoined {
+                    session: root,
+                    channel: scope::announce_channel_of(parent_path),
+                    member: scope::join_path(parent_path, leaf),
+                },
+            )
+            .await
+            .unwrap();
+        let claim = engine
+            .store()
+            .try_claim_new(session, OwnerRunId::new())
+            .await
+            .unwrap();
+        Agent {
+            session,
+            path: scope::join_path(parent_path, leaf),
+            _claim: claim,
+        }
+    }
+
+    /// The standard two-unit org for the scope tests:
+    ///
+    /// ```text
+    /// main
+    /// ├── lead-1 ── worker-1, worker-2
+    /// └── lead-2 ── worker-1      <- same leaf as lead-1's, a different agent
+    /// ```
+    struct Org {
+        root: SessionId,
+        lead_1: Agent,
+        lead_2: Agent,
+        worker_1: Agent,
+        worker_2: Agent,
+        other_worker: Agent,
+    }
+
+    async fn org(engine: &SessionEngine) -> Org {
+        let root = root_team(engine).await;
+        engine.ensure_root_registered(root).await.unwrap();
+        let lead_1 = register_child(engine, root, root, "main", "lead-1").await;
+        let lead_2 = register_child(engine, root, root, "main", "lead-2").await;
+        let worker_1 = register_child(
+            engine,
+            root,
+            lead_1.session,
+            &lead_1.path.clone(),
+            "worker-1",
+        )
+        .await;
+        let worker_2 = register_child(
+            engine,
+            root,
+            lead_1.session,
+            &lead_1.path.clone(),
+            "worker-2",
+        )
+        .await;
+        let other_worker = register_child(
+            engine,
+            root,
+            lead_2.session,
+            &lead_2.path.clone(),
+            "worker-1",
+        )
+        .await;
+        Org {
+            root,
+            lead_1,
+            lead_2,
+            worker_1,
+            worker_2,
+            other_worker,
+        }
+    }
+
+    /// Bodies delivered to `path`'s inbox, in order.
+    async fn inbox(engine: &SessionEngine, root: SessionId, path: &str) -> Vec<String> {
+        engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .inboxes
+            .get(path)
+            .map(|inbox| inbox.iter().map(|m| m.body.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// A sibling is reachable; an agent in another unit is not — and the refused
+    /// send leaves NOTHING in the log (AC1).
+    #[tokio::test]
+    async fn sibling_is_reachable_and_cousin_is_refused_without_appending() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        engine
+            .mail_send(
+                org.worker_1.session,
+                MailEndpoint::Handle("worker-2".to_string()),
+                MailKind::Message,
+                "hello sibling".to_string(),
+            )
+            .await
+            .expect("a same-parent sibling is in scope");
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_2.path).await,
+            vec!["hello sibling".to_string()]
+        );
+
+        let before = engine.replay(org.root).await.unwrap().len();
+        let refused = engine
+            .mail_send(
+                org.worker_1.session,
+                MailEndpoint::Handle(org.other_worker.path.clone()),
+                MailKind::Message,
+                "hello cousin".to_string(),
+            )
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(CoreError::Store(hya_store::StoreError::MailboxRejected(_)))
+            ),
+            "a cousin is out of scope: {refused:?}"
+        );
+        assert_eq!(
+            engine.replay(org.root).await.unwrap().len(),
+            before,
+            "a refused send must append nothing"
+        );
+        assert!(
+            inbox(&engine, org.root, &org.other_worker.path)
+                .await
+                .is_empty()
+        );
+    }
+
+    /// Skip-level is closed in both directions: a worker cannot reach the root,
+    /// and the root cannot reach a grandchild.
+    #[tokio::test]
+    async fn grandparent_and_grandchild_are_both_refused() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        let up = engine
+            .mail_send(
+                org.worker_1.session,
+                MailEndpoint::Handle("main".to_string()),
+                MailKind::Message,
+                "skipping levels".to_string(),
+            )
+            .await;
+        assert!(
+            up.is_err(),
+            "a worker must not reach the team root directly"
+        );
+
+        let down = engine
+            .mail_send(
+                org.root,
+                MailEndpoint::Handle(org.worker_1.path.clone()),
+                MailKind::Message,
+                "reaching past lead-1".to_string(),
+            )
+            .await;
+        assert!(down.is_err(), "the root must not reach a grandchild");
+    }
+
+    /// A relative leaf and the full canonical path name the same agent (AC2).
+    #[tokio::test]
+    async fn relative_leaf_and_full_path_deliver_identically() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        for address in ["worker-2", "main/lead-1/worker-2"] {
+            engine
+                .mail_send(
+                    org.worker_1.session,
+                    MailEndpoint::Handle(address.to_string()),
+                    MailKind::Message,
+                    format!("via {address}"),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_2.path).await,
+            vec![
+                "via worker-2".to_string(),
+                "via main/lead-1/worker-2".to_string()
+            ],
+            "both spellings reach the same inbox"
+        );
+    }
+
+    /// A relative leaf resolves inside the sender's own unit even when another
+    /// unit holds an agent with the same leaf.
+    #[tokio::test]
+    async fn duplicate_leaf_across_units_resolves_to_the_senders_own() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        engine
+            .mail_send(
+                org.worker_2.session,
+                MailEndpoint::Handle("worker-1".to_string()),
+                MailKind::Message,
+                "mine".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_1.path).await,
+            vec!["mine".to_string()]
+        );
+        assert!(
+            inbox(&engine, org.root, &org.other_worker.path)
+                .await
+                .is_empty(),
+            "the other unit's worker-1 must not receive it"
+        );
+    }
+
+    /// Announce reaches DIRECT reports and stops (AC6). A grandchild hears it
+    /// only after the intermediate leader announces in turn.
+    #[tokio::test]
+    async fn announce_reaches_direct_reports_only() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        let receipt = engine
+            .mail_announce(org.root, "all hands".to_string())
+            .await
+            .unwrap();
+        assert_eq!(receipt.recipients, 2, "the root leads exactly two agents");
+
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            vec!["all hands".to_string()]
+        );
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_2.path).await,
+            vec!["all hands".to_string()]
+        );
+        for grandchild in [&org.worker_1, &org.worker_2, &org.other_worker] {
+            assert!(
+                inbox(&engine, org.root, &grandchild.path).await.is_empty(),
+                "{} must NOT hear the root's announcement",
+                grandchild.path
+            );
+        }
+
+        // The relay: lead-1 passes it down, and only ITS unit hears it.
+        engine
+            .mail_announce(org.lead_1.session, "all hands".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_1.path).await,
+            vec!["all hands".to_string()]
+        );
+        assert!(
+            inbox(&engine, org.root, &org.other_worker.path)
+                .await
+                .is_empty(),
+            "lead-2's unit is not reached by lead-1's announcement"
+        );
+    }
+
+    /// An agent that leads nobody has nothing to announce to.
+    #[tokio::test]
+    async fn announce_from_a_leaf_agent_is_refused() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        let result = engine
+            .mail_announce(org.worker_1.session, "listen up".to_string())
+            .await;
+        assert!(result.is_err(), "a leaf agent leads no one: {result:?}");
+    }
+
+    /// R5 leaves a working path: relaying through the common ancestor delivers
+    /// a message the direct send refuses (AC9).
+    #[tokio::test]
+    async fn cross_unit_relay_through_the_common_ancestor_arrives() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        // worker-1 -> lead-1 -> main -> lead-2 -> lead-2's worker-1.
+        let hops = [
+            (org.worker_1.session, "lead-1"),
+            (org.lead_1.session, "main"),
+            (org.root, "lead-2"),
+            (org.lead_2.session, "worker-1"),
+        ];
+        for (from, to) in hops {
+            engine
+                .mail_send(
+                    from,
+                    MailEndpoint::Handle(to.to_string()),
+                    MailKind::Message,
+                    "relayed payload".to_string(),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("hop to {to} must be in scope: {e:?}"));
+        }
+
+        assert_eq!(
+            inbox(&engine, org.root, &org.other_worker.path).await,
+            vec!["relayed payload".to_string()],
+            "the message crossed units, one in-scope hop at a time"
+        );
+    }
+
+    /// `#name` is the unit you lead; `#^name` is your parent's unit, and only a
+    /// leader may use it (AC5).
+    #[tokio::test]
+    async fn caret_channel_is_leader_only() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        engine
+            .channel_join(org.lead_1.session, "build".to_string(), None)
+            .await
+            .unwrap();
+        engine
+            .channel_join(org.lead_1.session, "^build".to_string(), None)
+            .await
+            .unwrap();
+
+        let channels = engine
+            .read_projection(org.root)
+            .await
+            .unwrap()
+            .team
+            .channels;
+        assert!(
+            channels
+                .get("main/lead-1#build")
+                .is_some_and(|c| c.members.contains("main/lead-1")),
+            "bare name joined the unit lead-1 LEADS"
+        );
+        assert!(
+            channels
+                .get("main#build")
+                .is_some_and(|c| c.members.contains("main/lead-1")),
+            "caret joined lead-1's HOME unit"
+        );
+
+        let refused = engine
+            .channel_join(org.worker_1.session, "^build".to_string(), None)
+            .await;
+        assert!(
+            matches!(refused, Err(CoreError::Invalid(_))),
+            "a leaf agent has no second unit to disambiguate: {refused:?}"
+        );
+    }
+
+    /// Two units each own a `#build`; a post in one never reaches the other (AC4).
+    #[tokio::test]
+    async fn same_channel_name_in_two_units_stays_separate() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        engine
+            .channel_join(org.worker_1.session, "build".to_string(), None)
+            .await
+            .unwrap();
+        engine
+            .channel_join(org.other_worker.session, "build".to_string(), None)
+            .await
+            .unwrap();
+
+        engine
+            .mail_send(
+                org.lead_1.session,
+                MailEndpoint::Channel("build".to_string()),
+                MailKind::Message,
+                "unit one".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            inbox(&engine, org.root, &org.worker_1.path).await,
+            vec!["unit one".to_string()]
+        );
+        assert!(
+            inbox(&engine, org.root, &org.other_worker.path)
+                .await
+                .is_empty(),
+            "the other unit's #build is a different channel"
+        );
+    }
+
+    /// The roster is bucketed by relation and stops at the unit boundary (AC7),
+    /// and channel listings hide the reserved announce channel.
+    #[tokio::test]
+    async fn scoped_roster_and_channels_stop_at_the_unit_boundary() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        let roster = engine.team_roster(org.worker_1.session).await.unwrap();
+        assert_eq!(roster.self_path, "main/lead-1/worker-1");
+        assert_eq!(
+            roster.parent.as_ref().map(|e| e.handle.as_str()),
+            Some("main/lead-1")
+        );
+        assert_eq!(
+            roster
+                .peers
+                .iter()
+                .map(|e| e.handle.as_str())
+                .collect::<Vec<_>>(),
+            vec!["main/lead-1/worker-2"]
+        );
+        assert!(roster.reports.is_empty());
+        assert_eq!(
+            roster.entries().len(),
+            2,
+            "six agents exist; a worker sees two"
+        );
+
+        // Every agent auto-joined an announce channel, yet none is listed.
+        let channels = engine.team_channels(org.worker_1.session).await.unwrap();
+        assert!(
+            channels.is_empty(),
+            "the reserved announce channel must not appear: {channels:?}"
+        );
+
+        engine
+            .channel_join(org.worker_1.session, "build".to_string(), None)
+            .await
+            .unwrap();
+        let channels = engine.team_channels(org.worker_1.session).await.unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].name, "build");
+        assert_eq!(
+            channels[0].unit, "main/lead-1",
+            "the listing says which unit owns it"
         );
     }
 }

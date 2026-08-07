@@ -429,7 +429,7 @@ pub enum Event {
     // (`session` = the root of the team tree) so a single replay reconstructs the
     // whole team's inboxes/channels/roster, and the live bus carries them to the
     // TUI for free. Additive variants — older binaries fold them via `Unknown`.
-    /// Bind a team member's session to its stable, team-scoped handle.
+    /// Bind a team member's session to its stable handle within its unit.
     /// `agent_session` is the registered agent's own session; `session` is the
     /// team-root log the binding is recorded in.
     AgentRegistered {
@@ -437,8 +437,17 @@ pub enum Event {
         session: SessionId,
         /// Agent's own session id.
         agent_session: SessionId,
-        /// Stable team-scoped handle (mail address).
+        /// The agent's **leaf** name — its short name inside its unit, not a
+        /// path. The reducer joins it to `parent` to form the canonical handle.
         handle: String,
+        /// Canonical path of this agent's parent, e.g. `main/lead-1`.
+        ///
+        /// `None` means the team root. Combined with `skip_serializing_if`, a
+        /// root registration stays byte-identical on the wire, and a pre-scoping
+        /// log — which has no `parent` anywhere — folds as one flat unit under
+        /// `main`, preserving its original behavior (task 08-07, AC8).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
         /// Declared agent type for the roster.
         #[serde(default)]
         agent_type: AgentName,
@@ -591,7 +600,6 @@ impl Event {
     }
 }
 
-
 /// An ordered, replayable event: the unit shipped over SSE and stored in the log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -679,6 +687,7 @@ mod tests {
                 session: root,
                 agent_session: agent,
                 handle: "reviewer-3".to_string(),
+                parent: None,
                 agent_type: AgentName::new("reviewer"),
                 mode: SubagentMode::Resident,
             },
@@ -724,5 +733,64 @@ mod tests {
             let back: Event = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(event, back, "mailbox event must round-trip: {json}");
         }
+    }
+
+    /// A pre-scoping `agent_registered` payload carries no `parent` key at all.
+    /// It must still deserialize, with `parent` defaulting to `None` — the whole
+    /// basis of legacy-log replay (task 08-07, AC8).
+    #[test]
+    fn agent_registered_without_parent_deserializes_as_root_child() {
+        let root = SessionId::new();
+        let agent = SessionId::new();
+        let legacy = format!(
+            r#"{{"type":"agent_registered","session":"{root}","agent_session":"{agent}",
+                 "handle":"reviewer-1","agent_type":"reviewer","mode":"resident"}}"#
+        );
+        let event: Event = serde_json::from_str(&legacy).expect("legacy payload deserializes");
+        match event {
+            Event::AgentRegistered { parent, handle, .. } => {
+                assert_eq!(parent, None, "absent parent means the team root");
+                assert_eq!(handle, "reviewer-1");
+            }
+            other => panic!("expected AgentRegistered, got {other:?}"),
+        }
+    }
+
+    /// `parent: None` must not appear on the wire, so a root registration
+    /// serializes byte-identically to how it did before scoping. Without
+    /// `skip_serializing_if`, every existing log comparison and golden fixture
+    /// would shift by one key.
+    #[test]
+    fn absent_parent_is_omitted_from_the_wire() {
+        let session = SessionId::new();
+        let rooted = Event::AgentRegistered {
+            session,
+            agent_session: session,
+            handle: "main".to_string(),
+            parent: None,
+            agent_type: AgentName::new("build"),
+            mode: SubagentMode::Transient,
+        };
+        let json = serde_json::to_string(&rooted).expect("serialize");
+        assert!(
+            !json.contains("parent"),
+            "a None parent must be omitted, got {json}"
+        );
+
+        let nested = Event::AgentRegistered {
+            session,
+            agent_session: SessionId::new(),
+            handle: "worker-1".to_string(),
+            parent: Some("main/lead-1".to_string()),
+            agent_type: AgentName::new("worker"),
+            mode: SubagentMode::Resident,
+        };
+        let json = serde_json::to_string(&nested).expect("serialize");
+        assert!(
+            json.contains(r#""parent":"main/lead-1""#),
+            "a real parent must be carried, got {json}"
+        );
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(nested, back);
     }
 }
