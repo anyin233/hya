@@ -278,16 +278,21 @@ Alongside the `sync_event` table:
 
 ### `replay_sync_events(events: &[Value]) → Vec<Value>`
 
-For each event with `aggregateID` and `seq`, runs
-`INSERT OR IGNORE INTO sync_event (aggregate_id, seq, payload)`. Returns
-**only the newly inserted** events. A re-replay of an overlapping history
-returns an empty set for those rows.
+For each event with camelCase `aggregateID` and `seq`, runs
+`INSERT OR IGNORE INTO sync_event (aggregate_id, seq, payload)`. The stored
+payload is reshaped by `history_event` to snake_case keys
+`{ id, aggregate_id, seq, type, data }`. The return value is **not** that
+stored shape: it is a clone of each **caller-supplied** event that was newly
+inserted (still camelCase `aggregateID`, etc.). A re-replay of an overlapping
+history returns an empty set for those rows.
 
 ### `sync_history(known: &BTreeMap<String, u64>) → Vec<Value>`
 
 Returns every stored event (ordered by `seq`) whose sequence is **strictly
 greater** than the caller's per-aggregate `known` watermark (or any event for
-aggregates absent from `known`).
+aggregates absent from `known`). Each element is the **stored** JSON payload
+(`{ id, aggregate_id, seq, type, data }` — snake_case). Clients must not expect
+`aggregateID` on this path.
 
 ## Bundle registry database
 
