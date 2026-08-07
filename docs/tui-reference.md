@@ -434,6 +434,7 @@ hides. Prompt history is disabled while autocomplete is open.
 ### Attachments, paste, history, stash
 
 - **`prompt.paste` (`ctrl+v`):** inserts clipboard text or attaches a clipboard image as a `clipboard` file part. Large pasted text collapses into a summarized virtual extmark that expands on copy-out or in the external editor, controlled by `app.toggle.paste_summary` / KV `paste_summary_enabled` (seeded from `experimental.disable_paste_summary`).
+- **Local path / drag-and-drop paste:** if the pasted text looks like a local path or `file://` URL (quotes stripped; on non-`win32`, shell-style backslash escapes unescaped), the prompt tries to attach that file before treating the paste as plain text. `http(s)://` URLs are never fetched. Only these extensions attach: `.avif`, `.gif`, `.jpeg`, `.jpg`, `.pdf`, `.png`, `.svg`, `.webp`. Other paths (including `.txt` / `.md` / source files) paste as literal text. `.svg` is special-cased as **inline text** behind an `[SVG: <name>]` placeholder; the rest of the set attach as binary media parts.
 - **History:** Up at buffer start walks back; Down at buffer end walks forward; restores text, parts, and shell/normal mode.
 - **Stash:** `prompt.stash` saves and clears; `prompt.stash.pop` restores the newest entry; `prompt.stash.list` opens the dialog. A non-empty prompt is auto-stashed across prompt remounts.
 
@@ -455,11 +456,17 @@ non-zero exit surfaces `Editor exited with code/signal …`.
 
 ### Copy and clipboard
 
-- Mouse-up and right-click copy the terminal selection and toast `Copied to clipboard`.
-- Ctrl+C over a selection copies instead of exiting.
-- Escape clears the selection.
-- The OpenTUI console binds Ctrl+Y to copy-selection.
-- All of the above are disabled when `HYA_DISABLE_COPY_ON_SELECT` is set, and are **always** disabled on `win32`.
+Behavior is gated by `HyaFlag.disableCopyOnSelect`
+(`process.platform === "win32"` **or** truthy `HYA_DISABLE_COPY_ON_SELECT`).
+Despite the name, the flag switches between **auto copy-on-select** and
+**explicit-copy** modes — it does not turn all copying off.
+
+| Mode | When | Mouse-up | Right-click | Ctrl+C over selection | Escape |
+| --- | --- | --- | --- | --- | --- |
+| Auto copy-on-select | Default on non-`win32` when the env is unset | Copies selection | Off | Off (normal keybinds) | Off (normal keybinds) |
+| Explicit copy | `win32`, or `HYA_DISABLE_COPY_ON_SELECT` set | Off | Copies selection | Copies instead of exit | Clears selection |
+
+- The OpenTUI console binds Ctrl+Y to copy-selection (independent of this flag).
 
 **Transport:** native platform tools plus an OSC-52 escape, wrapped in the
 `\x1bPtmux;…\x1b\\` DCS passthrough when `TMUX` or `STY` is set. Reads support
@@ -533,7 +540,11 @@ A custom file whose basename matches a shipped theme (for example `hya.json`)
 
 The JSON basename (without `.json`) is the theme name and appears in `/themes`
 and as a valid `theme` config value. Valid files must be a JSON object with a
-nested `theme` object key; invalid files are dropped silently.
+nested `theme` object key. Files that parse as JSON but fail the theme shape
+check (`isTheme`) are skipped for that name only. **Malformed JSON is different:**
+`discoverThemes` has no try/catch around `JSON.parse`, so one bad `.json` file
+rejects the whole discovery promise; `syncCustomThemes` then catches and force-
+resets the active theme to `hya` without installing any custom themes.
 
 Discovery order is config dir first, then each `.hya` from cwd to root. Within
 that scan, **later directories overwrite earlier names**, so a root-most
