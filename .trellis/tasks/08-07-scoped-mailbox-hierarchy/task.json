@@ -3,7 +3,7 @@
   "name": "scoped-mailbox-hierarchy",
   "title": "Scoped mailbox: limit agent comms to parent + siblings",
   "description": "Redesign the global team mailbox into hierarchy-scoped mailboxes so an agent can only address its parent and its same-parent siblings, keeping large swarms tractable.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

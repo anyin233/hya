@@ -67,10 +67,12 @@ whole feature's rule; a subtle error here is invisible and total.
 
 ## Phase 2 — Wire changes (`hya-proto`)
 
-- [ ] `AgentRegistered` gains `parent: Option<String>` (`#[serde(default)]`).
-- [ ] `MailEndpoint` gains `Unit(String)`.
-- [ ] `RosterEntry.handle` documented as the canonical path; add
-      `parent: Option<String>`.
+- [ ] `AgentRegistered` gains `parent: Option<String>`, with **both**
+      `#[serde(default)]` and `skip_serializing_if = "Option::is_none"` so a
+      root registration stays byte-identical on the wire.
+- [ ] `RosterEntry.handle` documented as the canonical path. **No `parent`
+      field** — the path already encodes it.
+- [ ] `MailEndpoint` is **not** changed (see the correction in `design.md`).
 - [ ] Serde round-trip tests, and a test that a payload **without** `parent`
       still deserializes.
 
@@ -90,9 +92,9 @@ green with **no behavior change**.
       table in `design.md` (root case, `parent = Some`, legacy `None`).
 - [ ] Qualify channel keys in the `ChannelJoined` / `ChannelLeft` / `MailSent`
       channel arms.
-- [ ] Add the `MailEndpoint::Unit` fan-out arm: deliver to roster entries whose
-      parent equals the unit path — **direct children only**, and keep the
-      existing terminal-resident skip.
+- [ ] No new fan-out arm: announce rides the existing channel fan-out via the
+      reserved `{unit}#announce` channel, whose membership is the unit's direct
+      children (auto-joined in Phase 6).
 - [ ] Legacy leaf fallback for bare handles in `MailSent.to`, `MailSent.from`,
       `AgentActivityChanged.handle`, `ResidentWorkStarted.handle`.
 - [ ] Phase 0's fixture test must still pass (**AC8**).
@@ -131,8 +133,10 @@ and the primary rollback point.
 - [ ] `team_channels` → the sender's two units only, each labeled with its owner.
 - [ ] `channel_join` / `channel_leave` qualify `#` and `#^`; a non-leader using
       `^` is an error (**AC5**).
-- [ ] `announce`: emit `MailSent { to: Unit(self_path), kind: Announcement }`;
-      reject from an agent with no children.
+- [ ] `announce`: emit `MailSent { to: Channel("{self}#announce"),
+      kind: Announcement }`; reject from an agent with no children.
+- [ ] `#announce` is reserved: `join` / `leave` / ordinary posts to it are
+      refused, and it is hidden from the `channels` listing.
 - [ ] `resolve_handle` returns the canonical path.
 - [ ] Test: announce reaches direct children and **not** grandchildren (**AC6**).
 - [ ] Test: cross-unit relay through the common ancestor arrives (**AC9**).
@@ -152,8 +156,11 @@ and the primary rollback point.
 - [ ] Pass the real `parent` at every `AgentRegistered` emit site
       (`subagent.rs:261`, `resident.rs:1833`; root stays `None` at
       `engine/mailbox.rs:88`).
-- [ ] `resident.rs:842` `recipient_sessions`: add the `Unit` arm; canonical-path
-      lookups; keep self-wake exclusion.
+- [ ] Emit a `ChannelJoined` for `{parent}#announce` alongside every
+      `AgentRegistered`, so the announce channel's membership is the unit's
+      direct children and is replayable by older binaries too.
+- [ ] `resident.rs:842` `recipient_sessions`: canonical-path lookups; keep
+      self-wake exclusion (no new arm needed).
 - [ ] Determinism test: same roster + same batch order → same paths (**AC11**).
 
 **Route:** `plan-executor-heavy` — replay determinism; a nondeterministic handle
@@ -230,6 +237,14 @@ reducer); `plan-executor-heavy` if the conformance test exposes a reducer defect
 
 - Whether any consumer outside the listed files string-matches a roster handle.
   Grep before Phase 6; anything found is added to Phase 8.
-- Whether `MailEndpoint`'s serde representation tolerates a new variant on the
-  read path in older binaries as `Event`'s does. Verify in Phase 2; if it does
-  not, `Unit` needs an explicit compat shim.
+
+## Resolved during implementation
+
+- **`MailEndpoint` variant compat** — RESOLVED before Phase 1. `MailEndpoint` is
+  adjacently tagged and `Event`'s `#[serde(other)] Unknown` catches only unknown
+  event *types*, so a new endpoint variant would hard-error an older binary.
+  Announce now rides a reserved auto-joined `{unit}#announce` channel instead;
+  `MailEndpoint` is unchanged. See the correction in `design.md`.
+- **AC8 wording** — RESOLVED before Phase 0. A legacy log is re-keyed to
+  canonical paths, so map equality was the wrong assertion. AC8 now asserts
+  topology and delivery-outcome equivalence.
