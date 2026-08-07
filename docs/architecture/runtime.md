@@ -432,8 +432,9 @@ The turn loop checks the activation hook dispatcher's `is_healthy()`:
 - again after each before/after hook batch
 
 An unhealthy dispatcher aborts the turn with `CoreError::Cancelled` (not a
-hard error). That is why a lost sidecar shows up to clients as
-`MessageFinished { Cancelled }` rather than `{ Error }`.
+hard error) and **does not** force-emit `MessageFinished` on that path. Sidecar
+**loss-token** cancellation (separate from the health gate) does emit
+`MessageFinished { Cancelled }` when the assistant message is still open.
 
 ## Resident recovery and actor fencing
 
@@ -468,20 +469,29 @@ future 100/256 workload envelope.
 
 ## Turn termination guarantees
 
-`run_turn` receives a `CancellationToken`. Whenever the turn ends with the
-assistant message still open (or after a hard failure path), the engine
-force-emits `MessageFinished`:
+`run_turn` receives a `CancellationToken`. These paths **do** close an open
+assistant message with `MessageFinished`:
 
 | Path | Finish reason |
 | --- | --- |
-| Cancel token observed before/during a round | `Cancelled` |
+| Cancel token observed at the top of a round (before provider stream) | `Cancelled` (emitted then return `Ok(Cancelled)`) |
 | Sidecar loss token fires while the message is open | `Cancelled` |
-| Non-cancel provider/tool error after `MessageStarted` | `Error` |
+| Non-cancel provider/tool error after `MessageStarted` | `Error` (force-emit only when `outcome.is_err()` and **not** `CoreError::Cancelled`) |
 | Normal completion with no further tool calls | provider finish reason |
 
-Contract for clients: a UI that has seen `MessageStarted` is guaranteed to
-eventually see `MessageFinished`, so it never spins forever waiting for a
-finish event.
+**Not a universal guarantee.** Force-emit on error skips `CoreError::Cancelled`,
+so several paths can leave the assistant message **open** with no
+`MessageFinished`:
+
+- activation-hook health gate at the top of a round (`is_healthy` false →
+  `Err(Cancelled)` with no finish emit)
+- activation-hook health gate after tool before/after hook batches
+- resident tool path: `actor_claim` present, tool returns `ToolError::Cancelled`,
+  and the cancel token is cancelled → `Err(Cancelled)` without a finish emit
+
+Clients must not assume every `MessageStarted` is paired with a finish event
+on every cancel path; poll session projection or treat stream disconnect as
+terminal when hooks/sidecar health fail closed.
 
 The shell tool also checks the token before spawning a command and kills the
 spawned Unix process group on cancellation.
