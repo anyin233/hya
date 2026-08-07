@@ -3,9 +3,15 @@
 This is the canonical reference for keyboard shortcuts, slash commands, and the
 which-key panel in the TypeScript TUI (`packages/hya-tui-ts`). Defaults come from
 [`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts).
-Override bindings with TUI config `keybinds` using the **config keys** in
-[Overriding keybinds](#overriding-keybinds) (not palette command names). See also
-[Configuration](configuration.md).
+
+**Shipped product:** the launcher applies **defaults only** via
+`resolve({}, { terminalSuspend: … })` in
+[`main.tsx`](../packages/hya-tui-ts/src/main.tsx). Backend `config.yaml` has no
+`tui` / `keybinds` key, and the entrypoint does **not** load a separate on-disk
+TUI config file. The [Overriding keybinds](#overriding-keybinds) section
+documents the in-memory schema and accepted keys for hosts that pass a non-empty
+config object; writing `keybinds:` into `config.yaml` today does not change the
+running TUI. See also [Configuration](configuration.md).
 
 For screens, dialogs, transcript, and prompt behavior, see
 [TUI Reference](tui-reference.md).
@@ -42,9 +48,13 @@ still run alongside the handler.
 
 ## Overriding keybinds
 
-Config `keybinds` uses the **`Definitions` keys** from
+When a host supplies a non-empty TUI config object, `keybinds` uses the
+**`Definitions` keys** from
 `packages/hya-tui-ts/src/upstream/config/keybind.ts`, **not** the palette
-command names shown in the tables below.
+command names shown in the tables below. The shipped `hya` / `hya-ts` launcher
+does not load this map from disk (see the intro); the table is the override
+vocabulary for programmatic hosts and for the validated schema documented under
+[Configuration](configuration.md).
 
 | You write in config | What it is |
 | --- | --- |
@@ -53,7 +63,8 @@ command names shown in the tables below.
 | `dialog.select.prev` | Config key that is already dotted; used as-is for both config and binding lookup |
 | `leader` | Leader key only (not a command) |
 
-Unknown keys throw `Unrecognized keybind(s): …`. Example:
+Unknown keys throw `Unrecognized keybind(s): …`. Shape example (only effective
+when a host actually passes this object into `resolve`):
 
 ```yaml
 keybinds:

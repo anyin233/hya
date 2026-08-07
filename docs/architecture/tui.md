@@ -194,8 +194,12 @@ Inside the TUI (`app.tsx` onMount / effects):
 
 1. **`--agent` / `--model`** seed the local agent and model. An invalid model
    format (not `provider/model`) raises a **3 s warning toast** rather than
-   failing the process.
-2. **`--session` without `--fork`** navigates to that session immediately.
+   failing the process. Steps 1–2 run in the **same** `batch()` callback: the
+   invalid-model branch is `return toast.show(...)`, so it exits that callback
+   and **skips** the `--session` navigation in step 2. Example:
+   `hya --model badformat --session <ID>` shows the toast and lands on Home.
+2. **`--session` without `--fork`** navigates to that session immediately
+   (only when step 1 did not early-return for a bad `--model`).
 3. **`--continue`** (optionally with `--fork`) runs as soon as sync is no longer
    `loading` (including **`partial`**): it picks the most recently updated
    **root** session (`parentID === undefined`). With `--fork`, it forks that
@@ -306,10 +310,14 @@ This is **unrelated** to the backend `hya-plugin` stdio host.
 
 hya replaces the upstream dynamic plugin loader with a **static host**
 ([`static-host.ts`](../../packages/hya-tui-ts/src/hya/static-host.ts)): starts
-all builtin plugins in parallel, tracks cleanups, reports statuses in stable
-declaration order. There is no external plugin manager and no dynamic loading.
+builtin plugins in parallel after
+`createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)`, tracks
+cleanups, reports statuses in stable declaration order. There is no external
+plugin manager and no dynamic loading.
 
-Builtin ids in declaration order (eleven):
+Builtin ids in declaration order (eleven declared; **ten start by default** —
+`which-key` ships `enabled: false` and is filtered out of the static host; see
+[TUI Keybindings](../tui-keybindings.md)):
 
 1. `internal:home-footer`
 2. `internal:home-tips`
@@ -320,7 +328,7 @@ Builtin ids in declaration order (eleven):
 7. `internal:sidebar-files`
 8. `internal:sidebar-footer`
 9. `internal:notifications`
-10. `which-key`
+10. `which-key` (**default off** — does not start unless re-enabled)
 11. `diff-viewer`
 
 Render-extension slots used by the shell and builtins:
