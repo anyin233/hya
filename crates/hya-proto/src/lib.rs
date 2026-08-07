@@ -20,6 +20,9 @@ pub mod model;
 pub mod projection;
 /// Pure run-tree assembler over reduced session projections (no I/O).
 pub mod projection_tree;
+/// Canonical agent paths, the parent/sibling/report scope rule, and
+/// unit-qualified channel keys (task 08-07).
+pub mod scope;
 /// Compat workspace-adapter list entry.
 pub mod workspace;
 
@@ -40,6 +43,7 @@ pub use projection::{
     Projection, ResidentWorkProjection, RosterEntry, SessionProjection, TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
+pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};
 pub use workspace::WorkspaceAdapterInfo;
 
 /// Unix-epoch milliseconds. Used for `Envelope.ts_millis` and DB timestamps.
