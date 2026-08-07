@@ -1072,6 +1072,7 @@ dependencies = [
  "async-trait",
  "eventsource-stream",
  "futures-util",
+ "hya-proto",
  "libc",
  "reqwest",
  "serde",

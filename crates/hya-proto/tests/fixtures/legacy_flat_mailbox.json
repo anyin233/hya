@@ -1,0 +1,62 @@
+[
+  {
+    "type": "agent_registered",
+    "session": "hysec_LegacyFixtureRoot001",
+    "agent_session": "hysec_LegacyFixtureRoot001",
+    "handle": "main",
+    "agent_type": "build",
+    "mode": "transient"
+  },
+  {
+    "type": "agent_registered",
+    "session": "hysec_LegacyFixtureRoot001",
+    "agent_session": "hysec_LegacyFixtureKid0001",
+    "handle": "reviewer-1",
+    "agent_type": "reviewer",
+    "mode": "resident"
+  },
+  {
+    "type": "agent_registered",
+    "session": "hysec_LegacyFixtureRoot001",
+    "agent_session": "hysec_LegacyFixtureKid0002",
+    "handle": "reviewer-2",
+    "agent_type": "reviewer",
+    "mode": "resident"
+  },
+  {
+    "type": "mail_sent",
+    "session": "hysec_LegacyFixtureRoot001",
+    "from": "main",
+    "to": { "kind": "handle", "id": "reviewer-1" },
+    "kind": "message",
+    "body": "direct hello"
+  },
+  {
+    "type": "channel_joined",
+    "session": "hysec_LegacyFixtureRoot001",
+    "channel": "build",
+    "member": "reviewer-1"
+  },
+  {
+    "type": "channel_joined",
+    "session": "hysec_LegacyFixtureRoot001",
+    "channel": "build",
+    "member": "reviewer-2"
+  },
+  {
+    "type": "mail_sent",
+    "session": "hysec_LegacyFixtureRoot001",
+    "from": "main",
+    "to": { "kind": "channel", "id": "build" },
+    "kind": "announcement",
+    "body": "ship it"
+  },
+  {
+    "type": "mail_sent",
+    "session": "hysec_LegacyFixtureRoot001",
+    "from": "reviewer-1",
+    "to": { "kind": "handle", "id": "reviewer-2" },
+    "kind": "message",
+    "body": "sibling ping"
+  }
+]

@@ -12,7 +12,8 @@
 
 use async_trait::async_trait;
 use hya_proto::{
-    ActorClaim, MailEndpoint, MailKind, RosterEntry, RosterStatus, SessionId, ToolSchema,
+    ActorClaim, MailEndpoint, MailKind, RosterEntry, RosterStatus, ScopedRoster, SessionId,
+    ToolSchema,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -36,9 +37,12 @@ pub struct MailReceipt {
 /// A channel plus its current membership, for the `channels` tool.
 #[derive(Clone, Debug)]
 pub struct ChannelInfo {
-    /// Channel name without requiring a leading `#`.
+    /// Channel name without the leading `#` and without its unit qualifier.
     pub name: String,
-    /// Current member handles.
+    /// Canonical path of the unit that owns this channel. Two units may each own
+    /// a channel of the same `name`; this is what distinguishes them.
+    pub unit: String,
+    /// Current member canonical paths.
     pub members: Vec<String>,
     /// Message count on the channel.
     pub messages: usize,
@@ -85,12 +89,23 @@ pub enum MailboxRequest {
         /// Host reply.
         reply: oneshot::Sender<Result<(), String>>,
     },
-    /// List live teammates for the team.
+    /// Post a one-way announcement to the agents the sender leads.
+    Announce {
+        /// Sending session.
+        from: SessionId,
+        /// Optional actor claim for the send.
+        actor_claim: Option<ActorClaim>,
+        /// Announcement body.
+        body: String,
+        /// Host reply with receipt or rejection.
+        reply: oneshot::Sender<Result<MailReceipt, String>>,
+    },
+    /// List the teammates the sender may address, grouped by relation.
     Roster {
-        /// Acting session (team resolution).
+        /// Acting session (scope resolution).
         session: SessionId,
-        /// Host reply with roster rows.
-        reply: oneshot::Sender<Result<Vec<RosterEntry>, String>>,
+        /// Host reply with the scoped roster.
+        reply: oneshot::Sender<Result<ScopedRoster, String>>,
     },
     /// List channels for the team.
     Channels {
@@ -221,8 +236,21 @@ impl MailboxPlane {
         .map_err(MailboxError::Rejected)
     }
 
-    /// List the live roster for the acting agent's team.
-    pub async fn roster(&self) -> Result<Vec<RosterEntry>, MailboxError> {
+    /// Post a one-way announcement to the agents the acting agent leads.
+    pub async fn announce(&self, body: String) -> Result<MailReceipt, MailboxError> {
+        let from = self.session.ok_or(MailboxError::Unavailable)?;
+        self.request(|reply| MailboxRequest::Announce {
+            from,
+            actor_claim: self.actor_claim,
+            body,
+            reply,
+        })
+        .await?
+        .map_err(MailboxError::Rejected)
+    }
+
+    /// The roster as the acting agent sees it, grouped by relation.
+    pub async fn roster(&self) -> Result<ScopedRoster, MailboxError> {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::Roster { session, reply })
             .await?
@@ -266,9 +294,16 @@ impl Tool for SendTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "send",
-            "Send mail to a teammate by handle (e.g. `reviewer-3`) or to a channel (prefix with `#`, e.g. `#build`). Channel mail reaches every current subscriber.",
+            "Send mail to a teammate, or post to a channel (prefix with `#`).\n\n\
+             You can only reach your own unit: your parent, the teammates who \
+             share your parent, and the agents you lead. Anyone else must be \
+             reached by asking your parent to pass it on. Run `roster` to see \
+             who you can reach.\n\n\
+             Name a teammate by its short name (`worker-1`) or its full path \
+             (`main/lead-1/worker-1`). `#build` is your unit's channel; if you \
+             lead agents, `#^build` is your parent's unit's channel instead.",
             json!({
-                "to": {"type": "string", "description": "Recipient: a teammate handle, or a #channel name"},
+                "to": {"type": "string", "description": "A teammate's short name or full path, or a #channel"},
                 "body": {"type": "string", "description": "The message body"},
                 "kind": {"type": "string", "enum": ["message", "announcement"], "description": "Message intent; defaults to message"}
             }),
@@ -322,7 +357,10 @@ impl Tool for RosterTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "roster",
-            "List the live members of your team: each teammate's handle, agent type, and session.",
+            "List the agents you can message, grouped by how they relate to you: \
+             your parent, your peers (same parent), and your reports (agents you \
+             lead). Nobody outside your unit is listed, because you cannot \
+             message them directly.",
             json!({}),
             &[],
         )
@@ -331,6 +369,57 @@ impl Tool for RosterTool {
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
         let roster = ctx.mailbox.roster().await.map_err(map_err)?;
         Ok(render_roster(&roster))
+    }
+}
+
+pub(crate) struct AnnounceTool;
+
+#[derive(Deserialize)]
+struct AnnounceInput {
+    body: String,
+}
+
+#[async_trait]
+impl Tool for AnnounceTool {
+    fn name(&self) -> &str {
+        "announce"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        obj_schema(
+            "announce",
+            "Announce something to every agent you directly lead. One-way: they \
+             cannot reply on this path, and they will answer with ordinary mail \
+             to you if they need to.\n\n\
+             It reaches your DIRECT reports only, not the agents they lead. To \
+             reach further down, your reports must announce in turn.",
+            json!({
+                "body": {"type": "string", "description": "The announcement body"}
+            }),
+            &["body"],
+        )
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        let input: AnnounceInput =
+            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        if input.body.trim().is_empty() {
+            return Err(ToolError::Input("announcement body is empty".to_string()));
+        }
+        let receipt = ctx.mailbox.announce(input.body).await.map_err(map_err)?;
+        Ok(json!({
+            "title": format!("Announced to {} report(s)", receipt.recipients),
+            "output": format!(
+                "Announced from {} to {} direct report{}.",
+                receipt.from,
+                receipt.recipients,
+                if receipt.recipients == 1 { "" } else { "s" }
+            ),
+            "metadata": {
+                "from": receipt.from,
+                "recipients": receipt.recipients,
+            },
+        }))
     }
 }
 
@@ -345,48 +434,70 @@ fn status_label(status: &RosterStatus) -> &'static str {
     }
 }
 
-/// Render the `roster` tool payload from the current team roster, surfacing each
-/// teammate's live `status`, scheduling `mode`, and `current_task` (all tracked
-/// in the projection) rather than a fixed placeholder.
-fn render_roster(roster: &[RosterEntry]) -> Value {
-    let members: Vec<Value> = roster
-        .iter()
-        .map(|entry| {
-            json!({
-                "handle": entry.handle,
-                "type": entry.agent_type.as_str(),
-                "session": entry.session.to_string(),
-                "mode": entry.mode,
-                "status": status_label(&entry.status),
-                "current_task": entry.current_task,
-            })
-        })
-        .collect();
-    let output = if members.is_empty() {
-        "No teammates registered yet.".to_string()
-    } else {
-        roster
-            .iter()
-            .map(|e| {
-                let mut line = format!(
-                    "{} ({}) · {}",
-                    e.handle,
-                    e.agent_type.as_str(),
-                    status_label(&e.status)
-                );
-                if let Some(task) = e.current_task.as_deref().filter(|t| !t.is_empty()) {
-                    line.push_str(" — ");
-                    line.push_str(task);
-                }
-                line
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+/// One roster row as the model sees it.
+fn roster_row(entry: &RosterEntry, relation: &str) -> Value {
     json!({
-        "title": format!("{} teammate(s)", members.len()),
+        "handle": entry.handle,
+        "name": hya_proto::scope::leaf(&entry.handle),
+        "relation": relation,
+        "type": entry.agent_type.as_str(),
+        "session": entry.session.to_string(),
+        "mode": entry.mode,
+        "status": status_label(&entry.status),
+        "current_task": entry.current_task,
+    })
+}
+
+/// One human-readable roster line: short name first (that is what you address),
+/// with the full path kept for disambiguation.
+fn roster_line(entry: &RosterEntry) -> String {
+    let mut line = format!(
+        "  {} ({}) · {} · {}",
+        hya_proto::scope::leaf(&entry.handle),
+        entry.agent_type.as_str(),
+        status_label(&entry.status),
+        entry.handle,
+    );
+    if let Some(task) = entry.current_task.as_deref().filter(|t| !t.is_empty()) {
+        line.push_str(" — ");
+        line.push_str(task);
+    }
+    line
+}
+
+/// Render the `roster` payload grouped by relation, so the model reads its own
+/// position in the org straight off the result. Empty groups are omitted rather
+/// than shown as empty headings.
+fn render_roster(roster: &ScopedRoster) -> Value {
+    let mut rows = Vec::new();
+    let mut sections: Vec<String> = Vec::new();
+
+    if let Some(parent) = &roster.parent {
+        rows.push(roster_row(parent, "parent"));
+        sections.push(format!("parent:\n{}", roster_line(parent)));
+    }
+    for (label, group) in [("peers", &roster.peers), ("reports", &roster.reports)] {
+        if group.is_empty() {
+            continue;
+        }
+        for entry in group.iter() {
+            rows.push(roster_row(entry, label.trim_end_matches('s')));
+        }
+        let lines: Vec<String> = group.iter().map(roster_line).collect();
+        sections.push(format!("{label}:\n{}", lines.join("\n")));
+    }
+
+    let output = if sections.is_empty() {
+        "You have no teammates yet: no parent, no peers, and no reports.".to_string()
+    } else {
+        format!("self: {}\n\n{}", roster.self_path, sections.join("\n\n"))
+    };
+
+    json!({
+        "title": format!("{} teammate(s) in scope", rows.len()),
         "output": output,
-        "members": members,
+        "self": roster.self_path,
+        "members": rows,
     })
 }
 
@@ -401,7 +512,9 @@ impl Tool for ChannelsTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "channels",
-            "List your team's channels and their current members.",
+            "List the channels you can use and their current members. A channel \
+             belongs to one unit, so the same name can exist in another unit and \
+             be a different channel; `unit` says which one this is.",
             json!({}),
             &[],
         )
@@ -414,6 +527,7 @@ impl Tool for ChannelsTool {
             .map(|ch| {
                 json!({
                     "name": format!("#{}", ch.name),
+                    "unit": ch.unit,
                     "members": ch.members,
                     "messages": ch.messages,
                 })
@@ -424,7 +538,14 @@ impl Tool for ChannelsTool {
         } else {
             channels
                 .iter()
-                .map(|ch| format!("#{} ({} member(s))", ch.name, ch.members.len()))
+                .map(|ch| {
+                    format!(
+                        "#{} ({} member(s)) · unit {}",
+                        ch.name,
+                        ch.members.len(),
+                        ch.unit
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -452,9 +573,12 @@ impl Tool for JoinTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "join",
-            "Subscribe to a channel so you receive its mail. The channel is created if it does not exist.",
+            "Subscribe to a channel in your own unit so you receive its mail. \
+             The channel is created if it does not exist. If you lead agents, a \
+             bare name is your unit's channel and `^name` is your parent's \
+             unit's.",
             json!({
-                "channel": {"type": "string", "description": "Channel name (the leading # is optional)"}
+                "channel": {"type": "string", "description": "Channel name (the leading # is optional; prefix ^ for your parent's unit)"}
             }),
             &["channel"],
         )
@@ -518,23 +642,41 @@ mod tests {
     use super::*;
     use hya_proto::{AgentName, SubagentMode};
 
-    #[test]
-    fn render_roster_surfaces_live_status_mode_and_task() {
-        let entry = RosterEntry {
-            handle: "reviewer-1".to_string(),
+    fn entry(path: &str, status: RosterStatus, task: Option<&str>) -> RosterEntry {
+        RosterEntry {
+            handle: path.to_string(),
             session: SessionId::new(),
             agent_type: AgentName::new("reviewer"),
             mode: SubagentMode::Resident,
-            status: RosterStatus::Busy,
-            current_task: Some("reviewing auth.rs".to_string()),
+            status,
+            current_task: task.map(str::to_string),
             resident_cursor: 0,
             resident_work: None,
+        }
+    }
+
+    #[test]
+    fn render_roster_surfaces_live_status_mode_and_task() {
+        let roster = ScopedRoster {
+            self_path: "main/lead-1/worker-2".to_string(),
+            parent: None,
+            peers: vec![entry(
+                "main/lead-1/reviewer-1",
+                RosterStatus::Busy,
+                Some("reviewing auth.rs"),
+            )],
+            reports: Vec::new(),
         };
-        let value = render_roster(std::slice::from_ref(&entry));
+        let value = render_roster(&roster);
         let member = &value["members"][0];
         assert_eq!(member["status"], "busy");
         assert_eq!(member["mode"], "resident");
         assert_eq!(member["current_task"], "reviewing auth.rs");
+        assert_eq!(member["relation"], "peer");
+        assert_eq!(
+            member["name"], "reviewer-1",
+            "the short name is what the model addresses"
+        );
         let output = value["output"].as_str().unwrap_or_default();
         assert!(
             output.contains("reviewer-1 (reviewer) · busy"),
@@ -543,10 +685,46 @@ mod tests {
         assert!(output.contains("reviewing auth.rs"), "output was: {output}");
     }
 
+    /// Each group is labeled, and a group with no members is omitted rather than
+    /// rendered as an empty heading (AC7).
     #[test]
-    fn render_roster_reports_empty_team() {
-        let value = render_roster(&[]);
-        assert_eq!(value["title"], "0 teammate(s)");
-        assert_eq!(value["output"], "No teammates registered yet.");
+    fn render_roster_groups_by_relation_and_omits_empty_groups() {
+        let roster = ScopedRoster {
+            self_path: "main/lead-1".to_string(),
+            parent: Some(entry("main", RosterStatus::Idle, None)),
+            peers: Vec::new(),
+            reports: vec![
+                entry("main/lead-1/worker-1", RosterStatus::Idle, None),
+                entry("main/lead-1/worker-2", RosterStatus::Idle, None),
+            ],
+        };
+        let value = render_roster(&roster);
+        let output = value["output"].as_str().unwrap_or_default();
+
+        assert!(output.contains("self: main/lead-1"), "output was: {output}");
+        assert!(output.contains("parent:"), "output was: {output}");
+        assert!(output.contains("reports:"), "output was: {output}");
+        assert!(
+            !output.contains("peers:"),
+            "an empty group must be omitted, not shown empty: {output}"
+        );
+        assert_eq!(value["title"], "3 teammate(s) in scope");
+        assert_eq!(value["members"][0]["relation"], "parent");
+        assert_eq!(value["members"][1]["relation"], "report");
+    }
+
+    #[test]
+    fn render_roster_reports_an_agent_that_can_reach_nobody() {
+        let value = render_roster(&ScopedRoster {
+            self_path: "main".to_string(),
+            parent: None,
+            peers: Vec::new(),
+            reports: Vec::new(),
+        });
+        assert_eq!(value["title"], "0 teammate(s) in scope");
+        assert_eq!(
+            value["output"],
+            "You have no teammates yet: no parent, no peers, and no reports."
+        );
     }
 }
