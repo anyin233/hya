@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const EXPECTED_RELEASE: &str = "0.34.14";
+const EXPECTED_RELEASE: &str = "0.34.15";
 
 #[test]
 fn release_metadata_matches_hya_package_version() -> Result<(), Box<dyn std::error::Error>> {
