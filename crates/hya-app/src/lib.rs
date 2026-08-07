@@ -28,7 +28,7 @@ pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use installed_bundle_refresh::{InstalledBundleRefresh, bundle_registry_path};
 pub use runtime::{
     BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig,
-    RuntimeOptions, agent_base_with_model, agent_with_model, build_session_engine, builtin_catalog,
-    compaction_config, discover_context_files, host_info, offline_router, open_store,
-    resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
+    RuntimeOptions, agent_base_with_model, agent_with_model, build_session_engine,
+    builtin_agent_catalog, compaction_config, discover_context_files, host_info, offline_router,
+    open_store, resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
 };

@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::{BundleCatalog, BundleOrigin, PreparedCatalog};
-use hya_core::{CoreError, RuntimeCatalogRefresh, RuntimeRegistry};
-use hya_store::BundleRegistry;
+use hya_bundle::{BundleCatalog, PreparedCatalog};
+use hya_core::{AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry};
+use hya_store::{BundleRegistry, BundleRegistryRecord};
 use tokio::sync::{Mutex, OnceCell};
 
 /// Default path of the installed Bundle registry SQLite file.
@@ -25,18 +25,16 @@ pub fn bundle_registry_path() -> PathBuf {
 /// Lazily publishes installed Bundle catalog changes at root binding boundaries.
 pub struct InstalledBundleRefresh {
     registry_path: PathBuf,
-    builtins: Arc<BundleCatalog>,
     registry: OnceCell<BundleRegistry>,
     applied_generation: Mutex<u64>,
 }
 
 impl InstalledBundleRefresh {
-    /// Track installed-catalog generations for `registry_path` against `builtins`.
+    /// Track installed-catalog generations for `registry_path`.
     #[must_use]
-    pub fn new(registry_path: PathBuf, builtins: Arc<BundleCatalog>) -> Self {
+    pub fn new(registry_path: PathBuf) -> Self {
         Self {
             registry_path,
-            builtins,
             registry: OnceCell::new(),
             applied_generation: Mutex::new(0),
         }
@@ -71,36 +69,48 @@ impl InstalledBundleRefresh {
         if snapshot.generation == *applied_generation {
             return Ok(false);
         }
+        // A row written by a different binary version cannot decode. Skip it
+        // with a named warning and keep the rest of the catalog usable: a single
+        // stale row must not wedge every later turn, and the operator needs to
+        // know which bundle to reinstall.
         let mut prepared_catalogs = Vec::with_capacity(snapshot.bundles.len());
         for record in snapshot.bundles {
-            let prepared =
-                PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)?;
-            let [bundle] = prepared.bundles() else {
-                return Err(CoreError::Invalid(format!(
-                    "installed Bundle `{}` prepared catalog must contain exactly one bundle",
-                    record.bundle_id
-                )));
-            };
-            if bundle.origin != BundleOrigin::Installed
-                || bundle.immutable
-                || bundle.identity.id != record.bundle_id
-                || bundle.identity.version != record.version
-                || bundle.identity.publisher != record.publisher
-            {
-                return Err(CoreError::Invalid(format!(
-                    "installed Bundle `{}` metadata does not match its prepared catalog",
-                    record.bundle_id
-                )));
+            match Self::decode_installed(&record) {
+                Ok(prepared) => prepared_catalogs.push(prepared),
+                Err(detail) => {
+                    tracing::warn!(
+                        bundle_id = %record.bundle_id,
+                        version = %record.version,
+                        %detail,
+                        "skipping unreadable installed AgentBundle; reinstall it with \
+                         `hya bundle install`"
+                    );
+                }
             }
-            prepared_catalogs.push(prepared);
         }
         let prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
-        let catalog = self
-            .builtins
-            .with_verified_catalogs(&prepared_catalog_refs)?;
-        runtime.publish_catalog(Arc::new(catalog))?;
+        let bundles = BundleCatalog::from_verified_catalogs(&prepared_catalog_refs)?;
+        runtime.publish_catalog(Arc::new(AgentCatalog::new(Arc::new(bundles))?))?;
+        // Advance even when rows were skipped, so the warning is reported once
+        // per generation instead of on every root binding.
         *applied_generation = snapshot.generation;
         Ok(true)
+    }
+
+    /// Decode one registry row, or explain why it is unreadable.
+    fn decode_installed(record: &BundleRegistryRecord) -> Result<PreparedCatalog, String> {
+        let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
+            .map_err(|error| error.to_string())?;
+        let [bundle] = prepared.bundles() else {
+            return Err("prepared catalog must contain exactly one bundle".to_string());
+        };
+        if bundle.identity.id != record.bundle_id
+            || bundle.identity.version != record.version
+            || bundle.identity.publisher != record.publisher
+        {
+            return Err("registry metadata does not match the prepared catalog".to_string());
+        }
+        Ok(prepared)
     }
 }
 

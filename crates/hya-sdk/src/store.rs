@@ -768,7 +768,7 @@ mod tests {
         );
         let team = store.team_for("ses_root").expect("scoped team");
         assert_eq!(
-            team.roster.get("reviewer-3").map(|e| e.session.as_str()),
+            team.roster.get("main/reviewer-3").map(|e| e.session.as_str()),
             Some("ses_child"),
             "roster folded from hya.envelope team event"
         );
@@ -785,8 +785,8 @@ mod tests {
         .unwrap();
         assert!(store.apply_event(&mail));
         let team = store.team_for("ses_root").expect("scoped team");
-        assert_eq!(team.inboxes["reviewer-3"].len(), 1);
-        assert_eq!(team.inboxes["reviewer-3"][0].body, "please review");
+        assert_eq!(team.inboxes["main/reviewer-3"].len(), 1);
+        assert_eq!(team.inboxes["main/reviewer-3"][0].body, "please review");
     }
 
     #[test]
@@ -823,15 +823,15 @@ mod tests {
         let team_a = store.team_for("ses_a").expect("team a");
         let team_b = store.team_for("ses_b").expect("team b");
 
-        assert_eq!(team_a.roster["reviewer-1"].session, "ses_a_child");
-        assert_eq!(team_a.roster["reviewer-1"].status, "busy");
+        assert_eq!(team_a.roster["main/reviewer-1"].session, "ses_a_child");
+        assert_eq!(team_a.roster["main/reviewer-1"].status, "busy");
         assert_eq!(
-            team_a.roster["reviewer-1"].current_task.as_deref(),
+            team_a.roster["main/reviewer-1"].current_task.as_deref(),
             Some("reviewing ses_a")
         );
-        assert_eq!(team_b.roster["reviewer-1"].session, "ses_b_child");
-        assert_eq!(team_b.roster["reviewer-1"].status, "idle");
-        assert_eq!(team_b.roster["reviewer-1"].current_task, None);
+        assert_eq!(team_b.roster["main/reviewer-1"].session, "ses_b_child");
+        assert_eq!(team_b.roster["main/reviewer-1"].status, "idle");
+        assert_eq!(team_b.roster["main/reviewer-1"].current_task, None);
     }
 
     #[test]
@@ -934,10 +934,10 @@ mod tests {
     fn replay_live_capture_builds_user_and_assistant_text() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/live_session_turn.jsonl"
+            "/../../tests/fixtures/live_session_turn.jsonl"
         );
         let raw =
-            std::fs::read_to_string(path).expect("fixtures/live_session_turn.jsonl missing");
+            std::fs::read_to_string(path).expect("tests/fixtures/live_session_turn.jsonl missing");
         let mut store = MessageStore::default();
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
             let event: GlobalEvent = serde_json::from_str(line).expect("parse fixture line");

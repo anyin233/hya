@@ -243,7 +243,8 @@ async fn compat_agent_routes_include_bound_catalog_agents() {
     let (status, agents) = get_json(app.clone(), "/agent").await;
     let (api_status, api_agents) = get_json(app, "/api/agent").await;
 
-    // Then: only the bound test catalog is listed; role maps to mode.
+    // Then: the bound catalog is listed; role maps to mode. Built-in agents are
+    // compiled in, so they are always present even with no installed bundle.
     assert_eq!(status, StatusCode::OK);
     assert_eq!(api_status, StatusCode::OK);
     assert_eq!(
@@ -253,7 +254,23 @@ async fn compat_agent_routes_include_bound_catalog_agents() {
             .iter()
             .map(|agent| agent["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["build", "compaction", "general", "plan", "summary", "title"]
+        vec![
+            "build",
+            "compaction",
+            "explore",
+            "general",
+            "hya-docs",
+            "hya-explorer",
+            "hya-implementer",
+            "hya-main",
+            "hya-planner",
+            "hya-release",
+            "hya-reviewer",
+            "hya-tester",
+            "plan",
+            "summary",
+            "title",
+        ]
     );
 
     assert_eq!(find_agent(&agents, "plan")["mode"], "primary");
@@ -276,15 +293,32 @@ async fn compat_agent_routes_include_bound_catalog_agents() {
             .iter()
             .map(|agent| agent["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["build", "compaction", "general", "plan", "summary", "title"]
+        vec![
+            "build",
+            "compaction",
+            "explore",
+            "general",
+            "hya-docs",
+            "hya-explorer",
+            "hya-implementer",
+            "hya-main",
+            "hya-planner",
+            "hya-release",
+            "hya-reviewer",
+            "hya-tester",
+            "plan",
+            "summary",
+            "title",
+        ]
     );
     assert_eq!(find_agent(api_agents, "general")["mode"], "subagent");
     assert_eq!(find_agent(api_agents, "general")["hidden"], false);
-    assert_eq!(find_agent(api_agents, "title")["system"], "title prompt");
-    assert_eq!(
-        find_agent(api_agents, "summary")["system"],
-        "summary prompt"
-    );
+    for reserved in ["title", "summary"] {
+        assert_eq!(
+            find_agent(api_agents, reserved)["system"],
+            builtin_prompt(reserved)
+        );
+    }
     assert_eq!(find_agent(api_agents, "compaction")["hidden"], true);
     // TUI selector = mode primary only (build/plan main; general is subagent).
     let selector: Vec<&str> = api_agents
@@ -294,7 +328,7 @@ async fn compat_agent_routes_include_bound_catalog_agents() {
         .filter(|agent| agent["mode"] == "primary")
         .map(|agent| agent["id"].as_str().unwrap())
         .collect();
-    assert_eq!(selector, vec!["build", "plan"]);
+    assert_eq!(selector, vec!["build", "hya-main", "plan"]);
 }
 
 #[tokio::test]
@@ -351,7 +385,7 @@ async fn compat_agent_routes_ignore_project_legacy_agent_files() {
     assert_eq!(find_agent(&agents, "compaction")["hidden"], true);
     assert_eq!(
         find_agent(&agents, "compaction")["prompt"],
-        "compaction prompt"
+        builtin_prompt("compaction")
     );
 
     let api_agents = &api_agents["data"];
@@ -449,8 +483,8 @@ async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
         "bound catalog agent `research` must appear, got {ids:?}"
     );
     assert!(
-        !ids.contains(&"explore"),
-        "absent catalog agent `explore` must not be synthesized from NATIVE_AGENTS, got {ids:?}"
+        !ids.contains(&"not-installed"),
+        "an agent in no catalog must not be synthesized from NATIVE_AGENTS, got {ids:?}"
     );
     assert_eq!(find_agent(api_agents, "build")["mode"], "primary");
     assert_eq!(find_agent(api_agents, "plan")["mode"], "primary");
@@ -471,7 +505,7 @@ async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
         .collect();
     assert_eq!(
         selector,
-        vec!["build", "plan"],
+        vec!["build", "hya-main", "plan"],
         "TUI selector modes must be primary-only, got {selector:?}"
     );
     assert!(
@@ -479,21 +513,26 @@ async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
         "reachable subagent must not enter the TUI selector"
     );
 
-    // Then (c): caller can_spawn roster includes reachable subagent, excludes unlisted main
-    // and fixed system agents (independent of role).
+    // Then (c): a built-in caller reaches every ordinary agent, including the
+    // installed one, and never a reserved system agent.
     let binding = engine.bind_runtime(&workdir).unwrap();
     let Ok(roster) = engine.agent_roster_for_binding(&binding, "build") else {
         panic!("caller roster must resolve from bound catalog");
     };
     let roster_names: Vec<&str> = roster.iter().map(|agent| agent.name.as_str()).collect();
-    assert_eq!(
-        roster_names,
-        vec!["research"],
-        "roster must be can_spawn-only, got {roster_names:?}"
-    );
     assert!(
-        !roster_names.contains(&"plan"),
-        "unlisted main must not appear"
+        roster_names.contains(&"research"),
+        "installed bundle agent must be reachable, got {roster_names:?}"
+    );
+    for reserved in ["compaction", "title", "summary"] {
+        assert!(
+            !roster_names.contains(&reserved),
+            "reserved `{reserved}` must stay out of the roster, got {roster_names:?}"
+        );
+    }
+    assert!(
+        roster_names.contains(&"plan"),
+        "a built-in caller reaches every ordinary agent, including other mains"
     );
     for reserved in ["compaction", "title", "summary"] {
         assert!(
@@ -516,4 +555,12 @@ async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
         !ids.contains(&"reviewer"),
         "legacy .opencode agent must not merge into bound catalog metadata, got {ids:?}"
     );
+}
+
+/// Compiled-in prompt for a reserved system agent.
+fn builtin_prompt(id: &str) -> &'static str {
+    let Some(prompt) = hya_core::builtin_agent(id).and_then(|agent| agent.prompt) else {
+        panic!("builtin `{id}` must carry a prompt");
+    };
+    prompt
 }

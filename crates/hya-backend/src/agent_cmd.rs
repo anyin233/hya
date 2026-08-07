@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::io::Write as _;
 
 use anyhow::Context as _;
@@ -75,33 +75,23 @@ fn list_text_for(_workdir: &std::path::Path, all: bool) -> anyhow::Result<String
         return Ok(text);
     }
 
-    // Single embedded catalog authority — same Arc the runtime bootstrap uses.
-    let catalog = hya_app::builtin_catalog()?;
-    // Ordinary reachability: any catalog agent lists the id in can_spawn.
-    let reachable: BTreeSet<&str> = catalog
-        .bundles()
-        .iter()
-        .flat_map(|bundle| bundle.agents.iter())
-        .flat_map(|agent| agent.can_spawn.iter().map(|id| id.as_str()))
-        .collect();
-
-    let mut ordinary: Vec<_> = catalog
-        .bundles()
-        .iter()
-        .flat_map(|bundle| bundle.agents.iter())
-        .filter(|agent| {
-            let name = agent.stable_id.as_str();
-            !native_names.contains(name) && reachable.contains(name)
-        })
-        .collect();
-    ordinary.sort_by(|a, b| a.stable_id.as_str().cmp(b.stable_id.as_str()));
+    // One agent authority: compiled-in built-ins plus installed bundle agents.
+    // Reserved system agents are excluded, since no ordinary agent reaches them.
+    let catalog = hya_app::builtin_agent_catalog()?;
+    let mut ordinary = catalog.selectable();
+    ordinary.retain(|agent| !native_names.contains(agent.stable_id));
+    ordinary.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
 
     for agent in ordinary {
-        text.push_str(agent.stable_id.as_str());
+        text.push_str(agent.stable_id);
         text.push_str(" (");
-        text.push_str(agent.role.selector_mode());
-        text.push_str(")\n");
-        if let Some(description) = agent.description.as_deref().filter(|d| !d.is_empty()) {
+        text.push_str(agent.selector_mode());
+        text.push(')');
+        text.push_str(match agent.origin {
+            hya_core::AgentOrigin::Builtin => " [builtin]\n",
+            hya_core::AgentOrigin::Bundle { .. } => " [bundle]\n",
+        });
+        if let Some(description) = agent.description.filter(|text| !text.is_empty()) {
             text.push_str("  ");
             text.push_str(description);
             text.push('\n');

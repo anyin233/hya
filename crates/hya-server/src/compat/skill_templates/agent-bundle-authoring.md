@@ -5,7 +5,7 @@
 
 # AgentBundle authoring
 
-Author and install a 0.34.11 public `AgentBundle`. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `AgentBundle`. **A bundle defines exactly one agent**, so you install one bundle per specialist agent; built-in agents are compiled into the binary and are not bundles. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Repository references:
 
@@ -28,7 +28,6 @@ Static-only Bundles remain process-free. Bun Compat is the only executable sidec
 Use one root `bundle.hya.md` with both v1 markers:
 
 ```yaml
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 ```
 
@@ -41,7 +40,7 @@ bundle.hya.md
 extensions/runtime.js
 ```
 
-The manifest's Tool selector and JavaScript Extension entrypoint both reference the same `extensions/runtime.js` source, archived once under the controlled cross-kind exact-path rule. The 0.34.11 public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch. There is no import scanner, dependency installer, or new dependency guarantee; do not add files not represented by the v1 source contract.
+The manifest's Tool selector and JavaScript Extension entrypoint both reference the same `extensions/runtime.js` source, archived once under the controlled cross-kind exact-path rule. The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch. There is no import scanner, dependency installer, or new dependency guarantee; do not add files not represented by the v1 source contract.
 
 ## Selected Tool/Hook resources and the disjoint example
 
@@ -92,13 +91,13 @@ stdout is protocol-only; bare or malformed stdout is a protocol failure. stderr 
 
 - `role: main` is selectable in the TUI direct selector.
 - `role: subagent` is hidden from direct TUI selection.
-- `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
+- `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`. A bundle agent's roster is its own `can_spawn`; a built-in caller reaches the whole ordinary set, so installing a bundle makes its agent spawnable with no builtin edit.
 - `spawn_lifecycle` is orthogonal to `role`.
 - Explicit unknown or denied targets fail closed: catalog lookup does not rewrite an unknown `subagent_type` to `general`. Empty or omitted `subagent_type` on the `task` tool still normalizes to `general` before authorization.
 
 ## Resources and permissions
 
-`harness_access: none | basic | full` chooses the Harness-owned candidate set. `resource_view.allow`, `deny`, `aliases`, and `namespace` deterministically narrow and name it. Bundle-local names keep Bundle precedence and canonical qualified names remain exact.
+An installed bundle agent's tool plane is **derived from its origin, not declared**. It is clamped to the **internal public** plane: the builtin tool snapshot captured when the runtime registry was built, plus its own Bundle-local tools, skills, and MCP. It sees no Harness skill, no Harness MCP export, and no plugin-contributed tool, and it cannot select another bundle's resources. There is no manifest field for it. **The clamp is not a sandbox.** `can_spawn` may name a built-in, and a spawned built-in runs on its own full plane — the clamp bounds direct use, not delegation. `resource_view.allow`, `deny`, `aliases`, and `namespace` deterministically narrow and name what remains. Bundle-local names keep Bundle precedence and canonical qualified names remain exact.
 
 Bundle-local tool calls resolve against the activation's captured catalog binding. Existing `PermissionPlane` and plugin policy run before `tool/call`; denial prevents RPC. `PermissionPlane`/plugin policy remain the final gate before sidecar RPC. A Bundle adds no sandbox and causes no permission expansion. Host tools, static skills, and host-managed MCP remain governed by the Harness view.
 

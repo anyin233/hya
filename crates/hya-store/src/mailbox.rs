@@ -1,7 +1,7 @@
 use hya_proto::{
     ActorClaim, Envelope, Event, EventSeq, FinishReason, MailEndpoint, MailKind, MemberRunStatus,
     PartProjection, Projection, Role, RosterEntry, RosterStatus, SessionId, SubagentMode,
-    ToolPartState, now_millis,
+    ToolPartState, now_millis, scope,
 };
 use sqlx::Row;
 
@@ -35,11 +35,19 @@ impl SessionStore {
     /// Authoritatively validate and append one direct-handle mail event under the
     /// SQLite writer lock. The caller publishes the returned envelope after this
     /// transaction commits.
+    ///
+    /// `from` is the sender's canonical path; `address` is the recipient exactly
+    /// as the model wrote it — a relative leaf (`worker-1`) or a full path.
+    ///
+    /// **Gate order matters.** The scope check runs *before* the liveness checks,
+    /// and an out-of-scope address fails identically to an unknown one. If
+    /// liveness ran first, an agent could probe whether an out-of-scope teammate
+    /// existed or was still running by reading which rejection came back.
     pub async fn append_direct_mail(
         &self,
         root: SessionId,
         from: String,
-        handle: String,
+        address: String,
         kind: MailKind,
         body: String,
         actor_claim: Option<&ActorClaim>,
@@ -50,6 +58,14 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&mut tx, root).await?;
+        let Some(handle) = projection.team.resolve_in_scope(&from, &address) else {
+            return Err(StoreError::MailboxRejected(format!(
+                "`{address}` is not a teammate you can message; you may message \
+                 your parent, your same-parent teammates, and the agents you \
+                 lead — run `roster` to see them"
+            )));
+        };
+        // resolve_in_scope only returns roster keys, so this cannot miss.
         let Some(entry) = projection.team.roster.get(&handle) else {
             return Err(StoreError::MailboxRejected(format!(
                 "unknown mail target `{handle}`"
@@ -81,7 +97,14 @@ impl SessionStore {
         Ok(envelope)
     }
 
-    /// Append one channel-targeted mail under the writer lock; returns the envelope and recipient count.
+    /// Append one channel-targeted mail under the writer lock; returns the
+    /// envelope and recipient count.
+    ///
+    /// `channel` is the name as the model wrote it, without the leading `#`:
+    /// `build` for the sender's own unit, `^build` for its home unit when it
+    /// leads one. It is resolved to a unit-qualified key inside the transaction,
+    /// which is what prevents a post from reaching another unit's channel of the
+    /// same name.
     pub async fn append_channel_mail(
         &self,
         root: SessionId,
@@ -97,31 +120,52 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&mut tx, root).await?;
-        let mut recipients = 0;
-        if let Some(channel_state) = projection.team.channels.get(&channel) {
-            for member in &channel_state.members {
-                let eligible = match projection.team.roster.get(member) {
-                    Some(entry) if entry.mode == SubagentMode::Resident => {
-                        resident_member_is_eligible(&mut tx, entry).await?
-                    }
-                    _ => true,
-                };
-                if eligible {
-                    recipients += 1;
-                }
-            }
+        let key = projection
+            .team
+            .resolve_channel(&from, &channel)
+            .map_err(|error| StoreError::MailboxRejected(error.to_string()))?;
+        let (envelope, recipients) =
+            append_resolved_channel_mail(&mut tx, root, from, key, kind, body, &projection).await?;
+        tx.commit().await?;
+        Ok((envelope, recipients))
+    }
+
+    /// Append one **announcement** to the unit `from` leads.
+    ///
+    /// Announce is one-way and one level deep (task 08-07, R6): it reaches the
+    /// sender's direct reports and stops there. That falls out of the reserved
+    /// `{unit}#announce` channel, whose membership is exactly the unit's direct
+    /// children because every agent auto-joins its parent's announce channel at
+    /// registration.
+    ///
+    /// Rejected when the sender leads nobody — there is no unit to address.
+    pub async fn append_announce_mail(
+        &self,
+        root: SessionId,
+        from: String,
+        body: String,
+        actor_claim: Option<&ActorClaim>,
+    ) -> Result<(Envelope, usize), StoreError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(claim) = actor_claim {
+            fence_actor_claim(&mut tx, claim).await?;
         }
 
-        let envelope = append_event_in_transaction(
+        let projection = replay_projection(&mut tx, root).await?;
+        if !projection.team.leads_a_unit(&from) {
+            return Err(StoreError::MailboxRejected(
+                "you lead no agents, so there is no one to announce to".to_string(),
+            ));
+        }
+        let key = scope::announce_channel_of(&from);
+        let (envelope, recipients) = append_resolved_channel_mail(
             &mut tx,
             root,
-            Event::MailSent {
-                session: root,
-                from,
-                to: MailEndpoint::Channel(channel),
-                kind,
-                body,
-            },
+            from,
+            key,
+            MailKind::Announcement,
+            body,
+            &projection,
         )
         .await?;
         tx.commit().await?;
@@ -144,6 +188,9 @@ impl SessionStore {
         fence_actor_claim(&mut tx, &recovered.claim).await?;
 
         let projection = replay_projection(&mut tx, root).await?;
+        // Accept a canonical path or a bare leaf: callers hold handles minted at
+        // different times, and the roster is keyed by canonical path.
+        let handle = &projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(handle) else {
             return Err(StoreError::ActorClaimData(
                 "resident recovery roster mismatch".to_string(),
@@ -270,6 +317,8 @@ impl SessionStore {
         }
 
         let projection = replay_projection(&mut tx, root).await?;
+        // Canonical path or bare leaf, as elsewhere on the resident paths.
+        let handle = &projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(handle) else {
             return Err(StoreError::ActorClaimData(
                 "resident stop handle is not registered".to_string(),
@@ -432,11 +481,58 @@ async fn released_resident_matches(
     }
 
     let projection = replay_projection(tx, root).await?;
-    Ok(projection.team.roster.get(handle).is_some_and(|entry| {
+    let handle = projection.team.canonical_member(handle);
+    Ok(projection.team.roster.get(&handle).is_some_and(|entry| {
         entry.session == claim.actor_id
             && entry.mode == SubagentMode::Resident
             && entry.status == RosterStatus::Failed
     }))
+}
+
+/// Count eligible subscribers of an already-resolved channel key and append the
+/// post. Shared by the ordinary channel path and the announce path so both use
+/// one eligibility rule and one append.
+///
+/// A send is still appended when nobody is eligible: the channel keeps its own
+/// ordered log independently of who happened to be alive at post time.
+#[allow(clippy::too_many_arguments)]
+async fn append_resolved_channel_mail(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    root: SessionId,
+    from: String,
+    key: String,
+    kind: MailKind,
+    body: String,
+    projection: &Projection,
+) -> Result<(Envelope, usize), StoreError> {
+    let mut recipients = 0;
+    if let Some(channel_state) = projection.team.channels.get(&key) {
+        for member in &channel_state.members {
+            let eligible = match projection.team.roster.get(member) {
+                Some(entry) if entry.mode == SubagentMode::Resident => {
+                    resident_member_is_eligible(tx, entry).await?
+                }
+                _ => true,
+            };
+            if eligible {
+                recipients += 1;
+            }
+        }
+    }
+
+    let envelope = append_event_in_transaction(
+        tx,
+        root,
+        Event::MailSent {
+            session: root,
+            from,
+            to: MailEndpoint::Channel(key),
+            kind,
+            body,
+        },
+    )
+    .await?;
+    Ok((envelope, recipients))
 }
 
 async fn append_event_in_transaction(

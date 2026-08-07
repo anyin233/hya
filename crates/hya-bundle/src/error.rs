@@ -43,13 +43,18 @@ pub enum BundleError {
         /// Parse/validation detail.
         detail: String,
     },
-    /// `api_version` is not `hya.agent-bundle/v1`.
-    #[error("unsupported bundle api version `{found}` in `{source_name}`")]
-    WrongApiVersion {
+    /// A manifest still carries a key the single-agent format removed.
+    ///
+    /// Reported per key with concrete guidance: `deny_unknown_fields` alone
+    /// produces a serde message that does not say what to write instead.
+    #[error("`{key}` was removed from the AgentBundle manifest in `{source_name}`: {guidance}")]
+    RemovedManifestKey {
         /// Source root or package name for diagnostics.
         source_name: String,
-        /// Value found in the manifest.
-        found: String,
+        /// The removed key that is still present.
+        key: String,
+        /// What the author should do instead.
+        guidance: String,
     },
     /// `kind` is not `AgentBundle`.
     #[error("unsupported bundle kind `{found}` in `{source_name}`")]
@@ -101,13 +106,35 @@ pub enum BundleError {
         /// Requested spawn target stable id.
         agent_id: String,
     },
-    /// Two agents in one bundle share the same `local_id`.
-    #[error("duplicate local agent id `{local_id}` in bundle `{bundle_id}`")]
-    DuplicateLocalAgentId {
+    /// A `resource_view` entry names a resource outside the agent's tool plane.
+    ///
+    /// Distinct from [`Self::UnknownResourceReference`] on purpose: the resource
+    /// may well exist, but this agent's plane does not admit it. Saying
+    /// "unknown" would send an author looking for a typo that is not there.
+    #[error(
+        "bundle `{bundle_id}` references `{reference}`, which is outside its `{plane}` tool plane"
+    )]
+    ResourceNotInPlane {
+        /// Bundle identity id of the referring agent.
+        bundle_id: String,
+        /// The rejected reference.
+        reference: String,
+        /// Plane the referring agent is bound to.
+        plane: String,
+    },
+    /// An installed bundle claims an agent id reserved by a built-in agent.
+    ///
+    /// Built-ins run on the full Harness plane; an installed bundle agent runs
+    /// on the clamped internal-public plane. Letting a bundle claim a built-in
+    /// id would make the plane of a well-known id depend on install order.
+    #[error(
+        "bundle `{bundle_id}` declares agent `{agent_id}`, which is a reserved built-in agent id"
+    )]
+    BuiltinAgentIdShadowed {
         /// Bundle identity id.
         bundle_id: String,
-        /// Conflicting local agent id.
-        local_id: String,
+        /// Conflicting agent id.
+        agent_id: String,
     },
     /// `can_spawn` / hook / resource reference does not resolve in-catalog.
     #[error(
@@ -195,9 +222,6 @@ pub enum BundleError {
     /// Bundles/index not in the required deterministic order.
     #[error("prepared catalog is not canonically ordered")]
     NonCanonicalPreparedCatalog,
-    /// Catalog contains zero bundles after prepare/merge.
-    #[error("prepared catalog contains no bundles")]
-    EmptyPreparedCatalog,
     /// Bytes do not start with a known public or private package magic.
     #[error("invalid bundle package format")]
     InvalidPackageFormat,

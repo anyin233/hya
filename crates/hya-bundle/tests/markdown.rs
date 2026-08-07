@@ -1,43 +1,40 @@
 //! Single-file markdown bundles: manifest markers and exact-filename rules.
 
-use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_builtins};
+use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
 
 fn markdown(
     frontmatter: &str,
     file_name: &str,
 ) -> Result<hya_bundle::PreparedCatalog, BundleError> {
-    prepare_builtins(vec![BundleSource::new(
+    prepare_package(BundleSource::new(
         "markdown",
         vec![SourceFile::new(
             file_name,
             format!("---\n{frontmatter}\n---\nYou are the Markdown lead.\n").into_bytes(),
         )],
-    )])
+    ))
 }
 
 fn manifest_markers() -> &'static str {
-    r#"api_version: hya.agent-bundle/v1
-kind: AgentBundle
+    r#"kind: AgentBundle
 identity:
   id: hya/markdown
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: lead
-    stable_id: markdown-lead
-    role: main
-    spawn_lifecycle: transient
-    harness_access: full"#
+agent:
+  id: markdown-lead
+  role: main
+  spawn_lifecycle: transient"#
 }
 
 #[test]
-fn single_markdown_requires_exact_filename_and_both_v1_markers() {
+fn single_markdown_requires_the_exact_filename_and_the_kind_marker() {
     let valid = markdown(manifest_markers(), "bundle.hya.md");
     let Ok(valid) = valid else {
         panic!("valid single Markdown failed: {valid:?}");
     };
     assert_eq!(
-        valid.bundles()[0].agents[0].prompt.as_deref(),
+        valid.bundles()[0].agent.prompt.as_deref(),
         Some("You are the Markdown lead.")
     );
 
@@ -47,13 +44,15 @@ fn single_markdown_requires_exact_filename_and_both_v1_markers() {
         Err(BundleError::UnsupportedSource { .. })
     ));
 
-    let missing_api = markdown(
-        &manifest_markers().replace("api_version: hya.agent-bundle/v1\n", ""),
+    // `api_version` was removed with the single-agent format; a manifest that
+    // still carries it is rejected by name, not by a generic parse error.
+    let stale_api_version = markdown(
+        &format!("api_version: hya.agent-bundle/v1\n{}", manifest_markers()),
         "bundle.hya.md",
     );
     assert!(matches!(
-        missing_api,
-        Err(BundleError::InvalidManifest { .. })
+        stale_api_version,
+        Err(BundleError::RemovedManifestKey { ref key, .. }) if key == "api_version"
     ));
 
     let missing_kind = markdown(
@@ -67,51 +66,39 @@ fn single_markdown_requires_exact_filename_and_both_v1_markers() {
 }
 
 #[test]
-fn empty_body_markdown_supports_multiple_agents_with_explicit_prompt_files() {
-    let prepared = prepare_builtins(vec![BundleSource::new(
-        "markdown-multi-agent",
+fn empty_body_markdown_is_allowed_when_the_agent_names_a_prompt_file() {
+    // An empty Markdown body next to an explicit `prompt:` is "no body", not an
+    // empty prompt, so the named file still wins.
+    let prepared = prepare_package(BundleSource::new(
+        "markdown-explicit-prompt",
         vec![
             SourceFile::new(
                 "bundle.hya.md",
                 br#"---
-api_version: hya.agent-bundle/v1
 kind: AgentBundle
 identity:
-  id: hya/markdown-multi-agent
+  id: hya/markdown-explicit-prompt
   version: 1.0.0
   publisher: hya
-agents:
-  - local_id: alpha
-    stable_id: markdown-alpha
-    role: main
-    prompt: prompts/alpha.md
-    spawn_lifecycle: transient
-    harness_access: full
-  - local_id: beta
-    stable_id: markdown-beta
-    role: subagent
-    prompt: prompts/beta.md
-    spawn_lifecycle: transient
-    harness_access: full
+agent:
+  id: markdown-alpha
+  role: main
+  prompt: prompts/alpha.md
+  spawn_lifecycle: transient
 ---
 
 "#,
             ),
             SourceFile::new("prompts/alpha.md", b"Alpha prompt."),
-            SourceFile::new("prompts/beta.md", b"Beta prompt."),
         ],
-    )]);
+    ));
     let Ok(prepared) = prepared else {
-        panic!("multi-agent Markdown source must prepare successfully: {prepared:?}");
+        panic!("explicit-prompt Markdown source must prepare successfully: {prepared:?}");
     };
 
     assert_eq!(prepared.bundles().len(), 1);
-    let agents = &prepared.bundles()[0].agents;
-    assert_eq!(agents.len(), 2);
-    assert_eq!(agents[0].stable_id.as_str(), "markdown-alpha");
-    assert_eq!(agents[0].prompt.as_deref(), Some("Alpha prompt."));
-    assert_eq!(agents[0].prompt_source.as_deref(), Some("prompts/alpha.md"));
-    assert_eq!(agents[1].stable_id.as_str(), "markdown-beta");
-    assert_eq!(agents[1].prompt.as_deref(), Some("Beta prompt."));
-    assert_eq!(agents[1].prompt_source.as_deref(), Some("prompts/beta.md"));
+    let agent = &prepared.bundles()[0].agent;
+    assert_eq!(agent.id.as_str(), "markdown-alpha");
+    assert_eq!(agent.prompt.as_deref(), Some("Alpha prompt."));
+    assert_eq!(agent.prompt_source.as_deref(), Some("prompts/alpha.md"));
 }

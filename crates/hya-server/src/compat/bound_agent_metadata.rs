@@ -6,7 +6,6 @@
 //! Also owns the sole remaining workdir `default_agent` config reader used by
 //! session create and list sorting — no agent definition merge.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use hya_bundle::BundleError;
@@ -58,7 +57,7 @@ pub(crate) async fn resolve_session_agent(
             agent_id: candidate,
         }))
     })?;
-    Ok(agent.stable_id.clone())
+    Ok(AgentName::new(agent.stable_id))
 }
 
 /// Bind once for `workdir` and list catalog agents from that TurnBinding.
@@ -69,33 +68,25 @@ pub(super) async fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAg
     let binding = st.engine.bind_root_runtime(workdir).await?;
     let catalog = binding.agent_catalog();
 
-    // Ordinary reachability: any catalog agent lists the id in can_spawn.
-    let reachable: BTreeSet<&str> = catalog
-        .bundles()
-        .iter()
-        .flat_map(|bundle| bundle.agents.iter())
-        .flat_map(|agent| agent.can_spawn.iter().map(|id| id.as_str()))
-        .collect();
-
+    // Ordinary reachability: every non-reserved agent is reachable, because
+    // built-ins spawn the whole ordinary set. Reserved system agents are not.
     let mut rows: Vec<BoundAgentRow> = catalog
-        .bundles()
-        .iter()
-        .flat_map(|bundle| bundle.agents.iter())
+        .all()
+        .into_iter()
         .map(|agent| {
-            let name = agent.stable_id.as_str();
+            let name = agent.stable_id;
             // Role is the sole selector rule (main → primary).
-            let mode = agent.role.selector_mode().to_string();
-            let ordinarily_reachable = reachable.contains(name);
+            let mode = agent.selector_mode().to_string();
             // Wire `hidden` preserves autocomplete exclusion for unreachable
             // subagents; it never affects the TUI selector.
-            let hidden = mode == "subagent" && !ordinarily_reachable;
+            let hidden = mode == "subagent" && catalog.is_reserved(name);
             BoundAgentRow {
                 name: name.to_string(),
-                description: agent.description.clone(),
+                description: agent.description.map(str::to_string),
                 mode,
                 hidden,
-                color: agent.color.clone(),
-                prompt: agent.prompt.clone(),
+                color: agent.color.map(str::to_string),
+                prompt: agent.prompt.map(str::to_string),
                 model: agent.model_policy.model.clone(),
             }
         })

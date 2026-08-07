@@ -31,11 +31,12 @@
 //! "no pending work", quiescence can never fire while a turn is running or mail is
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use hya_proto::{
     ActorClaim, Event, MailEndpoint, MemberId, OwnerRunId, RosterStatus, SessionId, SubagentMode,
+    scope,
 };
 use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
@@ -845,18 +846,26 @@ impl TeamActor {
         let Ok(projection) = self.engine.read_projection(self.root).await else {
             return Vec::new();
         };
+        // Resolve the address the same way the reducer did when it folded this
+        // event. A live envelope already carries canonical addresses, so this is
+        // the identity; a replayed pre-scoping envelope carries bare names, and
+        // without this the roster lookup below would miss and the recipient would
+        // never wake.
+        let from = projection.team.canonical_member(from);
+        let from = from.as_str();
         let handles: Vec<String> = match to {
             MailEndpoint::Handle(handle) => {
+                let handle = projection.team.canonical_member(handle);
                 if handle == from {
                     Vec::new() // a self-addressed direct mail never self-wakes
                 } else {
-                    vec![handle.clone()]
+                    vec![handle]
                 }
             }
             MailEndpoint::Channel(channel) => projection
                 .team
                 .channels
-                .get(channel)
+                .get(&projection.team.canonical_channel(channel))
                 .map(|ch| {
                     ch.members
                         .iter()
@@ -1688,7 +1697,16 @@ impl ResidentSupervisor {
                     .await?
             }
         };
-        let handle = self.assign_handle(root, agent.name.as_str()).await;
+        // The spawning agent's canonical path is the unit this resident joins.
+        let parent_path = self
+            .engine
+            .resolve_handle(root, parent)
+            .await
+            .unwrap_or_else(|_| scope::ROOT_HANDLE.to_string());
+        let leaf = self
+            .assign_handle(root, &parent_path, agent.name.as_str())
+            .await;
+        let handle = scope::join_path(&parent_path, &leaf);
         // Announce in the parent tree (observable), then bind the handle + resident
         // mode in the team-root log.
         let member = MemberId::new();
@@ -1826,6 +1844,13 @@ impl ResidentSupervisor {
             guidance,
             sidecar_factory,
         } = activation;
+        // `handle` arrives either as a canonical path (from `spawn_resident`) or
+        // as a bare leaf (from the public `register_existing_resident*` entry
+        // points). Taking its leaf and re-deriving the unit from the session's
+        // own lineage normalizes both into one canonical path.
+        let parent_path = self.engine.parent_agent_path(root, session).await;
+        let leaf = scope::leaf(&handle).to_string();
+        let handle = scope::join_path(&parent_path, &leaf);
         let claim = self
             .engine
             .store()
@@ -1836,13 +1861,23 @@ impl ResidentSupervisor {
             .commit_resident_mutation(
                 &claim,
                 root,
-                vec![Event::AgentRegistered {
-                    session: root,
-                    agent_session: session,
-                    handle: handle.clone(),
-                    agent_type: agent.name.clone(),
-                    mode: SubagentMode::Resident,
-                }],
+                vec![
+                    Event::AgentRegistered {
+                        session: root,
+                        agent_session: session,
+                        handle: leaf,
+                        parent: Some(parent_path.clone()),
+                        agent_type: agent.name.clone(),
+                        mode: SubagentMode::Resident,
+                    },
+                    // Auto-join the unit's announce channel so a leader's
+                    // `announce` reaches this resident and stops here (R6).
+                    Event::ChannelJoined {
+                        session: root,
+                        channel: scope::announce_channel_of(&parent_path),
+                        member: handle.clone(),
+                    },
+                ],
             )
             .await
         {
@@ -1962,20 +1997,42 @@ impl ResidentSupervisor {
         Ok(())
     }
 
-    /// Assign the next `{type}-{ordinal}` handle for `agent_type` in team `root`,
-    /// continuing the ordinal past every existing member of that type. Deterministic
-    /// (roster + type only) for replay stability, mirroring `subagent::assign_handles`.
-    async fn assign_handle(&self, root: SessionId, agent_type: &str) -> String {
+    /// Assign the next `{type}-{ordinal}` **leaf** for `agent_type` inside
+    /// `parent_path`'s unit, continuing the ordinal past that unit's existing
+    /// members of the same type.
+    ///
+    /// Counts per unit rather than per team, and skips a leaf that collides with
+    /// a sibling or with the parent's own leaf — the same two rules
+    /// `subagent::assign_handles` enforces, for the resident spawn path.
+    /// Deterministic (roster + type only) for replay stability.
+    async fn assign_handle(&self, root: SessionId, parent_path: &str, agent_type: &str) -> String {
         let roster = self
             .engine
             .read_projection(root)
             .await
             .map(|p| p.team.roster)
             .unwrap_or_default();
-        let used = roster
-            .values()
-            .filter(|entry| entry.session != root && entry.agent_type.as_str() == agent_type)
+        let siblings: Vec<&String> = roster
+            .keys()
+            .filter(|path| scope::parent_path(path) == Some(parent_path))
+            .collect();
+        let taken: BTreeSet<&str> = siblings.iter().map(|path| scope::leaf(path)).collect();
+        let mut ordinal = siblings
+            .iter()
+            .filter(|path| {
+                roster
+                    .get(**path)
+                    .is_some_and(|entry| entry.agent_type.as_str() == agent_type)
+            })
             .count();
-        format!("{agent_type}-{}", used + 1)
+        let parent_leaf = scope::leaf(parent_path);
+        // Terminates: `taken` is finite and the ordinal only ever grows.
+        loop {
+            ordinal += 1;
+            let candidate = format!("{agent_type}-{ordinal}");
+            if candidate != parent_leaf && !taken.contains(candidate.as_str()) {
+                return candidate;
+            }
+        }
     }
 }

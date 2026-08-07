@@ -7,18 +7,18 @@ mod support;
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, PreparedResource, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    PreparedResource, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
-    AdmissionMemberIdentity, AgentSpec, BoundSidecarFactory, BoundSpawnSender, ChatParamsInput,
-    ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CoreError,
-    CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry, SessionEngine, SidecarHandle,
-    SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits, TeamEvidenceEnvelope,
-    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope, run_pre_admitted_member,
-    run_team,
+    AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    CoreError, CreateSession, EventBus, HookDispatcher, MemberSpec, MemberStatus,
+    MessageUserBeforeInput, MessageUserBeforeOutcome, ResidentSupervisor, RuntimeRegistry,
+    SessionEngine, SidecarHandle, SidecarLifecycle, SidecarStart, SubagentGovernor, SubagentLimits,
+    TeamEvidenceEnvelope, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, project_envelope,
+    run_pre_admitted_member, run_team,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId,
@@ -471,12 +471,9 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedBundle 
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
         digest: "test-only".to_string(),
-        agents: vec![PreparedAgent {
-            local_id: "sidecar-agent".to_string(),
-            stable_id: AgentName::new("sidecar-agent"),
+        agent: PreparedAgent {
+            id: AgentName::new("sidecar-agent"),
             description: None,
             role: AgentRole::Subagent,
             color: None,
@@ -486,11 +483,10 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedBundle 
             model_policy: ModelPolicy::default(),
             workdir: None,
             spawn_lifecycle,
-            harness_access: HarnessAccess::Full,
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
-        }],
+        },
         tools: vec![PreparedResource {
             local_id: "echo".to_string(),
             stable_id: SIDECAR_PERMISSION_TOOL.to_string(),
@@ -1818,10 +1814,8 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
 #[tokio::test]
 async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Transient)])
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -1912,10 +1906,8 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
 #[tokio::test]
 async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Transient)])
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
     let inputs = Arc::new(Mutex::new(Vec::new()));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(HookProbeTool {
@@ -2017,10 +2009,8 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
 #[tokio::test]
 async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Resident)])
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -2112,7 +2102,7 @@ async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
 
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projection.team.roster.get(&handle).unwrap().status,
+        projection.team.roster.get(handle.as_str()).unwrap().status,
         RosterStatus::Idle
     );
     {
@@ -2215,7 +2205,7 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
     );
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
     assert!(supervisor.team_cancel(root).is_none());
@@ -2494,7 +2484,7 @@ async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert_eq!(entry.current_task.as_deref(), Some("resident stopped"));
     let stop_events = engine
@@ -2885,7 +2875,7 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
     );
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Idle);
     assert_ne!(entry.current_task.as_deref(), Some("resident stopped"));
 }
@@ -2945,7 +2935,7 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
 
     let before_send = primary.read_projection(root).await.unwrap();
     assert_eq!(
-        before_send.team.roster.get(&handle).unwrap().status,
+        before_send.team.roster.get(handle.as_str()).unwrap().status,
         RosterStatus::Idle
     );
 
@@ -3022,7 +3012,7 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
     ));
 
     let projection = primary.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     let inbox_len = projection.team.inboxes.get(&handle).map_or(0, Vec::len);
     assert_eq!(inbox_len, 1);
@@ -3142,7 +3132,7 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
             .contains(&child)
     );
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     assert!(
         entry
@@ -3684,7 +3674,7 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
     assert!(supervisor.team_cancel(root).is_none());
 
     let projection = engine.read_projection(root).await.unwrap();
-    let entry = projection.team.roster.get(&handle).unwrap();
+    let entry = projection.team.roster.get(handle.as_str()).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
     let child_projection = engine.read_projection(child).await.unwrap();
     assert!(!child_projection.session.messages.iter().any(|message| {
@@ -3855,10 +3845,8 @@ async fn resident_activation_hook_transport_loss_enters_epoch_recovery() {
 
 async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog = Arc::new(
-        BundleCatalog::from_prepared(&[sidecar_permission_bundle(SpawnLifecycle::Resident)])
-            .unwrap(),
-    );
+    let catalog =
+        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -4086,7 +4074,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
             .any(|message| matches!(message.role, Role::User))
     );
     let root_projection = engine.read_projection(root).await.unwrap();
-    let worker = root_projection.team.roster.get("worker-1").unwrap();
+    let worker = root_projection.team.roster.get("main/worker-1").unwrap();
     assert_eq!(worker.status, RosterStatus::Idle);
     assert!(!matches!(worker.status, RosterStatus::Busy));
 
@@ -4242,7 +4230,9 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
                 status: RosterStatus::Failed,
                 current_task: Some(task),
             } if *session == root
-                && handle == "worker-1"
+                // Activity events carry the canonical path; only
+                // `AgentRegistered.handle` is still the bare leaf.
+                && handle == "main/worker-1"
                 && task.contains("sidecar ACK rejected")
         ) {
             break;
@@ -4312,7 +4302,9 @@ async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry()
         terminates: terminates.clone(),
         shutdowns: shutdowns.clone(),
     });
-    let handle = "worker-1".to_string();
+    // Canonical path: registration accepts either form, and every event and
+    // roster key now carries the path (task 08-07).
+    let handle = "main/worker-1".to_string();
     supervisor
         .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
         .await
@@ -4471,7 +4463,9 @@ async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempoten
         release: release.clone(),
         terminates: terminates.clone(),
     });
-    let handle = "worker-1".to_string();
+    // Canonical path: registration accepts either form, and every event and
+    // roster key now carries the path (task 08-07).
+    let handle = "main/worker-1".to_string();
     supervisor
         .register_existing_resident_with_sidecar(root, child, handle.clone(), agent, None, factory)
         .await
@@ -6082,4 +6076,9 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             .collect::<Vec<_>>(),
         vec![MemberStatus::Done, MemberStatus::Failed, MemberStatus::Done]
     );
+}
+
+/// Wrap one prepared bundle as an agent catalog over the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedBundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
+    AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&[bundle])?))
 }

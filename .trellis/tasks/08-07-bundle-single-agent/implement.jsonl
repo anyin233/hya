@@ -1,0 +1,9 @@
+{"file": "docs/agent-bundle-authoring.md", "reason": "Authoritative description of the CURRENT bundle format, harness_access table, resource_view grammar, sidecar ABI, and the two builtin bundles. Read it to know exactly what the change removes or rewrites."}
+{"file": "AGENTS.md", "reason": "TDD gate, crate map, and the exact verification commands every step must run before reporting done."}
+{"file": "CONTEXT.md", "reason": "Ubiquitous language. 'AgentBundle catalog' and 'BundleCatalog' definitions change in this task; use the existing terms and update them."}
+{"file": "docs/architecture/runtime.md", "reason": "Runtime snapshot, turn binding, and publication model that the AgentCatalog swap must not break."}
+{"file": "docs/plugin-protocol.md", "reason": "Plugin tools are one of the sources the clamped plane must exclude. Confirm how plugin tools reach the runtime registry."}
+{"file": "docs/skills.md", "reason": "Project and user skill discovery, which a bundle agent must no longer see."}
+{"file": ".trellis/spec/backend/task-tool.md", "reason": "Spawn admission and background spawn rules that the can_spawn / roster change interacts with."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "The change crosses hya-bundle, hya-core, hya-app, hya-store, and hya-backend. Use it before editing each seam."}
+{"file": "docs/testing/README.md", "reason": "Which suites to run and which are excluded from the default workspace test run."}

@@ -92,6 +92,7 @@ import {
   flattenRunTree,
   reduceWorkspace,
   resolveLifecyclePresentation,
+  rosterLabel,
   runTreeEventEffect,
   treeSessionIDs,
   workspaceLeaves,
@@ -1315,7 +1316,7 @@ export function Session() {
       const node = rows.find((row) => row.node.session === sessionID)?.node
       return {
         ...entry,
-        label: node?.roster?.handle ?? node?.member?.subagent_type ?? sessionID.slice(0, 12),
+        label: rosterLabel(node?.roster?.handle) ?? node?.member?.subagent_type ?? sessionID.slice(0, 12),
       }
     })
   })
@@ -1326,7 +1327,7 @@ export function Session() {
     const lifecycle = resolveLifecyclePresentation(node ?? {})
     return {
       label: [
-        node?.roster?.handle ?? node?.member?.subagent_type ?? "subagent",
+        rosterLabel(node?.roster?.handle) ?? node?.member?.subagent_type ?? "subagent",
         node?.roster?.agent_type ?? node?.member?.subagent_type ?? node?.agent,
         lifecycle.label,
         node?.roster?.current_task ?? node?.member?.description,

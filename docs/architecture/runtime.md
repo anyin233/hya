@@ -764,6 +764,14 @@ channels are event-sourced (`MailSent`, `ChannelJoined`, `ChannelLeft`) and
 folded by `hya-proto::Projection` (see
 [ADR 0001](../adr/0001-event-sourced-mailbox-and-channels.md)).
 
+Reach is **hierarchy-scoped**: an agent addresses only its parent, its
+same-parent siblings, and its direct reports. Handles are canonical paths
+(`main/lead-1/worker-2`) and channels belong to one unit
+(`main/lead-1#build`). The rule itself is pure path arithmetic in
+`hya-proto::scope`, enforced at a write gate in `hya-store` and a read filter in
+`hya-core` (see
+[ADR 0011](../adr/0011-hierarchy-scoped-mailbox.md)).
+
 `run_team` runs member specs in child sessions and returns bounded evidence
 summaries. It intentionally does not project full child transcripts into the
 lead session.

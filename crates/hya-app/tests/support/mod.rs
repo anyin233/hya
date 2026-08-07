@@ -62,7 +62,7 @@ impl Provider for IdentityFakeProvider {
 /// sequence `can_spawn: [a, b]`), so some ids parse successfully into a
 /// *different* value than the caller wrote. Those are the dangerous ones —
 /// they produce a fixture that silently disagrees with its own arguments.
-/// Measured against the real `hya_bundle::prepare_builtins` path:
+/// Measured against the real `hya_bundle::prepare_package` path:
 ///
 /// - `,` splits the `can_spawn` flow sequence: `can_spawn: [alpha,beta]`
 ///   silently yields two spawn edges (`alpha`, `beta`).
@@ -76,7 +76,7 @@ impl Provider for IdentityFakeProvider {
 ///
 /// Deliberately **not** guarded: YAML 1.1 bareword booleans (`no`, `on`, `y`,
 /// `off`, `yes`) and the other implicit-tag barewords (`null`, `~`, `123`,
-/// `.inf`). They were tested against `prepare_builtins` and every one
+/// `.inf`). They were tested against `prepare_package` and every one
 /// round-trips exactly — `serde_norway` resolves only `true|True|TRUE|
 /// false|False|FALSE` as booleans, and these fields deserialize as raw
 /// `String`s anyway. A guard against that list would catch nothing while
@@ -102,37 +102,48 @@ pub fn test_runtime(
     tools: Arc<ToolRegistry>,
     agents: &[(&str, AgentRole, &[&str])],
 ) -> Arc<RuntimeRegistry> {
-    let mut manifest = String::from(
-        "api_version: hya.agent-bundle/v1\nkind: AgentBundle\nidentity:\n  id: hya/app-tests\n  version: 0.0.0\n  publisher: hya-tests\nagents:\n",
-    );
-    let mut files = Vec::with_capacity(agents.len() + 1);
+    // A package prepares one bundle with one agent, so each fixture agent gets
+    // its own package. Built-in ids come from the compiled-in registry.
+    let mut prepared = Vec::new();
     for (stable_id, role, can_spawn) in agents {
         assert_yaml_safe_id(stable_id);
         for target in *can_spawn {
             assert_yaml_safe_id(target);
         }
+        if hya_core::is_builtin_id(stable_id) {
+            continue;
+        }
         let role = match role {
             AgentRole::Main => "main",
             AgentRole::Subagent => "subagent",
         };
-        manifest.push_str(&format!(
-            "  - local_id: {stable_id}\n    stable_id: {stable_id}\n    role: {role}\n    prompt: prompts/{stable_id}.md\n    spawn_lifecycle: transient\n    harness_access: full\n"
-        ));
+        let mut manifest = format!(
+            "kind: AgentBundle\nidentity:\n  id: hya/app-tests-{stable_id}\n  version: 0.0.0\n  publisher: hya-tests\nagent:\n  id: {stable_id}\n  role: {role}\n  prompt: prompts/{stable_id}.md\n  spawn_lifecycle: transient\n"
+        );
         if !can_spawn.is_empty() {
-            manifest.push_str("    can_spawn: [");
+            manifest.push_str("  can_spawn: [");
             manifest.push_str(&can_spawn.join(", "));
             manifest.push_str("]\n");
         }
-        files.push(SourceFile::new(
-            format!("prompts/{stable_id}.md"),
-            format!("{stable_id} prompt").into_bytes(),
-        ));
+        let files = vec![
+            SourceFile::new(
+                format!("prompts/{stable_id}.md"),
+                format!("{stable_id} prompt").into_bytes(),
+            ),
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+        ];
+        prepared.push(
+            hya_bundle::prepare_package(BundleSource::new(
+                format!("hya/app-tests-{stable_id}"),
+                files,
+            ))
+            .expect("test bundle must prepare"),
+        );
     }
-    files.push(SourceFile::new("bundle.yaml", manifest.into_bytes()));
-    let prepared = hya_bundle::prepare_builtins(vec![BundleSource::new("hya/app-tests", files)])
-        .expect("test bundle must prepare");
-    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared])
-        .expect("test bundle must retain verified identity");
+    let refs = prepared.iter().collect::<Vec<_>>();
+    let catalog = BundleCatalog::from_verified_catalogs(&refs)
+        .expect("test bundles must retain verified identity");
+    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("test agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),

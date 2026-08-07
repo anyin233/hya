@@ -118,17 +118,38 @@ Session is unavailable, no Session has been resumed.
 _Avoid_: restart, replay, continue
 
 **Agent**:
-A role/config — name, system prompt, model or category, tools, permissions — sourced from the
-**AgentBundle catalog** (built-in / installed prepared bundles on the process
-`BundleCatalog` / `TurnBinding`). Legacy per-file markdown agent definitions under
+A role/config — name, system prompt, model or category, tools, permissions — with one of two
+**Origins**: a **built-in agent** compiled into the binary, or an **AgentBundle agent** from an
+installed prepared bundle. Both are resolved through the **Agent catalog** on the process
+`AgentCatalog` / `TurnBinding`. Legacy per-file markdown agent definitions under
 `.hya/` / `.claude/` / `.opencode` are **not** discovered or used. Distinct from the
 Session that runs it.
 _Avoid_: role, persona, bot
 
+**Agent origin**:
+Which of the two sources an Agent came from: **built-in** (compiled in, full Harness tool plane,
+owns no bundle resources) or **bundle** (installed, clamped **internal public** tool plane plus
+its own bundle resources). Origin decides the **Tool plane**; no manifest field selects it.
+_Avoid_: kind, type, provenance
+
+**Tool plane**:
+The set of Harness-owned resources a bound Agent may see, derived from its **Agent origin**.
+`Full` is the live tool snapshot plus Harness skills and MCP; `InternalPublic` is the builtin
+tool snapshot captured at registry construction, with no Harness skills, no Harness MCP, and no
+plugin-contributed tools. Not a sandbox: a bundle agent may still spawn a built-in, which runs on
+its own plane.
+_Avoid_: permission set, scope, sandbox
+
+**AgentBundle**:
+One installable package that defines **exactly one** Agent plus the tools, skills, MCP
+declarations, hooks, and extensions that Agent may use. Install one bundle per specialist Agent.
+Built-in agents are **not** AgentBundles.
+_Avoid_: plugin, extension, agent pack
+
 **Agent catalog**:
-The set of Agent definitions available for selection or spawning, owned by
-`BundleCatalog` on the runtime snapshot / turn binding (built-ins plus installed
-public bundles). Not a disk walk of markdown agent files. Distinct from the live
+The set of Agent definitions available for selection or spawning, owned by `AgentCatalog` on the
+runtime snapshot / turn binding: the compiled-in built-in roster joined with the installed
+`BundleCatalog`. Not a disk walk of markdown agent files. Distinct from the live
 **Roster**, which is projected from a running Team.
 _Avoid_: roster, directory, list, legacy agent-file discovery
 

@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, BundleOrigin, HarnessAccess, ModelPolicy,
-    PreparedAgent, PreparedBundle, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
+    ResourceView, SpawnLifecycle,
 };
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
@@ -376,7 +376,7 @@ async fn authorized_inline_overlay_executes_without_catalog_entry() {
     let binding = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
     assert!(binding.resolve_agent("inline-one").is_none());
     assert_eq!(
-        binding.resolve_agent("quick").unwrap().prompt.as_deref(),
+        binding.resolve_agent("quick").unwrap().prompt,
         Some("quick prompt")
     );
 }
@@ -1701,11 +1701,11 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     });
     let queued_request = queued_rx.recv().await.expect("queued spawn request");
 
-    let mut published_bundles = old_binding.agent_catalog().bundles().to_vec();
+    let mut published_bundles = old_binding.bundle_catalog().bundles().to_vec();
     let quick = published_bundles
         .iter_mut()
-        .flat_map(|bundle| &mut bundle.agents)
-        .find(|agent| agent.stable_id.as_str() == "quick")
+        .map(|bundle| &mut bundle.agent)
+        .find(|agent| agent.id.as_str() == "quick")
         .expect("quick agent in old prepared catalog");
     assert_eq!(quick.prompt.as_deref(), Some(OLD_QUICK_PROMPT));
     quick.prompt = Some(NEW_CATALOG_CHILD_PROMPT.to_string());
@@ -1716,6 +1716,8 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     // just above, and the verified constructors take `&[&PreparedCatalog]`.
     let published_catalog =
         BundleCatalog::from_prepared(&published_bundles).expect("complete replacement catalog");
+    let published_catalog = hya_core::AgentCatalog::new(Arc::new(published_catalog))
+        .expect("replacement agent catalog");
     runtime
         .publish_catalog(Arc::new(published_catalog))
         .expect("publish replacement catalog");
@@ -1723,7 +1725,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     assert_eq!(
         old_binding
             .resolve_agent("quick")
-            .and_then(|agent| agent.prompt.as_deref()),
+            .and_then(|agent| agent.prompt),
         Some(OLD_QUICK_PROMPT),
         "the parent TurnBinding must remain pinned"
     );
@@ -1736,7 +1738,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
     assert_eq!(
         fresh_binding
             .resolve_agent("quick")
-            .and_then(|agent| agent.prompt.as_deref()),
+            .and_then(|agent| agent.prompt),
         Some(NEW_CATALOG_CHILD_PROMPT),
         "a fresh TurnBinding must observe the published catalog"
     );
@@ -2500,89 +2502,68 @@ const ROOT_MAIN_BUNDLE_PROMPT: &str = "ROOT_MAIN_BUNDLE_PROMPT_MARKER";
 const NESTED_CALLER_BUNDLE_PROMPT: &str = "NESTED_CALLER_BUNDLE_PROMPT_MARKER";
 const ROOT_ONLY_SPAWN_TARGET: &str = "root-only-helper";
 
-/// Build a catalog where root and nested definitions differ in Bundle prompt,
-/// can_spawn roster, and harness resource policy (Full vs None).
+/// Build a catalog where root and nested definitions differ in Bundle prompt
+/// and can_spawn roster.
+///
+/// The harness plane is no longer part of the divergence: it is derived from
+/// origin, so every installed bundle agent here shares the clamped plane.
 fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let agent = |stable_id: &str,
-                 role: AgentRole,
-                 prompt: &str,
-                 can_spawn: &[&str],
-                 access: HarnessAccess|
-     -> PreparedAgent {
-        PreparedAgent {
-            local_id: stable_id.to_string(),
-            stable_id: AgentName::new(stable_id),
-            description: None,
-            role,
-            color: None,
-            prompt: Some(prompt.to_string()),
-            prompt_source: None,
-            prompt_digest: None,
-            model_policy: ModelPolicy::default(),
-            workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
-            harness_access: access,
-            resource_view: ResourceView::default(),
-            can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
-            hook_refs: Vec::new(),
-        }
-    };
-    let bundle = PreparedBundle {
-        format_version: 1,
-        identity: BundleIdentity {
-            id: "hya/nested-root-divergence".to_string(),
-            version: "0.0.0".to_string(),
-            publisher: "hya-tests".to_string(),
-        },
-        origin: BundleOrigin::Builtin,
-        immutable: true,
-        digest: "test-only".to_string(),
-        agents: vec![
-            // Root main: Full tools + root-only can_spawn target.
-            agent(
-                "build",
-                AgentRole::Main,
-                ROOT_MAIN_BUNDLE_PROMPT,
-                &["planner", ROOT_ONLY_SPAWN_TARGET],
-                HarnessAccess::Full,
-            ),
-            // Nested caller: No harness tools + only resident quick.
-            agent(
-                "planner",
-                AgentRole::Subagent,
-                NESTED_CALLER_BUNDLE_PROMPT,
-                &["quick"],
-                HarnessAccess::None,
-            ),
-            agent(
-                "quick",
-                AgentRole::Subagent,
-                "quick prompt",
-                &[],
-                HarnessAccess::Full,
-            ),
-            agent(
-                ROOT_ONLY_SPAWN_TARGET,
-                AgentRole::Subagent,
-                "root-only helper prompt",
-                &[],
-                HarnessAccess::Full,
-            ),
-            agent(
-                "general",
-                AgentRole::Main,
-                "general prompt",
-                &[],
-                HarnessAccess::Full,
-            ),
-        ],
-        tools: Vec::new(),
-        skills: Vec::new(),
-        mcp: Vec::new(),
-        hooks: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let catalog = BundleCatalog::from_prepared(&[bundle]).expect("nested-root catalog");
+    let bundle =
+        |stable_id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]| PreparedBundle {
+            format_version: 1,
+            identity: BundleIdentity {
+                id: format!("hya/nested-root-divergence-{stable_id}"),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: format!("test-only-{stable_id}"),
+            agent: PreparedAgent {
+                id: AgentName::new(stable_id),
+                description: None,
+                role,
+                color: None,
+                prompt: Some(prompt.to_string()),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                spawn_lifecycle: SpawnLifecycle::Transient,
+                resource_view: ResourceView::default(),
+                can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
+                hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        };
+    let bundles = vec![
+        // Root main: root-only can_spawn target.
+        bundle(
+            "root-main",
+            AgentRole::Main,
+            ROOT_MAIN_BUNDLE_PROMPT,
+            &["planner", ROOT_ONLY_SPAWN_TARGET],
+        ),
+        // Nested caller: only resident quick.
+        bundle(
+            "planner",
+            AgentRole::Subagent,
+            NESTED_CALLER_BUNDLE_PROMPT,
+            &["quick"],
+        ),
+        bundle("quick", AgentRole::Subagent, "quick prompt", &[]),
+        bundle(
+            ROOT_ONLY_SPAWN_TARGET,
+            AgentRole::Subagent,
+            "root-only helper prompt",
+            &[],
+        ),
+    ];
+    let catalog = BundleCatalog::from_prepared(&bundles).expect("nested-root catalog");
+    let catalog =
+        hya_core::AgentCatalog::new(Arc::new(catalog)).expect("nested-root agent catalog");
     Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),
@@ -2625,7 +2606,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
     );
     let workdir = temp_child_workdir("nested-root");
     let base = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("root-main"),
         model: ModelRef::new("fake"),
         system_prompt: "harness base must not win over root Bundle prompt".to_string(),
         workdir: workdir.clone(),
@@ -2644,7 +2625,7 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("root-main"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
         })
@@ -2676,7 +2657,9 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
             .any(|a| a.name == ROOT_ONLY_SPAWN_TARGET),
         "nested must not list root-only can_spawn target"
     );
-    let root_roster = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let root_roster = engine
+        .agent_roster_for_binding(&binding, "root-main")
+        .unwrap();
     assert!(
         root_roster.iter().any(|a| a.name == ROOT_ONLY_SPAWN_TARGET),
         "root can_spawn must include root-only target: {root_roster:?}"
@@ -2802,8 +2785,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
     let runtime = {
         let agent = |stable_id: &str, role: AgentRole, can_spawn: &[&str]| -> PreparedAgent {
             PreparedAgent {
-                local_id: stable_id.to_string(),
-                stable_id: AgentName::new(stable_id),
+                id: AgentName::new(stable_id),
                 description: None,
                 role,
                 color: None,
@@ -2813,34 +2795,37 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 model_policy: ModelPolicy::default(),
                 workdir: None,
                 spawn_lifecycle: SpawnLifecycle::Transient,
-                harness_access: HarnessAccess::Full,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
             }
         };
-        let bundle = PreparedBundle {
+        // `general` is a compiled-in built-in, so only the two bundle agents
+        // need bundles here.
+        let bundles = [
+            ("planner", AgentRole::Subagent, &["quick"][..]),
+            ("quick", AgentRole::Subagent, &[][..]),
+        ]
+        .into_iter()
+        .map(|(stable_id, role, can_spawn)| PreparedBundle {
             format_version: 1,
             identity: BundleIdentity {
-                id: "hya/missing-root-def".to_string(),
+                id: format!("hya/missing-root-def-{stable_id}"),
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
-            origin: BundleOrigin::Builtin,
-            immutable: true,
-            digest: "test-only".to_string(),
-            agents: vec![
-                agent("planner", AgentRole::Subagent, &["quick"]),
-                agent("quick", AgentRole::Subagent, &[]),
-                agent("general", AgentRole::Main, &[]),
-            ],
+            digest: format!("test-only-{stable_id}"),
+            agent: agent(stable_id, role, can_spawn),
             tools: Vec::new(),
             skills: Vec::new(),
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
-        };
-        let catalog = BundleCatalog::from_prepared(&[bundle]).expect("missing-root catalog");
+        })
+        .collect::<Vec<_>>();
+        let catalog = BundleCatalog::from_prepared(&bundles).expect("missing-root catalog");
+        let catalog =
+            hya_core::AgentCatalog::new(Arc::new(catalog)).expect("missing-root agent catalog");
         Arc::new(RuntimeRegistry::from_snapshot(
             ToolRegistry::builtins().snapshot(),
             Arc::new(catalog),

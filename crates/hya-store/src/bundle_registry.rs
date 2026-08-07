@@ -3,7 +3,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use hya_bundle::{BundleCatalog, BundleOrigin, PreparedBundle, PreparedCatalog};
+use hya_bundle::{BundleCatalog, PreparedBundle, PreparedCatalog};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, Sqlite, Transaction};
 
@@ -149,7 +149,7 @@ impl BundleRegistry {
     /// Install from a package inspection: public packages go through [`Self::install`]; private is rejected.
     pub async fn install_inspection(
         &self,
-        builtins: &[hya_bundle::PreparedBundle],
+        reserved_agent_ids: &[&str],
         inspection: hya_bundle::PackageInspection,
         installed_at: i64,
     ) -> Result<BundleInstallOutcome, StoreError> {
@@ -159,7 +159,7 @@ impl BundleRegistry {
             }
             hya_bundle::PackageInspection::Public(public) => {
                 self.install(
-                    builtins,
+                    reserved_agent_ids,
                     BundleInstallCandidate {
                         source_digest: public.source_digest,
                         prepared_digest: public.prepared.digest().to_owned(),
@@ -172,10 +172,15 @@ impl BundleRegistry {
         }
     }
 
-    /// Validate candidate against builtins+installed catalog, then insert or replace under an immediate lock.
+    /// Validate the candidate against the installed catalog, then insert or
+    /// replace under an immediate lock.
+    ///
+    /// `reserved_agent_ids` are the compiled-in built-in agent ids. A bundle
+    /// that claims one is rejected here rather than at catalog publish time, so
+    /// the operator sees the failure at install.
     pub async fn install(
         &self,
-        builtins: &[hya_bundle::PreparedBundle],
+        reserved_agent_ids: &[&str],
         candidate: BundleInstallCandidate,
     ) -> Result<BundleInstallOutcome, StoreError> {
         let BundleInstallCandidate {
@@ -190,15 +195,13 @@ impl BundleRegistry {
                 "install candidate must contain exactly one mutable installed bundle".to_string(),
             ));
         };
-        if incoming.origin != BundleOrigin::Installed || incoming.immutable {
-            return Err(StoreError::BundleRegistryData(
-                "install candidate must contain exactly one mutable installed bundle".to_string(),
-            ));
-        }
         let incoming = incoming.clone();
         let bundle_id = incoming.identity.id.clone();
-        if is_immutable_builtin(builtins, &bundle_id) {
-            return Err(StoreError::BundleImmutable { bundle_id });
+        if reserved_agent_ids.contains(&incoming.agent.id.as_str()) {
+            return Err(StoreError::BundleAgentIdReserved {
+                bundle_id,
+                agent_id: incoming.agent.id.as_str().to_string(),
+            });
         }
         let version = incoming.identity.version.clone();
         let publisher = incoming.identity.publisher.clone();
@@ -223,7 +226,7 @@ impl BundleRegistry {
             loaded.record.source_digest != source_digest && loaded.record.version != version
         });
 
-        let mut complete = builtins.to_vec();
+        let mut complete = Vec::new();
         for loaded in &snapshot.bundles {
             if replaces && loaded.record.bundle_id == bundle_id {
                 continue;
@@ -287,17 +290,8 @@ impl BundleRegistry {
         Ok(BundleInstallOutcome::Installed { generation })
     }
 
-    /// Remove an installed bundle after re-validating the remaining catalog with `builtins`.
-    pub async fn uninstall(
-        &self,
-        builtins: &[hya_bundle::PreparedBundle],
-        bundle_id: &str,
-    ) -> Result<BundleUninstallOutcome, StoreError> {
-        if is_immutable_builtin(builtins, bundle_id) {
-            return Err(StoreError::BundleImmutable {
-                bundle_id: bundle_id.to_owned(),
-            });
-        }
+    /// Remove an installed bundle after re-validating the remaining catalog.
+    pub async fn uninstall(&self, bundle_id: &str) -> Result<BundleUninstallOutcome, StoreError> {
         let mut transaction = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -320,7 +314,7 @@ impl BundleRegistry {
             });
         }
 
-        let mut complete = builtins.to_vec();
+        let mut complete = Vec::new();
         for loaded in &snapshot.bundles {
             if loaded.record.bundle_id == bundle_id {
                 continue;
@@ -389,9 +383,7 @@ impl BundleRegistry {
                     bundle_id: record.bundle_id.clone(),
                 });
             };
-            if prepared_bundle.origin != BundleOrigin::Installed
-                || prepared_bundle.immutable
-                || prepared_bundle.identity.id.as_str() != record.bundle_id.as_str()
+            if prepared_bundle.identity.id.as_str() != record.bundle_id.as_str()
                 || prepared_bundle.identity.version.as_str() != record.version.as_str()
                 || prepared_bundle.identity.publisher.as_str() != record.publisher.as_str()
             {
@@ -445,14 +437,6 @@ async fn advance_generation(
         ));
     }
     Ok(generation)
-}
-
-fn is_immutable_builtin(builtins: &[hya_bundle::PreparedBundle], bundle_id: &str) -> bool {
-    builtins.iter().any(|builtin| {
-        builtin.identity.id.as_str() == bundle_id
-            && builtin.origin == BundleOrigin::Builtin
-            && builtin.immutable
-    })
 }
 
 fn is_sqlite_busy_or_locked(error: &sqlx::Error) -> bool {

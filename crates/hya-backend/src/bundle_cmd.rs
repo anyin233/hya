@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use clap::Subcommand;
 use hya_bundle::{
-    BundleOrigin, PackageInspection, PreparedBundle, PreparedCatalog, PrivatePackageAuthentication,
+    PackageInspection, PreparedBundle, PreparedCatalog, PrivatePackageAuthentication,
     PrivatePackagePayload, cleanup_orphaned_staging, stage_package,
 };
 use hya_store::{
@@ -66,9 +66,8 @@ async fn install(package: PathBuf) -> anyhow::Result<()> {
         }
     };
     let registry = open_registry().await?;
-    let catalog = hya_app::builtin_catalog()?;
     let outcome = registry
-        .install_inspection(catalog.bundles(), inspection, hya_proto::now_millis())
+        .install_inspection(&reserved_agent_ids(), inspection, hya_proto::now_millis())
         .await?;
     let (action, generation) = match outcome {
         BundleInstallOutcome::Installed { generation } => ("installed", generation),
@@ -135,51 +134,44 @@ fn validate_package_path(package: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn list() -> anyhow::Result<()> {
-    let catalog = hya_app::builtin_catalog()?;
-    let installed = installed_records_if_exists().await?;
-    let mut rows = catalog
-        .bundles()
+/// Built-in agent ids an installed bundle must not claim.
+fn reserved_agent_ids() -> Vec<&'static str> {
+    hya_core::BUILTIN_AGENTS
         .iter()
-        .map(|bundle| {
+        .map(|agent| agent.id)
+        .collect()
+}
+
+async fn list() -> anyhow::Result<()> {
+    // Built-in agents are not bundles, so only installed bundles are listed.
+    let installed = installed_records_if_exists().await?;
+    let mut rows = installed
+        .iter()
+        .map(|record| {
+            let state = match decode_installed_bundle(record) {
+                Ok(bundle) => (bundle.agent.id.to_string(), "active"),
+                // Written by a different binary version: name the row and tell
+                // the operator what to do, rather than failing the whole list.
+                Err(_) => ("-".to_string(), "unreadable (reinstall)"),
+            };
             (
-                bundle.identity.id.as_str(),
-                bundle.identity.version.as_str(),
-                "builtin",
-                "builtin-v1",
-                true,
+                record.bundle_id.as_str(),
+                record.version.as_str(),
+                state.0,
+                state.1,
             )
         })
         .collect::<Vec<_>>();
-    rows.extend(installed.iter().map(|record| {
-        (
-            record.bundle_id.as_str(),
-            record.version.as_str(),
-            "installed",
-            "public-v1",
-            false,
-        )
-    }));
     rows.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
 
-    println!("NAME VERSION ORIGIN FORMAT STATE IMMUTABLE");
-    for (bundle_id, version, origin, format, immutable) in rows {
-        println!("{bundle_id} {version} {origin} {format} active {immutable}");
+    println!("NAME VERSION AGENT STATE");
+    for (bundle_id, version, agent, state) in rows {
+        println!("{bundle_id} {version} {agent} {state}");
     }
     Ok(())
 }
 
 async fn info(bundle_id: &str) -> anyhow::Result<()> {
-    let catalog = hya_app::builtin_catalog()?;
-    if let Some(bundle) = catalog
-        .bundles()
-        .iter()
-        .find(|bundle| bundle.identity.id == bundle_id)
-    {
-        print_builtin_info(bundle);
-        return Ok(());
-    }
-
     let record = installed_records_if_exists()
         .await?
         .into_iter()
@@ -203,20 +195,8 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
 }
 
 async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
-    let catalog = hya_app::builtin_catalog()?;
-    if catalog
-        .bundles()
-        .iter()
-        .any(|bundle| bundle.identity.id == bundle_id)
-    {
-        return Err(StoreError::BundleImmutable {
-            bundle_id: bundle_id.to_string(),
-        }
-        .into());
-    }
     let registry = open_registry().await?;
-    let BundleUninstallOutcome::Removed { generation } =
-        registry.uninstall(catalog.bundles(), bundle_id).await?;
+    let BundleUninstallOutcome::Removed { generation } = registry.uninstall(bundle_id).await?;
     println!("uninstalled {bundle_id} generation={generation}");
     Ok(())
 }
@@ -268,22 +248,8 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
     Ok(registry.snapshot().await?.bundles)
 }
 
-fn print_builtin_info(bundle: &PreparedBundle) {
-    println!("name={}", bundle.identity.id);
-    println!("version={}", bundle.identity.version);
-    println!("publisher={}", bundle.identity.publisher);
-    println!("origin=builtin");
-    println!("format=builtin-v1");
-    println!("state=active");
-    println!("immutable=true");
-    println!("bundle_digest={}", bundle.digest);
-    print_static_info(bundle, "=");
-}
-
 fn print_static_info(bundle: &PreparedBundle, separator: &str) {
-    for agent in &bundle.agents {
-        println!("agent{separator}{}", agent.stable_id);
-    }
+    println!("agent{separator}{}", bundle.agent.id);
     for skill in &bundle.skills {
         println!("skill{separator}{}", skill.stable_id);
     }
@@ -310,9 +276,7 @@ fn decode_installed_bundle(record: &BundleRegistryRecord) -> anyhow::Result<Prep
     let [bundle] = prepared.bundles() else {
         return Err(corrupt().into());
     };
-    if bundle.origin != BundleOrigin::Installed
-        || bundle.immutable
-        || bundle.identity.id.as_str() != record.bundle_id.as_str()
+    if bundle.identity.id.as_str() != record.bundle_id.as_str()
         || bundle.identity.version.as_str() != record.version.as_str()
         || bundle.identity.publisher.as_str() != record.publisher.as_str()
     {
