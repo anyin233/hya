@@ -105,7 +105,7 @@ Important modules:
 | [`permission.rs`](../crates/hya-tool/src/permission.rs) | Action/resource rules, `Allow`/`Ask`/`Deny`, ask requests, persistent allow-always decisions. |
 | [`tool.rs`](../crates/hya-tool/src/tool.rs) | Tool trait, registry, aliases, shared context, path/search helpers. |
 | [`read.rs`](../crates/hya-tool/src/read.rs), [`write.rs`](../crates/hya-tool/src/write.rs), [`edit.rs`](../crates/hya-tool/src/edit.rs), [`apply_patch`](../crates/hya-tool/src/apply_patch) | File read/write/edit/patch tools. |
-| [`shell.rs`](../crates/hya-tool/src/shell.rs) | Shell execution tool and `bash` alias. |
+| [`shell.rs`](../crates/hya-tool/src/shell.rs) | Shell execution tool; registry also advertises a second canonical name `bash` (same implementation, not a hidden alias). |
 | [`webfetch`](../crates/hya-tool/src/webfetch), [`websearch.rs`](../crates/hya-tool/src/websearch.rs) | Web fetch/search tools. |
 | [`lsp.rs`](../crates/hya-tool/src/lsp.rs), [`formatter.rs`](../crates/hya-tool/src/formatter.rs) | LSP and formatter planes. |
 | [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../crates/hya-tool/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`question.rs`](../crates/hya-tool/src/question.rs) | Skill, subtask, todo, and human-question tools. |
@@ -121,7 +121,7 @@ Builtins currently include:
 | `ls` | `Read` | List immediate directory entries. |
 | `glob`, `find` | `Glob` | Search path names under a directory. |
 | `grep` | `Grep` | Regex-search file contents under a path. |
-| `shell`, `bash` | `Bash` | Run a shell command in the agent workdir. |
+| `shell`, `bash` | `Bash` | Two **advertised** canonical tool names (`insert_named_builtin` for `bash`) sharing one shell implementation. Not among the five **hidden** aliases (`patch`, `fetch`, `search`, `todo`, `plan`). |
 | `webfetch` (`fetch`), `websearch` (`search`) | `WebFetch` / `WebSearch` | Fetch URLs or query a configured web-search provider. |
 | `question`, `ask_user` | `Tool` | Ask the human a select or free-text question (interaction plane). |
 | `lsp` | `Tool` | Dispatch workspace-symbol/diagnostic-style LSP operations. |

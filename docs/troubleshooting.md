@@ -80,8 +80,11 @@ Clipboard behaviour
 Upstream HTTP failures surface as `ProviderError::Http` with a message shaped
 like `{status}: {body snippet}`
 ([`crates/hya-provider/src/http.rs`](../crates/hya-provider/src/http.rs)). The
-response body is truncated to the **first 500 characters**, so a long HTML error
-page is cut off.
+snippet is taken with a **byte** slice of up to 500 bytes
+(`text.get(..500)`). When byte offset 500 is not a UTF-8 character boundary,
+the code falls back to the **entire** body, so non-ASCII error pages may appear
+untruncated; when the slice succeeds, the cut is at a byte index (not a
+character count).
 
 **No automatic retry** is attempted at the provider layer for 429 or 5xx: the
 turn fails immediately.

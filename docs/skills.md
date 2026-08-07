@@ -55,8 +55,8 @@ When invoked, inspect the named paths and report findings.
 | --- | --- | --- |
 | `name` | **yes** | Skill id shown to the model and used for first-name-wins. |
 | `description` | **yes** | Short summary injected into the available-skills prompt section before the body is loaded. |
-| `allowed-tools` | no | Per-skill tool allowlist (list of strings). **Empty or absent means unrestricted.** |
-| `model` | no | Optional per-skill model override. |
+| `allowed-tools` | no | List of tool name strings. **Parsed and stored**, and hashed into the skill-view semantic-identity digest only. **Not enforced** as a runtime tool allowlist — declaring `allowed-tools: [read]` does not restrict which tools the model may call. |
+| `model` | no | Optional model string. **Parsed and stored**, and hashed into the skill-view semantic-identity digest only. **Not used** for model routing or turn completion. |
 | `disable` | no | When `true`, the skill is skipped entirely (never appears in the catalog). Default `false`. |
 | `license` | no | Parsed but **currently unused** by the runtime. |
 
@@ -127,7 +127,8 @@ A user-authored skill with a matching `name` **shadows the built-in entirely**.
 Discovered skills contribute a system-prompt section of the form “these skills
 are available on demand; read the named SKILL.md when relevant”, listing each
 `name: description`. The body is loaded when the model invokes the `skill` tool
-(or equivalent), subject to any `allowed-tools` policy on that skill.
+(or equivalent). There is no per-skill tool gate from `allowed-tools` at that
+point.
 
 When an agent’s resource view selects harness skills, it must also select the
 `skill` tool facade; otherwise the view is rejected. See

@@ -50,8 +50,11 @@ TUI / API clients / transcript renderers
 7. The engine appends streamed events, collects requested tool calls, executes
    tools, and appends tool results.
 8. If tools were called, the engine runs tool-after hooks and starts another
-   provider round with the updated projection. A hard cap stops runaway tool
-   loops.
+   provider round with the updated projection. There is **no** hard iteration
+   cap on this loop: it continues until a round yields no tool calls,
+   cancellation is observed, or execution returns an error. (CLI
+   `--max-iterations` applies to `-p` goal mode only, not to ordinary
+   `run_turn` rounds.)
 9. When no more tool calls remain, the assistant message is finished.
 
 ## Why Event Sourcing
