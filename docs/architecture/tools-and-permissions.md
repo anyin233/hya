@@ -207,13 +207,23 @@ and server receive ask requests through their existing surfaces. Headless
    **first** plugin that returns `allow_once`, `allow_always`, or `reject` wins.
    If every plugin defers (or every plugin errors), the host falls through to
    its normal interactive user prompt (`None` from the interceptor).
-2. **Cache invalidation**: remembered plugin-mediated decisions are keyed by a
-   domain-separated **SHA-256** digest over the literal domain string
-   `b"hya.plugin.permission-bridge.semantic-identity/v1"` plus, per participating
-   plugin, its id, its canonical initialize declaration, and its effective
-   `permission.ask` posture. Adding, removing, or changing any permission plugin
-   automatically invalidates previously cached decisions.
-3. **Wire resource**: `permission.ask` carries a tagged `WireResource` union with
+2. **Remembered grants are not plugin-keyed**: an `allow_always` from the bridge
+   is stored like any other decision — either a legacy `Rule(action, "*", Allow)`
+   on the persistent rule list or an `ExactSubject` in `native_grants`
+   ([`permission.rs`](../../crates/hya-tool/src/permission.rs)). Those stores
+   are **not** keyed by plugin identity and are **not** cleared when the plugin
+   set changes.
+3. **Semantic identity (fingerprint, not a decision cache)**: the bridge's
+   `PermissionInterceptor::semantic_identity_v1` is a domain-separated SHA-256
+   over `b"hya.plugin.permission-bridge.semantic-identity/v1"` plus, per plugin
+   that registers `permission.ask`, its id, canonical initialize declaration,
+   and effective posture. That digest is mixed into
+   `PermissionPlane::semantic_identity_v1` and then
+   `TurnBinding::semantic_fingerprint_v1` so runtime refresh can detect that
+   permission **policy** changed — it does not index or invalidate remembered
+   grants. See also
+   [runtime.md — Permission policy semantic identity](runtime.md#permission-policy-semantic-identity).
+4. **Wire resource**: `permission.ask` carries a tagged `WireResource` union with
    the nine variants listed above.
 
 ## External directory boundary
