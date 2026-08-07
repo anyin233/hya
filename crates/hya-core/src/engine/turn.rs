@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hya_proto::{Event, FinishReason, MessageId, Role, SessionId, TokenUsage, ToolCallId};
+use hya_proto::{
+    CompactionStrategy, Event, FinishReason, Message, MessageId, Role, SessionId, TokenUsage,
+    ToolCallId,
+};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +28,21 @@ use crate::{AgentResourcePolicy, TurnBinding};
 mod messages;
 
 use messages::{projection_to_messages, request_from_messages};
+
+/// Range endpoints for a compaction that folded the entire input window.
+///
+/// Native provider compact is handed the whole window, unlike the local
+/// summarizer which folds only the prefix before the retained recent messages.
+/// `None` for an empty window, which cannot trip the threshold anyway.
+fn whole_window_range(messages: &[Message]) -> Option<(MessageId, MessageId, u32)> {
+    let first = messages.first()?;
+    let last = messages.last()?;
+    Some((
+        first.id(),
+        last.id(),
+        u32::try_from(messages.len()).unwrap_or(u32::MAX),
+    ))
+}
 
 struct TurnExecution<'a> {
     binding: &'a TurnBinding,
@@ -569,6 +587,11 @@ impl SessionEngine {
             // Context protection: prefer provider `/responses/compact` when the
             // route supports it; otherwise fall back to the local model summarizer.
             if crate::compaction::needs_compaction(&messages, &self.compaction) {
+                // Snapshot what tripped the threshold before the transcript is
+                // replaced, so the ContextCompacted record explains why it ran.
+                let input_tokens_est = u64::try_from(crate::compaction::estimate_tokens(&messages))
+                    .unwrap_or(u64::MAX);
+                let threshold = u64::try_from(self.compaction.token_threshold).unwrap_or(u64::MAX);
                 // Exact-resolve fixed Compaction once before any compact provider
                 // call (native or local). Missing definition fails closed here.
                 // Reuse the turn's captured binding; never re-bind or open a second catalog.
@@ -587,6 +610,8 @@ impl SessionEngine {
                 {
                     Ok(Some(window)) => {
                         let body = hya_provider::format_responses_compact_system(&window.items);
+                        // Native compact folds the whole input window it was given.
+                        let folded = whole_window_range(&messages);
                         // Persist so subsequent rounds re-inject the compact window
                         // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
                         let injected = match actor_claim {
@@ -596,7 +621,24 @@ impl SessionEngine {
                             }
                             None => self.inject_system_message(session, body).await,
                         };
-                        if injected.is_ok() {
+                        if let Ok(marker) = injected {
+                            if let Some((from_message, to_message, folded_count)) = folded {
+                                self.emit_for_actor(
+                                    actor_claim,
+                                    session,
+                                    Event::ContextCompacted {
+                                        session,
+                                        message: marker,
+                                        strategy: CompactionStrategy::Native,
+                                        from_message,
+                                        to_message,
+                                        folded_count,
+                                        input_tokens_est,
+                                        threshold,
+                                    },
+                                )
+                                .await?;
+                            }
                             projection = self.store.read_projection(session).await?;
                             messages = projection_to_messages(agent, &projection);
                         }
@@ -608,15 +650,49 @@ impl SessionEngine {
                             let options = summarize_options_from_definition(definition);
                             // Provider failures stay soft (prior behavior); missing
                             // definition already failed closed above.
-                            if let Ok(compacted) = crate::compaction::compact_with(
-                                messages.clone(),
+                            if let Ok(Some(plan)) = crate::compaction::plan_compaction(
+                                &messages,
                                 &self.compaction,
                                 summarizer.as_ref(),
                                 options,
                             )
                             .await
                             {
-                                messages = compacted;
+                                // Persist the local summary behind the same marker the
+                                // native path uses. Without this the summary died with
+                                // the request and every later round re-summarized the
+                                // same history.
+                                let body = format!(
+                                    "{}\n{}",
+                                    hya_provider::COMPACT_CONTEXT_MARKER,
+                                    plan.summary
+                                );
+                                let injected = match actor_claim {
+                                    Some(claim) => {
+                                        self.inject_system_message_for_actor(claim, session, body)
+                                            .await
+                                    }
+                                    None => self.inject_system_message(session, body).await,
+                                };
+                                if let Ok(marker) = injected {
+                                    self.emit_for_actor(
+                                        actor_claim,
+                                        session,
+                                        Event::ContextCompacted {
+                                            session,
+                                            message: marker,
+                                            strategy: CompactionStrategy::LocalSummarizer,
+                                            from_message: plan.from_message,
+                                            to_message: plan.to_message,
+                                            folded_count: plan.folded_count,
+                                            input_tokens_est,
+                                            threshold,
+                                        },
+                                    )
+                                    .await?;
+                                    projection = self.store.read_projection(session).await?;
+                                    messages = projection_to_messages(agent, &projection);
+                                }
                             }
                         }
                     }
