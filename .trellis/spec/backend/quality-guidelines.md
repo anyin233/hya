@@ -801,3 +801,54 @@ Bumping the version means updating **all** of these together:
 - Good: all seven updated in one `chore(release): X.Y.Z` commit.
 - Bad: bumping `Cargo.toml` and running only the crate's own tests — the failure
   lives in `-p hya`, so a scoped test run misses it entirely.
+
+---
+
+## Scenario: Reducing a Transcript Before a Provider Request
+
+### 1. Scope / Trigger
+
+- Trigger: any change to what the turn loop sends the model — compaction
+  thresholds, eviction, summarization, or token accounting.
+- Applies to `crates/hya-core/src/compaction.rs` and the reduction block in
+  `crates/hya-core/src/engine/turn.rs`.
+
+### 2. Contracts
+
+- **A measured token count describes the transcript at the moment it was
+  measured.** `tokens_in_use` prefers the provider-reported usage on the most
+  recent assistant message. After any request-local edit (tool-output eviction,
+  message rewriting) that number is stale: re-measuring reports no saving.
+  Carry one running count and apply each reduction as a delta instead.
+- A function that re-derives the compaction decision must not be called after
+  such an edit. `fold_prefix` exists for callers that already decided;
+  `plan_compaction_at` is the guarded wrapper.
+- Request-local reductions must never write the store. The event log stays a
+  sufficient statistic for offline reconstruction (see 0.34.15).
+- Thresholds scale to `Capabilities::max_context` when advertised; a route with
+  no window keeps the configured flat threshold. Clamp resolved thresholds to a
+  floor — a near-zero threshold compacts every turn, which is worse than never.
+
+### 3. Validation & Error Matrix
+
+- Re-measuring after eviction -> saving invisible, summarizer runs anyway.
+- No floor on a scaled threshold -> compact-every-turn loop on a small window.
+- Trusting an out-of-range `context_fraction` -> nonsense threshold.
+- Eviction inside `keep_recent` -> the agent loses the result it just fetched.
+
+### 4. Good/Base/Bad Cases
+
+- Good: eviction alone drops under the threshold, `ContextEvicted` is recorded,
+  no summarizer call, and the log still holds the full tool output.
+- Base: a route reporting no usage falls back to `chars / 4` with behaviour
+  identical to before.
+- Bad: testing eviction within a single turn. Every tool part of one turn lands
+  in the **same** assistant message, which sits inside `keep_recent`; eviction is
+  a cross-turn reduction and a single-turn test will always see zero evicted.
+
+### 5. Tests Required
+
+- A table test over the threshold resolver, including the clamp and bad input.
+- A regression proving unchanged behaviour when no usage is reported.
+- A cross-turn test that eviction alone avoids the summarizer.
+- A test that the event log retains full tool output after an evicted turn.
