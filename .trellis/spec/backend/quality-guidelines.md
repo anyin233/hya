@@ -708,3 +708,96 @@ dispatchWorkspace({ type: "terminal", sessionIDs: [node.session] })
 const lifecycle = resolveLifecyclePresentation(node)
 // Completion changes lifecycle presentation; pane removal stays user- or reconciliation-owned.
 ```
+
+---
+
+## Scenario: Adding an Additive `Event` Variant
+
+### 1. Scope / Trigger
+
+- Trigger: adding a variant to `hya_proto::Event`, or a field to an existing variant.
+- Applies to `crates/hya-proto/src/event.rs`, `projection.rs`, and every crate that
+  matches `Event` exhaustively.
+
+### 2. Signatures
+
+- New fields use `#[serde(default)]` plus `skip_serializing_if` so an empty value
+  never reaches the wire. Precedent: `MemberSpawned.agent_type`, `.mode`,
+  `.directive`, `.tool_call`.
+- `Event::Unknown` carries `#[serde(other)]`: an older binary folds newer variants
+  instead of failing to replay.
+
+### 3. Contracts
+
+- Extend `Event::session()` so the variant reports its owning session, or `None`.
+- Add the variant to the reducer's no-op arm in `projection.rs` when it is an
+  observability record rather than a state transition. The reducer match is
+  exhaustive by design — it fails the build rather than silently ignoring a
+  variant, so never add a `_ =>` catch-all.
+- A record-only variant must not change reduced state. It still advances
+  `last_seq`; assert on `projection.session` / `.team`, not the whole `Projection`.
+- Compile-driven site list (the build enumerates these; do not hand-maintain):
+  `hya-core/src/engine/text_complete.rs`, and in `hya-server/src/compat/`:
+  `event.rs` (SSE payload passthrough), `message_parts.rs` (x2),
+  `session_context_messages.rs` (x2), `session_prompt.rs`.
+
+### 4. Validation & Error Matrix
+
+- Missing `Event::session()` arm -> non-exhaustive match, build fails.
+- Missing reducer arm -> non-exhaustive match, build fails.
+- New required field without `serde(default)` -> pre-existing logs fail to replay.
+- Field serialized when empty -> wire drift against older consumers.
+
+### 5. Good/Base/Bad Cases
+
+- Good: variant added, `session()` + reducer no-op arm extended, round-trip test,
+  and a test proving a pre-change payload still decodes and folds.
+- Base: a variant with no reduced state; assert `before.session == after.session`.
+- Bad: reusing an existing field for new meaning. `SessionCreated.parent` means
+  *subagent lineage* and drives depth accounting, governor budgets, and team root —
+  a fork must use `SessionForked`, not `parent`, or it corrupts the spawn tree.
+
+### 6. Tests Required
+
+- serde round-trip for the variant and any new enum.
+- `session()` returns the expected owner.
+- Replay proves reduced state is unchanged for record-only variants.
+- Backward compatibility: encode with empty additions, assert the field names are
+  absent from the JSON, then decode and fold it.
+
+---
+
+## Scenario: Workspace Version Bump
+
+### 1. Scope / Trigger
+
+- Trigger: any fix or feature change, per the root `AGENTS.md` release rule.
+- Enforced by `crates/hya/tests/version_metadata.rs`, which fails the workspace
+  suite when any file below disagrees.
+
+### 2. Contracts
+
+Bumping the version means updating **all** of these together:
+
+| File | What to change |
+| --- | --- |
+| `Cargo.toml` | `[workspace.package].version` |
+| `Cargo.lock` | every `hya` / `hya-*` package version (a build refreshes it) |
+| `crates/hya/tests/version_metadata.rs` | the `EXPECTED_RELEASE` constant |
+| `README.md` | the `workspace version \`X.Y.Z\`` string |
+| `packages/hya-tui-ts/package.json` | `"version"` |
+| `CHANGELOG.md` | first heading is exactly `# X.Y.Z` |
+| `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
+
+### 3. Validation & Error Matrix
+
+- Bumping `Cargo.toml` alone -> `version_metadata` fails on `EXPECTED_RELEASE`.
+- Stale `README.md` / `package.json` -> same test fails later in the same run.
+- Root `CHANGELOG.md` retaining old releases -> stale history is published verbatim
+  as the GitHub Release body.
+
+### 4. Good/Base/Bad Cases
+
+- Good: all seven updated in one `chore(release): X.Y.Z` commit.
+- Bad: bumping `Cargo.toml` and running only the crate's own tests — the failure
+  lives in `-p hya`, so a scoped test run misses it entirely.
