@@ -72,21 +72,21 @@ A bare mention of the name does not count.
 
 ## Acceptance Criteria
 
-- [ ] AC1: The coverage report exists under this task's `research/` directory and
+- [x] AC1: The coverage report exists under this task's `research/` directory and
       lists every derived feature with its status and source reference.
 - [ ] AC2: Every feature in the report has status `documented`; the report's final
       pass shows zero `undocumented` and zero `thin` entries.
 - [ ] AC3: Zero `stale` and zero `contradicted` entries remain.
-- [ ] AC4: `cargo doc --workspace --no-deps` completes with no warnings.
-- [ ] AC5: Every crate's `lib.rs` or `main.rs` opens with a `//!` comment longer
+- [x] AC4: `cargo doc --workspace --no-deps` completes with no warnings.
+- [x] AC5: Every crate's `lib.rs` or `main.rs` opens with a `//!` comment longer
       than a restatement of the crate name.
-- [ ] AC6: A `missing_docs` check over each crate's public API reports no items.
-- [ ] AC7: `packages/hya-tui-ts/README.md` exists and covers install, build, run,
+- [x] AC6: A `missing_docs` check over each crate's public API reports no items.
+- [x] AC7: `packages/hya-tui-ts/README.md` exists and covers install, build, run,
       and architecture; its exported symbols carry TSDoc.
-- [ ] AC8: Every document reachable from `docs/README.md`; no orphan files added.
+- [x] AC8: Every document reachable from `docs/README.md`; no orphan files added.
 - [ ] AC9: An independent verification pass re-derives the feature surface and
       confirms coverage, rather than trusting the writers' own reports.
-- [ ] AC10: `cargo build --workspace` and the repository's documentation link check
+- [x] AC10: `cargo build --workspace` and the repository's documentation link check
       pass; no source behavior changed (`git diff` touches only documents and
       documentation comments).
 
@@ -97,3 +97,53 @@ A bare mention of the name does not count.
   of what is claimed.
 - `docs/opencode-feature-inventory.md` is not the checklist. It is itself audited
   against the derived surface.
+
+## Outcome (2026-08-07)
+
+### Measured result
+
+| Deliverable | Before | After | Gate |
+| --- | --- | --- | --- |
+| Prose feature coverage | 530/1235 (43%) | **318/324 gap list closed (98.1%)**, last 6 fixed post-measurement | 4 independent re-audits |
+| Rust API docs | 2495 undocumented | **0** | `missing_docs = "deny"`, workspace-wide |
+| TS package | no README, 0 TSDoc | 3 READMEs, 19/19 S1 exports | `bun test` 50/50 |
+| Tests | — | **1340 passed, 0 failed** | `cargo test --workspace` |
+| Links | — | 746 checked, **0 dead** | link checker |
+| Behavior change | — | **none** | diff review of 324 `.rs` files |
+
+Nine new documents; all reachable from `docs/README.md`.
+
+### Acceptance criteria
+
+AC1, AC4-AC8 and AC10 are met and mechanically verified by
+`research/verify.sh` (all gates PASS).
+
+**AC2, AC3 and AC9 are not met as literally written.** They required an
+independent re-audit reporting *zero* residual findings. The last audited state
+was 318/324 with 6 open; those 6 were fixed and hand-verified, but no fifth audit
+measured the result.
+
+### Why that criterion was miscalibrated
+
+AC2/AC3/AC9 assumed the gap list was the whole surface. It was not. Each audit
+also reported findings *outside* the 324 entries, and that count never converged
+(31 -> 14 -> 21 -> 14). The reason is measurable: **8 of the 13 documents flagged
+in round 3 had never been touched by any fix pass.** Adversarial readers sample
+different regions of a ~15k-line corpus each run, so the stream is discovery, not
+regression. "Zero findings from a fresh adversarial read" has no terminal state at
+this corpus size.
+
+The 324-item list *is* a good regression surface — stable, re-runnable, and it
+converged monotonically (306 -> 312 -> 316 -> 318). Future work should measure
+against it and add contract tests for sentences that encode contracts, the way
+`crates/hya-bundle/tests/docs_example.rs` does. That test is the only reason a
+rewrite which silently weakened 12 of its 22 pinned sentences was caught.
+
+### The finding that outlived the documentation work
+
+The audits repeatedly surfaced configuration fields that are parsed, serialized
+onto the wire, and then silently dropped: per-command `agent`/`model`/`subtask`,
+bundle `workdir`, skill `allowed-tools`/`model`, and the unreachable `last_used`
+reasoning branch. Each reads as a working feature; setting one produces silence,
+not an error. The documents now say so explicitly, but this is a code defect class
+that documentation can only describe. Recorded in `docs/FOLLOWUPS.md`.

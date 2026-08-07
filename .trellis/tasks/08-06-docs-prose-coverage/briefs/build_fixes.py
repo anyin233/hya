@@ -15,17 +15,15 @@ FIX = json.load(open(HERE / "fixes.json"))
 
 # batch -> files (file-disjoint, as before)
 BATCHES = {
-    "H1": ["docs/configuration.md", "docs/cli.md", "docs/getting-started.md"],
-    "H2": ["docs/architecture/server-client.md", "docs/architecture/storage.md",
-           "docs/architecture/runtime.md"],
-    "H3": ["docs/architecture/providers.md", "docs/plugin-protocol.md",
-           "docs/self-update.md", "docs/architecture/tools-and-permissions.md",
-           "docs/architecture/agent-tool-surface.md"],
-    "H4": ["docs/tui-reference.md", "docs/tui-keybindings.md",
-           "docs/project-structure.md", "docs/agent-bundle-authoring.md",
-           "docs/testing/agent-matrix.md", "AGENTS.md", "CONTEXT.md",
-           "docs/opencode-feature-inventory.md", "docs/hya-pi-compat-comparison.md",
-           "docs/FOLLOWUPS.md"],
+    "J1": ["docs/configuration.md", "docs/cli.md"],
+    "J2": ["docs/tui-reference.md", "docs/tui-keybindings.md"],
+    "J3": ["docs/architecture/runtime.md", "docs/architecture/storage.md",
+           "docs/architecture/providers.md", "docs/architecture/server-client.md",
+           "docs/architecture/agent-tool-surface.md",
+           "docs/architecture/tools-and-permissions.md"],
+    "J4": ["docs/compat-plugins.md", "docs/agent-bundle-authoring.md",
+           "docs/self-update.md", "docs/compat-parity.md",
+           "docs/testing/agent-matrix.md", "docs/testing/process-e2e.md"],
 }
 
 HEAD = """# Fix batch {b} - {label}
