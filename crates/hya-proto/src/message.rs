@@ -283,3 +283,49 @@ pub enum Message {
         content: String,
     },
 }
+
+impl Message {
+    /// Id of this message, whatever its role.
+    ///
+    /// Compaction records its folded range as `MessageId` endpoints, so it needs
+    /// a role-agnostic accessor over the transcript slice it is about to fold.
+    #[must_use]
+    pub const fn id(&self) -> MessageId {
+        match self {
+            Self::User { id, .. } | Self::Assistant { id, .. } | Self::System { id, .. } => *id,
+        }
+    }
+}
+
+#[cfg(test)]
+mod message_id_tests {
+    use super::*;
+
+    #[test]
+    fn id_returns_the_id_of_every_variant() {
+        let user_id = MessageId::new();
+        let assistant_id = MessageId::new();
+        let system_id = MessageId::new();
+
+        let user = Message::User {
+            id: user_id,
+            parts: Vec::new(),
+        };
+        let assistant = Message::Assistant {
+            id: assistant_id,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts: Vec::new(),
+            finish: None,
+            tokens: None,
+        };
+        let system = Message::System {
+            id: system_id,
+            content: String::new(),
+        };
+
+        assert_eq!(user.id(), user_id);
+        assert_eq!(assistant.id(), assistant_id);
+        assert_eq!(system.id(), system_id);
+    }
+}
