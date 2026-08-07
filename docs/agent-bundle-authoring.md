@@ -233,11 +233,20 @@ Each `allow` / `deny` entry resolves to a stable id. Accepted forms
 | Form | Example |
 | --- | --- |
 | Harness tool / skill / mcp | `harness:tool/read`, `harness:skill/foo`, `harness:mcp/server__tool` |
-| Fully qualified bundle stable id | `bundle:<bundle_id>/tool/<local_id>` |
+| Fully qualified bundle stable id | `bundle:<bundle_id>/tool/<local_id>` (also `…/skill/…`, `…/mcp/…`) |
 | Bare bundle-local name or resource alias | `echo`, `checklist` |
 
-The five **ExportKind** namespaces are: `tool`, `skill`, `mcp`, `hook`,
-`extension`. Resource stable ids use `bundle:<bundle_id>/<kind>/<local_id>`.
+**`allow` / `deny` kinds are only `tool`, `skill`, and `mcp`.** For both the
+`harness:` and `bundle:` prefixes, `resolve_global_reference` hard-whitelists
+those three kinds and returns `UnknownResourceReference` for `hook` or
+`extension`. Do **not** put `bundle:<id>/hook/…` or `harness:extension/…` in
+`allow` / `deny`.
+
+Catalog **ExportKind** still includes five values (`tool`, `skill`, `mcp`,
+`hook`, `extension`) for prepared resource indexing and stable ids of the form
+`bundle:<bundle_id>/<kind>/<local_id>`. Hook selection for an agent uses the
+separate `hook_refs` field only (Bundle-local hook resources). Extensions are
+not referenceable through `resource_view`.
 
 An **ambiguous bare name** (matches more than one candidate) is a
 `NamespaceCollision` / resolution error. An **alias key** that collides with an

@@ -54,12 +54,13 @@ If you want to understand the codebase:
 5. [Event Model](architecture/event-model.md)
 6. [Providers](architecture/providers.md)
 7. [Tools and Permissions](architecture/tools-and-permissions.md)
-8. [Storage](architecture/storage.md)
-9. [Server and Client](architecture/server-client.md)
-10. [Plugin protocol](plugin-protocol.md)
-11. [TUI](architecture/tui.md)
-12. [Development](development.md)
-13. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
+8. [Agent tool surface](architecture/agent-tool-surface.md)
+9. [Storage](architecture/storage.md)
+10. [Server and Client](architecture/server-client.md)
+11. [Plugin protocol](plugin-protocol.md)
+12. [TUI](architecture/tui.md)
+13. [Development](development.md)
+14. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 
 ## Docs Map
 
@@ -82,6 +83,8 @@ If you want to understand the codebase:
 | [Event Model](architecture/event-model.md) | Explain canonical events, envelopes, messages, parts, ids, and projections. |
 | [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, Responses, and Google protocols, SSE decoding, and fallback providers. |
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
+| [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |
+| [Compat parity](compat-parity.md) | Feature-by-feature Compat baseline status for tools, APIs, CLI, and remaining gaps. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, Compat-compatible route groups, and the typed client crate. |
 | [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, and backend SDK boundary. |

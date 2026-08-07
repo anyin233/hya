@@ -118,13 +118,19 @@ Session is unavailable, no Session has been resumed.
 _Avoid_: restart, replay, continue
 
 **Agent**:
-A role/config — name, system prompt, model or category, tools, permissions — sourced from a
-built-in ("native") agent or a user-authored markdown file. Distinct from the Session that runs it.
+A role/config — name, system prompt, model or category, tools, permissions — sourced from the
+**AgentBundle catalog** (built-in / installed prepared bundles on the process
+`BundleCatalog` / `TurnBinding`). Legacy per-file markdown agent definitions under
+`.hya/` / `.claude/` / `.opencode` are **not** discovered or used. Distinct from the
+Session that runs it.
 _Avoid_: role, persona, bot
 
 **Agent catalog**:
-The disk- and config-discovered set of Agent definitions available for selection or spawning. Distinct from the live **Roster**, which is projected from a running Team.
-_Avoid_: roster, directory, list
+The set of Agent definitions available for selection or spawning, owned by
+`BundleCatalog` on the runtime snapshot / turn binding (built-ins plus installed
+public bundles). Not a disk walk of markdown agent files. Distinct from the live
+**Roster**, which is projected from a running Team.
+_Avoid_: roster, directory, list, legacy agent-file discovery
 
 **Subagent**:
 A child session spawned by another agent. Every subagent *is* a full Session, not a lightweight
@@ -212,10 +218,12 @@ The TUI surface for inspecting the current Team's Roster and choosing subagent S
 It is scoped to the active main agent's Team, not to global Session history.
 _Avoid_: global subagent browser, session browser
 
-**Roster sidebar**:
-An always-visible Session-screen sidebar block that summarizes live Roster entries for the current
-Team. It complements the Subagent manager.
-_Avoid_: subagent transcript sidebar, global agent list
+**Roster sidebar** (removed surface):
+Do **not** use this term for the current TUI. The Session-screen sidebar has **no**
+roster block; its plugins are Context, MCP, LSP, Todo, Modified Files, and a
+footer. Live Roster inspection is the **Subagent manager** / pane roster dialog,
+not a sidebar section.
+_Avoid_: treating sidebar as a roster; inventing a roster sidebar plugin
 
 **Subagent selector**:
 The choice point inside the Subagent manager for binding one live Roster entry to a Subagent
