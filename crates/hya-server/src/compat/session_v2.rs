@@ -213,7 +213,7 @@ async fn remove(
     if let Err(response) = load_existing_session(&st, session, &id).await? {
         return Ok(response);
     }
-    st.runs.cancel(session);
+    st.cancel_run(session);
     let data = st.engine.delete_session(session).await?;
     Ok(Json(DataResponse { data }).into_response())
 }

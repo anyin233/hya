@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use crate::prepare::normalize_source_path;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -7,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_package};
 use sevenz_rust2::{
-    ArchiveReader, ArchiveReaderOptions, EncoderMethod, Error as ArchiveError, Password,
+    ArchiveEntry, ArchiveReader, ArchiveReaderOptions, ArchiveWriter, EncoderConfiguration,
+    EncoderMethod, Error as ArchiveError, Password,
 };
 use sha2::{Digest, Sha256};
 
@@ -426,6 +428,84 @@ pub fn inspect_private_package(bytes: &[u8]) -> Result<PrivatePackageInspection,
     })
 }
 
+/// Write a validated source tree as a deterministic public `.hyabundle` archive.
+///
+/// Only the manifest and files referenced by the prepared payload are emitted.
+/// Entries are sorted by normalized path and use the fixed COPY codec with no
+/// archive metadata, so repeated writes of identical source bytes are equal.
+///
+/// # Errors
+///
+/// Returns a typed preparation or archive error when the source is invalid or
+/// the archive cannot be encoded.
+pub fn write_public_package(source: &BundleSource) -> Result<Vec<u8>, BundleError> {
+    let prepared = prepare_package(source.clone())?;
+    let (_, source_files) = source.clone().into_parts();
+    let mut source_files_by_path = BTreeMap::new();
+    for file in source_files {
+        let (path, bytes) = file.into_parts();
+        let path = normalize_source_path("public-package", &path)?;
+        if source_files_by_path.insert(path.clone(), bytes).is_some() {
+            return Err(BundleError::DuplicateSourcePath {
+                source_name: "public-package".to_string(),
+                path,
+            });
+        }
+    }
+    let mut paths = BTreeSet::new();
+    if source_files_by_path.contains_key("bundle.yaml") {
+        paths.insert("bundle.yaml".to_string());
+    } else {
+        paths.insert("bundle.hya.md".to_string());
+    }
+    for bundle in prepared.bundles() {
+        if let Some(workflow) = bundle.workflow() {
+            paths.insert(workflow.source_path.clone());
+        }
+        for agent in bundle.agents() {
+            if let Some(prompt_source) = &agent.prompt_source {
+                paths.insert(prompt_source.clone());
+            }
+        }
+        for resource in bundle
+            .tools()
+            .iter()
+            .chain(bundle.skills())
+            .chain(bundle.mcp())
+            .chain(bundle.hooks())
+            .chain(bundle.extensions())
+        {
+            paths.insert(resource.source_path.clone());
+        }
+    }
+
+    let mut writer = ArchiveWriter::new(Cursor::new(Vec::new())).map_err(map_archive_error)?;
+    writer.set_encrypt_header(false);
+    writer.set_content_methods(vec![EncoderConfiguration::new(EncoderMethod::COPY)]);
+    for path in paths {
+        let bytes =
+            source_files_by_path
+                .get(&path)
+                .ok_or_else(|| BundleError::MissingReference {
+                    bundle_id: "public-package".to_string(),
+                    path: path.clone(),
+                })?;
+        writer
+            .push_archive_entry(
+                ArchiveEntry::new_file(&path),
+                Some(Cursor::new(bytes.as_slice())),
+            )
+            .map_err(map_archive_error)?;
+    }
+    writer
+        .finish()
+        .map(|output| output.into_inner())
+        .map_err(|error| BundleError::Io {
+            path: "public-package".to_string(),
+            detail: error.to_string(),
+        })
+}
+
 /// Strictly validates, decodes, and prepares an untrusted public package.
 ///
 /// Enforces archive size (128 MiB), per-entry (64 MiB), total expanded (256 MiB),
@@ -454,7 +534,7 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
             || archive
                 .files
                 .iter()
-                .filter(|entry| entry.name == "bundle.hya.md")
+                .filter(|entry| entry.name == "bundle.hya.md" || entry.name == "bundle.yaml")
                 .count()
                 != 1
         {
@@ -686,18 +766,27 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
 
     let prepared = prepare_package(BundleSource::new("public-package", source_files))?;
     let mut prepared_paths = BTreeSet::new();
-    prepared_paths.insert("bundle.hya.md".to_string());
+    if archive_paths.contains("bundle.yaml") {
+        prepared_paths.insert("bundle.yaml".to_string());
+    } else {
+        prepared_paths.insert("bundle.hya.md".to_string());
+    }
     for bundle in prepared.bundles() {
-        if let Some(prompt_source) = &bundle.agent.prompt_source {
-            prepared_paths.insert(prompt_source.clone());
+        if let Some(workflow) = bundle.workflow() {
+            prepared_paths.insert(workflow.source_path.clone());
+        }
+        for agent in bundle.agents() {
+            if let Some(prompt_source) = &agent.prompt_source {
+                prepared_paths.insert(prompt_source.clone());
+            }
         }
         for resource in bundle
-            .tools
+            .tools()
             .iter()
-            .chain(&bundle.skills)
-            .chain(&bundle.mcp)
-            .chain(&bundle.hooks)
-            .chain(&bundle.extensions)
+            .chain(bundle.skills())
+            .chain(bundle.mcp())
+            .chain(bundle.hooks())
+            .chain(bundle.extensions())
         {
             prepared_paths.insert(resource.source_path.clone());
         }

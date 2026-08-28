@@ -477,7 +477,7 @@ async fn api_agent_metadata_from_bound_catalog_role_and_can_spawn() {
         .map(|agent| agent["id"].as_str().unwrap())
         .collect();
 
-    // Then (a): metadata comes from the explicit PreparedBundle catalog; role → mode.
+    // Then (a): metadata comes from the explicit prepared installable catalog; role → mode.
     assert!(
         ids.contains(&"research"),
         "bound catalog agent `research` must appear, got {ids:?}"

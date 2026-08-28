@@ -3,7 +3,7 @@
 //! These types are the ABI an external plugin author serializes on stdio.
 //! Keep them aligned with `docs/plugin-protocol.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hya_proto::{
     Envelope, Message, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolSchema,
@@ -11,6 +11,9 @@ use hya_proto::{
 use hya_tool::Action;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::error::PluginError;
 
 /// Re-export of the workspace-adapter metadata shape returned at initialize.
 pub use hya_proto::WorkspaceAdapterInfo;
@@ -174,26 +177,280 @@ pub struct HostInfo {
     pub version: String,
 }
 
-/// Plugin→host initialize result: declaration of hooks, tools, and adapters.
+/// Maximum UTF-8 byte length of a Skill contribution id.
+pub const MAX_SKILL_ID_BYTES: usize = 256;
+
+/// Maximum UTF-8 byte length of a Skill contribution body.
+pub const MAX_SKILL_CONTENT_BYTES: usize = 256 * 1024;
+
+/// Maximum UTF-8 byte length of a Skill contribution digest.
+pub const MAX_SKILL_DIGEST_BYTES: usize = 64;
+
+/// One bounded Skill declaration returned by a plugin initialize handshake.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InitializeResult {
-    /// Protocol version the plugin accepts (must equal host [`PROTOCOL_VERSION`]).
-    pub protocol_version: u32,
-    /// Declared plugin identity; `id` must match the configured source id.
-    pub plugin: PluginInfo,
+#[serde(deny_unknown_fields)]
+pub struct SkillContribution {
+    /// Stable Skill identifier in the plugin contribution namespace.
+    pub id: String,
+    /// Complete Skill content, including any plugin-defined markdown payload.
+    pub content: String,
+    /// Exact content digest supplied by the declaring plugin.
+    pub digest: String,
+}
+
+/// The complete typed contribution surface returned by plugin initialization.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginContributionSet {
     /// Hooks this plugin implements (only these are dispatched).
     #[serde(default)]
     pub hooks: Vec<HookRegistration>,
-    /// Tools this plugin exposes to the model (must use object `inputSchema`).
+    /// Tools this plugin exposes to the model.
     #[serde(default)]
     pub tools: Vec<ToolInfo>,
+    /// Skills this plugin exposes to the runtime.
+    #[serde(default)]
+    pub skills: Vec<SkillContribution>,
     /// Workspace adapters aggregated for `GET /experimental/workspace/adapter`.
     #[serde(default, rename = "workspaceAdapters")]
     pub workspace_adapters: Vec<WorkspaceAdapterInfo>,
 }
 
+impl PluginContributionSet {
+    /// Validate declaration shape, bounds, uniqueness, and tool schema before activation.
+    ///
+    /// The plugin id is included in every failure so callers can report which
+    /// initialize handshake was rejected without parsing an untyped payload.
+    pub fn validate(&self, plugin: &str) -> Result<(), PluginError> {
+        let mut tool_ids = BTreeSet::new();
+        let mut exported_ids = BTreeSet::new();
+        for tool in &self.tools {
+            validate_text_field(
+                plugin,
+                "tool",
+                &tool.name,
+                "name",
+                &tool.name,
+                MAX_SKILL_ID_BYTES,
+            )?;
+            if !tool_ids.insert(tool.name.clone()) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "tool".to_string(),
+                    id: tool.name.clone(),
+                });
+            }
+            if !exported_ids.insert(tool.name.clone()) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "tool".to_string(),
+                    id: tool.name.clone(),
+                });
+            }
+            if tool.input_schema.get("type").and_then(Value::as_str) != Some("object") {
+                return Err(PluginError::InvalidContribution {
+                    plugin: plugin.to_string(),
+                    kind: "tool".to_string(),
+                    id: tool.name.clone(),
+                    detail: "inputSchema.type must be `object`".to_string(),
+                });
+            }
+        }
+
+        let mut skill_ids = BTreeSet::new();
+        for skill in &self.skills {
+            validate_text_field(
+                plugin,
+                "skill",
+                &skill.id,
+                "id",
+                &skill.id,
+                MAX_SKILL_ID_BYTES,
+            )?;
+            validate_text_field(
+                plugin,
+                "skill",
+                &skill.id,
+                "content",
+                &skill.content,
+                MAX_SKILL_CONTENT_BYTES,
+            )?;
+            validate_text_field(
+                plugin,
+                "skill",
+                &skill.id,
+                "digest",
+                &skill.digest,
+                MAX_SKILL_DIGEST_BYTES,
+            )?;
+            validate_skill_digest(plugin, skill)?;
+            if !skill_ids.insert(skill.id.clone()) || !exported_ids.insert(skill.id.clone()) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "skill".to_string(),
+                    id: skill.id.clone(),
+                });
+            }
+        }
+
+        let mut hook_names = BTreeSet::new();
+        for hook in &self.hooks {
+            if !hook_names.insert(hook.name) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "hook".to_string(),
+                    id: hook.name.as_str().to_string(),
+                });
+            }
+        }
+
+        let mut workspace_adapters = BTreeSet::new();
+        for adapter in &self.workspace_adapters {
+            validate_text_field(
+                plugin,
+                "workspace adapter",
+                &adapter.name,
+                "type",
+                &adapter.r#type,
+                MAX_SKILL_ID_BYTES,
+            )?;
+            validate_text_field(
+                plugin,
+                "workspace adapter",
+                &adapter.name,
+                "name",
+                &adapter.name,
+                MAX_SKILL_ID_BYTES,
+            )?;
+            if !workspace_adapters.insert((adapter.r#type.clone(), adapter.name.clone())) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "workspace adapter".to_string(),
+                    id: format!("{}:{}", adapter.r#type, adapter.name),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validate a bounded textual contribution field and reject control bytes.
+fn validate_text_field(
+    plugin: &str,
+    kind: &str,
+    id: &str,
+    field: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<(), PluginError> {
+    if value.is_empty() || value.len() > max_bytes || value.as_bytes().contains(&0) {
+        return Err(PluginError::InvalidContribution {
+            plugin: plugin.to_string(),
+            kind: kind.to_string(),
+            id: id.to_string(),
+            detail: format!("{field} must be non-empty and at most {max_bytes} bytes"),
+        });
+    }
+    Ok(())
+}
+
+/// Validate the canonical lowercase SHA-256 digest for one Skill body.
+fn validate_skill_digest(plugin: &str, skill: &SkillContribution) -> Result<(), PluginError> {
+    let is_lower_hex = skill.digest.len() == MAX_SKILL_DIGEST_BYTES
+        && skill
+            .digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
+    if !is_lower_hex {
+        return Err(PluginError::InvalidContribution {
+            plugin: plugin.to_string(),
+            kind: "skill".to_string(),
+            id: skill.id.clone(),
+            detail: "digest must be 64 lowercase SHA-256 hex characters".to_string(),
+        });
+    }
+    let expected = sha256_hex(skill.content.as_bytes());
+    if skill.digest != expected {
+        return Err(PluginError::InvalidContribution {
+            plugin: plugin.to_string(),
+            kind: "skill".to_string(),
+            id: skill.id.clone(),
+            detail: format!("digest does not match UTF-8 content (expected {expected})"),
+        });
+    }
+    Ok(())
+}
+
+/// Encode SHA-256 bytes as canonical lowercase hexadecimal text.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest.as_slice() {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+/// Plugin→host initialize result with one flattened contribution set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InitializeResult {
+    /// Protocol version the plugin accepts (must equal host [`PROTOCOL_VERSION`]).
+    pub protocol_version: u32,
+    /// Declared plugin identity; `id` must match the configured source id.
+    pub plugin: PluginInfo,
+    /// All tools, Skills, hooks, and workspace adapters returned by initialization.
+    #[serde(flatten)]
+    pub contributions: PluginContributionSet,
+}
+
+/// Strict flattened wire helper for decoding an initialize result.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitializeResultWire {
+    /// Protocol version the plugin accepts.
+    protocol_version: u32,
+    /// Declared plugin identity.
+    plugin: PluginInfo,
+    /// Hook declarations.
+    #[serde(default)]
+    hooks: Vec<HookRegistration>,
+    /// Tool declarations.
+    #[serde(default)]
+    tools: Vec<ToolInfo>,
+    /// Skill declarations; absent on old plugins.
+    #[serde(default)]
+    skills: Vec<SkillContribution>,
+    /// Workspace adapter declarations.
+    #[serde(default, rename = "workspaceAdapters")]
+    workspace_adapters: Vec<WorkspaceAdapterInfo>,
+}
+
+impl<'de> Deserialize<'de> for InitializeResult {
+    /// Decode the flattened wire declaration while rejecting unknown fields.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = InitializeResultWire::deserialize(deserializer)?;
+        Ok(Self {
+            protocol_version: wire.protocol_version,
+            plugin: wire.plugin,
+            contributions: PluginContributionSet {
+                hooks: wire.hooks,
+                tools: wire.tools,
+                skills: wire.skills,
+                workspace_adapters: wire.workspace_adapters,
+            },
+        })
+    }
+}
+
 /// Identity fields inside [`InitializeResult::plugin`].
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginInfo {
     /// Stable plugin id (must equal configured / manifest id).
     pub id: String,
@@ -221,6 +478,7 @@ pub enum PluginKindWire {
 
 /// One hook entry in the initialize declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HookRegistration {
     /// Hook identity.
     pub name: HookName,
@@ -231,6 +489,7 @@ pub struct HookRegistration {
 
 /// Tool declaration in the initialize reply (`inputSchema` is camelCase on the wire).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolInfo {
     /// Tool name exposed to the model.

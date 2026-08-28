@@ -1,0 +1,21 @@
+kind: WorkflowBundle
+identity:
+  id: hya/plan-impl-review
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: plan-impl-review
+  path: workflows/plan-impl-review.hya.md
+agents:
+  - id: plan-impl-review-planner
+    role: subagent
+    prompt: prompts/planner.md
+    spawn_lifecycle: transient
+  - id: plan-impl-review-implementer
+    role: subagent
+    prompt: prompts/implementer.md
+    spawn_lifecycle: transient
+  - id: plan-impl-review-reviewer
+    role: subagent
+    prompt: prompts/reviewer.md
+    spawn_lifecycle: transient

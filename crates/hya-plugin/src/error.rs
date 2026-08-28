@@ -50,6 +50,29 @@ pub enum PluginError {
         /// Plugin id whose declaration changed across respawn.
         plugin: String,
     },
+
+    /// A plugin contribution has an invalid field or payload shape.
+    #[error("plugin `{plugin}` declared invalid {kind} `{id}`: {detail}")]
+    InvalidContribution {
+        /// Plugin id from the initialize declaration.
+        plugin: String,
+        /// Contribution kind (`tool`, `skill`, `hook`, or workspace adapter).
+        kind: String,
+        /// Local declaration id used for diagnostics.
+        id: String,
+        /// Validation detail for the malformed field.
+        detail: String,
+    },
+    /// A plugin initialize reply contains duplicate declarations.
+    #[error("plugin `{plugin}` declared duplicate {kind} `{id}`")]
+    DuplicateContribution {
+        /// Plugin id from the initialize declaration.
+        plugin: String,
+        /// Contribution kind that was repeated.
+        kind: String,
+        /// Repeated declaration id.
+        id: String,
+    },
     /// A request exceeded its per-call timeout.
     #[error("plugin call timed out: {method}")]
     Timeout {

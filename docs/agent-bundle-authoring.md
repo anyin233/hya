@@ -1,6 +1,6 @@
 # AgentBundle Authoring
 
-Author and install a public `AgentBundle`. **A bundle defines exactly one agent.** Install one bundle per specialist agent; the bundle system is how you define subagents. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `AgentBundle`. **An AgentBundle defines exactly one agent.** Install one AgentBundle per independent specialist agent. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only AgentBundles remain process-free. A public executable AgentBundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Examples:
 
@@ -23,18 +23,19 @@ Bun Compat is the sole executable sidecar implementation. Static-only Bundles re
 
 ## Source layouts: `bundle.yaml` vs `bundle.hya.md`
 
-A bundle **source directory** must contain **exactly one** of:
+A public bundle source directory must contain exactly one of:
 
 | File | Form |
 | --- | --- |
-| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Used by the shipped built-in bundles. |
-| `bundle.hya.md` | YAML frontmatter fenced by `---` plus a markdown body. |
+| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `WorkflowBundle`; also supported by `AgentBundle`. |
+| `bundle.hya.md` | YAML frontmatter fenced by `---` plus a Markdown body. Supported only by `AgentBundle`. |
 
 Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 
 - **Both present** → hard error (`source contains both bundle.yaml and bundle.hya.md`).
 - **Neither present** → `UnsupportedSource`.
 - The manifest (YAML portion) is parsed with **`deny_unknown_fields`**: an unrecognised key is a hard error, not a warning.
+- A `WorkflowBundle` in `bundle.hya.md` fails preparation; use explicit `bundle.yaml`.
 
 ### `bundle.hya.md` constraints
 
@@ -42,8 +43,8 @@ Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
 - A **nonempty** markdown body becomes the agent's prompt. The agent must **not** also set `prompt:` to a file path.
 - An **empty** body plus an explicit `prompt:` path is allowed: the body is "absent", not "an empty prompt", so the named file wins.
 
-Because a bundle defines exactly one agent, the body is unambiguously that
-agent's prompt — there is nothing to disambiguate.
+Because an AgentBundle defines exactly one agent, the body is unambiguously that
+agent's prompt. A WorkflowBundle has no manifest body; each packaged Agent uses an explicit `prompts/` path.
 
 The archive rules are: undeclared directory files are ignored; unreferenced archive files
 are rejected.
@@ -54,7 +55,7 @@ are rejected.
 - Required whenever the agent uses `prompt: path/to/file.md` instead of a body prompt.
 - Real example: [`crates/hya-bundle/tests/fixtures/directory/bundle.yaml`](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml).
 
-A public archive contains the root manifest (`bundle.hya.md` or the prepared closure equivalent) plus exactly the normalized paths represented by the v1 agent prompt/resource/Extension contract, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
+A public archive contains the root manifest plus exactly the normalized source closure represented by its AgentBundle or WorkflowBundle payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v2 identity and digest.
 
 The retained static package can be created with:
 
@@ -85,9 +86,9 @@ Public package extraction enforces ([`package.rs`](../crates/hya-bundle/src/pack
 
 ---
 
-## Manifest reference
+## AgentBundle manifest reference
 
-Both markers are required at the top of the YAML:
+The AgentBundle marker is required at the top of the YAML:
 
 ```yaml
 kind: AgentBundle
@@ -103,10 +104,10 @@ kind: AgentBundle
 | `extensions` | no | `js`, `rust` extension lists. |
 | `agent` | yes | The single agent this bundle defines. |
 
-**Removed keys.** `api_version` and per-agent `harness_access` no longer exist,
-and `agents:` (a list) is replaced by `agent:` (a map). A manifest that still
-carries any of them is rejected by name with `RemovedManifestKey`, which says
-what to write instead.
+**Removed AgentBundle keys.** `api_version` and per-agent `harness_access` no longer exist,
+and `agents:` (a list) is replaced by singular `agent:` for this payload kind. A
+WorkflowBundle uses `agents:` under its separate closed schema. An AgentBundle
+manifest that carries a removed key is rejected by name with `RemovedManifestKey`.
 
 **Unsupported in the current release** (declared but rejected at prepare):
 `resources.mcp`, `extensions.rust`, and per-agent `resource_profile`.
@@ -459,10 +460,11 @@ They differ from bundle agents in three ways:
 
 ## Prepared catalog format
 
-Prepared catalogs use **`PREPARED_FORMAT_VERSION = 1`** and the document shape:
+Prepared catalogs use **`PREPARED_FORMAT_VERSION = 2`** and a closed payload
+union in the document shape:
 
 ```text
-{ format_version, bundles[], index[] }
+{ format_version, bundles: [AgentBundle | WorkflowBundle], index[] }
 ```
 
 **Canonical ordering** (non-canonical catalogs are rejected on decode):

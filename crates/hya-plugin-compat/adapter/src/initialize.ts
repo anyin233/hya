@@ -10,9 +10,18 @@ import {
   discoverPluginSpecs,
   parseAdapterOptions,
 } from "./loader/discovery"
-import { loadLocalPluginHooks, type CompatHooks } from "./loader/init"
+import {
+  loadLocalPluginContributions,
+  PluginDeclarationError,
+  type CompatHooks,
+} from "./loader/init"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import { hookRegistrationsFrom } from "./registration"
+import type {
+  PluginContributionSet,
+  SkillContribution,
+  WorkspaceAdapterContribution,
+} from "./contributions"
 import type {
   ActivationMetadata,
   HandledRequest,
@@ -20,6 +29,13 @@ import type {
   RuntimeEnv,
 } from "./runtime_types"
 import { buildToolRegistry } from "./tool"
+
+export type {
+  PluginContributionSet,
+  SkillContribution,
+  WorkspaceAdapterContribution,
+} from "./contributions"
+
 
 export const PROTOCOL_VERSION = 1
 
@@ -44,19 +60,15 @@ const InitializeParamsSchema = z
     }
   })
 
-type LoadedHooksResult =
+type LoadedContributionsResult =
   | {
       readonly hooks: readonly CompatHooks[]
-      readonly workspaceAdapters: readonly WorkspaceAdapterEntry[]
+      readonly skills: readonly SkillContribution[]
+      readonly workspaceAdapters: readonly WorkspaceAdapterContribution[]
       readonly response?: undefined
     }
   | { readonly hooks?: undefined; readonly response: HandledRequest }
 
-type WorkspaceAdapterEntry = {
-  readonly type: string
-  readonly name: string
-  readonly description: string
-}
 
 export async function handleInitialize(
   request: JsonRpcRequest,
@@ -80,11 +92,28 @@ export async function handleInitialize(
           lifecycle: params.data.lifecycle,
         }
       : undefined
-  const loaded = await loadConfiguredHooks(context, request.id, activation)
+  const loaded = await loadConfiguredContributions(context, request.id, activation)
   if (loaded.response !== undefined) {
     return loaded.response
   }
   const registry = buildToolRegistry(loaded.hooks)
+  if (registry.errors.length > 0) {
+    return {
+      response: errorResponse(
+        request.id,
+        ERROR_CODES.INTERNAL_ERROR,
+        registry.errors.map((error) => error.message).join("; "),
+      ),
+      shouldExit: false,
+    }
+  }
+  const contributions: PluginContributionSet = {
+    hooks: hookRegistrationsFrom(loaded.hooks),
+    tools: registry.infos,
+    skills: loaded.skills,
+    workspaceAdapters: loaded.workspaceAdapters,
+  }
+  context.contributions = contributions
   context.hooks.splice(0, context.hooks.length, ...loaded.hooks)
   context.tools.clear()
   for (const [name, tool] of registry.tools) {
@@ -99,21 +128,19 @@ export async function handleInitialize(
         version: context.version,
         kind: "compat",
       },
-      hooks: hookRegistrationsFrom(loaded.hooks),
-      tools: registry.infos,
-      workspaceAdapters: loaded.workspaceAdapters,
+      ...contributions,
     }),
     shouldExit: false,
   }
 }
 
-async function loadConfiguredHooks(
+async function loadConfiguredContributions(
   context: RequestContext,
   id: number,
   activation: ActivationMetadata | undefined,
-): Promise<LoadedHooksResult> {
+): Promise<LoadedContributionsResult> {
   if (activation !== undefined) {
-    const loaded = await loadLocalPluginHooks(
+    const loaded = await loadLocalPluginContributions(
       context.bundleExtensions,
       Object.freeze({}),
     )
@@ -131,7 +158,7 @@ async function loadConfiguredHooks(
         },
       }
     }
-    return { hooks: loaded.hooks, workspaceAdapters: [] }
+    return { hooks: loaded.hooks, skills: loaded.skills, workspaceAdapters: [] }
   }
 
   let options: ReturnType<typeof parseAdapterOptions>
@@ -149,9 +176,9 @@ async function loadConfiguredHooks(
     throw error
   }
   if (envFlag(context.env.COMPAT_PURE)) {
-    return { hooks: [], workspaceAdapters: [] }
+    return { hooks: [], skills: [], workspaceAdapters: [] }
   }
-  const workspaceAdapters: WorkspaceAdapterEntry[] = []
+  const workspaceAdapters: WorkspaceAdapterContribution[] = []
   const directory = context.env.HYA_DIRECTORY ?? process.cwd()
   const worktree = context.env.HYA_WORKTREE ?? directory
   const discovered = await discoverPluginSpecs({
@@ -164,14 +191,29 @@ async function loadConfiguredHooks(
     xdgConfigHome: context.env.XDG_CONFIG_HOME,
     home: context.env.HOME,
   })
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     [...discovered, ...options.plugin],
     pluginInput(context.env, context.stderr, directory, worktree, workspaceAdapters),
   )
+  const declarationErrors = loaded.errors.filter((error) => error.kind === "declaration")
+  if (declarationErrors.length > 0) {
+    return {
+      response: {
+        response: errorResponse(
+          id,
+          ERROR_CODES.INTERNAL_ERROR,
+          declarationErrors
+            .map((error) => `${error.spec}: ${error.message}`)
+            .join("; "),
+        ),
+        shouldExit: false,
+      },
+    }
+  }
   for (const error of loaded.errors) {
     await context.stderr.write(`compat plugin ${error.spec}: ${error.message}\n`)
   }
-  return { hooks: loaded.hooks, workspaceAdapters }
+  return { hooks: loaded.hooks, skills: loaded.skills, workspaceAdapters }
 }
 
 function nonemptyEnv(value: string | undefined): string | undefined {
@@ -187,8 +229,9 @@ function pluginInput(
   stderr: RequestContext["stderr"],
   directory: string,
   worktree: string,
-  workspaceAdapters: WorkspaceAdapterEntry[],
+  workspaceAdapters: WorkspaceAdapterContribution[],
 ): Readonly<Record<string, unknown>> {
+
   const project = createCompatProject(env, worktree)
   return {
     client: createCompatClientAdapter(stderr, {
@@ -205,9 +248,21 @@ function pluginInput(
     experimental_workspace: {
       register: (type: string, adapter: unknown) => {
         const entry = workspaceAdapterEntry(type, adapter)
-        if (entry !== undefined) {
-          workspaceAdapters.push(entry)
+        if (entry === undefined) {
+          throw new PluginDeclarationError(
+            `invalid workspace adapter declaration for type: ${type}`,
+          )
         }
+        if (
+          workspaceAdapters.some(
+            (existing) => existing.type === entry.type && existing.name === entry.name,
+          )
+        ) {
+          throw new PluginDeclarationError(
+            `duplicate workspace adapter declaration: ${entry.type}:${entry.name}`,
+          )
+        }
+        workspaceAdapters.push(entry)
       },
     },
   }
@@ -216,13 +271,16 @@ function pluginInput(
 function workspaceAdapterEntry(
   type: string,
   adapter: unknown,
-): WorkspaceAdapterEntry | undefined {
+): WorkspaceAdapterContribution | undefined {
   if (!isRecord(adapter)) {
     return undefined
   }
   const name = adapter.name
   const description = adapter.description
-  if (typeof name !== "string" || typeof description !== "string") {
+  if (type.length === 0 || typeof name !== "string" || name.length === 0) {
+    return undefined
+  }
+  if (typeof description !== "string") {
     return undefined
   }
   return { type, name, description }

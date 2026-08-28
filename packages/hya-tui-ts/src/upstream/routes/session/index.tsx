@@ -435,12 +435,34 @@ export function Session() {
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
   const renderer = useRenderer()
-  const focusMain = () =>
+  const refreshTreeInteractions = async () => {
+    const tree = treeResource().tree
+    if (!tree) return
+    const sessionIDs = treeSessionIDs(tree)
+    const [permissions, questions] = await Promise.all([
+      sdk.client.permission.list({}, { throwOnError: true }),
+      sdk.client.question.list({}, { throwOnError: true }),
+    ])
+    for (const sessionID of sessionIDs) {
+      const matchingPermissions = (permissions.data ?? []).filter((request) => request.sessionID === sessionID)
+      const matchingQuestions = (questions.data ?? []).filter((request) => request.sessionID === sessionID)
+      sync.set("permission", sessionID, matchingPermissions)
+      sync.set("question", sessionID, matchingQuestions)
+    }
+  }
+  const focusMain = () => {
     focusMainPromptOwnership({
       dispatch: dispatchWorkspace,
       prompt,
       modalActive: dialog.stack.length > 0,
     })
+    void refreshTreeInteractions().catch((error) => {
+      toast.show({
+        message: `Failed to refresh pending subagent interactions: ${errorMessage(error)}`,
+        variant: "error",
+      })
+    })
+  }
   // Child session route (legacy / deep-link): Escape walks back to the parent.
   useBindings(() => ({
     enabled: () => !!session()?.parentID && mainFocused() && dialog.stack.length === 0,

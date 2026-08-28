@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
-use hya_core::RuntimeRegistry;
+use hya_core::runtime_registry::RuntimeSourceSkill;
+use hya_core::{RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
 use hya_proto::AgentName;
-use hya_tool::ToolRegistry;
+use hya_tool::{SkillCatalogEntry, ToolRegistry};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -80,11 +81,11 @@ pub fn runtime_with_catalog(
     agents: &[AgentFixture],
 ) -> Arc<RuntimeRegistry> {
     // One bundle per agent, over the compiled-in built-ins.
-    let bundles: Vec<PreparedBundle> = agents
+    let bundles: Vec<PreparedInstallableBundle> = agents
         .iter()
         .filter(|agent| !hya_core::is_builtin_id(agent.stable_id))
-        .map(|agent| PreparedBundle {
-            format_version: 1,
+        .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/server-tests-{}", agent.stable_id),
                 version: "0.0.0".to_string(),
@@ -132,14 +133,72 @@ pub fn runtime_with_catalog(
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
-        })
+        })))
         .collect();
+    let sources = bundles
+        .iter()
+        .filter_map(bundle_skill_source)
+        .collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles).expect("server test catalog");
     let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog");
-    Arc::new(RuntimeRegistry::from_snapshot(
+    let runtime = Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),
         Arc::new(catalog),
-    ))
+    ));
+    if !sources.is_empty() {
+        runtime
+            .refresh(|candidate| {
+                candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources)
+            })
+            .expect("server test bundle Skill sources must publish");
+    }
+    runtime
+}
+
+/// Adapt one server fixture bundle's prepared Skill into its runtime source.
+fn bundle_skill_source(bundle: &PreparedInstallableBundle) -> Option<RuntimeSource> {
+    let skills = bundle
+        .skills()
+        .iter()
+        .map(|resource| {
+            let parsed = hya_tool::parse_skill(&resource.content)
+                .expect("server fixture Skill must contain valid frontmatter");
+            let path = PathBuf::from(format!(
+                "bundle:{}/{}",
+                bundle.identity().id,
+                resource.source_path
+            ));
+            let dir = path
+                .parent()
+                .expect("server fixture Skill path must have a parent")
+                .to_path_buf();
+            RuntimeSourceSkill::new(
+                resource.stable_id.clone(),
+                resource.local_id.clone(),
+                resource.aliases.clone(),
+                resource.digest.clone(),
+                resource.content.clone(),
+                SkillCatalogEntry {
+                    name: parsed.name,
+                    description: parsed.description,
+                    content: parsed.content,
+                    allowed_tools: parsed.allowed_tools,
+                    model: parsed.model,
+                    path,
+                    dir,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    (!skills.is_empty()).then(|| {
+        RuntimeSource::new(
+            RuntimeSourceId::bundle(bundle.identity().id.clone()),
+            [0; 32],
+            Arc::new(()),
+            Vec::new(),
+        )
+        .with_skills(skills)
+    })
 }
 
 /// Minimal prepared catalog for server engine fixtures (Commit 2 RuntimeRegistry).

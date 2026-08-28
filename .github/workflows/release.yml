@@ -35,6 +35,11 @@ jobs:
           curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
           test "$("$HOME/.bun/bin/bun" --version)" = "1.3.14"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - name: Install 7-Zip for Workflow package smoke test
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
 
       - name: Prepare TypeScript TUI
         working-directory: packages/hya-tui-ts
@@ -102,7 +107,8 @@ jobs:
 
           rm -rf dist
           runtime="dist/$package_dir/lib/hya/hya-tui-ts"
-          mkdir -p "dist/$package_dir/bin" "$runtime/src"
+          compat_adapter="dist/$package_dir/lib/hya/compat-adapter"
+          mkdir -p "dist/$package_dir/bin" "$runtime/src" "$compat_adapter/src"
           cp "target/$TARGET/release/hya" "target/$TARGET/release/hya-backend" \
             "target/$TARGET/release/hya-ts" "dist/$package_dir/bin/"
           cp README.md "dist/$package_dir/"
@@ -112,8 +118,14 @@ jobs:
             packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
             packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$runtime/"
           cp -R packages/hya-tui-ts/src/. "$runtime/src/"
+          cp crates/hya-plugin-compat/adapter/package.json \
+            crates/hya-plugin-compat/adapter/bun.lock "$compat_adapter/"
+          cp -R crates/hya-plugin-compat/adapter/src/. "$compat_adapter/src/"
           (cd "$runtime" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          (cd "$compat_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
           "$HOME/.bun/bin/bun" packages/hya-tui-ts/scripts/prune-sdk-server.ts "$runtime"
+          scripts/package-argus-example.sh bundles/examples/argus-example \
+            "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
           tar -czf "dist/$archive" -C dist "$package_dir"
           (cd dist && sha256sum "$archive" > SHA256SUMS)
@@ -146,6 +158,32 @@ jobs:
           test -f "$runtime/bunfig.toml"
           test -f "$runtime/tsconfig.json"
           test -f "$runtime/src/main.tsx"
+          compat_adapter="$scratch/$package_dir/lib/hya/compat-adapter"
+          for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/package.json node_modules/@opencode-ai/sdk/package.json; do
+            test -e "$compat_adapter/$path"
+          done
+          compat_probe="$scratch/compat-probe"
+          compat_output="$scratch/compat-output"
+          mkdir -p "$compat_probe"
+          (
+            cd "$compat_probe"
+            env -u HYA_COMPAT_ADAPTER_DIR COMPAT_PURE=1 HYA_DIRECTORY="$compat_probe" HYA_WORKTREE="$compat_probe" \
+              "$HOME/.bun/bin/bun" run "$compat_adapter/src/main.ts" >"$compat_output" <<'COMPAT_REQUESTS'
+          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"host":{"name":"hya","version":"release"}}}
+          {"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}
+          COMPAT_REQUESTS
+          )
+          grep -F '"protocol_version":1' "$compat_output"
+          grep -F '"hooks":[]' "$compat_output"
+          grep -F '"tools":[]' "$compat_output"
+          grep -F '"id":2,"result":{}' "$compat_output"
+          example_archive="$scratch/$package_dir/examples/hya-argus-example.hyabundle"
+          test -f "$example_archive"
+          7z t "$example_archive" >/dev/null
+          7z l -slt "$example_archive" >"$scratch/argus-listing.txt"
+          grep -Fx "Path = bundle.yaml" "$scratch/argus-listing.txt"
+          grep -Fx "Path = workflows/argus.hya.md" "$scratch/argus-listing.txt"
+          ! grep -F "bundles/examples/argus-example" "$scratch/argus-listing.txt"
           project="$scratch/project"
           mock_bun="$scratch/mock-bun"
           bun_invocation="$scratch/bun-invocation"
@@ -191,6 +229,12 @@ jobs:
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/bunfig.toml" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/tsconfig.json" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/hya-tui-ts/node_modules/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/lib/hya/compat-adapter/package.json" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/compat-adapter/bun.lock" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/compat-adapter/src/main.ts" "$scratch/archive.txt"
+          grep -F "$package_dir/lib/hya/compat-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
+          ! grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be

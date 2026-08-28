@@ -36,5 +36,8 @@ pub use activation_dispatcher::ActivationHookDispatcher;
 pub use client::{ChildGuard, DEFAULT_CALL_TIMEOUT, INITIALIZE_TIMEOUT, PluginClient};
 pub use error::PluginError;
 pub use host::{PluginHost, PluginStatus, PreparedPlugin};
-pub use messages::{HostInfo, PROTOCOL_VERSION};
+pub use messages::{
+    HostInfo, MAX_SKILL_CONTENT_BYTES, MAX_SKILL_DIGEST_BYTES, MAX_SKILL_ID_BYTES,
+    PROTOCOL_VERSION, PluginContributionSet, SkillContribution,
+};
 pub use permission_bridge::PermissionBridge;

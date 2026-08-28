@@ -3,9 +3,22 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedCatalog};
-use hya_core::{AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry};
+use hya_core::{
+    AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource,
+    RuntimeSourceKind,
+};
+use hya_plugin::{PluginContributionSet, SkillContribution};
 use hya_store::{BundleRegistry, BundleRegistryRecord};
 use tokio::sync::{Mutex, OnceCell};
+
+use crate::runtime_reconcile::prepared_static_bundle_source;
+
+/// Decode the build-prepared first-party WorkflowBundle.
+pub fn first_party_catalog() -> Result<PreparedCatalog, CoreError> {
+    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/first-party.prepared.json"));
+    let digest = include_str!(concat!(env!("OUT_DIR"), "/first-party.prepared.digest")).trim();
+    Ok(PreparedCatalog::decode(bytes, digest)?)
+}
 
 /// Default path of the installed Bundle registry SQLite file.
 ///
@@ -81,16 +94,24 @@ impl InstalledBundleRefresh {
                     tracing::warn!(
                         bundle_id = %record.bundle_id,
                         version = %record.version,
-                        %detail,
-                        "skipping unreadable installed AgentBundle; reinstall it with \
-                         `hya bundle install`"
+                        error = %detail,
+                        "skipping unreadable installed bundle; reinstall it with `hya bundle install`"
                     );
                 }
             }
         }
-        let prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
-        let bundles = BundleCatalog::from_verified_catalogs(&prepared_catalog_refs)?;
-        runtime.publish_catalog(Arc::new(AgentCatalog::new(Arc::new(bundles))?))?;
+        let first_party = first_party_catalog()?;
+        let mut prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
+        prepared_catalog_refs.push(&first_party);
+        let bundles = Arc::new(BundleCatalog::from_verified_catalogs(
+            &prepared_catalog_refs,
+        )?);
+        let static_sources = static_bundle_skill_sources(&bundles)?;
+        let agent_catalog = Arc::new(AgentCatalog::new(Arc::clone(&bundles))?);
+        runtime.refresh(|candidate| {
+            candidate.replace_catalog(Arc::clone(&agent_catalog));
+            candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources.clone())
+        })?;
         // Advance even when rows were skipped, so the warning is reported once
         // per generation instead of on every root binding.
         *applied_generation = snapshot.generation;
@@ -104,14 +125,49 @@ impl InstalledBundleRefresh {
         let [bundle] = prepared.bundles() else {
             return Err("prepared catalog must contain exactly one bundle".to_string());
         };
-        if bundle.identity.id != record.bundle_id
-            || bundle.identity.version != record.version
-            || bundle.identity.publisher != record.publisher
+        let identity = bundle.identity();
+        if identity.id != record.bundle_id
+            || identity.version != record.version
+            || identity.publisher != record.publisher
         {
             return Err("registry metadata does not match the prepared catalog".to_string());
         }
         Ok(prepared)
     }
+}
+
+/// Adapt every prepared bundle Skill through the shared contribution seam.
+pub(crate) fn static_bundle_skill_sources(
+    catalog: &BundleCatalog,
+) -> Result<Vec<RuntimeSource>, CoreError> {
+    let mut sources = Vec::new();
+    for bundle in catalog.bundles() {
+        let resources = bundle.skills();
+        if resources.is_empty() {
+            continue;
+        }
+        let contributions = PluginContributionSet {
+            skills: resources
+                .iter()
+                .map(|resource| SkillContribution {
+                    id: resource.local_id.clone(),
+                    content: resource.content.clone(),
+                    digest: resource.digest.clone(),
+                })
+                .collect(),
+            ..PluginContributionSet::default()
+        };
+        let source =
+            prepared_static_bundle_source(&bundle.identity().id, resources, &contributions)
+                .map_err(|error| {
+                    CoreError::Invalid(format!(
+                        "prepare static Skills for bundle `{}`: {error}",
+                        bundle.identity().id
+                    ))
+                })?;
+        sources.push(source.into_runtime_source());
+    }
+    Ok(sources)
 }
 
 #[async_trait]

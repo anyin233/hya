@@ -13,8 +13,7 @@ pub(super) fn router() -> Router<ServerState> {
 
 async fn doc() -> Json<Value> {
     let paths = paths(&[
-        ("/doc", &["get"]),
-        ("/openapi.json", &["get"]),
+        ("/sessions/{sessionID}/workflow", &["get", "post"]),
         ("/auth/{providerID}", &["put", "delete"]),
         ("/log", &["post"]),
         ("/global/health", &["get"]),
@@ -93,7 +92,7 @@ async fn doc() -> Json<Value> {
         ("/session/{sessionID}/unrevert", &["post"]),
         ("/session/{sessionID}/share", &["post", "delete"]),
         ("/session/{sessionID}/summarize", &["post"]),
-        ("/session/{sessionID}/permissions/{permissionID}", &["post"]),
+        ("/session/{sessionID}/workflow", &["get", "post"]),
         ("/experimental/capabilities", &["get"]),
         ("/experimental/console", &["get"]),
         ("/experimental/console/orgs", &["get"]),
@@ -188,8 +187,7 @@ async fn doc() -> Json<Value> {
         ("/api/session/{sessionID}/shell", &["post"]),
         ("/api/session/{sessionID}/init", &["post"]),
         ("/api/session/{sessionID}/compact", &["post"]),
-        ("/api/session/{sessionID}/wait", &["post"]),
-        ("/api/pty/shells", &["get"]),
+        ("/api/session/{sessionID}/workflow", &["get", "post"]),
         ("/api/pty", &["get", "post"]),
         ("/api/pty/{ptyID}", &["get", "put", "delete"]),
         ("/api/pty/{ptyID}/connect-token", &["post"]),

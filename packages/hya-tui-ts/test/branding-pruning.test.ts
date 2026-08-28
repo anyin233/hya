@@ -29,6 +29,7 @@ test("public hya presentation and static registrations are stable", async () => 
   expect(auditSurface.paths.every((item) => item.split(path.sep).includes("hya"))).toBe(true)
   expect(auditSurface.tempName).toStartWith("hya-")
   expect(auditSurface.staticBuiltins).toEqual([
+    "internal:sidebar-workflow",
     "internal:home-footer",
     "internal:home-tips",
     "internal:sidebar-context",

@@ -42,10 +42,21 @@ export type ToolCallReply = {
   readonly time_ms: number
 }
 
+export type ToolDeclarationError = {
+  /** Declaration failure category. */
+  readonly kind: "duplicate" | "malformed"
+  /** Tool name used for diagnostics. */
+  readonly name: string
+  /** Contextual declaration failure detail. */
+  readonly message: string
+}
+
 export type ToolRegistry = {
   readonly infos: readonly ToolInfo[]
   readonly tools: ReadonlyMap<string, CompatToolDefinition>
+  readonly errors: readonly ToolDeclarationError[]
 }
+
 
 export type CompatToolDefinition = {
   readonly description: string
@@ -72,13 +83,35 @@ export class UnsupportedToolAskError extends Error {
 export function buildToolRegistry(hooks: readonly CompatHooks[]): ToolRegistry {
   const infos: ToolInfo[] = []
   const tools = new Map<string, CompatToolDefinition>()
+  const errors: ToolDeclarationError[] = []
   for (const hook of hooks) {
     const tool = hook.tool
+    if (tool === undefined) {
+      continue
+    }
     if (!isRecord(tool)) {
+      errors.push({
+        kind: "malformed",
+        name: "<unknown>",
+        message: "tool declaration must be an object",
+      })
       continue
     }
     for (const [name, value] of Object.entries(tool)) {
-      if (tools.has(name) || !isToolDefinition(value)) {
+      if (tools.has(name)) {
+        errors.push({
+          kind: "duplicate",
+          name,
+          message: `duplicate tool declaration: ${name}`,
+        })
+        continue
+      }
+      if (!isToolDefinition(value)) {
+        errors.push({
+          kind: "malformed",
+          name,
+          message: `malformed tool declaration: ${name}`,
+        })
         continue
       }
       tools.set(name, value)
@@ -89,7 +122,7 @@ export function buildToolRegistry(hooks: readonly CompatHooks[]): ToolRegistry {
       })
     }
   }
-  return { infos, tools }
+  return { infos, tools, errors }
 }
 
 export async function callRegisteredTool(

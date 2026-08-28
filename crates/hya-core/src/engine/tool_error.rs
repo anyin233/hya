@@ -2,7 +2,10 @@ use hya_tool::ToolError;
 use serde_json::{Value, json};
 
 pub(super) fn tool_error_value(error: &ToolError) -> Value {
-    tool_error_message_value(tool_error_type(error), &error.to_string())
+    match error {
+        ToolError::WorkflowControl { code, message } => tool_error_message_value(code, message),
+        _ => tool_error_message_value(tool_error_type(error), &error.to_string()),
+    }
 }
 
 pub(super) fn tool_error_message_value(kind: &str, message: &str) -> Value {
@@ -14,7 +17,7 @@ pub(super) fn tool_error_message_value(kind: &str, message: &str) -> Value {
     })
 }
 
-fn tool_error_type(error: &ToolError) -> &'static str {
+fn tool_error_type(error: &ToolError) -> &str {
     match error {
         ToolError::Input(_) => "input",
         ToolError::Permission(_) => "permission",
@@ -24,9 +27,25 @@ fn tool_error_type(error: &ToolError) -> &'static str {
         ToolError::Overloaded(_) => "overloaded",
         ToolError::OperationIdConflict => "operation_id_conflict",
         ToolError::OperationAlreadyHandled => "operation_already_handled",
+        ToolError::WorkflowControl { code, .. } => code,
         ToolError::UnknownAgentId { .. } => "unknown_agent_id",
         ToolError::AgentSpawnNotAllowed { .. } => "agent_spawn_not_allowed",
         ToolError::UnsupportedInlineAgentField { .. } => "unsupported_inline_agent_field",
         ToolError::Other(_) => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_control_code_survives_tool_error_serialization() {
+        let value = tool_error_value(&ToolError::WorkflowControl {
+            code: "WORKFLOW_BUSY".to_string(),
+            message: "another run is active".to_string(),
+        });
+        assert_eq!(value["error"]["type"], "WORKFLOW_BUSY");
+        assert_eq!(value["error"]["message"], "another run is active");
     }
 }

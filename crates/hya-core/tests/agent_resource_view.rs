@@ -12,10 +12,14 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use futures::stream;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    PreparedResource, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, PreparedResource, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
+use hya_core::runtime_registry::RuntimeSourceSkill;
+use hya_core::{
+    AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, RuntimeSource,
+    RuntimeSourceId, SessionEngine,
+};
 use hya_proto::{AgentName, FinishReason, MessageId, ModelRef, SessionId, ToolName, ToolSchema};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -23,7 +27,8 @@ use hya_provider::{
 };
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, Mode, PermissionPlane, PermissionRules, Rule, Tool, ToolCtx, ToolError, ToolRegistry,
+    Action, Mode, PermissionPlane, PermissionRules, Rule, SkillCatalogEntry, Tool, ToolCtx,
+    ToolError, ToolRegistry,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -154,7 +159,7 @@ impl Tool for CountingTool {
 /// plane is reachable only through a built-in, which is the point of the split.
 ///
 /// Each agent gets its own bundle, and therefore its own copy of the skill.
-fn catalog() -> Arc<AgentCatalog> {
+fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
     let bundles = [
         ("narrowed", "narrowed-agent", true),
         ("clamped", "clamped-agent", false),
@@ -163,8 +168,8 @@ fn catalog() -> Arc<AgentCatalog> {
     .map(|(bundle_slug, stable_id, narrow)| {
         let bundle_id = format!("hya/resource-view-{bundle_slug}");
         let skill_id = format!("bundle:{bundle_id}/skill/bundle-skill");
-        PreparedBundle {
-            format_version: 1,
+        PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.clone(),
                 version: "0.0.0".to_string(),
@@ -212,8 +217,59 @@ fn catalog() -> Arc<AgentCatalog> {
         }
     })
     .collect::<Vec<_>>();
+    let sources = bundles.iter().map(bundle_skill_source).collect::<Vec<_>>();
+    let bundles = bundles
+        .into_iter()
+        .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
+        .collect::<Vec<_>>();
     let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");
-    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
+    (
+        Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog")),
+        sources,
+    )
+}
+
+/// Adapt the fixture's prepared Skill into the runtime-owned source shape.
+fn bundle_skill_source(bundle: &PreparedAgentBundle) -> RuntimeSource {
+    let skills = bundle
+        .skills
+        .iter()
+        .map(|resource| {
+            let parsed = hya_tool::parse_skill(&resource.content)
+                .expect("fixture Skill must contain valid frontmatter");
+            let path = std::path::PathBuf::from(format!(
+                "bundle:{}/{}",
+                bundle.identity.id, resource.source_path
+            ));
+            let dir = path
+                .parent()
+                .expect("fixture Skill path must have a parent")
+                .to_path_buf();
+            RuntimeSourceSkill::new(
+                resource.stable_id.clone(),
+                resource.local_id.clone(),
+                resource.aliases.clone(),
+                resource.digest.clone(),
+                resource.content.clone(),
+                SkillCatalogEntry {
+                    name: parsed.name,
+                    description: parsed.description,
+                    content: parsed.content,
+                    allowed_tools: parsed.allowed_tools,
+                    model: parsed.model,
+                    path,
+                    dir,
+                },
+            )
+        })
+        .collect();
+    RuntimeSource::new(
+        RuntimeSourceId::bundle(bundle.identity.id.clone()),
+        [0; 32],
+        Arc::new(()),
+        Vec::new(),
+    )
+    .with_skills(skills)
 }
 
 #[tokio::test]
@@ -225,9 +281,11 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
         requests: Mutex::new(Vec::new()),
     });
     let calls = Arc::new(AtomicUsize::new(0));
-    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog()));
+    let (catalog, sources) = catalog();
+    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
     runtime
         .refresh(|candidate| {
+            candidate.upsert_sources(sources)?;
             candidate.register_tool(Arc::new(CountingTool {
                 calls: calls.clone(),
             }))
@@ -351,8 +409,8 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             calls: calls.clone(),
         }))
         .unwrap();
-    let bundle = PreparedBundle {
-        format_version: 1,
+    let bundle = PreparedAgentBundle {
+        format_version: 2,
         identity: BundleIdentity {
             id: "hya/alias-test".to_string(),
             version: "0.0.0".to_string(),
@@ -622,8 +680,8 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
         ("skill", "harness:skill/anything"),
     ] {
         let bundle_id = format!("hya/plane-refusal-{slug}");
-        let bundle = PreparedBundle {
-            format_version: 1,
+        let bundle = PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.clone(),
                 version: "0.0.0".to_string(),
@@ -673,7 +731,9 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
 }
 
 /// Wrap one prepared bundle as an agent catalog alongside the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedBundle) -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_prepared(&[bundle]).expect("valid bundle catalog");
+fn agent_catalog(bundle: PreparedAgentBundle) -> Arc<AgentCatalog> {
+    let bundles =
+        BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(Box::new(bundle))])
+            .expect("valid bundle catalog");
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog"))
 }

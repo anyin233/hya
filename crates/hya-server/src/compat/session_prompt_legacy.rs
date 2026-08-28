@@ -65,7 +65,7 @@ async fn prompt(
         st.engine.switch_model(session, model).await?;
     }
     if !no_reply {
-        let Some(run) = st.runs.start(session) else {
+        let Some(run) = st.start_run(session) else {
             return Ok(super::errors::session_busy(session));
         };
         super::session_prompt_async::publish_session_status(&st.engine, session, "busy").await;

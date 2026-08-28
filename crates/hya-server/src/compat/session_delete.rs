@@ -15,7 +15,7 @@ pub(super) async fn delete_message(
     if let Err(response) = ensure_session(&st, session).await? {
         return Ok(response);
     }
-    if st.runs.is_busy(session) {
+    if st.is_busy(session) {
         return Ok(super::errors::session_busy(session));
     }
     st.engine.delete_message(session, message).await?;

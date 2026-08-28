@@ -227,17 +227,41 @@ _Avoid_: directory, registry, member list
 ### Workflows
 
 **Workflow**:
-A user-authored DAG of Stages stored as one file under `.hya/workflows` (or the
-user config dir). Composes governed team spawns into a reusable graph. hya ships
-zero built-in workflows; users assemble their own — no preset pipeline.
+A named, revisioned, reusable acyclic graph of Stages. A Workflow can come from
+a user discovery root or a WorkflowBundle. hya includes one selectable
+first-party example, but never selects or runs a Workflow automatically.
 _Avoid_: preset pipeline, macro, script
 
 **Stage**:
-One node of a Workflow: an agent id (resolved through the caller's can_spawn
-authorization), a prompt template with `{{inputs.key}}` / `{{stage_id}}`
-placeholders, and `needs:` edges. Same-level stages run as one parallel
-governed member batch; downstream stages join bounded upstream sections.
-_Avoid_: step chain (stages form a DAG, not a chain), task (that's the work item)
+One graph node: a target Agent, a directive, optional display title, and direct
+predecessors. A Stage can be transient, iterative with an independent verifier,
+or bound to a resident actor key. Graph order defines deterministic Stage and
+join order; declared `{{input.<name>}}` values and predecessor evidence are its
+inputs.
+_Avoid_: step chain (Stages form a DAG), task (the work item), `needs` entry
+
+**WorkflowBundle**:
+One installable payload containing exactly one Workflow and the complete
+reachable set of Agents it requires. It is distinct from an AgentBundle, which
+contains exactly one Agent.
+_Avoid_: multi-Agent AgentBundle, preset bundle
+
+**Workflow identity**:
+The stable source identity, declared name, and immutable revision of one
+compiled Workflow. A Session selection records this identity without starting
+a run or replacing the transcript. Changed or missing source content leaves the
+identity stale or unavailable until the user explicitly selects again.
+_Avoid_: Workflow selection (state, not identity), active Workflow, default pipeline
+
+**Workflow run**:
+One governed execution of the selected or explicitly named Workflow. A run owns
+its Stage activations and ends successful, failed, cancelled, or interrupted.
+_Avoid_: Session (a run uses Sessions), Team (a run can use governed Teams)
+
+**Actor key**:
+A Workflow-local name that binds sequential Stages to one resident Agent
+Session. Reusing an Agent id without an actor key creates separate activations.
+_Avoid_: Agent id, handle
 
 ### Surfaces
 
@@ -256,10 +280,10 @@ It is scoped to the active main agent's Team, not to global Session history.
 _Avoid_: global subagent browser, session browser
 
 **Roster sidebar** (removed surface):
-Do **not** use this term for the current TUI. The Session-screen sidebar has **no**
-roster block; its plugins are Context, MCP, LSP, Todo, Modified Files, and a
-footer. Live Roster inspection is the **Subagent manager** / pane roster dialog,
-not a sidebar section.
+Do **not** use this term for the current TUI. The Session-screen sidebar has no
+roster block; its plugins include Workflow, Context, MCP, LSP, Todo, Modified
+Files, and a footer. Live Roster inspection is the **Subagent manager** / pane
+roster dialog, not a sidebar section.
 _Avoid_: treating sidebar as a roster; inventing a roster sidebar plugin
 
 **Subagent selector**:

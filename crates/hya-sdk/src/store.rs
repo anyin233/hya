@@ -5,12 +5,16 @@
 //! turn-stream (that is the durable prompt-admission inbox, parked in `reducer.rs`).
 //! `sync` envelopes are event-sourced replay duplicates and are ignored here.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Map, Value};
 
 use crate::team::TeamProjection;
 use crate::types::{GlobalEvent, Message, Part, Session};
+use crate::workflow::{
+    WorkflowMemberProjection, WorkflowProjection, WorkflowRunProjection, WorkflowStageProjection,
+    WorkflowStageStatus,
+};
 
 const MESSAGE_CAP: usize = 100;
 
@@ -58,6 +62,167 @@ pub struct MemberProjection {
     pub status: String,
     /// Terminal summary reported by member_finished.
     pub summary: String,
+}
+/// A Workflow member reference joined to its canonical Session member row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowMemberActivity {
+    /// Workflow Stage role and activation iteration.
+    pub reference: WorkflowMemberProjection,
+    /// Canonical member lifecycle row from [`MessageStore::members`].
+    pub member: MemberProjection,
+}
+
+/// One Workflow Stage plus the canonical members linked to that Stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowStageActivity {
+    /// Replay-derived Stage plan and status.
+    pub stage: WorkflowStageProjection,
+    /// Members joined by stable member id; unrelated Session members are absent.
+    pub members: Vec<WorkflowMemberActivity>,
+}
+
+/// Server-derived activity for the current Workflow state.
+///
+/// The activity is rebuilt from `Session.workflow` and the existing canonical
+/// `MessageStore::members` projection. It is not stored or folded separately,
+/// so unrelated run-tree members and duplicate Workflow references cannot
+/// inflate the displayed counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowActivity {
+    /// Selected Workflow identity, if one has been persisted.
+    pub selection: Option<crate::workflow::WorkflowIdentity>,
+    /// Current or terminal Workflow run, if one has been admitted.
+    pub run: Option<WorkflowRunProjection>,
+    /// Stages in the declaration order supplied by the server.
+    pub stages: Vec<WorkflowStageActivity>,
+    /// Number of unique referenced members whose lifecycle is active.
+    pub active_agents: usize,
+    /// Number of unique referenced members present in the canonical projection.
+    pub total_agents: usize,
+    /// Number of Stages with `completed` status.
+    pub completed_stages: usize,
+    /// Total number of Stages in the current run.
+    pub total_stages: usize,
+    /// Current graph level, preferring the first running/pending Stage.
+    pub graph_level: Option<usize>,
+    /// Running Stage ids in declaration order.
+    pub running_stage_ids: Vec<String>,
+    /// First running Stage, or first pending Stage before execution begins.
+    pub current_stage: Option<WorkflowStageActivity>,
+    /// First failed Stage, when the run contains one.
+    pub failed_stage: Option<WorkflowStageActivity>,
+}
+
+impl WorkflowActivity {
+    /// Derive activity by joining Workflow member references to canonical rows.
+    #[must_use]
+    pub fn from_projection(workflow: &WorkflowProjection, members: &[MemberProjection]) -> Self {
+        let Some(run) = workflow.run.as_ref() else {
+            return Self {
+                selection: workflow.selection.clone(),
+                run: None,
+                stages: Vec::new(),
+                active_agents: 0,
+                total_agents: 0,
+                completed_stages: 0,
+                total_stages: 0,
+                graph_level: None,
+                running_stage_ids: Vec::new(),
+                current_stage: None,
+                failed_stage: None,
+            };
+        };
+
+        let canonical: BTreeMap<&str, &MemberProjection> = members
+            .iter()
+            .map(|member| (member.member.as_str(), member))
+            .collect();
+        let mut unique_members: BTreeMap<String, &MemberProjection> = BTreeMap::new();
+        let mut stages = Vec::with_capacity(run.stages.len());
+        let mut running_stage_ids = Vec::new();
+        let mut current_stage: Option<WorkflowStageActivity> = None;
+        let mut failed_stage: Option<WorkflowStageActivity> = None;
+        let mut graph_level = None;
+        let mut completed_stages = 0;
+
+        for stage in &run.stages {
+            if stage.status == WorkflowStageStatus::Completed {
+                completed_stages += 1;
+            }
+            let mut joined = Vec::new();
+            for reference in &stage.members {
+                let Some(member) = canonical.get(reference.member.as_str()) else {
+                    continue;
+                };
+                if joined
+                    .iter()
+                    .any(|entry: &WorkflowMemberActivity| entry.reference == *reference)
+                {
+                    continue;
+                }
+                unique_members
+                    .entry(reference.member.clone())
+                    .or_insert(*member);
+                joined.push(WorkflowMemberActivity {
+                    reference: reference.clone(),
+                    member: (*member).clone(),
+                });
+            }
+            let activity = WorkflowStageActivity {
+                stage: stage.clone(),
+                members: joined,
+            };
+            match stage.status {
+                WorkflowStageStatus::Running => {
+                    let first_running = running_stage_ids.is_empty();
+                    running_stage_ids.push(stage.plan.id.clone());
+                    graph_level = if first_running {
+                        Some(stage.plan.level)
+                    } else {
+                        Some(
+                            graph_level
+                                .map_or(stage.plan.level, |level| level.min(stage.plan.level)),
+                        )
+                    };
+                    if current_stage
+                        .as_ref()
+                        .is_none_or(|current| current.stage.status != WorkflowStageStatus::Running)
+                    {
+                        current_stage = Some(activity.clone());
+                    }
+                }
+                WorkflowStageStatus::Pending if current_stage.is_none() => {
+                    if running_stage_ids.is_empty() {
+                        graph_level = Some(stage.plan.level);
+                    }
+                    current_stage = Some(activity.clone());
+                }
+                WorkflowStageStatus::Failed if failed_stage.is_none() => {
+                    failed_stage = Some(activity.clone());
+                }
+                _ => {}
+            }
+            stages.push(activity);
+        }
+
+        let active_agents = unique_members
+            .values()
+            .filter(|member| matches!(member.status.as_str(), "spawning" | "running"))
+            .count();
+        Self {
+            selection: workflow.selection.clone(),
+            run: Some(run.clone()),
+            stages,
+            active_agents,
+            total_agents: unique_members.len(),
+            completed_stages,
+            total_stages: run.stages.len(),
+            graph_level,
+            running_stage_ids,
+            current_stage,
+            failed_stage,
+        }
+    }
 }
 
 /// Live conversation store: `sessionID -> messages` and `messageID -> parts`, each kept
@@ -442,6 +607,20 @@ impl MessageStore {
     #[must_use]
     pub fn session(&self, session_id: &str) -> Option<&Session> {
         self.sessions.get(session_id)
+    }
+    /// Derive current Workflow activity by joining referenced members to the
+    /// canonical member projection for `session_id`.
+    ///
+    /// Returns `None` when the Session or its Workflow state is not hydrated.
+    /// Only member ids referenced by the newest Workflow run are included;
+    /// unrelated child members are intentionally excluded.
+    #[must_use]
+    pub fn workflow_activity(&self, session_id: &str) -> Option<WorkflowActivity> {
+        let workflow = self.sessions.get(session_id)?.workflow.as_ref()?;
+        Some(WorkflowActivity::from_projection(
+            workflow,
+            self.members.get(session_id).map_or(&[][..], Vec::as_slice),
+        ))
     }
 
     /// Child sessions whose `parent_id` is `parent_id`, sorted by id.
@@ -973,5 +1152,164 @@ mod tests {
             assistant_text.contains("hello there friend"),
             "assistant streamed reply accumulated, got {assistant_text:?}"
         );
+    }
+    #[test]
+    fn workflow_activity_joins_only_referenced_members_and_deduplicates_counts() {
+        let identity = crate::workflow::WorkflowIdentity {
+            source: "bundle:demo".to_owned(),
+            name: "demo".to_owned(),
+            revision: "ab".repeat(32),
+        };
+        let stage =
+            |id: &str,
+             level: usize,
+             status: WorkflowStageStatus,
+             members: Vec<WorkflowMemberProjection>| WorkflowStageProjection {
+                plan: crate::workflow::WorkflowStagePlan {
+                    id: id.to_owned(),
+                    title: Some(format!("Stage {id}")),
+                    agent: "build".to_owned(),
+                    mode: "once".to_owned(),
+                    level,
+                },
+                status,
+                members,
+            };
+        let reference = |member: &str, iteration: u32| WorkflowMemberProjection {
+            member: member.to_owned(),
+            role: crate::workflow::WorkflowMemberRole::Worker,
+            iteration,
+        };
+        let workflow = WorkflowProjection {
+            selection: Some(identity.clone()),
+            availability: None,
+            run: Some(WorkflowRunProjection {
+                id: "run-1".to_owned(),
+                workflow: identity,
+                request_hash: "hash".to_owned(),
+                owner: "owner-1".to_owned(),
+                status: crate::workflow::WorkflowRunStatus::Running,
+                stages: vec![
+                    stage(
+                        "prepare",
+                        0,
+                        WorkflowStageStatus::Completed,
+                        vec![reference("member-1", 0), reference("member-1", 0)],
+                    ),
+                    stage(
+                        "build",
+                        1,
+                        WorkflowStageStatus::Running,
+                        vec![reference("member-1", 0), reference("member-2", 0)],
+                    ),
+                ],
+                error: None,
+            }),
+        };
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "id": "ses_workflow",
+            "workflow": workflow,
+        }))
+        .unwrap();
+        let mut store = MessageStore::default();
+        store.sessions.insert(session.id.clone(), session);
+        store.members.insert(
+            "ses_workflow".to_owned(),
+            vec![
+                MemberProjection {
+                    member: "member-1".to_owned(),
+                    child: Some("ses_child_1".to_owned()),
+                    subagent_type: "build".to_owned(),
+                    description: "prepare".to_owned(),
+                    depth: 0,
+                    status: "running".to_owned(),
+                    summary: String::new(),
+                },
+                MemberProjection {
+                    member: "member-2".to_owned(),
+                    child: Some("ses_child_2".to_owned()),
+                    subagent_type: "review".to_owned(),
+                    description: "review".to_owned(),
+                    depth: 0,
+                    status: "done".to_owned(),
+                    summary: "ok".to_owned(),
+                },
+                MemberProjection {
+                    member: "unrelated".to_owned(),
+                    child: Some("ses_unrelated".to_owned()),
+                    subagent_type: "other".to_owned(),
+                    description: "must not count".to_owned(),
+                    depth: 0,
+                    status: "running".to_owned(),
+                    summary: String::new(),
+                },
+            ],
+        );
+
+        let activity = store.workflow_activity("ses_workflow").expect("activity");
+        assert_eq!(activity.active_agents, 1);
+        assert_eq!(activity.total_agents, 2);
+        assert_eq!(activity.completed_stages, 1);
+        assert_eq!(activity.total_stages, 2);
+        assert_eq!(activity.graph_level, Some(1));
+        assert_eq!(activity.running_stage_ids, vec!["build"]);
+        assert_eq!(
+            activity
+                .current_stage
+                .as_ref()
+                .map(|stage| stage.stage.plan.id.as_str()),
+            Some("build")
+        );
+        assert_eq!(activity.stages[0].members.len(), 1);
+        assert_eq!(activity.stages[1].members.len(), 2);
+        assert!(activity
+            .stages
+            .iter()
+            .flat_map(|stage| stage.members.iter())
+            .all(|member| member.member.member != "unrelated"));
+    }
+    #[test]
+    fn session_updated_replaces_workflow_state_without_touching_transcript() {
+        let workflow = |name: &str| {
+            serde_json::json!({
+                "selection": {
+                    "source": format!("bundle:{name}"),
+                    "name": name,
+                    "revision": "ab".repeat(32)
+                },
+                "run": null
+            })
+        };
+        let session_event = |kind: &str, name: &str| -> GlobalEvent {
+            serde_json::from_value(serde_json::json!({
+                "payload": { "type": kind, "properties": {
+                    "info": { "id": "ses_workflow", "title": "kept", "workflow": workflow(name) }
+                }}
+            }))
+            .unwrap()
+        };
+        let message_event: GlobalEvent = serde_json::from_value(serde_json::json!({
+            "payload": { "type": "message.updated", "properties": {
+                "info": { "id": "msg_1", "sessionID": "ses_workflow", "role": "user" }
+            }}
+        }))
+        .unwrap();
+        let mut store = MessageStore::default();
+        assert!(store.apply_event(&session_event("session.created", "alpha")));
+        assert!(store.apply_event(&message_event));
+        assert!(store.apply_event(&session_event("session.updated", "beta")));
+
+        let session = store.session("ses_workflow").expect("hydrated session");
+        assert_eq!(session.title.as_deref(), Some("kept"));
+        assert_eq!(
+            session
+                .workflow
+                .as_ref()
+                .and_then(|state| state.selection.as_ref())
+                .map(|selection| selection.name.as_str()),
+            Some("beta")
+        );
+        assert_eq!(store.messages["ses_workflow"].len(), 1);
+        assert_eq!(store.messages["ses_workflow"][0].id, "msg_1");
     }
 }

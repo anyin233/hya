@@ -21,12 +21,12 @@ pub(super) async fn prompt_async(
         }
         Err(error) => return Err(error),
     }
-    let runs = st.runs.clone();
+    let run_state = st.clone();
     let engine = st.engine.clone();
     let turn = super::reference::session_agent_with_guidance(&st, session).await;
     let external_dirs = super::reference::external_directories_at(&st, &turn.agent.workdir).await;
     std::mem::drop(tokio::spawn(async move {
-        let Some(run) = runs.start(session) else {
+        let Some(run) = run_state.start_run(session) else {
             publish_background_error(&engine, session, "session busy".to_string()).await;
             return;
         };

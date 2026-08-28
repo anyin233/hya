@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use hya_bundle::PreparedResource;
+use hya_core::runtime_registry::RuntimeSourceSkill;
 use hya_core::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
     RuntimeSourceKind, RuntimeSourceOwner,
@@ -10,8 +13,9 @@ use hya_core::{
 use hya_mcp::{McpServerConfig, McpStatus, PreparedMcpServer};
 use hya_plugin::PreparedPlugin;
 use hya_plugin::config::PluginSpec;
+use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 use hya_proto::ConfigGeneration;
-use hya_tool::{Tool, ToolPermission};
+use hya_tool::{SkillCatalogEntry, Tool, ToolPermission, parse_skill};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -120,6 +124,7 @@ pub(crate) struct PreparedSource {
     declaration_digest: [u8; 32],
     owner: Arc<dyn RuntimeSourceOwner>,
     exports: Vec<PreparedExport>,
+    skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
 }
 
@@ -235,17 +240,26 @@ impl PreparedSource {
             declaration_digest,
             owner,
             exports,
+            skills: Vec::new(),
             resources: BTreeMap::new(),
         }
     }
+    /// Attach parsed Skill contributions to this prepared runtime source.
+    #[must_use]
+    pub(crate) fn with_skills(mut self, skills: Vec<RuntimeSourceSkill>) -> Self {
+        self.skills = skills;
+        self
+    }
 
+    /// Attach opaque JSON resources to this prepared runtime source.
     #[must_use]
     pub(crate) fn with_resources(mut self, resources: BTreeMap<String, Value>) -> Self {
         self.resources = resources;
         self
     }
 
-    fn into_runtime_source(self) -> RuntimeSource {
+    /// Consume this validated candidate into the immutable runtime source shape.
+    pub(crate) fn into_runtime_source(self) -> RuntimeSource {
         let exports = self
             .exports
             .into_iter()
@@ -261,6 +275,7 @@ impl PreparedSource {
             })
             .collect();
         RuntimeSource::new(self.id, self.declaration_digest, self.owner, exports)
+            .with_skills(self.skills)
             .with_resources(self.resources)
     }
 }
@@ -275,8 +290,185 @@ impl PreparedFailure {
     }
 }
 
-pub(crate) fn prepared_plugin_source(plugin: PreparedPlugin) -> PreparedSource {
+/// Convert prepared bundle Skill resources through the shared contribution seam.
+pub(crate) fn adapt_prepared_bundle_skills(
+    bundle_id: &str,
+    resources: &[PreparedResource],
+    contributions: &PluginContributionSet,
+) -> Result<Vec<SkillCatalogEntry>, ReconcileError> {
+    Ok(
+        prepared_bundle_skill_exports(bundle_id, resources, contributions)?
+            .into_iter()
+            .map(|skill| skill.entry().clone())
+            .collect(),
+    )
+}
+
+/// Prepare a static bundle source whose Skills are already validated and parsed.
+pub(crate) fn prepared_static_bundle_source(
+    bundle_id: &str,
+    resources: &[PreparedResource],
+    contributions: &PluginContributionSet,
+) -> Result<PreparedSource, ReconcileError> {
+    let skills = prepared_bundle_skill_exports(bundle_id, resources, contributions)?;
+    let declaration_digest = digest_static_bundle_skills(bundle_id, &skills);
+    Ok(PreparedSource::new(
+        SourceId::bundle(bundle_id),
+        declaration_digest,
+        Arc::new(()),
+        Vec::new(),
+    )
+    .with_skills(skills))
+}
+
+/// Validate and parse every prepared bundle Skill exactly once at the contribution seam.
+fn prepared_bundle_skill_exports(
+    bundle_id: &str,
+    resources: &[PreparedResource],
+    contributions: &PluginContributionSet,
+) -> Result<Vec<RuntimeSourceSkill>, ReconcileError> {
+    contributions.validate(bundle_id).map_err(|error| {
+        ReconcileError::InvalidPrepared(format!("Skill contribution validation failed: {error}"))
+    })?;
+
+    let mut prepared_by_id = BTreeMap::new();
+    for resource in resources {
+        let expected_stable_id = format!("bundle:{bundle_id}/skill/{}", resource.local_id);
+        if resource.stable_id != expected_stable_id {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "prepared Skill `{}` has unexpected stable id `{}`",
+                resource.local_id, resource.stable_id
+            )));
+        }
+        if prepared_by_id
+            .insert(resource.local_id.as_str(), resource)
+            .is_some()
+        {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "duplicate prepared Skill `{}`",
+                resource.local_id
+            )));
+        }
+    }
+    if prepared_by_id.len() != contributions.skills.len() {
+        return Err(ReconcileError::InvalidPrepared(format!(
+            "prepared Skill count {} does not match contribution count {}",
+            prepared_by_id.len(),
+            contributions.skills.len()
+        )));
+    }
+
+    let mut contribution_by_id = BTreeMap::new();
+    for contribution in &contributions.skills {
+        if contribution_by_id
+            .insert(contribution.id.as_str(), contribution)
+            .is_some()
+        {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "duplicate Skill contribution `{}`",
+                contribution.id
+            )));
+        }
+    }
+
+    let mut exports = Vec::with_capacity(resources.len());
+    for (local_id, resource) in prepared_by_id {
+        let Some(contribution) = contribution_by_id.get(local_id) else {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "prepared Skill `{local_id}` is missing from contributions"
+            )));
+        };
+        if contribution.content != resource.content || contribution.digest != resource.digest {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "Skill contribution `{local_id}` differs from prepared id/content/digest"
+            )));
+        }
+        let path = PathBuf::from(format!("bundle:{bundle_id}/{}", resource.source_path));
+        let entry = parse_skill_contribution(contribution, path)?;
+        exports.push(RuntimeSourceSkill::new(
+            resource.stable_id.clone(),
+            resource.local_id.clone(),
+            resource.aliases.clone(),
+            resource.digest.clone(),
+            resource.content.clone(),
+            entry,
+        ));
+    }
+    Ok(exports)
+}
+
+/// Parse one shared Skill contribution into runtime metadata at the declaration seam.
+fn parse_skill_contribution(
+    contribution: &SkillContribution,
+    path: PathBuf,
+) -> Result<SkillCatalogEntry, ReconcileError> {
+    let parsed = parse_skill(&contribution.content).ok_or_else(|| {
+        ReconcileError::InvalidPrepared(format!(
+            "Skill contribution `{}` has invalid SKILL.md frontmatter",
+            contribution.id
+        ))
+    })?;
+    if parsed.name != contribution.id {
+        return Err(ReconcileError::InvalidPrepared(format!(
+            "parsed Skill name `{}` does not match contribution id `{}`",
+            parsed.name, contribution.id
+        )));
+    }
+    let dir = path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+    Ok(SkillCatalogEntry {
+        name: parsed.name,
+        description: parsed.description,
+        content: parsed.content,
+        allowed_tools: parsed.allowed_tools,
+        model: parsed.model,
+        path,
+        dir,
+    })
+}
+
+/// Build deterministic declaration identity bytes for a static bundle Skill source.
+fn digest_static_bundle_skills(bundle_id: &str, skills: &[RuntimeSourceSkill]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"hya:static-bundle-skill-declaration:v1\0");
+    update_bytes(&mut digest, bundle_id.as_bytes());
+    for skill in skills {
+        update_bytes(&mut digest, skill.stable_id().as_bytes());
+        update_bytes(&mut digest, skill.local_id().as_bytes());
+        update_bytes(&mut digest, skill.digest().as_bytes());
+        update_bytes(&mut digest, skill.content().as_bytes());
+    }
+    digest.finalize().into()
+}
+
+/// Prepare one dynamic plugin source through the same Skill parser and source view.
+pub(crate) fn prepared_plugin_source(
+    plugin: PreparedPlugin,
+) -> Result<PreparedSource, ReconcileError> {
     let id = SourceId::plugin(plugin.id());
+    let contributions = plugin.contributions();
+    contributions.validate(plugin.id()).map_err(|error| {
+        ReconcileError::InvalidPrepared(format!("plugin contribution validation failed: {error}"))
+    })?;
+    let skills = contributions
+        .skills
+        .iter()
+        .map(|contribution| {
+            let path = PathBuf::from(format!(
+                "plugin:{}/skills/{}/SKILL.md",
+                plugin.id(),
+                contribution.id
+            ));
+            let entry = parse_skill_contribution(contribution, path)?;
+            Ok(RuntimeSourceSkill::new(
+                format!("plugin:{}/skill/{}", plugin.id(), contribution.id),
+                contribution.id.clone(),
+                Vec::new(),
+                contribution.digest.clone(),
+                contribution.content.clone(),
+                entry,
+            ))
+        })
+        .collect::<Result<Vec<_>, ReconcileError>>()?;
     let mut digest = Sha256::new();
     digest.update(b"hya:plugin-declaration:v1\0");
     update_bytes(&mut digest, plugin.canonical_declaration());
@@ -289,7 +481,7 @@ pub(crate) fn prepared_plugin_source(plugin: PreparedPlugin) -> PreparedSource {
             PreparedExport::tool(declared_id, Vec::new(), tool, ToolPermission::Tool)
         })
         .collect();
-    PreparedSource::new(id, declaration_digest, Arc::new(plugin), exports)
+    Ok(PreparedSource::new(id, declaration_digest, Arc::new(plugin), exports).with_skills(skills))
 }
 
 impl From<PreparedSource> for PreparedResult {
@@ -971,13 +1163,18 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
-    use hya_core::RuntimeRegistry;
+    use hya_bundle::{
+        AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+        PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    };
+    use hya_core::{AgentCatalog, RuntimeRegistry};
     use hya_mcp::McpServerConfig;
     use hya_plugin::config::PluginSpec;
     use hya_plugin::messages::PluginKindWire;
-    use hya_proto::{ToolName, ToolSchema};
+    use hya_proto::{AgentName, ToolName, ToolSchema};
     use hya_tool::{Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry};
     use serde_json::{Value, json};
+    use sha2::{Digest as _, Sha256};
 
     use super::{
         DesiredSource, ObservedState, PreparedExport, PreparedFailure, PreparedResult,
@@ -1373,6 +1570,207 @@ mod tests {
         assert_eq!(status[&mcp].effective_declaration_digest, Some([12; 32]));
         assert_eq!(status[&plugin].observed_declaration_digest, Some([13; 32]));
         assert_eq!(status[&plugin].effective_declaration_digest, Some([13; 32]));
+        Ok(())
+    }
+    /// Prepared static Skills must use the shared contribution declaration and preserve parsed metadata.
+    #[test]
+    fn prepared_static_bundle_skills_require_exact_contributions_and_preserve_metadata()
+    -> anyhow::Result<()> {
+        use hya_bundle::PreparedResource;
+        use hya_plugin::messages::{PluginContributionSet, SkillContribution};
+
+        let bundle_id = "hya/static-skill";
+        let source_path = "resources/skills/reviewer.md";
+        let content = "---\nname: reviewer\ndescription: reviews code\nallowed-tools: [read, grep]\nmodel: anthropic/claude-sonnet-4-6\n---\nBODY TEXT\n";
+        let digest = format!("{:x}", Sha256::digest(content.as_bytes()));
+        let prepared = PreparedResource {
+            local_id: "reviewer".to_string(),
+            stable_id: format!("bundle:{bundle_id}/skill/reviewer"),
+            source_path: source_path.to_string(),
+            digest: digest.clone(),
+            content: content.to_string(),
+            aliases: Vec::new(),
+        };
+        let valid = PluginContributionSet {
+            skills: vec![SkillContribution {
+                id: "reviewer".to_string(),
+                content: content.to_string(),
+                digest: digest.clone(),
+            }],
+            ..PluginContributionSet::default()
+        };
+
+        let parsed = super::adapt_prepared_bundle_skills(
+            bundle_id,
+            std::slice::from_ref(&prepared),
+            &valid,
+        )?;
+        let [entry] = parsed.as_slice() else {
+            panic!("matching prepared Skill contribution must publish one entry");
+        };
+        assert_eq!(entry.name, "reviewer");
+        assert_eq!(entry.description, "reviews code");
+        assert_eq!(entry.content, "BODY TEXT\n");
+        assert_eq!(entry.allowed_tools, ["read", "grep"]);
+        assert_eq!(entry.model.as_deref(), Some("anthropic/claude-sonnet-4-6"));
+        assert_eq!(
+            entry.path,
+            std::path::PathBuf::from(format!("bundle:{bundle_id}/{source_path}"))
+        );
+        assert_eq!(
+            entry.dir,
+            std::path::PathBuf::from(format!("bundle:{bundle_id}/resources/skills"))
+        );
+
+        let mut wrong_id = valid.clone();
+        wrong_id.skills[0].id = "other".to_string();
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &wrong_id,
+            )
+            .is_err(),
+            "a contribution id different from the prepared local id must fail closed"
+        );
+
+        let mut wrong_content = valid.clone();
+        wrong_content.skills[0].content.push_str("tampered");
+        wrong_content.skills[0].digest = format!(
+            "{:x}",
+            Sha256::digest(wrong_content.skills[0].content.as_bytes())
+        );
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &wrong_content,
+            )
+            .is_err(),
+            "content different from the prepared bytes must fail closed"
+        );
+
+        let mut wrong_digest = valid.clone();
+        wrong_digest.skills[0].digest = "0".repeat(64);
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &wrong_digest,
+            )
+            .is_err(),
+            "a digest different from the prepared digest must fail closed"
+        );
+
+        let missing = PluginContributionSet::default();
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &missing,
+            )
+            .is_err(),
+            "a missing prepared Skill declaration must fail closed"
+        );
+
+        let mut extra = valid.clone();
+        extra.skills.push(SkillContribution {
+            id: "extra".to_string(),
+            content: "---\nname: extra\ndescription: extra\n---\nextra\n".to_string(),
+            digest: format!(
+                "{:x}",
+                Sha256::digest(b"---\nname: extra\ndescription: extra\n---\nextra\n")
+            ),
+        });
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &extra,
+            )
+            .is_err(),
+            "an extra undeclared Skill must fail closed"
+        );
+
+        let mut duplicate = valid.clone();
+        duplicate.skills.push(valid.skills[0].clone());
+        assert!(
+            super::adapt_prepared_bundle_skills(
+                bundle_id,
+                std::slice::from_ref(&prepared),
+                &duplicate,
+            )
+            .is_err(),
+            "duplicate Skill declarations must fail closed"
+        );
+
+        let agent = PreparedAgent {
+            id: AgentName::new("static-agent"),
+            description: None,
+            role: AgentRole::Main,
+            color: None,
+            prompt: Some("static agent".to_string()),
+            prompt_source: None,
+            prompt_digest: None,
+            model_policy: ModelPolicy::default(),
+            workdir: None,
+            spawn_lifecycle: SpawnLifecycle::Transient,
+            resource_view: ResourceView {
+                allow: vec![prepared.stable_id.clone()],
+                deny: Vec::new(),
+                aliases: BTreeMap::new(),
+                namespace: None,
+            },
+            can_spawn: Vec::new(),
+            hook_refs: Vec::new(),
+        };
+        let bundle = PreparedAgentBundle {
+            format_version: 2,
+            identity: BundleIdentity {
+                id: bundle_id.to_string(),
+                version: "1.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
+            },
+            digest: "test-only".to_string(),
+            agent,
+            tools: Vec::new(),
+            skills: vec![prepared.clone()],
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let bundles =
+            BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(Box::new(bundle))])?;
+        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
+        let registry = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+        let source_id = SourceId::bundle(bundle_id);
+        let source = super::prepared_static_bundle_source(bundle_id, &[prepared], &valid)?
+            .into_runtime_source();
+        let published = registry.refresh(|candidate| {
+            candidate
+                .replace_sources_of_kind(hya_core::RuntimeSourceKind::Bundle, vec![source.clone()])
+        })?;
+        assert_eq!(published, registry.effective_manifest().generation);
+        let source_manifest = registry
+            .effective_manifest()
+            .sources
+            .remove(&source_id)
+            .ok_or_else(|| anyhow::anyhow!("published static Skill source is missing"))?;
+        let [published] = source_manifest.skill_entries.as_slice() else {
+            panic!("published static Skill source must retain one metadata entry");
+        };
+        assert_eq!(published.name, "reviewer");
+        assert_eq!(published.description, "reviews code");
+        assert_eq!(published.content, "BODY TEXT\n");
+        assert_eq!(published.allowed_tools, ["read", "grep"]);
+        assert_eq!(
+            published.model.as_deref(),
+            Some("anthropic/claude-sonnet-4-6")
+        );
+        assert_eq!(
+            published.path,
+            std::path::PathBuf::from(format!("bundle:{bundle_id}/{source_path}"))
+        );
         Ok(())
     }
 }

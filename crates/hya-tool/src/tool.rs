@@ -65,6 +65,14 @@ pub enum ToolError {
     /// The operation id was already completed; a second handle is rejected.
     #[error("operation already handled")]
     OperationAlreadyHandled,
+    /// App-owned Workflow control rejected a structured command.
+    #[error("{code}: {message}")]
+    WorkflowControl {
+        /// Machine-stable control code.
+        code: String,
+        /// Bounded diagnostic.
+        message: String,
+    },
     /// Requested subagent type is not in the caller's authorized roster.
     #[error("UNKNOWN_AGENT_ID: `{agent_id}`")]
     UnknownAgentId {

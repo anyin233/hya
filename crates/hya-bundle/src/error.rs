@@ -29,8 +29,8 @@ pub enum BundleError {
         /// Offending path.
         path: String,
     },
-    /// Neither `bundle.yaml` nor `bundle.hya.md` (or both) — no usable v1 manifest.
-    #[error("bundle source `{source_name}` has no supported v1 manifest")]
+    /// Neither `bundle.yaml` nor `bundle.hya.md` (or both) — no usable manifest.
+    #[error("bundle source `{source_name}` has no supported manifest")]
     UnsupportedSource {
         /// Source root or package name for diagnostics.
         source_name: String,
@@ -63,6 +63,48 @@ pub enum BundleError {
         source_name: String,
         /// Value found in the manifest.
         found: String,
+    },
+    /// Workflow source could not be compiled by the shared Workflow compiler.
+    #[error("Workflow source `{source_path}` in bundle `{bundle_id}` failed to compile: {detail}")]
+    WorkflowCompile {
+        /// Bundle identity owning the Workflow source.
+        bundle_id: String,
+        /// Canonical Workflow source path.
+        source_path: String,
+        /// Compiler diagnostic detail.
+        detail: String,
+    },
+    /// Manifest Workflow identity differs from the compiled Workflow name.
+    #[error(
+        "WorkflowBundle `{bundle_id}` declares Workflow `{manifest_id}`, but the source compiles as `{compiled_id}`"
+    )]
+    WorkflowIdMismatch {
+        /// Bundle identity owning the Workflow.
+        bundle_id: String,
+        /// Identifier declared in `bundle.yaml`.
+        manifest_id: String,
+        /// Identifier produced by `hya-workflow::compile`.
+        compiled_id: String,
+    },
+    /// A Workflow stage or reachable Agent names a non-built-in Agent absent from the bundle.
+    #[error(
+        "WorkflowBundle `{bundle_id}` is missing reachable Agent `{agent_id}` referenced by `{reference}`"
+    )]
+    WorkflowAgentMissing {
+        /// Bundle identity owning the Workflow.
+        bundle_id: String,
+        /// Missing stable Agent id.
+        agent_id: String,
+        /// Stage, verifier, or Agent that required the missing id.
+        reference: String,
+    },
+    /// A WorkflowBundle carries an Agent outside the exact compiled reachable closure.
+    #[error("WorkflowBundle `{bundle_id}` carries unreachable Agent `{agent_id}`")]
+    WorkflowAgentUnreachable {
+        /// Bundle identity owning the Workflow.
+        bundle_id: String,
+        /// Unreachable stable Agent id.
+        agent_id: String,
     },
     /// Declared prompt/resource path is missing from the source closure.
     #[error("bundle `{bundle_id}` references missing source path `{path}`")]

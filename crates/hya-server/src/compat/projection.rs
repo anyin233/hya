@@ -1,5 +1,10 @@
+use std::collections::BTreeSet;
+
 use hya_core::title;
-use hya_proto::{AgentName, Envelope, Event, ModelRef, Projection, SessionId, TokenUsage};
+use hya_proto::{
+    AgentName, Envelope, Event, MemberId, MemberRunStatus, ModelRef, Projection, SessionId,
+    TokenUsage, WorkflowProjection,
+};
 use serde::Serialize;
 use serde_json::{Number, Value};
 
@@ -36,8 +41,21 @@ pub(super) struct CompatSessionInfo {
     permission: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     revert: Option<CompatSessionRevert>,
+    /// Replay-derived Workflow selection and latest run state.
+    workflow: WorkflowProjection,
+    /// Active canonical rows referenced by the current Workflow run only.
+    #[serde(rename = "workflowActivity", skip_serializing_if = "Vec::is_empty")]
+    workflow_activity: Vec<CompatWorkflowMemberActivity>,
     #[serde(skip)]
     empty_unnamed: bool,
+}
+
+/// Bounded live data needed to join one Workflow member reference in the TUI.
+#[derive(Clone, Debug, Serialize)]
+struct CompatWorkflowMemberActivity {
+    member: MemberId,
+    status: MemberRunStatus,
+    work: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -143,6 +161,7 @@ pub(super) fn snapshot(
     envs: &[Envelope],
     projection: &Projection,
     started_hint: Option<i64>,
+    workflow: WorkflowProjection,
 ) -> Option<CompatSessionSnapshot> {
     let meta = created_meta(envs)?;
     let created = started_hint
@@ -150,7 +169,7 @@ pub(super) fn snapshot(
         .or_else(|| envs.first().map(|env| env.ts_millis))
         .unwrap_or(0);
     let updated = envs.last().map(|env| env.ts_millis).unwrap_or(created);
-    let info = session_info(session, projection, &meta, created, updated);
+    let info = session_info(session, projection, &meta, created, updated, workflow);
     let message_context = super::message_projection::CompatMessageContext::new(
         projection.session.agent.as_ref().unwrap_or(&meta.agent),
         projection.session.model.as_ref().unwrap_or(&meta.model),
@@ -203,9 +222,11 @@ fn session_info(
     meta: &SessionCreatedMeta,
     created: i64,
     updated: i64,
+    workflow: WorkflowProjection,
 ) -> CompatSessionInfo {
     let id = session.to_string();
     let (metadata, revert) = session_metadata(projection.session.metadata.clone());
+    let workflow_activity = workflow_member_activity(projection, &workflow);
     CompatSessionInfo {
         id: id.clone(),
         slug: id,
@@ -246,8 +267,50 @@ fn session_info(
         },
         permission: projection.session.permission.clone(),
         revert,
+        workflow,
+        workflow_activity,
         empty_unnamed: title::is_empty_unnamed_session(projection),
     }
+}
+
+/// Derive bounded active rows without exposing unrelated members or full directives.
+fn workflow_member_activity(
+    projection: &Projection,
+    workflow: &WorkflowProjection,
+) -> Vec<CompatWorkflowMemberActivity> {
+    const WORK_LIMIT: usize = 256;
+    let Some(run) = workflow.run.as_ref() else {
+        return Vec::new();
+    };
+    let linked = run
+        .stages
+        .iter()
+        .flat_map(|stage| stage.members.iter().map(|entry| entry.member))
+        .collect::<BTreeSet<_>>();
+    projection
+        .session
+        .members
+        .iter()
+        .filter(|member| linked.contains(&member.member))
+        .filter(|member| {
+            matches!(
+                member.status,
+                MemberRunStatus::Spawning | MemberRunStatus::Running
+            )
+        })
+        .map(|member| {
+            let work = if member.description.trim().is_empty() {
+                &member.directive
+            } else {
+                &member.description
+            };
+            CompatWorkflowMemberActivity {
+                member: member.member,
+                status: member.status,
+                work: work.chars().take(WORK_LIMIT).collect(),
+            }
+        })
+        .collect()
 }
 
 fn session_metadata(metadata: Option<Value>) -> (Option<Value>, Option<CompatSessionRevert>) {

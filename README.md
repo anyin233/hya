@@ -18,7 +18,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.35.2`,
+hya is under active development (workspace version `0.36.0`,
 `MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
 crates.io — build it from source as described below. APIs, config, and command
 surface may still change between versions.
@@ -92,14 +92,17 @@ sample config.
   plane, all driven from the same config.
 
 Public AgentBundles may remain static/process-free or supply selected
-Bundle-local Bun sidecar capabilities. They can be inspected and installed
-with `hya bundle info -f example.hyabundle` and
+Bundle-local Bun sidecar capabilities. Public WorkflowBundles package one
+compiled Workflow with its exact reachable Agent closure. Both kinds can be
+inspected and installed with `hya bundle info -f example.hyabundle` and
 `hya bundle install example.hyabundle`. See the
-[authoring guide](docs/agent-bundle-authoring.md),
+[AgentBundle authoring guide](docs/agent-bundle-authoring.md),
+[Workflow and WorkflowBundle guide](docs/workflows.md),
 [static example](docs/examples/bundle.hya.md),
 [transient Bun example](docs/examples/bun-transient/),
-[resident Bun example](docs/examples/bun-resident/), and
-[disjoint Bun example](docs/examples/bun-disjoint/) plus the
+[resident Bun example](docs/examples/bun-resident/),
+[disjoint Bun example](docs/examples/bun-disjoint/), and the full
+[Argus WorkflowBundle example](bundles/examples/argus-example/) plus the
 [CLI reference](docs/cli.md#bundle-commands).
 
 ## Documentation
@@ -110,6 +113,7 @@ with `hya bundle info -f example.hyabundle` and
 | [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, run the TUI, headless turns, goal mode, server, and a first live provider. |
 | [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
 | [docs/cli.md](docs/cli.md) | `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
+| [docs/workflows.md](docs/workflows.md) | Workflow document format, governance, CLI/tool execution, and WorkflowBundle packaging. |
 | [docs/tui-keybindings.md](docs/tui-keybindings.md) | Full TUI keybinds, slash commands, leader chords, and which-key. |
 | [docs/tui-reference.md](docs/tui-reference.md) | TUI screens, transcript, dialogs, and prompt behavior. |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, terminal, permission, and server issues. |

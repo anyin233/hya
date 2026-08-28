@@ -135,10 +135,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: BundleCommand,
     },
-    /// Manage user-authored workflow DAGs.
     Workflow {
         #[command(subcommand)]
-        command: crate::workflow_cmd::WorkflowCommand,
+        command: crate::workflow_cmd::WorkflowCliCommand,
     },
     /// List configured models.
     Models {

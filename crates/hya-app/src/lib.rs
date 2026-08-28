@@ -23,12 +23,24 @@ pub mod plugins;
 pub mod runtime;
 mod runtime_reconcile;
 mod spawn_intent;
+/// Shared Workflow discovery, selection, state, and execution control.
+pub mod workflow_control;
 
+pub use hya_proto::{
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowRunResult,
+    WorkflowStageInfo, WorkflowSummary,
+};
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
-pub use installed_bundle_refresh::{InstalledBundleRefresh, bundle_registry_path};
+pub use installed_bundle_refresh::{
+    InstalledBundleRefresh, bundle_registry_path, first_party_catalog,
+};
 pub use runtime::{
     BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig,
     RuntimeOptions, agent_base_with_model, agent_with_model, build_session_engine,
     builtin_agent_catalog, compaction_config, discover_context_files, host_info, offline_router,
     open_store, resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
+};
+pub use workflow_control::{
+    FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
+    WorkflowCatalogRoots, WorkflowControl, WorkflowControlError, WorkflowInvocation,
 };

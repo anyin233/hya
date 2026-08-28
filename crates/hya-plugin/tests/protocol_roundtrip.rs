@@ -2,9 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use hya_plugin::PluginError;
 use hya_plugin::messages::{
-    EventNotificationParams, HookName, HookPosture, HookRegistration, InitializeResult, PluginInfo,
-    PluginKindWire, ToolCallParams, ToolCallReply, ToolInfo, WorkspaceAdapterInfo,
+    EventNotificationParams, HookName, HookPosture, HookRegistration, InitializeResult,
+    PluginContributionSet, PluginInfo, PluginKindWire, SkillContribution, ToolCallParams,
+    ToolCallReply, ToolInfo, WorkspaceAdapterInfo,
 };
 use hya_plugin::protocol::{Frame, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use hya_proto::{Envelope, Event, EventSeq, MessageId, Role, SessionId, ToolCallId};
@@ -124,20 +126,23 @@ fn initialize_result_roundtrip() {
             version: "0.1.0".into(),
             kind: PluginKindWire::Rust,
         },
-        hooks: vec![HookRegistration {
-            name: HookName::Event,
-            posture: Some(HookPosture::Open),
-        }],
-        tools: vec![ToolInfo {
-            name: "t".into(),
-            description: String::new(),
-            input_schema: json!({"type": "object"}),
-        }],
-        workspace_adapters: vec![WorkspaceAdapterInfo {
-            r#type: "folder".into(),
-            name: "Folder".into(),
-            description: "Local folder workspace".into(),
-        }],
+        contributions: PluginContributionSet {
+            hooks: vec![HookRegistration {
+                name: HookName::Event,
+                posture: Some(HookPosture::Open),
+            }],
+            tools: vec![ToolInfo {
+                name: "t".into(),
+                description: String::new(),
+                input_schema: json!({"type": "object"}),
+            }],
+            skills: Vec::new(),
+            workspace_adapters: vec![WorkspaceAdapterInfo {
+                r#type: "folder".into(),
+                name: "Folder".into(),
+                description: "Local folder workspace".into(),
+            }],
+        },
     };
     assert_eq!(init, reparse(&init));
     assert!(
@@ -145,6 +150,109 @@ fn initialize_result_roundtrip() {
             .unwrap()
             .contains("\"kind\":\"rust\"")
     );
+}
+
+#[test]
+fn initialize_result_roundtrips_skill_contribution() {
+    let init = InitializeResult {
+        protocol_version: 1,
+        plugin: PluginInfo {
+            id: "skills".into(),
+            version: "0.1.0".into(),
+            kind: PluginKindWire::Rust,
+        },
+        contributions: PluginContributionSet {
+            hooks: Vec::new(),
+            tools: Vec::new(),
+            skills: vec![SkillContribution {
+                id: "reviewer".into(),
+                content: "test".into(),
+                digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+            }],
+            workspace_adapters: Vec::new(),
+        },
+    };
+
+    assert_eq!(init, reparse(&init));
+    let encoded = serde_json::to_string(&init).unwrap();
+    assert!(encoded.contains("\"skills\""));
+    assert!(encoded.contains("\"id\":\"reviewer\""));
+    assert!(encoded.contains(
+        "\"digest\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\""
+    ));
+
+    let legacy = json!({
+        "protocol_version": 1,
+        "plugin": { "id": "legacy", "version": "0.1.0", "kind": "rust" },
+        "hooks": [],
+        "tools": [],
+        "workspaceAdapters": [],
+    });
+    let decoded: InitializeResult = serde_json::from_value(legacy).unwrap();
+    assert!(decoded.contributions.skills.is_empty());
+}
+
+#[test]
+fn contribution_validation_rejects_malformed_and_duplicate_declarations() {
+    let duplicate = PluginContributionSet {
+        skills: vec![
+            SkillContribution {
+                id: "reviewer".into(),
+                content: "test".into(),
+                digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+            },
+            SkillContribution {
+                id: "reviewer".into(),
+                content: "test".into(),
+                digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+            },
+        ],
+        ..PluginContributionSet::default()
+    };
+    assert!(matches!(
+        duplicate.validate("duplicate-plugin"),
+        Err(PluginError::DuplicateContribution { kind, id, .. })
+            if kind == "skill" && id == "reviewer"
+    ));
+
+    let malformed = PluginContributionSet {
+        skills: vec![SkillContribution {
+            id: "reviewer".into(),
+            content: "test".into(),
+            digest: "A".repeat(64),
+        }],
+        ..PluginContributionSet::default()
+    };
+    assert!(matches!(
+        malformed.validate("malformed-plugin"),
+        Err(PluginError::InvalidContribution { plugin, kind, detail, .. })
+            if plugin == "malformed-plugin"
+                && kind == "skill"
+                && detail.contains("lowercase SHA-256")
+    ));
+
+    let mismatch = PluginContributionSet {
+        skills: vec![SkillContribution {
+            id: "reviewer".into(),
+            content: "test".into(),
+            digest: "0000000000000000000000000000000000000000000000000000000000000000".into(),
+        }],
+        ..PluginContributionSet::default()
+    };
+    assert!(matches!(
+        mismatch.validate("mismatch-plugin"),
+        Err(PluginError::InvalidContribution { plugin, kind, detail, .. })
+            if plugin == "mismatch-plugin"
+                && kind == "skill"
+                && detail.contains("does not match UTF-8 content")
+    ));
+
+    let unknown = json!({
+        "protocol_version": 1,
+        "plugin": { "id": "strict", "version": "0.1.0", "kind": "rust" },
+        "unexpected": true,
+    });
+    assert!(serde_json::from_value::<InitializeResult>(unknown).is_err());
 }
 
 #[test]

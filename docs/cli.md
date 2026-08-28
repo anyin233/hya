@@ -230,6 +230,33 @@ The `/` list also includes server-provided commands from the backend catalog:
 - Entries whose `source` is `skill` are **hidden** from the `/` list; open them
   through `/skills` instead.
 
+## Workflow Commands
+
+```sh
+hya-backend workflow list
+hya-backend workflow info plan-impl-review
+hya-backend --db sessions.db workflow use plan-impl-review --session hysec_...
+hya-backend --db sessions.db workflow run --session hysec_... \
+  --input request=verify-parser
+hya-backend --db sessions.db workflow state --session hysec_...
+```
+
+`list` and `info` read the merged project, user, installed, and immutable
+first-party Workflow catalog. `use` persists an exact source/revision identity
+in an existing Session and therefore requires `--session`. `state` also requires
+`--session` and replays that Session from the selected database.
+
+`run [NAME]` executes the explicit name, or the Session selection when `NAME`
+is omitted with `--session`. A run without `--session` creates a new Session and
+requires `NAME`. Repeat `--input KEY=VALUE` for declared inputs; values split on
+the first `=`. `--revision` (alias `--expected-revision`) fences selection/run
+against a canonical compiler revision, and `--json` emits the shared typed
+command result.
+
+Inside the TUI, `/workflow list|info|use|run|state` uses the same app control
+path and bypasses parent-model admission. Progress arrives through normal
+Session Events and `session.updated` synchronization.
+
 ## Bundle Commands
 
 ```sh
@@ -245,13 +272,13 @@ which forwards the bundle subcommand once to `hya-backend`; invoking
 `hya-backend bundle ...` directly exposes the same backend implementation.
 
 `install` reports whether the package was installed, replaced, or unchanged,
-along with bundle identity, version, and registry generation. `list` reports
-name, version, origin, format, state, and immutability for the merged built-in
-and installed catalog. `info` reports identity, publisher, origin, format,
-state, immutability, digests, and static agent/skill IDs when available.
-Built-ins are merged read-only and cannot be replaced or uninstalled. Repeating
-an install with the same digest is idempotent; replacement and removal publish
-through atomic registry operations.
+along with bundle identity, version, closed payload kind, and registry generation.
+`list` reports name, version, packaged Agents, state, package kind, and Workflow
+id for the merged immutable first-party and installed catalog. `info` also
+reports publisher, origin, format, immutability, digests, and packaged resource
+ids when available. The first-party WorkflowBundle is read-only and cannot be
+replaced or uninstalled. Repeating an install with the same digest is
+idempotent; replacement and removal publish through atomic registry operations.
 
 Before the registry is touched, `install` stages the package on disk via
 `stage_package`: the bytes land in
@@ -274,20 +301,26 @@ watcher or per-round/tool-call registry query.
 `info -f` strictly inspects a package without mutating the registry or runtime
 publication. Package paths require the exact lowercase `.hyabundle` suffix;
 the bytes magic is still authoritative for public/private format detection.
-Public packages may remain process-free or may include only the exact existing-v1
-declared agent prompt/resource/Extension closure for self-contained selected JS
-Extension entrypoints in an activation-scoped Bun Compat sidecar; no helper/import
-closure is supported. Undeclared directory files are ignored and unreferenced
-archive files are rejected; activation never executes the authoring tree. See [AgentBundle Authoring](agent-bundle-authoring.md) and the
-[static example](examples/bundle.hya.md), [transient Bun example](examples/bun-transient/),
-[resident Bun example](examples/bun-resident/), and [disjoint Bun example](examples/bun-disjoint/)
-for supported forms. Package publication validates the complete built-ins-plus-installed
-BundleCatalog before atomic generation publication. Each activation materializes only
-the selected agent's captured Tool/Hook capability closure and exact-path-matched
-JS Extension entrypoints; staged-but-unselected Extensions never activate. New
-root turns and catalog refreshes publish the installed generation lazily while
+Public packages are a closed `AgentBundle | WorkflowBundle` payload. An
+AgentBundle carries one Agent. A WorkflowBundle carries one compiled Workflow
+and its exact reachable Agent closure. Either kind may remain process-free or
+include only its declared prompt/resource/Extension closure for
+self-contained selected JavaScript entrypoints in an activation-scoped Bun
+Compat sidecar; no helper/import closure is supported. Undeclared directory
+files are ignored and unreferenced archive files are rejected; activation never
+executes the authoring tree. See [AgentBundle Authoring](agent-bundle-authoring.md),
+[WorkflowBundle packaging](workflows.md#packaging-a-workflowbundle), and the
+[static](examples/bundle.hya.md), [transient Bun](examples/bun-transient/),
+[resident Bun](examples/bun-resident/), and [disjoint Bun](examples/bun-disjoint/)
+examples. Package publication validates collisions against the immutable
+first-party catalog, the complete installed BundleCatalog, and reserved core
+Agent ids before atomic generation publication. Each activation materializes
+only the selected Agent's captured Tool/Hook/Skill capability closure and
+exact-path-matched JavaScript Extension entrypoints; staged-but-unselected
+Extensions never activate.
+New root turns and catalog refreshes publish the installed generation lazily while
 existing TurnBindings remain pinned. Private output reports authentication as
-unverified, payload as opaque, and activation as unsupported in 0.34.11.
+unverified, payload as opaque, and activation as unsupported in 0.36.0.
 Raw Rust extensions and Bundle-declared MCP remain unsupported; the sidecar
 does not run an agent loop or add a permission plane.
 

@@ -8,14 +8,13 @@ use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use tokio::sync::mpsc;
 
 use crate::mcp_control::{EmptyMcpControl, McpControl};
+use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{compat, pending, runs};
 
-/// Public app state builders pass into [`crate::router`].
-///
 /// Holds the session engine, process agent base, permission/question queues,
-/// MCP control handle, workspace adapters, and formatter status. The router
-/// wraps this into internal `ServerState` (run registry + Compat process-local
-/// state).
+/// MCP and Workflow control handles, workspace adapters, and formatter status.
+/// The router wraps this into internal `ServerState` (run registry + Compat
+/// process-local state).
 #[derive(Clone)]
 pub struct AppState {
     /// Shared session engine for all routes.
@@ -25,13 +24,14 @@ pub struct AppState {
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
     mcp_control: Arc<dyn McpControl>,
+    workflow_control: Arc<dyn WorkflowControl>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
 }
 
 impl AppState {
-    /// Create state with empty pending queues and a no-op MCP control handle.
+    /// Create state with empty pending queues and no-op MCP and Workflow control handles.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let permission_requests = pending::PermissionRequests::new(engine.store().clone());
@@ -39,8 +39,9 @@ impl AppState {
             engine,
             agent,
             permission_requests,
-            question_requests: Default::default(),
+            question_requests: pending::QuestionRequests::default(),
             mcp_control: Arc::new(EmptyMcpControl),
+            workflow_control: Arc::new(EmptyWorkflowControl),
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
             default_agent: None,
@@ -76,6 +77,13 @@ impl AppState {
         self
     }
 
+    /// Install the app-owned Workflow control handle for native and Compat routes.
+    #[must_use]
+    pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
+        self.workflow_control = control;
+        self
+    }
+
     /// Register plugin workspace adapters for experimental workspace routes.
     #[must_use]
     pub fn with_workspace_adapters(mut self, adapters: Vec<WorkspaceAdapterInfo>) -> Self {
@@ -100,6 +108,7 @@ pub(crate) struct ServerState {
     pub(crate) question_requests: pending::QuestionRequests,
     pub(crate) global: compat::GlobalState,
     pub(crate) mcp_control: Arc<dyn McpControl>,
+    pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) project: compat::ProjectState,
     pub(crate) pty: compat::PtyState,
     pub(crate) tui: compat::TuiState,
@@ -118,6 +127,7 @@ impl ServerState {
             question_requests: app.question_requests,
             global: compat::GlobalState::new(),
             mcp_control: app.mcp_control,
+            workflow_control: app.workflow_control,
             project: compat::ProjectState::new(),
             pty: compat::PtyState::new(),
             tui: compat::TuiState::new(),
@@ -125,5 +135,42 @@ impl ServerState {
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
         }
+    }
+
+    /// Start a parent-model run only when no Workflow owns the Session.
+    pub(crate) fn start_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
+        self.reserve_run(session)
+    }
+
+    /// Reserve the Session for a mutating Workflow command.
+    ///
+    /// Parent-model and Workflow admissions use the same process-local
+    /// registry. The reservation remains held by the caller while it crosses
+    /// the Workflow control port, so a parent turn cannot slip in before the
+    /// app-owned Workflow claim becomes visible.
+    pub(crate) fn reserve_workflow_run(
+        &self,
+        session: hya_proto::SessionId,
+    ) -> Option<runs::RunGuard> {
+        self.reserve_run(session)
+    }
+
+    fn reserve_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
+        if self.workflow_control.active_run(session).is_some() {
+            return None;
+        }
+        self.runs.start(session)
+    }
+
+    /// Return whether either execution surface currently owns the Session.
+    pub(crate) fn is_busy(&self, session: hya_proto::SessionId) -> bool {
+        self.runs.is_busy(session) || self.workflow_control.active_run(session).is_some()
+    }
+
+    /// Cancel both parent-model and Workflow execution surfaces for a Session.
+    pub(crate) fn cancel_run(&self, session: hya_proto::SessionId) -> bool {
+        let model = self.runs.cancel(session);
+        let workflow = self.workflow_control.cancel(session);
+        model || workflow
     }
 }

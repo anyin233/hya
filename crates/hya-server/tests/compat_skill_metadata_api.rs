@@ -293,7 +293,7 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
     );
     let authoring_surface = format!("{authoring_description}\n{authoring_content}");
     let required_markers = [
-        ("0.34.11", "the release"),
+        ("0.36.0", "the release"),
         ("AgentBundle", "the bundle format"),
         ("Bun Compat", "the executable sidecar implementation"),
         ("hya bundle install", "the install command"),
@@ -357,7 +357,7 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
         ("authentication=unverified", "private authentication status"),
         ("payload=opaque", "private payload status"),
         (
-            "private activation unsupported",
+            "private activation is unsupported",
             "private activation rejection",
         ),
         ("raw Rust", "raw Rust rejection"),

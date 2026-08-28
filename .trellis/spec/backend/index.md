@@ -19,6 +19,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Task Tool](./task-tool.md) | Single/batch validation plus bounded background spawn admission and typed overload | Documented |
+| [Workflow Control](./workflow-control.md) | Event-sourced Workflow state, atomic admission, recovery ownership, surfaces, and SDK contracts | Documented |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 
 ---

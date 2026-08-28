@@ -30,7 +30,7 @@ async fn revert(
     Json(payload): Json<RevertPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    if st.runs.is_busy(session) {
+    if st.is_busy(session) {
         return Ok(super::errors::session_busy(session));
     }
     let snapshot = match load_session(&st, session).await? {
@@ -58,7 +58,7 @@ async fn unrevert(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    if st.runs.is_busy(session) {
+    if st.is_busy(session) {
         return Ok(super::errors::session_busy(session));
     }
     let snapshot = match load_session(&st, session).await? {

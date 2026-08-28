@@ -14,7 +14,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::SpawnLifecycle;
-use hya_proto::{MailEndpoint, MailKind, MemberId, RosterStatus, SessionId};
+use hya_proto::{
+    ActorClaim, Event, MailEndpoint, MailKind, MemberId, RosterStatus, SessionId,
+    WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
+};
 use hya_tool::AgentDef;
 use hya_workflow::{
     CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence,
@@ -31,7 +34,10 @@ use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
 use crate::resident::ResidentSupervisor;
 use crate::sidecar::BoundSidecarFactory;
-use crate::subagent::{MemberEvidence, MemberSpec, MemberStatus, run_pre_admitted_team};
+use crate::subagent::{
+    MemberEvidence, MemberSpec, MemberStatus, run_pre_admitted_team,
+    run_pre_admitted_team_for_actor,
+};
 
 use super::WorkflowError;
 
@@ -57,7 +63,6 @@ pub struct WorkflowRunContext {
     /// Resident scheduling owner required only when the compiled plan has actors.
     pub resident_supervisor: Option<Arc<ResidentSupervisor>>,
 }
-
 /// Terminal status of one workflow stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -150,12 +155,20 @@ struct ResolvedAgent {
 struct ResidentActor {
     session: SessionId,
     handle: String,
+    member: MemberId,
 }
 
 struct PreparedActivation {
     index: usize,
     directive: String,
     system_context: Arc<str>,
+}
+
+struct ResidentActivation {
+    actor: ResidentActor,
+    prepared: PreparedActivation,
+    cancel: CancellationToken,
+    actor_claim: Option<ActorClaim>,
 }
 
 struct WorkflowBudgetReservation {
@@ -168,6 +181,22 @@ impl Drop for WorkflowBudgetReservation {
     fn drop(&mut self) {
         self.governor.refund_reserved(self.root, self.units);
     }
+}
+
+/// Fully preflighted and budget-reserved Workflow execution.
+///
+/// Dropping this value before [`Self::execute`] refunds the scoped reservation
+/// without creating a child Session or sending mail.
+pub struct PreparedWorkflowRun {
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    workflow: CompiledWorkflow,
+    context: WorkflowRunContext,
+    resolved: Vec<ResolvedAgent>,
+    verifiers: Vec<Option<ResolvedAgent>>,
+    _budget: Option<WorkflowBudgetReservation>,
+    durable_run: Option<WorkflowRunId>,
+    actor_claim: Option<ActorClaim>,
 }
 
 fn resolve_agent(
@@ -214,238 +243,412 @@ fn resolve_agent(
     })
 }
 
-/// Execute `def` under `lead`, honoring `ctx`.
+/// Preflight and reserve one compiled Workflow before any child or mail effect.
 ///
 /// # Errors
-/// [`WorkflowError`] for invalid definitions, unauthorized/unknown stage
-/// agents, admission rejections, and engine failures during member turns.
-pub async fn run_workflow(
+/// Returns validation, authorization, semantic, lineage, or admission failures.
+pub async fn prepare_workflow_run(
     engine: Arc<SessionEngine>,
     lead: SessionId,
     workflow: &CompiledWorkflow,
-    ctx: WorkflowRunContext,
-    cancel: CancellationToken,
-) -> Result<WorkflowRunReport, WorkflowError> {
-    workflow.validate_inputs(&ctx.inputs)?;
+    context: WorkflowRunContext,
+    durable_run: Option<WorkflowRunId>,
+) -> Result<PreparedWorkflowRun, WorkflowError> {
+    prepare_workflow_run_for_actor(engine, lead, workflow, context, durable_run, None).await
+}
+
+/// Preflight a Workflow while retaining an optional actor capability for every
+/// durable child and lifecycle mutation.
+///
+/// # Errors
+/// Returns the same validation, authorization, semantic, lineage, or admission
+/// failures as [`prepare_workflow_run`].
+pub async fn prepare_workflow_run_for_actor(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    workflow: &CompiledWorkflow,
+    context: WorkflowRunContext,
+    durable_run: Option<WorkflowRunId>,
+    actor_claim: Option<ActorClaim>,
+) -> Result<PreparedWorkflowRun, WorkflowError> {
+    workflow.validate_inputs(&context.inputs)?;
     let plan = workflow.plan();
     let name = workflow.definition().name();
-
     let wanted = worst_case_admission_units(plan.stages());
 
     let mut resolved = Vec::with_capacity(plan.stages().len());
     let mut verifiers = Vec::with_capacity(plan.stages().len());
     for stage in plan.stages() {
-        resolved.push(resolve_agent(&engine, &ctx, stage.agent())?);
+        resolved.push(resolve_agent(&engine, &context, stage.agent())?);
         verifiers.push(
             stage
                 .verify()
-                .map(|verify| resolve_agent(&engine, &ctx, verify.agent()))
+                .map(|verify| resolve_agent(&engine, &context, verify.agent()))
                 .transpose()?,
         );
     }
-    validate_resolved_semantics(name, plan.stages(), &resolved, &verifiers, &ctx)?;
-    let _budget = reserve_workflow_budget(&engine, lead, name, wanted).await?;
+    validate_resolved_semantics(name, plan.stages(), &resolved, &verifiers, &context)?;
+    let budget = reserve_workflow_budget(&engine, lead, name, wanted).await?;
+    Ok(PreparedWorkflowRun {
+        engine,
+        lead,
+        workflow: workflow.clone(),
+        context,
+        resolved,
+        verifiers,
+        _budget: budget,
+        durable_run,
+        actor_claim,
+    })
+}
 
-    let mut reports: Vec<StageReport> = plan.stages().iter().map(pending_report).collect();
-    let mut actors: BTreeMap<String, ResidentActor> = BTreeMap::new();
-    for level in plan.levels() {
-        if cancel.is_cancelled() {
-            mark_pending(&mut reports, StageStatus::Cancelled);
-            return Ok(WorkflowRunReport {
-                status: WorkflowStatus::Cancelled,
-                stages: reports,
-            });
-        }
+/// Execute `workflow` under `lead` after shared preflight.
+///
+/// # Errors
+/// Returns validation, authorization, admission, or execution failures.
+pub async fn run_workflow(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    workflow: &CompiledWorkflow,
+    context: WorkflowRunContext,
+    cancel: CancellationToken,
+) -> Result<WorkflowRunReport, WorkflowError> {
+    prepare_workflow_run(engine, lead, workflow, context, None)
+        .await?
+        .execute(cancel)
+        .await
+}
 
-        let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
-        let mut prepared = Vec::with_capacity(level.stage_indices().len());
-        for &index in level.stage_indices() {
-            let rendered = workflow.render_stage(index, &ctx.inputs, &stage_evidence)?;
-            prepared.push(PreparedActivation {
-                index,
-                directive: rendered.directive().to_string(),
-                system_context: Arc::from(rendered.system_context().to_string()),
-            });
-        }
+/// Execute the already-validated graph and consume its budget reservation.
+///
+/// # Errors
+/// Returns rendering or governed Stage execution failures.
+impl PreparedWorkflowRun {
+    /// Execute the already-validated graph and consume its budget reservation.
+    ///
+    /// # Errors
+    /// Returns rendering or governed Stage execution failures.
+    pub async fn execute(
+        self,
+        cancel: CancellationToken,
+    ) -> Result<WorkflowRunReport, WorkflowError> {
+        let Self {
+            engine,
+            lead,
+            workflow,
+            context,
+            resolved,
+            verifiers,
+            _budget,
+            durable_run,
+            actor_claim,
+        } = self;
+        let plan = workflow.plan();
+        let name = workflow.definition().name();
+        let mut reports: Vec<StageReport> = plan.stages().iter().map(pending_report).collect();
+        let mut actors: BTreeMap<String, ResidentActor> = BTreeMap::new();
+        for level in plan.levels() {
+            if cancel.is_cancelled() {
+                mark_pending(&mut reports, StageStatus::Cancelled);
+                return Ok(WorkflowRunReport {
+                    status: WorkflowStatus::Cancelled,
+                    stages: reports,
+                });
+            }
 
-        let mut transient_indices = Vec::new();
-        let mut transient_specs = Vec::new();
-        let mut resident_activations = Vec::new();
-        for activation in prepared {
-            let stage = &plan.stages()[activation.index];
-            let resolved_stage = resolved[activation.index].clone();
-            if let Some(actor_key) = stage.actor() {
-                let Some(supervisor) = ctx.resident_supervisor.as_ref() else {
-                    return Err(WorkflowError::Invalid {
-                        workflow: name.to_string(),
-                        detail: "resident supervisor disappeared after preflight".to_string(),
-                    });
-                };
-                let actor = if let Some(existing) = actors.get(actor_key).cloned() {
-                    existing
-                } else {
-                    let (session, handle) = supervisor
-                        .spawn_resident_parked(
+            let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
+            let mut activations = Vec::with_capacity(level.stage_indices().len());
+            for &index in level.stage_indices() {
+                let rendered = workflow.render_stage(index, &context.inputs, &stage_evidence)?;
+                activations.push(PreparedActivation {
+                    index,
+                    directive: rendered.directive().to_string(),
+                    system_context: Arc::from(rendered.system_context().to_string()),
+                });
+            }
+            if let Some(run) = durable_run {
+                for &index in level.stage_indices() {
+                    let stage = &plan.stages()[index];
+                    engine
+                        .record_workflow_event_for_actor(
+                            actor_claim.as_ref(),
                             lead,
-                            resolved_stage.spec.clone(),
-                            (
-                                ctx.binding.clone(),
-                                resolved_stage.agents.clone(),
-                                resolved_stage.resources.clone(),
-                                resolved_stage.sidecar_factory.clone(),
-                            ),
-                            format!("Workflow {name} resident actor `{actor_key}`"),
-                            None,
-                            Some(activation.system_context.clone()),
+                            Event::WorkflowStageStarted {
+                                session: lead,
+                                run,
+                                stage: stage.id().to_string(),
+                            },
                         )
                         .await?;
-                    let actor = ResidentActor { session, handle };
-                    actors.insert(actor_key.to_string(), actor.clone());
-                    actor
+                }
+            }
+
+            let mut transient_members = Vec::new();
+            let mut transient_specs = Vec::new();
+            let mut resident_activations = Vec::new();
+            for activation in activations {
+                let stage = &plan.stages()[activation.index];
+                let resolved_stage = resolved[activation.index].clone();
+                if let Some(actor_key) = stage.actor() {
+                    let Some(supervisor) = context.resident_supervisor.as_ref() else {
+                        return Err(WorkflowError::Invalid {
+                            workflow: name.to_string(),
+                            detail: "resident supervisor disappeared after preflight".to_string(),
+                        });
+                    };
+                    let actor = if let Some(existing) = actors.get(actor_key).cloned() {
+                        existing
+                    } else {
+                        let (session, handle, member) = supervisor
+                            .spawn_resident_parked(
+                                lead,
+                                resolved_stage.spec.clone(),
+                                (
+                                    context.binding.clone(),
+                                    resolved_stage.agents.clone(),
+                                    resolved_stage.resources.clone(),
+                                    resolved_stage.sidecar_factory.clone(),
+                                ),
+                                format!("Workflow {name} resident actor `{actor_key}`"),
+                                actor_claim.as_ref(),
+                                Some(activation.system_context.clone()),
+                            )
+                            .await?;
+                        let actor = ResidentActor {
+                            session,
+                            handle,
+                            member,
+                        };
+                        actors.insert(actor_key.to_string(), actor.clone());
+                        actor
+                    };
+                    if let Some(run) = durable_run {
+                        engine
+                            .record_workflow_event_for_actor(
+                                actor_claim.as_ref(),
+                                lead,
+                                Event::WorkflowStageMemberLinked {
+                                    session: lead,
+                                    run,
+                                    stage: stage.id().to_string(),
+                                    member: actor.member,
+                                    role: WorkflowMemberRole::Worker,
+                                    iteration: 0,
+                                },
+                            )
+                            .await?;
+                    }
+                    resident_activations.push((activation, actor));
+                } else {
+                    let member = MemberId::new();
+                    transient_members.push((activation.index, member));
+                    transient_specs.push(MemberSpec {
+                        id: member,
+                        agent: resolved_stage.spec,
+                        binding: context.binding.clone(),
+                        agents: resolved_stage.agents,
+                        resources: Some(resolved_stage.resources),
+                        guidance: Some(activation.system_context),
+                        directive: activation.directive,
+                        tool_call: None,
+                        description: format!("Workflow {name} / {}", stage.id()),
+                        session: None,
+                        sidecar_factory: resolved_stage.sidecar_factory,
+                    });
+                }
+            }
+            if let Some(run) = durable_run {
+                for &(index, member) in &transient_members {
+                    engine
+                        .record_workflow_event_for_actor(
+                            actor_claim.as_ref(),
+                            lead,
+                            Event::WorkflowStageMemberLinked {
+                                session: lead,
+                                run,
+                                stage: plan.stages()[index].id().to_string(),
+                                member,
+                                role: WorkflowMemberRole::Worker,
+                                iteration: 0,
+                            },
+                        )
+                        .await?;
+                }
+            }
+
+            let transient_run = async {
+                if transient_specs.is_empty() {
+                    Vec::new()
+                } else if let Some(claim) = actor_claim {
+                    run_pre_admitted_team_for_actor(
+                        engine.clone(),
+                        lead,
+                        transient_specs,
+                        cancel.child_token(),
+                        claim,
+                    )
+                    .await
+                } else {
+                    run_pre_admitted_team(
+                        engine.clone(),
+                        lead,
+                        transient_specs,
+                        cancel.child_token(),
+                    )
+                    .await
+                }
+            };
+            let resident_run = futures::future::join_all(resident_activations.into_iter().map(
+                |(activation, actor)| {
+                    let engine = engine.clone();
+                    let supervisor = context.resident_supervisor.as_ref().cloned();
+                    let stage = plan.stages()[activation.index].clone();
+                    let activation_cancel = cancel.child_token();
+                    async move {
+                        let Some(supervisor) = supervisor else {
+                            return Err(WorkflowError::Invalid {
+                                workflow: name.to_string(),
+                                detail: "resident supervisor disappeared after spawn".to_string(),
+                            });
+                        };
+                        let index = activation.index;
+                        let report = activate_resident_stage(
+                            engine,
+                            lead,
+                            supervisor,
+                            &stage,
+                            ResidentActivation {
+                                actor,
+                                prepared: activation,
+                                cancel: activation_cancel,
+                                actor_claim,
+                            },
+                        )
+                        .await?;
+                        Ok::<_, WorkflowError>((index, report))
+                    }
+                },
+            ));
+            let (evidence, resident_results) = tokio::join!(transient_run, resident_run);
+            let cancelled = cancel.is_cancelled();
+            for (&(index, _), evidence) in transient_members.iter().zip(evidence.iter()) {
+                let report =
+                    stage_report(&engine, &plan.stages()[index], evidence, cancelled).await?;
+                reports[index] = report;
+            }
+            for result in resident_results {
+                let (index, report) = result?;
+                reports[index] = report;
+            }
+
+            for &index in level.stage_indices() {
+                let stage = &plan.stages()[index];
+                let Some(verify) = stage.verify() else {
+                    continue;
                 };
-                resident_activations.push((activation, actor));
-            } else {
-                transient_indices.push(activation.index);
-                transient_specs.push(MemberSpec {
-                    id: MemberId::new(),
-                    agent: resolved_stage.spec,
-                    binding: ctx.binding.clone(),
-                    agents: resolved_stage.agents,
-                    resources: Some(resolved_stage.resources),
-                    guidance: Some(activation.system_context),
-                    directive: activation.directive,
-                    tool_call: None,
-                    description: format!("Workflow {name} / {}", stage.id()),
-                    session: None,
-                    sidecar_factory: resolved_stage.sidecar_factory,
+                if reports[index].status != StageStatus::Done {
+                    continue;
+                }
+                let Some(verifier) = verifiers[index].clone() else {
+                    continue;
+                };
+                let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
+                let rendered = workflow.render_stage(index, &context.inputs, &stage_evidence)?;
+                let verification_condition = rendered
+                    .verification_condition()
+                    .unwrap_or_else(|| verify.until());
+                let mut report = reports[index].clone();
+                match drive_loop_stage(
+                    engine.clone(),
+                    lead,
+                    name,
+                    &context,
+                    stage,
+                    verify,
+                    rendered.directive(),
+                    rendered.system_context(),
+                    verification_condition,
+                    &resolved[index],
+                    verifier,
+                    report.clone(),
+                    cancel.clone(),
+                    actor_claim,
+                    durable_run,
+                )
+                .await
+                {
+                    Ok(completed) => reports[index] = completed,
+                    Err(error) => {
+                        report.status = if cancel.is_cancelled() {
+                            StageStatus::Cancelled
+                        } else {
+                            StageStatus::Failed
+                        };
+                        report.output = clamp(format!("loop Stage failed: {error}"));
+                        reports[index] = report;
+                    }
+                }
+            }
+            if let Some(run) = durable_run {
+                for &index in level.stage_indices() {
+                    let report = &reports[index];
+                    engine
+                        .record_workflow_event_for_actor(
+                            actor_claim.as_ref(),
+                            lead,
+                            Event::WorkflowStageFinished {
+                                session: lead,
+                                run,
+                                stage: report.stage.clone(),
+                                status: protocol_stage_status(report.status),
+                            },
+                        )
+                        .await?;
+                }
+            }
+
+            if cancel.is_cancelled() {
+                mark_pending(&mut reports, StageStatus::Cancelled);
+                return Ok(WorkflowRunReport {
+                    status: WorkflowStatus::Cancelled,
+                    stages: reports,
+                });
+            }
+            if workflow.definition().on_failure() == FailurePolicy::FailFast
+                && level_failed(&reports, level.stage_indices())
+            {
+                mark_pending(&mut reports, StageStatus::Skipped);
+                return Ok(WorkflowRunReport {
+                    status: WorkflowStatus::Failed,
+                    stages: reports,
                 });
             }
         }
 
-        let transient_run = async {
-            if transient_specs.is_empty() {
-                Vec::new()
-            } else {
-                run_pre_admitted_team(engine.clone(), lead, transient_specs, cancel.child_token())
-                    .await
-            }
-        };
-        let resident_run = futures::future::join_all(resident_activations.into_iter().map(
-            |(activation, actor)| {
-                let engine = engine.clone();
-                let supervisor = ctx.resident_supervisor.as_ref().cloned();
-                let stage = plan.stages()[activation.index].clone();
-                let activation_cancel = cancel.child_token();
-                async move {
-                    let Some(supervisor) = supervisor else {
-                        return Err(WorkflowError::Invalid {
-                            workflow: name.to_string(),
-                            detail: "resident supervisor disappeared after spawn".to_string(),
-                        });
-                    };
-                    let index = activation.index;
-                    let report = activate_resident_stage(
-                        engine,
-                        lead,
-                        supervisor,
-                        &stage,
-                        actor,
-                        activation,
-                        activation_cancel,
-                    )
-                    .await?;
-                    Ok::<_, WorkflowError>((index, report))
-                }
-            },
-        ));
-        let (evidence, resident_results) = tokio::join!(transient_run, resident_run);
-        let cancelled = cancel.is_cancelled();
-        for (&index, evidence) in transient_indices.iter().zip(evidence.iter()) {
-            reports[index] =
-                stage_report(&engine, &plan.stages()[index], evidence, cancelled).await?;
-        }
-        for result in resident_results {
-            let (index, report) = result?;
-            reports[index] = report;
-        }
-
-        for &index in level.stage_indices() {
-            let stage = &plan.stages()[index];
-            let Some(verify) = stage.verify() else {
-                continue;
-            };
-            if reports[index].status != StageStatus::Done {
-                continue;
-            }
-            let Some(verifier) = verifiers[index].clone() else {
-                continue;
-            };
-            let stage_evidence = reports.iter().map(report_evidence).collect::<Vec<_>>();
-            let rendered = workflow.render_stage(index, &ctx.inputs, &stage_evidence)?;
-            let verification_condition = rendered
-                .verification_condition()
-                .unwrap_or_else(|| verify.until());
-            let mut report = reports[index].clone();
-            match drive_loop_stage(
-                engine.clone(),
-                lead,
-                name,
-                &ctx,
-                stage,
-                verify,
-                rendered.directive(),
-                rendered.system_context(),
-                verification_condition,
-                &resolved[index],
-                verifier,
-                report.clone(),
-                cancel.clone(),
-            )
-            .await
-            {
-                Ok(completed) => reports[index] = completed,
-                Err(error) => {
-                    report.status = if cancel.is_cancelled() {
-                        StageStatus::Cancelled
-                    } else {
-                        StageStatus::Failed
-                    };
-                    report.output = clamp(format!("loop Stage failed: {error}"));
-                    reports[index] = report;
-                }
-            }
-        }
-
-        if cancel.is_cancelled() {
-            mark_pending(&mut reports, StageStatus::Cancelled);
-            return Ok(WorkflowRunReport {
-                status: WorkflowStatus::Cancelled,
-                stages: reports,
-            });
-        }
-        if workflow.definition().on_failure() == FailurePolicy::FailFast
-            && level_failed(&reports, level.stage_indices())
+        let status = if reports
+            .iter()
+            .any(|report| report.status == StageStatus::Failed)
         {
-            mark_pending(&mut reports, StageStatus::Skipped);
-            return Ok(WorkflowRunReport {
-                status: WorkflowStatus::Failed,
-                stages: reports,
-            });
-        }
+            WorkflowStatus::Failed
+        } else {
+            WorkflowStatus::Completed
+        };
+        Ok(WorkflowRunReport {
+            status,
+            stages: reports,
+        })
     }
+}
 
-    let status = if reports
-        .iter()
-        .any(|report| report.status == StageStatus::Failed)
-    {
-        WorkflowStatus::Failed
-    } else {
-        WorkflowStatus::Completed
-    };
-    Ok(WorkflowRunReport {
-        status,
-        stages: reports,
-    })
+/// Map executor Stage state to its durable protocol counterpart.
+const fn protocol_stage_status(status: StageStatus) -> WorkflowStageStatus {
+    match status {
+        StageStatus::Pending => WorkflowStageStatus::Pending,
+        StageStatus::Done => WorkflowStageStatus::Completed,
+        StageStatus::Failed => WorkflowStageStatus::Failed,
+        StageStatus::Cancelled => WorkflowStageStatus::Cancelled,
+        StageStatus::Skipped => WorkflowStageStatus::Skipped,
+    }
 }
 
 fn worst_case_admission_units(stages: &[WorkflowStage]) -> u64 {
@@ -652,25 +855,30 @@ async fn activate_resident_stage(
     lead: SessionId,
     supervisor: Arc<ResidentSupervisor>,
     stage: &WorkflowStage,
-    actor: ResidentActor,
-    activation: PreparedActivation,
-    cancel: CancellationToken,
+    activation: ResidentActivation,
 ) -> Result<StageReport, WorkflowError> {
+    let ResidentActivation {
+        actor,
+        prepared,
+        cancel,
+        actor_claim,
+    } = activation;
     let PreparedActivation {
         directive,
         system_context,
         ..
-    } = activation;
+    } = prepared;
     supervisor
         .set_resident_guidance(actor.session, system_context)
         .await?;
     let mut events = engine.bus().subscribe();
     engine
-        .mail_send(
+        .mail_send_for_actor(
             lead,
             MailEndpoint::Handle(actor.handle.clone()),
             MailKind::Message,
             directive,
+            actor_claim.as_ref(),
         )
         .await?;
     let (root, _) = engine.session_lineage(lead).await?;
@@ -782,6 +990,8 @@ async fn drive_loop_stage(
     resolved_verifier: ResolvedAgent,
     first_report: StageReport,
     cancel: CancellationToken,
+    actor_claim: Option<ActorClaim>,
+    durable_run: Option<WorkflowRunId>,
 ) -> Result<StageReport, WorkflowError> {
     let worker_session = first_report
         .session
@@ -798,6 +1008,10 @@ async fn drive_loop_stage(
         latest_output: tokio::sync::Mutex::new(first_report.output.clone()),
         label: format!("Workflow {workflow_name} / {}", stage.id()),
         guidance: Arc::from(system_context.to_string()),
+        actor_claim,
+        durable_run,
+        stage_id: stage.id().to_string(),
+        next_iteration: tokio::sync::Mutex::new(1),
     };
 
     let gate = VerifierGate {
@@ -809,8 +1023,11 @@ async fn drive_loop_stage(
         label: executor.label.clone(),
         cancel: cancel.clone(),
         guidance: Arc::from(system_context.to_string()),
+        actor_claim,
+        durable_run,
+        stage_id: stage.id().to_string(),
+        next_iteration: tokio::sync::Mutex::new(0),
     };
-
     let caps = SafetyCaps {
         max_iterations: verify.max_iterations(),
         ..SafetyCaps::default()
@@ -854,6 +1071,10 @@ struct LoopWorkerExecutor {
     latest_output: tokio::sync::Mutex<String>,
     label: String,
     guidance: Arc<str>,
+    actor_claim: Option<ActorClaim>,
+    durable_run: Option<WorkflowRunId>,
+    stage_id: String,
+    next_iteration: tokio::sync::Mutex<u32>,
 }
 
 impl LoopWorkerExecutor {
@@ -870,12 +1091,12 @@ impl IterationExecutor for LoopWorkerExecutor {
         cancel: &CancellationToken,
     ) -> Result<String, CoreError> {
         if let Some(first) = self.first.lock().await.take() {
-            *self.latest_output.lock().await = first.clone();
             return Ok(first);
         }
         let resumed = *self.session.lock().await;
+        let member = MemberId::new();
         let spec = MemberSpec {
-            id: MemberId::new(),
+            id: member,
             resources: Some(self.worker.resources.clone()),
             agent: self.worker.spec.clone(),
             binding: self.ctx.binding.clone(),
@@ -887,13 +1108,44 @@ impl IterationExecutor for LoopWorkerExecutor {
             session: resumed,
             sidecar_factory: self.worker.sidecar_factory.clone(),
         };
-        let evidence = run_pre_admitted_team(
-            self.engine.clone(),
-            self.lead,
-            vec![spec],
-            cancel.child_token(),
-        )
-        .await;
+        if let Some(run) = self.durable_run {
+            let mut next = self.next_iteration.lock().await;
+            let iteration = *next;
+            *next = next.saturating_add(1);
+            self.engine
+                .record_workflow_event_for_actor(
+                    self.actor_claim.as_ref(),
+                    self.lead,
+                    Event::WorkflowStageMemberLinked {
+                        session: self.lead,
+                        run,
+                        stage: self.stage_id.clone(),
+                        member,
+                        role: WorkflowMemberRole::Worker,
+                        iteration,
+                    },
+                )
+                .await
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        }
+        let evidence = if let Some(claim) = self.actor_claim {
+            run_pre_admitted_team_for_actor(
+                self.engine.clone(),
+                self.lead,
+                vec![spec],
+                cancel.child_token(),
+                claim,
+            )
+            .await
+        } else {
+            run_pre_admitted_team(
+                self.engine.clone(),
+                self.lead,
+                vec![spec],
+                cancel.child_token(),
+            )
+            .await
+        };
         let Some(entry) = evidence.first() else {
             return Err(CoreError::Invalid(
                 "workflow worker produced no evidence".to_string(),
@@ -931,6 +1183,10 @@ struct VerifierGate {
     label: String,
     cancel: CancellationToken,
     guidance: Arc<str>,
+    actor_claim: Option<ActorClaim>,
+    durable_run: Option<WorkflowRunId>,
+    stage_id: String,
+    next_iteration: tokio::sync::Mutex<u32>,
 }
 
 #[async_trait]
@@ -945,8 +1201,9 @@ impl IterationGate for VerifierGate {
             self.until,
             render_transcript_bounded(transcript)
         );
+        let member = MemberId::new();
         let spec = MemberSpec {
-            id: MemberId::new(),
+            id: member,
             resources: Some(self.verifier.resources.clone()),
             agent: self.verifier.spec.clone(),
             binding: self.ctx.binding.clone(),
@@ -958,13 +1215,43 @@ impl IterationGate for VerifierGate {
             session: None,
             sidecar_factory: self.verifier.sidecar_factory.clone(),
         };
-        let evidence = run_pre_admitted_team(
-            self.engine.clone(),
-            self.lead,
-            vec![spec],
-            self.cancel.child_token(),
-        )
-        .await;
+        if let Some(run) = self.durable_run {
+            let mut next = self.next_iteration.lock().await;
+            let iteration = *next;
+            *next = next.saturating_add(1);
+            self.engine
+                .record_workflow_event_for_actor(
+                    self.actor_claim.as_ref(),
+                    self.lead,
+                    Event::WorkflowStageMemberLinked {
+                        session: self.lead,
+                        run,
+                        stage: self.stage_id.clone(),
+                        member,
+                        role: WorkflowMemberRole::Verifier,
+                        iteration,
+                    },
+                )
+                .await?;
+        }
+        let evidence = if let Some(claim) = self.actor_claim {
+            run_pre_admitted_team_for_actor(
+                self.engine.clone(),
+                self.lead,
+                vec![spec],
+                self.cancel.child_token(),
+                claim,
+            )
+            .await
+        } else {
+            run_pre_admitted_team(
+                self.engine.clone(),
+                self.lead,
+                vec![spec],
+                self.cancel.child_token(),
+            )
+            .await
+        };
         let Some(entry) = evidence.first() else {
             return Err(CoreError::Invalid(
                 "verifier produced no evidence".to_string(),

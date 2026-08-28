@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
 use hya_proto::AgentName;
 use hya_tool::ToolRegistry;
@@ -16,8 +16,8 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
     // unit tests spawn.
     let bundles = ["resident", "reviewer"]
         .into_iter()
-        .map(|stable_id| PreparedBundle {
-            format_version: 1,
+        .map(|stable_id| PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/core-unit-tests-{stable_id}"),
                 version: "0.0.0".to_string(),
@@ -45,6 +45,10 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             hooks: Vec::new(),
             extensions: Vec::new(),
         })
+        .collect::<Vec<_>>();
+    let bundles = bundles
+        .into_iter()
+        .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
         .collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {

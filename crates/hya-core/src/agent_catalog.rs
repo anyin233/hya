@@ -1,7 +1,7 @@
 //! One resolution seam over two agent origins.
 //!
 //! Built-in agents are Rust constants ([`crate::builtin_agents`]) on the full
-//! Harness tool plane. Installed AgentBundle agents come from a
+//! Harness tool plane. Installed bundle agents come from a
 //! [`BundleCatalog`] and run on the clamped internal-public plane. Call sites
 //! must not branch on the difference: they resolve through [`AgentCatalog`] and
 //! receive an origin-tagged [`AgentDefinition`].
@@ -99,11 +99,13 @@ impl AgentCatalog {
     /// Reject installed bundles that shadow a built-in agent id.
     fn validate(&self) -> Result<(), BundleError> {
         for bundle in self.bundles.bundles() {
-            if is_builtin_id(bundle.agent.id.as_str()) {
-                return Err(BundleError::BuiltinAgentIdShadowed {
-                    bundle_id: bundle.identity.id.clone(),
-                    agent_id: bundle.agent.id.as_str().to_string(),
-                });
+            for agent in bundle.agents() {
+                if is_builtin_id(agent.id.as_str()) {
+                    return Err(BundleError::BuiltinAgentIdShadowed {
+                        bundle_id: bundle.identity().id.clone(),
+                        agent_id: agent.id.as_str().to_string(),
+                    });
+                }
             }
         }
         Ok(())
@@ -251,8 +253,10 @@ impl AgentCatalog {
             .map(BuiltinAgent::definition)
             .collect::<Vec<_>>();
         for bundle in self.bundles.bundles() {
-            if let Some(definition) = self.resolve(bundle.agent.id.as_str()) {
-                agents.push(definition);
+            for agent in bundle.agents() {
+                if let Some(definition) = self.resolve(agent.id.as_str()) {
+                    agents.push(definition);
+                }
             }
         }
         agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));

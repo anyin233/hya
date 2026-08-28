@@ -32,8 +32,14 @@ const InitializeResultSchema = z.object({
       inputSchema: z.unknown(),
     }),
   ),
+  skills: z.array(
+    z.object({
+      id: z.string(),
+      content: z.string(),
+      digest: z.string(),
+    }),
+  ),
 })
-
 const tempDirs: string[] = []
 
 afterEach(async () => {
@@ -107,6 +113,83 @@ test("initialize returns hya compat plugin identity", async () => {
   expect(result.plugin.kind).toBe("compat")
   expect(result.hooks).toEqual([])
   expect(result.tools).toEqual([])
+})
+
+test("initialize publishes Skill contributions with exact fields", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "skills-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "skills",',
+      "  server: async () => ({",
+      '    skills: [{ id: "reviewer", content: "test", digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }],',
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 15,
+        method: "initialize",
+        params: { protocol_version: 1, host: { name: "hya", version: "0.0.0" } },
+      },
+      { jsonrpc: "2.0", id: 16, method: "shutdown", params: {} },
+    ],
+    {
+      HYA_COMPAT_OPTIONS_JSON: JSON.stringify({
+        plugin: [pathToFileURL(pluginFile).href],
+      }),
+      HYA_DIRECTORY: root,
+      HYA_WORKTREE: root,
+    },
+  )
+
+  const result = InitializeResultSchema.parse(responses[0]?.result)
+  expect(result.skills).toEqual([
+    { id: "reviewer", content: "test", digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
+  ])
+})
+
+test("initialize rejects duplicate Skill contributions", async () => {
+  const root = await makeTempDir()
+  const pluginFile = path.join(root, "duplicate-skills-plugin.ts")
+  await writeFile(
+    pluginFile,
+    [
+      "export default {",
+      '  id: "duplicate-skills",',
+      "  server: async () => ({",
+      '    skills: [\n      { id: "reviewer", content: "test", digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },\n      { id: "reviewer", content: "test", digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },\n    ],',
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapter(
+    [
+      {
+        jsonrpc: "2.0",
+        id: 17,
+        method: "initialize",
+        params: { protocol_version: 1, host: { name: "hya", version: "0.0.0" } },
+      },
+    ],
+    {
+      HYA_COMPAT_OPTIONS_JSON: JSON.stringify({
+        plugin: [pathToFileURL(pluginFile).href],
+      }),
+      HYA_DIRECTORY: root,
+      HYA_WORKTREE: root,
+    },
+  )
+
+  expect(responses[0]?.error?.code).toBe(-32603)
+  expect(responses[0]?.error?.message).toContain("duplicate Skill contribution id")
 })
 
 test("bundle activation initialize accepts exact operational metadata", async () => {

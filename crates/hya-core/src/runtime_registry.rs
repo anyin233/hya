@@ -8,7 +8,7 @@ use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 use hya_proto::{ConfigGeneration, ToolName, ToolSchema};
 use hya_tool::{
     DuplicateName, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
-    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills, parse_skill,
+    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,21 +41,24 @@ pub struct RuntimeRegistry {
 /// Offline mutable candidate. Its contents cannot become effective except
 /// through [`RuntimeRegistry::refresh`].
 pub struct RuntimeCandidate {
+    catalog: Arc<AgentCatalog>,
     tools: ToolRegistry,
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
 }
 
-/// Kind of external runtime contribution.
+/// Kind of runtime contribution source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeSourceKind {
+    /// Statically prepared bundle resources.
+    Bundle,
     /// MCP server tools.
     Mcp,
-    /// Plugin-declared tools.
+    /// Plugin-declared tools and Skills.
     Plugin,
 }
 
-/// Stable identity of a configured MCP/plugin source.
+/// Stable identity of a configured bundle, MCP, or plugin source.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeSourceId {
     kind: RuntimeSourceKind,
@@ -80,14 +83,30 @@ pub struct RuntimeSourceExport {
     permission: ToolPermission,
 }
 
-/// Published MCP/plugin source with tools and opaque resources.
+/// Published bundle/MCP/plugin source with tools, Skills, and opaque resources.
 #[derive(Clone)]
 pub struct RuntimeSource {
     id: RuntimeSourceId,
     declaration_digest: [u8; 32],
     owner: Arc<dyn RuntimeSourceOwner>,
     exports: Vec<RuntimeSourceExport>,
+    skills: Vec<RuntimeSourceSkill>,
     resources: Arc<BTreeMap<String, Value>>,
+}
+
+/// One Skill contribution materialized for a published runtime source.
+///
+/// `stable_id` is the resource identity used by bundle resource views. The
+/// parsed entry carries the complete Skill metadata and a deterministic virtual
+/// path; no runtime consumer reparses the original Markdown.
+#[derive(Clone)]
+pub struct RuntimeSourceSkill {
+    stable_id: String,
+    local_id: String,
+    aliases: Vec<String>,
+    digest: String,
+    content: String,
+    entry: SkillCatalogEntry,
 }
 
 /// Serialisable summary of a source for diagnostics/UI.
@@ -99,6 +118,10 @@ pub struct RuntimeSourceManifest {
     pub declaration_digest: [u8; 32],
     /// Canonical export names.
     pub exports: Vec<String>,
+    /// Canonical Skill resource ids.
+    pub skills: Vec<String>,
+    /// Parsed Skill metadata retained by the published source.
+    pub skill_entries: Vec<SkillCatalogEntry>,
     /// Opaque resource map from the source.
     pub resources: Arc<BTreeMap<String, Value>>,
 }
@@ -160,7 +183,8 @@ pub struct AgentResourcePolicy {
     bundle_id: Option<String>,
     plane: AgentToolPlane,
     resource_view: ResourceView,
-    selected_bundle_tool_ids: Arc<[String]>,
+    selected_bundle_tool_ids: Arc<Vec<String>>,
+    selected_bundle_skill_ids: Arc<Vec<String>>,
     canonical_hook_ids: Arc<[String]>,
 }
 
@@ -168,7 +192,13 @@ impl AgentResourcePolicy {
     /// Bundle-local tool ids selected for this agent view.
     #[must_use]
     pub fn selected_bundle_tool_ids(&self) -> &[String] {
-        self.selected_bundle_tool_ids.as_ref()
+        self.selected_bundle_tool_ids.as_slice()
+    }
+
+    /// Bundle-local Skill ids selected for this agent view.
+    #[must_use]
+    pub fn selected_bundle_skill_ids(&self) -> &[String] {
+        self.selected_bundle_skill_ids.as_slice()
     }
 
     /// Canonical hook ids activated for this agent view.
@@ -364,6 +394,16 @@ impl RuntimeRegistry {
                                 .iter()
                                 .map(|export| export.canonical_name.clone())
                                 .collect(),
+                            skills: source
+                                .skills
+                                .iter()
+                                .map(|skill| skill.stable_id.clone())
+                                .collect(),
+                            skill_entries: source
+                                .skills
+                                .iter()
+                                .map(|skill| skill.entry.clone())
+                                .collect(),
                             resources: source.resources.clone(),
                         },
                     )
@@ -384,19 +424,24 @@ impl RuntimeRegistry {
         current: Arc<RuntimeSnapshot>,
         candidate: RuntimeCandidate,
     ) -> Result<Arc<RuntimeSnapshot>, RuntimeRefreshError> {
-        let tools = candidate.tools.snapshot();
-        let skills = candidate.skills;
+        let RuntimeCandidate {
+            catalog,
+            tools,
+            skills,
+            sources,
+        } = candidate;
+        let tools = tools.snapshot();
         let generation = current
             .generation
             .checked_next()
             .ok_or(RuntimeRefreshError::GenerationExhausted)?;
         let published = Arc::new(RuntimeSnapshot {
             generation,
-            catalog: Arc::clone(&current.catalog),
+            catalog,
             basic_tools: current.basic_tools.clone(),
             tools,
             skills,
-            sources: candidate.sources,
+            sources,
         });
         *self
             .active
@@ -409,10 +454,16 @@ impl RuntimeRegistry {
 impl RuntimeCandidate {
     fn from_snapshot(snapshot: &RuntimeSnapshot) -> Self {
         Self {
+            catalog: Arc::clone(&snapshot.catalog),
             tools: ToolRegistry::from_snapshot(&snapshot.tools),
             skills: snapshot.skills.clone(),
             sources: snapshot.sources.clone(),
         }
+    }
+
+    /// Replace the complete Agent/Bundle catalog on this offline candidate.
+    pub fn replace_catalog(&mut self, catalog: Arc<AgentCatalog>) {
+        self.catalog = catalog;
     }
 
     /// Register a tool with default `Tool` permission on this candidate.
@@ -490,9 +541,72 @@ impl RuntimeCandidate {
                         identity,
                     )?;
             }
+            let mut skill_ids = BTreeSet::new();
+            for skill in &source.skills {
+                if !skill_ids.insert(skill.stable_id.as_str()) {
+                    return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                        "duplicate Skill {} for source {}",
+                        skill.stable_id, source.id
+                    )));
+                }
+                if skill.local_id.is_empty() || skill.entry.name != skill.local_id {
+                    return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                        "Skill {} local id does not match parsed name for source {}",
+                        skill.stable_id, source.id
+                    )));
+                }
+                match source.id.kind {
+                    RuntimeSourceKind::Bundle => {
+                        let Some(bundle_path) = skill.stable_id.strip_prefix("bundle:") else {
+                            return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                                "bundle source {} published non-bundle Skill {}",
+                                source.id, skill.stable_id
+                            )));
+                        };
+                        let expected =
+                            format!("{}/skill/{}", source.id.configured_id, skill.local_id);
+                        if bundle_path != expected {
+                            return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                                "bundle Skill {} is not owned by source {}",
+                                skill.stable_id, source.id
+                            )));
+                        }
+                    }
+                    RuntimeSourceKind::Mcp | RuntimeSourceKind::Plugin => {
+                        if skill.stable_id.starts_with("bundle:") {
+                            return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                                "non-bundle source {} cannot publish bundle Skill {}",
+                                source.id, skill.stable_id
+                            )));
+                        }
+                    }
+                }
+            }
             self.sources.insert(source.id.clone(), source);
         }
         Ok(())
+    }
+
+    /// Replace every source of one kind while preserving other source kinds.
+    pub fn replace_sources_of_kind(
+        &mut self,
+        kind: RuntimeSourceKind,
+        sources: Vec<RuntimeSource>,
+    ) -> Result<(), RuntimeRefreshError> {
+        if let Some(source) = sources.iter().find(|source| source.id.kind() != kind) {
+            return Err(RuntimeRefreshError::InvalidCandidate(format!(
+                "source {} does not belong to replacement kind {kind:?}",
+                source.id
+            )));
+        }
+        let removed = self
+            .sources
+            .keys()
+            .filter(|id| id.kind() == kind)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.remove_sources(&removed);
+        self.upsert_sources(sources)
     }
 
     /// Remove sources by id from this candidate.
@@ -522,7 +636,8 @@ impl RuntimeCandidate {
     }
 
     fn logically_matches(&self, snapshot: &RuntimeSnapshot) -> bool {
-        self.tools.logically_matches(&snapshot.tools)
+        self.catalog.bundles().bundles() == snapshot.catalog.bundles().bundles()
+            && self.tools.logically_matches(&snapshot.tools)
             && self.skills == snapshot.skills
             && sources_match(&self.sources, &snapshot.sources)
     }
@@ -536,6 +651,12 @@ impl RuntimeSourceId {
             kind,
             configured_id: configured_id.into(),
         }
+    }
+
+    #[must_use]
+    /// Construct a statically prepared bundle [`RuntimeSourceId`].
+    pub fn bundle(configured_id: impl Into<String>) -> Self {
+        Self::new(RuntimeSourceKind::Bundle, configured_id)
     }
 
     #[must_use]
@@ -566,6 +687,7 @@ impl RuntimeSourceId {
 impl std::fmt::Display for RuntimeSourceId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match self.kind {
+            RuntimeSourceKind::Bundle => "bundle",
             RuntimeSourceKind::Mcp => "mcp",
             RuntimeSourceKind::Plugin => "plugin",
         };
@@ -592,9 +714,60 @@ impl RuntimeSourceExport {
         }
     }
 }
+impl RuntimeSourceSkill {
+    /// Build one source-owned Skill entry from a parsed contribution.
+    #[must_use]
+    pub fn new(
+        stable_id: impl Into<String>,
+        local_id: impl Into<String>,
+        aliases: Vec<String>,
+        digest: impl Into<String>,
+        content: impl Into<String>,
+        entry: SkillCatalogEntry,
+    ) -> Self {
+        Self {
+            stable_id: stable_id.into(),
+            local_id: local_id.into(),
+            aliases,
+            digest: digest.into(),
+            content: content.into(),
+            entry,
+        }
+    }
+
+    /// Stable resource id used in bundle resource views.
+    #[must_use]
+    pub fn stable_id(&self) -> &str {
+        &self.stable_id
+    }
+
+    /// Bundle or plugin-local Skill id.
+    #[must_use]
+    pub fn local_id(&self) -> &str {
+        &self.local_id
+    }
+
+    /// Declared SHA-256 digest of the complete Skill content.
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// Complete Skill Markdown declaration bytes.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Parsed Skill metadata retained by the source.
+    #[must_use]
+    pub fn entry(&self) -> &SkillCatalogEntry {
+        &self.entry
+    }
+}
 
 impl RuntimeSource {
-    /// Build a published source with exports and an empty resource map.
+    /// Build a published source with exports, Skills, and an empty resource map.
     #[must_use]
     pub fn new(
         id: RuntimeSourceId,
@@ -607,8 +780,16 @@ impl RuntimeSource {
             declaration_digest,
             owner,
             exports,
+            skills: Vec::new(),
             resources: Arc::new(BTreeMap::new()),
         }
+    }
+
+    /// Attach parsed Skill contributions to the source.
+    #[must_use]
+    pub fn with_skills(mut self, skills: Vec<RuntimeSourceSkill>) -> Self {
+        self.skills = skills;
+        self
     }
 
     #[must_use]
@@ -635,6 +816,15 @@ fn sources_match(
                 left.declaration_digest == right.declaration_digest
                     && Arc::ptr_eq(&left.owner, &right.owner)
                     && left.resources == right.resources
+                    && left.skills.len() == right.skills.len()
+                    && left.skills.iter().zip(&right.skills).all(|(left, right)| {
+                        left.stable_id == right.stable_id
+                            && left.local_id == right.local_id
+                            && left.aliases == right.aliases
+                            && left.digest == right.digest
+                            && left.content == right.content
+                            && left.entry == right.entry
+                    })
                     && left.exports.len() == right.exports.len()
                     && left
                         .exports
@@ -786,19 +976,33 @@ impl TurnBinding {
             bundle_id,
             plane,
             resource_view,
-            selected_bundle_tool_ids: Arc::from(Vec::<String>::new()),
+            selected_bundle_tool_ids: Arc::new(Vec::new()),
+            selected_bundle_skill_ids: Arc::new(Vec::new()),
             canonical_hook_ids: Arc::from(hook_refs),
         };
         if let Ok(partitions) = self.collect_resource_candidates(&policy)
             && let Ok(selected) = select_candidates_globally(&policy, &partitions)
         {
-            policy.selected_bundle_tool_ids = Arc::from(
+            policy.selected_bundle_tool_ids = Arc::new(
                 selected
                     .tool
                     .iter()
                     .filter(|id| {
                         partitions
                             .tool
+                            .get(*id)
+                            .is_some_and(ResourceCandidate::is_bundle_local)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+            policy.selected_bundle_skill_ids = Arc::new(
+                selected
+                    .skill
+                    .iter()
+                    .filter(|id| {
+                        partitions
+                            .skill
                             .get(*id)
                             .is_some_and(ResourceCandidate::is_bundle_local)
                     })
@@ -881,16 +1085,18 @@ impl TurnBinding {
                 tool_candidates.insert(
                     resource.stable_id.clone(),
                     ResourceCandidate::BundleLocal {
-                        local_id: resource.local_id.clone(),
-                        source_path: resource.source_path.clone(),
-                        content: resource.content.clone(),
                         short_name: resource.local_id.clone(),
                         qualified_name: resource.stable_id.clone(),
                         aliases: resource.aliases.clone(),
                     },
                 );
             }
-            collect_bundle_skill_candidates(bundles, bundle_id, &mut skill_candidates)?;
+            collect_bundle_skill_candidates(
+                bundles,
+                &self.snapshot.sources,
+                bundle_id,
+                &mut skill_candidates,
+            )?;
             collect_bundle_mcp_candidates(bundles, bundle_id, &mut mcp_candidates)?;
         }
 
@@ -901,7 +1107,12 @@ impl TurnBinding {
             &self.snapshot.sources,
             &mut tool_candidates,
         );
-        collect_harness_skill_candidates(policy.plane, self.skills(), &mut skill_candidates);
+        collect_harness_skill_candidates(
+            policy.plane,
+            self.skills(),
+            &self.snapshot.sources,
+            &mut skill_candidates,
+        );
         collect_harness_mcp_candidates(policy.plane, &self.snapshot.sources, &mut mcp_candidates);
 
         Ok(CandidatePartitions {
@@ -1073,7 +1284,8 @@ impl TurnBinding {
                 | ResourceCandidate::HarnessMcp { resolved, .. } => {
                     tools.insert(public_name.clone(), resolved.clone());
                 }
-                ResourceCandidate::HarnessSkill { .. } => {
+                ResourceCandidate::BundleLocalSkill { .. }
+                | ResourceCandidate::HarnessSkill { .. } => {
                     return Err(BundleError::UnknownResourceReference {
                         bundle_id: bundle_id.to_string(),
                         kind: kind.to_string(),
@@ -1102,14 +1314,11 @@ impl TurnBinding {
                 }
             })?;
             let mut entry = match candidate {
-                ResourceCandidate::BundleLocal {
-                    local_id,
-                    source_path,
-                    content,
-                    ..
-                } => parse_bundle_skill(bundle_id, local_id, source_path, content)?,
-                ResourceCandidate::HarnessSkill { entry, .. } => entry.clone(),
-                ResourceCandidate::HarnessTool { .. } | ResourceCandidate::HarnessMcp { .. } => {
+                ResourceCandidate::BundleLocalSkill { entry, .. }
+                | ResourceCandidate::HarnessSkill { entry, .. } => entry.clone(),
+                ResourceCandidate::BundleLocal { .. }
+                | ResourceCandidate::HarnessTool { .. }
+                | ResourceCandidate::HarnessMcp { .. } => {
                     return Err(BundleError::UnknownResourceReference {
                         bundle_id: bundle_id.to_string(),
                         kind: "skill".to_string(),
@@ -1220,11 +1429,14 @@ impl CompiledResourceView {
 #[derive(Clone)]
 enum ResourceCandidate {
     BundleLocal {
-        local_id: String,
-        source_path: String,
-        content: String,
         short_name: String,
         qualified_name: String,
+        aliases: Vec<String>,
+    },
+    BundleLocalSkill {
+        short_name: String,
+        qualified_name: String,
+        entry: SkillCatalogEntry,
         aliases: Vec<String>,
     },
     HarnessTool {
@@ -1251,6 +1463,7 @@ impl ResourceCandidate {
     fn short_name(&self) -> &str {
         match self {
             Self::BundleLocal { short_name, .. }
+            | Self::BundleLocalSkill { short_name, .. }
             | Self::HarnessTool { short_name, .. }
             | Self::HarnessSkill { short_name, .. }
             | Self::HarnessMcp { short_name, .. } => short_name,
@@ -1260,6 +1473,7 @@ impl ResourceCandidate {
     fn qualified_name(&self) -> &str {
         match self {
             Self::BundleLocal { qualified_name, .. }
+            | Self::BundleLocalSkill { qualified_name, .. }
             | Self::HarnessTool { qualified_name, .. }
             | Self::HarnessSkill { qualified_name, .. }
             | Self::HarnessMcp { qualified_name, .. } => qualified_name,
@@ -1267,12 +1481,16 @@ impl ResourceCandidate {
     }
 
     fn is_bundle_local(&self) -> bool {
-        matches!(self, Self::BundleLocal { .. })
+        matches!(
+            self,
+            Self::BundleLocal { .. } | Self::BundleLocalSkill { .. }
+        )
     }
 
     fn aliases(&self) -> &[String] {
         match self {
             Self::BundleLocal { aliases, .. }
+            | Self::BundleLocalSkill { aliases, .. }
             | Self::HarnessTool { aliases, .. }
             | Self::HarnessSkill { aliases, .. }
             | Self::HarnessMcp { aliases, .. } => aliases,
@@ -1390,6 +1608,7 @@ fn runtime_source_dispatch_identity(
         match source.id.kind {
             RuntimeSourceKind::Mcp => 0,
             RuntimeSourceKind::Plugin => 1,
+            RuntimeSourceKind::Bundle => 2,
         },
     );
     append_identity_tag(&mut bytes, 2);
@@ -1574,6 +1793,7 @@ fn append_runtime_source_view_identity(
             match source_id.kind {
                 RuntimeSourceKind::Mcp => 0,
                 RuntimeSourceKind::Plugin => 1,
+                RuntimeSourceKind::Bundle => 2,
             },
         );
         append_identity_tag(bytes, 2);
@@ -1588,6 +1808,28 @@ fn append_runtime_source_view_identity(
         }
 
         append_identity_tag(bytes, 5);
+        append_identity_count(bytes, source.skills.len()).ok()?;
+        for skill in &source.skills {
+            append_identity_tag(bytes, 1);
+            append_identity_bytes(bytes, skill.stable_id.as_bytes()).ok()?;
+            append_identity_tag(bytes, 2);
+            append_identity_bytes(bytes, skill.local_id.as_bytes()).ok()?;
+            append_identity_tag(bytes, 3);
+            let mut aliases = skill.aliases.clone();
+            aliases.sort();
+            append_identity_count(bytes, aliases.len()).ok()?;
+            for alias in aliases {
+                append_identity_bytes(bytes, alias.as_bytes()).ok()?;
+            }
+            append_identity_tag(bytes, 4);
+            append_identity_bytes(bytes, skill.digest.as_bytes()).ok()?;
+            append_identity_tag(bytes, 5);
+            append_identity_bytes(bytes, skill.content.as_bytes()).ok()?;
+            append_identity_tag(bytes, 6);
+            append_skill_view_identity(bytes, std::slice::from_ref(&skill.entry))?;
+        }
+
+        append_identity_tag(bytes, 6);
         append_identity_count(bytes, source.exports.len()).ok()?;
         for export in &source.exports {
             append_identity_tag(bytes, 1);
@@ -1631,9 +1873,6 @@ fn collect_bundle_tool_candidates(
         out.insert(
             resource.stable_id.clone(),
             ResourceCandidate::BundleLocal {
-                local_id: resource.local_id.clone(),
-                source_path: resource.source_path.clone(),
-                content: resource.content.clone(),
                 short_name: resource.local_id.clone(),
                 qualified_name: resource.stable_id.clone(),
                 aliases: resource.aliases.clone(),
@@ -1690,6 +1929,7 @@ fn collect_harness_tool_candidates(
 
 fn collect_bundle_skill_candidates(
     catalog: &BundleCatalog,
+    sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
     bundle_id: &str,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) -> Result<(), BundleError> {
@@ -1700,16 +1940,52 @@ fn collect_bundle_skill_candidates(
             reference: bundle_id.to_string(),
         });
     };
-    for resource in resources {
+    if resources.is_empty() {
+        return Ok(());
+    }
+    let source_id = RuntimeSourceId::bundle(bundle_id);
+    let Some(source) = sources.get(&source_id) else {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: "prepared Skill contributions were not published".to_string(),
+        });
+    };
+    let prepared = resources
+        .iter()
+        .map(|resource| (resource.stable_id.as_str(), resource))
+        .collect::<BTreeMap<_, _>>();
+    if prepared.len() != source.skills.len() {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: "published Skill contributions do not match prepared resources".to_string(),
+        });
+    }
+    for skill in &source.skills {
+        let Some(resource) = prepared.get(skill.stable_id.as_str()) else {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!("published Skill `{}` is not prepared", skill.stable_id),
+            });
+        };
+        if resource.local_id != skill.local_id
+            || resource.digest != skill.digest
+            || resource.aliases != skill.aliases
+        {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "published Skill `{}` differs from prepared bytes",
+                    skill.stable_id
+                ),
+            });
+        }
         out.insert(
-            resource.stable_id.clone(),
-            ResourceCandidate::BundleLocal {
-                local_id: resource.local_id.clone(),
-                source_path: resource.source_path.clone(),
-                content: resource.content.clone(),
-                short_name: resource.local_id.clone(),
-                qualified_name: resource.stable_id.clone(),
-                aliases: resource.aliases.clone(),
+            skill.stable_id.clone(),
+            ResourceCandidate::BundleLocalSkill {
+                short_name: skill.local_id.clone(),
+                qualified_name: skill.stable_id.clone(),
+                entry: skill.entry.clone(),
+                aliases: skill.aliases.clone(),
             },
         );
     }
@@ -1719,10 +1995,12 @@ fn collect_bundle_skill_candidates(
 fn collect_harness_skill_candidates(
     plane: AgentToolPlane,
     harness_skills: &[SkillCatalogEntry],
+    sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // Project and user skills are discovered from the working directory. A
-    // bundle agent must not see them.
+    // bundle agent must not see them. Bundle-owned source Skills are selected
+    // by `collect_bundle_skill_candidates` so they remain owner-scoped.
     if plane != AgentToolPlane::Full {
         return;
     }
@@ -1737,6 +2015,25 @@ fn collect_harness_skill_candidates(
                 aliases: Vec::new(),
             },
         );
+    }
+    for source in sources.values() {
+        if source.id.kind() != RuntimeSourceKind::Plugin {
+            continue;
+        }
+        for skill in &source.skills {
+            if skill.stable_id.starts_with("bundle:") {
+                continue;
+            }
+            out.insert(
+                skill.stable_id.clone(),
+                ResourceCandidate::HarnessSkill {
+                    short_name: skill.local_id.clone(),
+                    qualified_name: skill.stable_id.clone(),
+                    entry: skill.entry.clone(),
+                    aliases: skill.aliases.clone(),
+                },
+            );
+        }
     }
 }
 
@@ -1756,9 +2053,6 @@ fn collect_bundle_mcp_candidates(
         out.insert(
             resource.stable_id.clone(),
             ResourceCandidate::BundleLocal {
-                local_id: resource.local_id.clone(),
-                source_path: resource.source_path.clone(),
-                content: resource.content.clone(),
                 short_name: resource.local_id.clone(),
                 qualified_name: resource.stable_id.clone(),
                 aliases: resource.aliases.clone(),
@@ -1799,38 +2093,6 @@ fn collect_harness_mcp_candidates(
             },
         );
     }
-}
-
-fn parse_bundle_skill(
-    bundle_id: &str,
-    local_id: &str,
-    source_path: &str,
-    content: &str,
-) -> Result<SkillCatalogEntry, BundleError> {
-    let parsed = parse_skill(content).ok_or_else(|| BundleError::InvalidManifest {
-        source_name: source_path.to_string(),
-        detail: "bundle-local skill must contain valid SKILL.md frontmatter".to_string(),
-    })?;
-    if parsed.name != local_id {
-        return Err(BundleError::InvalidManifest {
-            source_name: source_path.to_string(),
-            detail: format!(
-                "bundle-local skill name `{}` must match resource id `{local_id}`",
-                parsed.name
-            ),
-        });
-    }
-    let path = PathBuf::from(format!("bundle:{bundle_id}/{source_path}"));
-    let dir = path.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-    Ok(SkillCatalogEntry {
-        name: parsed.name,
-        description: parsed.description,
-        content: parsed.content,
-        allowed_tools: parsed.allowed_tools,
-        model: parsed.model,
-        path,
-        dir,
-    })
 }
 
 fn select_candidates_globally(
@@ -2309,8 +2571,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedBundle,
-        PreparedResource, SourceFile, SpawnLifecycle, prepare_package,
+        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+        PreparedInstallableBundle, PreparedResource, SourceFile, SpawnLifecycle, prepare_package,
     };
     use hya_proto::{AgentName, ToolName};
     use hya_tool::{
@@ -2321,13 +2583,18 @@ mod tests {
     use serde_json::{Value, json};
     use std::path::PathBuf;
 
-    /// Test shim: wrap prepared bundles as an [`AgentCatalog`] over the
+    /// Test shim: wrap prepared AgentBundles as an [`AgentCatalog`] over the
     /// compiled-in built-in roster, so unit tests keep their existing shape.
     struct TestCatalog;
 
     impl TestCatalog {
-        fn from_prepared(bundles: &[PreparedBundle]) -> Result<AgentCatalog, BundleError> {
-            AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles)?))
+        fn from_prepared(bundles: &[PreparedAgentBundle]) -> Result<AgentCatalog, BundleError> {
+            let bundles = bundles
+                .iter()
+                .cloned()
+                .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
+                .collect::<Vec<_>>();
+            AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
         }
 
         fn from_verified_catalogs(
@@ -2335,6 +2602,68 @@ mod tests {
         ) -> Result<AgentCatalog, BundleError> {
             AgentCatalog::new(Arc::new(BundleCatalog::from_verified_catalogs(catalogs)?))
         }
+    }
+
+    /// Build a test registry and publish every prepared bundle Skill through the runtime source seam.
+    fn test_runtime_registry(tools: ToolRegistry, catalog: Arc<AgentCatalog>) -> RuntimeRegistry {
+        let sources = catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .filter_map(|bundle| {
+                let skills = bundle
+                    .resources(hya_bundle::ExportKind::Skill)
+                    .iter()
+                    .map(|resource| {
+                        let parsed = hya_tool::parse_skill(&resource.content)
+                            .expect("test bundle Skill must contain valid frontmatter");
+                        let path = PathBuf::from(format!(
+                            "bundle:{}/{}",
+                            bundle.identity().id,
+                            resource.source_path
+                        ));
+                        let dir = path
+                            .parent()
+                            .expect("test bundle Skill path must have a parent")
+                            .to_path_buf();
+                        RuntimeSourceSkill::new(
+                            resource.stable_id.clone(),
+                            resource.local_id.clone(),
+                            resource.aliases.clone(),
+                            resource.digest.clone(),
+                            resource.content.clone(),
+                            SkillCatalogEntry {
+                                name: parsed.name,
+                                description: parsed.description,
+                                content: parsed.content,
+                                allowed_tools: parsed.allowed_tools,
+                                model: parsed.model,
+                                path,
+                                dir,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (!skills.is_empty()).then(|| {
+                    RuntimeSource::new(
+                        RuntimeSourceId::bundle(bundle.identity().id.clone()),
+                        [0; 32],
+                        Arc::new(()),
+                        Vec::new(),
+                    )
+                    .with_skills(skills)
+                })
+            })
+            .collect::<Vec<_>>();
+        let registry = RuntimeRegistry::new(tools, catalog);
+        if !sources.is_empty() {
+            registry
+                .refresh(|candidate| {
+                    candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources)
+                })
+                .expect("test bundle Skill sources must publish");
+        }
+        registry
     }
 
     struct NoopTool {
@@ -2414,9 +2743,9 @@ mod tests {
         bundle_id: &str,
         agent: PreparedAgent,
         skills: Vec<PreparedResource>,
-    ) -> PreparedBundle {
-        PreparedBundle {
-            format_version: 1,
+    ) -> PreparedAgentBundle {
+        PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),
                 version: "0.0.0".to_string(),
@@ -2460,7 +2789,7 @@ mod tests {
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let workdir = PathBuf::from("/tmp/hya-resource-view-pin");
         let binding = registry.bind_turn(&workdir).unwrap();
         let policy = binding
@@ -2498,7 +2827,7 @@ mod tests {
                     )])
                     .unwrap(),
                 );
-                let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+                let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
                 let mut resources = BTreeMap::new();
                 resources.insert("probe".to_string(), resource_value);
                 registry
@@ -2978,7 +3307,7 @@ agent:
             let Ok(catalog) = catalog else {
                 panic!("source fingerprint verified catalog construction failed: {catalog:?}");
             };
-            let registry = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::new(catalog));
+            let registry = test_runtime_registry(ToolRegistry::builtins(), Arc::new(catalog));
             let mut plugin_resources = BTreeMap::new();
             plugin_resources.insert(
                 "config".to_string(),
@@ -3212,7 +3541,7 @@ agent:
             .unwrap(),
         );
         // Register after construction so basic_tools stays builtins-only.
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
             .unwrap();
@@ -3248,7 +3577,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-denied"))
             .unwrap();
@@ -3283,7 +3612,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-qualified"))
             .unwrap();
@@ -3320,7 +3649,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-collide"))
             .unwrap();
@@ -3355,7 +3684,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let workdir = tempfile_skill_workdir("shared", "HARNESS");
         let binding = registry.bind_turn(&workdir).unwrap();
         let policy = binding
@@ -3402,7 +3731,7 @@ agent:
             )])
             .unwrap(),
         );
-        let filtered_registry = RuntimeRegistry::new(ToolRegistry::builtins(), filtered_catalog);
+        let filtered_registry = test_runtime_registry(ToolRegistry::builtins(), filtered_catalog);
         let filtered_binding = filtered_registry.bind_turn(&workdir).unwrap();
         let filtered_policy = filtered_binding
             .agent_resource_policy_on_plane("skill-agent", AgentToolPlane::Full)
@@ -3452,7 +3781,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-schema-dispatch"))
             .unwrap();
@@ -3502,7 +3831,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("dynamic_marker"))))
             .unwrap();
@@ -3510,6 +3839,10 @@ agent:
             .bind_turn(Path::new("/tmp/hya-none-inline"))
             .unwrap();
         let policy = binding.agent_resource_policy("none-agent").unwrap();
+        assert_eq!(
+            policy.selected_bundle_skill_ids(),
+            &["bundle:hya/none-inline/skill/bundle-skill".to_string()]
+        );
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         assert!(
             compiled.public_tool_names().is_empty(),
@@ -3596,7 +3929,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-qualified-map"))
             .unwrap();
@@ -3685,7 +4018,7 @@ agent:
             ])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| {
                 candidate.upsert_sources(vec![RuntimeSource::new(
@@ -3810,7 +4143,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), wrong_kind);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), wrong_kind);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-global-wrong-kind"))
             .unwrap();
@@ -3841,7 +4174,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), ambiguous);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), ambiguous);
         // Register a harness tool whose short name collides with the local skill.
         registry
             .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
@@ -3882,7 +4215,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-alias-self"))
             .unwrap();
@@ -3927,7 +4260,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-cross-kind-ok"))
             .unwrap();
@@ -3975,7 +4308,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| {
                 candidate.upsert_sources(vec![RuntimeSource::new(
@@ -4034,7 +4367,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| candidate.register_tool(Arc::new(NoopTool::new("shared"))))
             .unwrap();
@@ -4075,7 +4408,7 @@ agent:
                 )])
                 .unwrap(),
             );
-            let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+            let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
             let binding = registry.bind_turn(Path::new(workdir)).unwrap();
             let policy = binding
                 .agent_resource_policy_on_plane(agent_id, plane)
@@ -4129,7 +4462,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-view-alias-suppress"))
             .unwrap();
@@ -4197,7 +4530,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-view-alias-candidate-collide"))
             .unwrap();
@@ -4247,7 +4580,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| {
                 candidate.upsert_sources(vec![RuntimeSource::new(
@@ -4297,7 +4630,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         registry
             .refresh(|candidate| {
                 candidate.upsert_sources(vec![RuntimeSource::new(
@@ -4367,7 +4700,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-skill-alias"))
             .unwrap();
@@ -4417,7 +4750,7 @@ agent:
             ])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-filter-alias"))
             .unwrap();
@@ -4454,7 +4787,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-filtered-stable"))
             .unwrap();
@@ -4502,7 +4835,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-facade-alias"))
             .unwrap();
@@ -4557,7 +4890,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry.bind_turn(Path::new("/tmp/hya-spellings")).unwrap();
         let compiled = binding
             .compile_agent_resources(&binding.agent_resource_policy("spellings").unwrap())
@@ -4598,7 +4931,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let workdir = tempfile_skill_workdir("workdir-only", "MUST_NOT_INLINE");
         let binding = registry.bind_turn(&workdir).unwrap();
         let policy = binding
@@ -4649,7 +4982,7 @@ agent:
             )])
             .unwrap(),
         );
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-nested-bundle-id"))
             .unwrap();
@@ -4692,7 +5025,7 @@ agent:
         tools
             .register_with_permission(Arc::new(NoopTool::new("echo")), ToolPermission::Tool)
             .unwrap();
-        let registry = RuntimeRegistry::new(tools, catalog);
+        let registry = test_runtime_registry(tools, catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-sidecar-tool-map"))
             .unwrap();
@@ -4799,7 +5132,7 @@ agent:
         }];
 
         let catalog = Arc::new(TestCatalog::from_prepared(&[alpha_bundle, beta_bundle]).unwrap());
-        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-disjoint-sidecars"))
             .unwrap();

@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::error::{Result, SdkError};
 use crate::store::StoredPart;
 use crate::types::{Agent, Config, Message, Session};
+use crate::workflow::{WorkflowCommand, WorkflowCommandResult, WorkflowProjection};
 
 /// Raw request transport beneath [`Client`].
 ///
@@ -45,6 +46,22 @@ pub trait Client: Send + Sync {
     /// `GET /session/{id}`
     async fn session_get(&self, session_id: &str) -> Result<Session>;
 
+    /// `POST /session/{id}/workflow` — execute one typed Workflow command.
+    ///
+    /// The command and result are the shared tagged DTOs used by the backend
+    /// control seam. HTTP/native transports use the same path and JSON body.
+    async fn workflow_command(
+        &self,
+        session_id: &str,
+        command: WorkflowCommand,
+    ) -> Result<WorkflowCommandResult>;
+
+    /// `GET /session/{id}/workflow` — read replay-derived Workflow state.
+    ///
+    /// The endpoint normally returns `WorkflowCommandResult::State`; accepting
+    /// a bare projection as well keeps this method compatible with servers that
+    /// expose the state resource without the command envelope.
+    async fn workflow_state(&self, session_id: &str) -> Result<WorkflowProjection>;
     /// `GET /session/{id}/message` — full history as `{info, parts}` pairs (info → [`Message`],
     /// parts → [`StoredPart`]s). Hydrates the store when switching to a session not streamed live.
     async fn session_messages(&self, session_id: &str) -> Result<Vec<(Message, Vec<StoredPart>)>>;
@@ -214,15 +231,18 @@ impl Transport for HttpTransport {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let bytes = request
+        let response = request
             .send()
             .await
-            .map_err(|e| SdkError::Http(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| SdkError::Http(e.to_string()))?
+            .map_err(|e| SdkError::Http(e.to_string()))?;
+        let status = response.status();
+        let bytes = response
             .bytes()
             .await
             .map_err(|e| SdkError::Http(e.to_string()))?;
+        if !status.is_success() {
+            return Err(crate::error::decode_http_error(status.as_u16(), &bytes));
+        }
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
@@ -276,6 +296,25 @@ impl<T: Transport> Client for ApiClient<T> {
 
     async fn session_get(&self, session_id: &str) -> Result<Session> {
         self.get(&format!("/session/{session_id}")).await
+    }
+    async fn workflow_command(
+        &self,
+        session_id: &str,
+        command: WorkflowCommand,
+    ) -> Result<WorkflowCommandResult> {
+        self.post(
+            &format!("/session/{session_id}/workflow"),
+            serde_json::to_value(command)?,
+        )
+        .await
+    }
+
+    async fn workflow_state(&self, session_id: &str) -> Result<WorkflowProjection> {
+        let value = self
+            .transport
+            .request("GET", &format!("/session/{session_id}/workflow"), None)
+            .await?;
+        decode_workflow_state(value)
     }
 
     async fn session_messages(&self, session_id: &str) -> Result<Vec<(Message, Vec<StoredPart>)>> {
@@ -600,6 +639,21 @@ impl<T: Transport> Client for ApiClient<T> {
     }
 }
 
+fn decode_workflow_state(value: Value) -> Result<WorkflowProjection> {
+    match serde_json::from_value::<WorkflowCommandResult>(value.clone()) {
+        Ok(WorkflowCommandResult::State { state })
+        | Ok(WorkflowCommandResult::Selected { state }) => Ok(state),
+        Ok(other) => Err(SdkError::Http(format!(
+            "workflow state endpoint returned unexpected result {other:?}"
+        ))),
+        Err(wrapper_error) => serde_json::from_value(value).map_err(|projection_error| {
+            SdkError::Http(format!(
+                "decode workflow state: {projection_error}; wrapper decode: {wrapper_error}"
+            ))
+        }),
+    }
+}
+
 fn parse_plugin_entry(value: &str) -> (String, Option<String>) {
     if let Some(rest) = value.strip_prefix("file://") {
         let mut parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
@@ -656,8 +710,83 @@ fn model_variant_names(info: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{model_variant_names, parse_plugin_entry, question_path};
-    use serde_json::json;
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use tokio::sync::Mutex;
+
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use serde_json::{json, Value};
+
+    use super::{
+        model_variant_names, parse_plugin_entry, question_path, ApiClient, Client, Transport,
+    };
+    use crate::error::Result;
+    use crate::workflow::{WorkflowCommand, WorkflowCommandResult};
+    type RecordedCall = (String, String, Option<Value>);
+
+    struct RecordingTransport {
+        calls: Arc<Mutex<Vec<RecordedCall>>>,
+        response: Value,
+    }
+
+    #[async_trait]
+    impl Transport for RecordingTransport {
+        fn base_url(&self) -> &str {
+            "http://test.invalid"
+        }
+
+        fn directory(&self) -> &str {
+            "/tmp"
+        }
+
+        async fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
+            self.calls
+                .lock()
+                .await
+                .push((method.to_owned(), path.to_owned(), body.cloned()));
+            Ok(self.response.clone())
+        }
+    }
+    #[tokio::test]
+    async fn workflow_methods_use_shared_endpoint_and_typed_json() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let client = ApiClient::with_transport(RecordingTransport {
+            calls: Arc::clone(&calls),
+            response: json!({ "kind": "list", "workflows": [] }),
+        });
+        let result = client
+            .workflow_command("ses_1", WorkflowCommand::List)
+            .await
+            .expect("typed list result");
+        assert!(
+            matches!(result, WorkflowCommandResult::List { workflows } if workflows.is_empty())
+        );
+        let recorded = calls.lock().await;
+        assert_eq!(
+            recorded.as_slice(),
+            &[(
+                String::from("POST"),
+                String::from("/session/ses_1/workflow"),
+                Some(json!({ "command": "list" })),
+            )]
+        );
+
+        let state_calls = Arc::new(Mutex::new(Vec::new()));
+        let state_client = ApiClient::with_transport(RecordingTransport {
+            calls: Arc::clone(&state_calls),
+            response: json!({ "kind": "state", "state": { "selection": null, "run": null } }),
+        });
+        let state = state_client
+            .workflow_state("ses_1")
+            .await
+            .expect("typed state result");
+        assert!(state.selection.is_none());
+        let state_calls = state_calls.lock().await;
+        assert_eq!(state_calls[0].0, "GET");
+        assert_eq!(state_calls[0].1, "/session/ses_1/workflow");
+    }
 
     #[test]
     fn parse_plugin_entry_handles_name_at_version_and_file_urls() {

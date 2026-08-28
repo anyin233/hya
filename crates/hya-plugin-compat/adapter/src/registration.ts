@@ -1,8 +1,7 @@
 import type { CompatHooks } from "./loader/init"
 
-export type HookRegistration = {
-  readonly name: string
-}
+export type { HookRegistration } from "./contributions"
+import type { HookRegistration } from "./contributions"
 
 const HOOK_MAPPINGS = [
   ["event", "event"],

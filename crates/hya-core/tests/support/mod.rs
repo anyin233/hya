@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, RuntimeRegistry};
 use hya_proto::{AgentName, ToolName, ToolSchema};
@@ -37,38 +37,44 @@ pub fn test_catalog_with_lifecycles(
     let bundles = agents
         .iter()
         .filter(|(stable_id, _, _, _)| !hya_core::is_builtin_id(stable_id))
-        .map(|(stable_id, role, lifecycle, can_spawn)| PreparedBundle {
-            format_version: 1,
-            identity: BundleIdentity {
-                id: format!("hya/test-{stable_id}"),
-                version: "0.0.0".to_string(),
-                publisher: "hya-tests".to_string(),
+        .map(
+            |(stable_id, role, lifecycle, can_spawn)| PreparedAgentBundle {
+                format_version: 2,
+                identity: BundleIdentity {
+                    id: format!("hya/test-{stable_id}"),
+                    version: "0.0.0".to_string(),
+                    publisher: "hya-tests".to_string(),
+                },
+                digest: format!("test-only-{stable_id}"),
+                agent: PreparedAgent {
+                    id: AgentName::new(*stable_id),
+                    description: None,
+                    role: *role,
+                    color: None,
+                    prompt: Some(format!("{stable_id} prompt")),
+                    prompt_source: None,
+                    prompt_digest: None,
+                    model_policy: ModelPolicy::default(),
+                    workdir: None,
+                    spawn_lifecycle: *lifecycle,
+                    resource_view: ResourceView::default(),
+                    can_spawn: can_spawn
+                        .iter()
+                        .map(|agent| AgentName::new(*agent))
+                        .collect(),
+                    hook_refs: Vec::new(),
+                },
+                tools: Vec::new(),
+                skills: Vec::new(),
+                mcp: Vec::new(),
+                hooks: Vec::new(),
+                extensions: Vec::new(),
             },
-            digest: format!("test-only-{stable_id}"),
-            agent: PreparedAgent {
-                id: AgentName::new(*stable_id),
-                description: None,
-                role: *role,
-                color: None,
-                prompt: Some(format!("{stable_id} prompt")),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy::default(),
-                workdir: None,
-                spawn_lifecycle: *lifecycle,
-                resource_view: ResourceView::default(),
-                can_spawn: can_spawn
-                    .iter()
-                    .map(|agent| AgentName::new(*agent))
-                    .collect(),
-                hook_refs: Vec::new(),
-            },
-            tools: Vec::new(),
-            skills: Vec::new(),
-            mcp: Vec::new(),
-            hooks: Vec::new(),
-            extensions: Vec::new(),
-        })
+        )
+        .collect::<Vec<_>>();
+    let bundles = bundles
+        .into_iter()
+        .map(|bundle| PreparedInstallableBundle::Agent(Box::new(bundle)))
         .collect::<Vec<_>>();
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {

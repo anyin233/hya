@@ -1,5 +1,10 @@
 import type { CompatHooks } from "./loader/init"
+import {
+  emptyPluginContributionSet,
+  type PluginContributionSet,
+} from "./contributions"
 import type { CompatToolDefinition } from "./tool"
+
 
 export type TextSink = {
   readonly write: (data: string) => unknown
@@ -32,9 +37,12 @@ export type RequestContext = {
   readonly stderr: TextSink
   readonly hooks: CompatHooks[]
   readonly tools: Map<string, CompatToolDefinition>
+  /** Current typed initialize declarations published by the adapter. */
+  contributions: PluginContributionSet
   readonly bundleExtensions: readonly string[]
   activation: ActivationMetadata | undefined
 }
+
 
 export function createRequestContext(options: RuntimeOptions): RequestContext {
   return {
@@ -43,6 +51,7 @@ export function createRequestContext(options: RuntimeOptions): RequestContext {
     stderr: options.stderr,
     hooks: [],
     tools: new Map<string, CompatToolDefinition>(),
+    contributions: emptyPluginContributionSet(),
     bundleExtensions: options.bundleExtensions,
     activation: undefined,
   }

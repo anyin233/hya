@@ -8,11 +8,14 @@
 //! - `startup-bench` — measure backend startup latency.
 //! - `matrix-check` — verify the agent test matrix in `docs/testing/` still
 //!   matches the scenarios the suites actually declare.
+//! - `package-bundle` — validate a source tree and emit deterministic public
+//!   `.hyabundle` bytes through the shared package writer.
 //!
 //! An unknown or missing task prints usage and exits successfully, so the binary
 //! is safe to invoke from a wrapper that does not know the task list.
 
 mod matrix_check;
+mod package_bundle;
 mod startup_bench;
 mod sync_compat;
 
@@ -24,10 +27,13 @@ fn main() {
     let result = match task.as_deref() {
         Some("sync-compat") => sync_compat::run(args.collect()),
         Some("migrate") => sync_compat::run(args.collect()),
+        Some("package-bundle") => package_bundle::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),
         _ => {
-            eprintln!("usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check>");
+            eprintln!(
+                "usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check|package-bundle>"
+            );
             Ok(())
         }
     };

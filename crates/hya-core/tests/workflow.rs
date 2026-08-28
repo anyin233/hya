@@ -1768,35 +1768,37 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                     aliases: Vec::new(),
                 });
             }
-            hya_bundle::PreparedBundle {
-                format_version: 1,
-                identity: hya_bundle::BundleIdentity {
-                    id: format!("hya/test-{stable_id}"),
-                    version: "0.0.0".to_string(),
-                    publisher: "hya-tests".to_string(),
+            hya_bundle::PreparedInstallableBundle::Agent(Box::new(
+                hya_bundle::PreparedAgentBundle {
+                    format_version: 2,
+                    identity: hya_bundle::BundleIdentity {
+                        id: format!("hya/test-{stable_id}"),
+                        version: "0.0.0".to_string(),
+                        publisher: "hya-tests".to_string(),
+                    },
+                    digest: format!("test-only-{stable_id}"),
+                    agent: hya_bundle::PreparedAgent {
+                        id: AgentName::new(*stable_id),
+                        description: None,
+                        role: AgentRole::Subagent,
+                        color: None,
+                        prompt: Some(format!("{stable_id} prompt")),
+                        prompt_source: None,
+                        prompt_digest: None,
+                        model_policy: hya_bundle::ModelPolicy::default(),
+                        workdir: None,
+                        spawn_lifecycle: hya_bundle::SpawnLifecycle::Transient,
+                        resource_view: hya_bundle::ResourceView::default(),
+                        can_spawn: Vec::new(),
+                        hook_refs: Vec::new(),
+                    },
+                    tools,
+                    skills: Vec::new(),
+                    mcp: Vec::new(),
+                    hooks: Vec::new(),
+                    extensions: Vec::new(),
                 },
-                digest: format!("test-only-{stable_id}"),
-                agent: hya_bundle::PreparedAgent {
-                    id: AgentName::new(*stable_id),
-                    description: None,
-                    role: AgentRole::Subagent,
-                    color: None,
-                    prompt: Some(format!("{stable_id} prompt")),
-                    prompt_source: None,
-                    prompt_digest: None,
-                    model_policy: hya_bundle::ModelPolicy::default(),
-                    workdir: None,
-                    spawn_lifecycle: hya_bundle::SpawnLifecycle::Transient,
-                    resource_view: hya_bundle::ResourceView::default(),
-                    can_spawn: Vec::new(),
-                    hook_refs: Vec::new(),
-                },
-                tools,
-                skills: Vec::new(),
-                mcp: Vec::new(),
-                hooks: Vec::new(),
-                extensions: Vec::new(),
-            }
+            ))
         })
         .collect::<Vec<_>>();
     let bundles =
